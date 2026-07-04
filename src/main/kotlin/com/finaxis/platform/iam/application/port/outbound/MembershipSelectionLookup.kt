@@ -17,11 +17,29 @@ data class MembershipSelection(
  * Outbound application port for membership and branch assignment lookups.
  */
 interface MembershipSelectionLookup {
+    /**
+     * Finds the application user id for a Keycloak subject.
+     */
     fun findUserIdByKeycloakSubject(keycloakSubject: String): UUID?
 
-    fun findMembership(userId: UUID, organisationId: UUID): MembershipSelection?
+    /**
+     * Finds the user's membership in an organisation.
+     */
+    fun findMembership(
+        userId: UUID,
+        organisationId: UUID,
+    ): MembershipSelection?
 
+    /**
+     * Lists branch ids assigned to a membership.
+     */
     fun findAssignedBranchIds(membershipId: UUID): List<UUID>
 
-    fun hasAssignedBranch(membershipId: UUID, branchId: UUID): Boolean
+    /**
+     * Returns whether the membership is assigned to the branch.
+     */
+    fun hasAssignedBranch(
+        membershipId: UUID,
+        branchId: UUID,
+    ): Boolean
 }

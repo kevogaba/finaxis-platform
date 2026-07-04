@@ -16,9 +16,18 @@ data class PermissionEffectAssignment(
  * Outbound application port for resolving membership-scoped permissions.
  */
 interface PermissionResolutionQueries {
+    /**
+     * Reads the current membership status.
+     */
     fun membershipStatus(membershipId: UUID): MembershipStatus?
 
+    /**
+     * Reads active permission codes granted through assigned roles.
+     */
     fun rolePermissionCodes(membershipId: UUID): Set<String>
 
+    /**
+     * Reads direct allow and deny permission assignments.
+     */
     fun directPermissionEffects(membershipId: UUID): List<PermissionEffectAssignment>
 }

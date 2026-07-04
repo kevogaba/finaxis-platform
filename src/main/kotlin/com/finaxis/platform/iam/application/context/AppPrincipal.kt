@@ -1,8 +1,9 @@
 package com.finaxis.platform.iam.application.context
 
-import java.util.UUID
 import org.springframework.security.authentication.AbstractAuthenticationToken
 import org.springframework.security.core.authority.SimpleGrantedAuthority
+import java.io.Serializable
+import java.util.UUID
 
 /**
  * Application principal exposed to controllers and method security after tenant context resolution.
@@ -16,7 +17,14 @@ data class AppPrincipal(
     val email: String?,
     val fullName: String?,
     val permissions: Set<String>,
-)
+) : Serializable {
+    /**
+     * Java serialization metadata for Redis-backed Spring Security session storage.
+     */
+    companion object {
+        private const val serialVersionUID = 1L
+    }
+}
 
 /**
  * Spring Security authentication token backed by an application principal.
@@ -24,7 +32,6 @@ data class AppPrincipal(
 class AppPrincipalAuthenticationToken(
     private val appPrincipal: AppPrincipal,
 ) : AbstractAuthenticationToken(appPrincipal.permissions.map(::SimpleGrantedAuthority)) {
-
     init {
         isAuthenticated = true
     }
@@ -32,4 +39,11 @@ class AppPrincipalAuthenticationToken(
     override fun getCredentials(): Any = ""
 
     override fun getPrincipal(): AppPrincipal = appPrincipal
+
+    /**
+     * Java serialization metadata for Redis-backed Spring Security session storage.
+     */
+    companion object {
+        private const val serialVersionUID = 1L
+    }
 }

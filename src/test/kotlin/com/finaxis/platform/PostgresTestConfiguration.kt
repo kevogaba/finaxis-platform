@@ -11,12 +11,9 @@ import org.testcontainers.utility.DockerImageName
 class PostgresTestConfiguration {
     @Bean
     @ServiceConnection
-    fun postgresContainer(): PostgreSQLContainer {
-        return PostgreSQLContainer(DockerImageName.parse("postgres:latest"))
-    }
+    fun postgresContainer(): PostgreSQLContainer =
+        PostgreSQLContainer(DockerImageName.parse(TestContainerImages.POSTGRES))
 
     @Bean
-    fun jwtDecoder(): JwtDecoder {
-        return JwtDecoder { error("Test context does not decode JWTs") }
-    }
+    fun jwtDecoder(): JwtDecoder = JwtDecoder { error("Test context does not decode JWTs") }
 }

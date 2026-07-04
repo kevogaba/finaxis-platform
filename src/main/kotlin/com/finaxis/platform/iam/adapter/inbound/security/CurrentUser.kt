@@ -10,6 +10,10 @@ import org.springframework.stereotype.Component
  */
 @Component
 class CurrentUser {
+    /**
+     * Returns the current application principal or fails when no active tenant context was
+     * resolved.
+     */
     fun principal(): AppPrincipal {
         val principal = SecurityContextHolder.getContext().authentication?.principal
         if (principal is AppPrincipal) {

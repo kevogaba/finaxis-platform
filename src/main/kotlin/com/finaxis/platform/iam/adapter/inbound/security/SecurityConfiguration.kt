@@ -1,11 +1,10 @@
 package com.finaxis.platform.iam.adapter.inbound.security
 
-import com.finaxis.platform.iam.adapter.outbound.persistence.AppUserRepository
-import com.finaxis.platform.iam.adapter.outbound.persistence.OrganisationMembershipRepository
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
+import com.finaxis.platform.iam.application.port.outbound.AppPrincipalLookup
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
@@ -31,17 +30,26 @@ import org.springframework.web.filter.OncePerRequestFilter
 class SecurityConfiguration(
     private val activeOrganisationFilter: ActiveOrganisationContextFilter,
 ) {
+    /**
+     * Builds the servlet security filter chain for JWT authentication and method security.
+     */
     @Bean
     fun securityFilterChain(http: HttpSecurity): SecurityFilterChain {
         http
             .csrf { csrf -> csrf.disable() }
-            .sessionManagement { sessions -> sessions.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED) }
-            .authorizeHttpRequests { requests ->
+            .sessionManagement { sessions ->
+                sessions.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
+            }.authorizeHttpRequests { requests ->
                 requests
-                    .requestMatchers("/actuator/health", "/docs/**", "/v3/api-docs/**", "/swagger-ui/**").permitAll()
-                    .anyRequest().authenticated()
-            }
-            .oauth2ResourceServer { resourceServer -> resourceServer.jwt { } }
+                    .requestMatchers(
+                        "/actuator/health",
+                        "/docs/**",
+                        "/v3/api-docs/**",
+                        "/swagger-ui/**",
+                    ).permitAll()
+                    .anyRequest()
+                    .authenticated()
+            }.oauth2ResourceServer { resourceServer -> resourceServer.jwt { } }
             .addFilterAfter(activeOrganisationFilter, BearerTokenAuthenticationFilter::class.java)
         return http.build()
     }
@@ -52,20 +60,26 @@ class SecurityConfiguration(
  */
 @Service
 class AppPrincipalLoader(
-    private val users: AppUserRepository,
-    private val memberships: OrganisationMembershipRepository,
+    private val principalLookup: AppPrincipalLookup,
     private val resolver: EffectivePermissionResolver,
 ) {
-    fun load(keycloakSubject: String, context: ActiveOrganisationContext): AppPrincipal? {
-        val user = users.findByKeycloakSubject(keycloakSubject) ?: return null
-        if (user.id != context.userId) {
-            return null
-        }
-
-        val membership = memberships.findById(context.membershipId).orElse(null) ?: return null
-        if (membership.userId != user.id || membership.organisationId != context.organisationId) {
-            return null
-        }
+    /**
+     * Loads the application principal for a matching Keycloak subject and tenant context.
+     */
+    fun load(
+        keycloakSubject: String,
+        context: ActiveOrganisationContext,
+    ): AppPrincipal? {
+        val user =
+            principalLookup
+                .findPrincipalUserByKeycloakSubject(keycloakSubject)
+                ?.takeIf { it.id == context.userId }
+                ?: return null
+        val membership =
+            principalLookup
+                .findPrincipalMembershipById(context.membershipId)
+                ?.takeIf { it.userId == user.id && it.organisationId == context.organisationId }
+                ?: return null
 
         return AppPrincipal(
             userId = user.id,
@@ -80,6 +94,10 @@ class AppPrincipalLoader(
     }
 }
 
+/**
+ * Servlet filter that upgrades Keycloak JWT authentication to an application principal when
+ * context exists.
+ */
 @Service
 class ActiveOrganisationContextFilter(
     private val contextResolver: ActiveOrganisationContextResolver,
@@ -108,10 +126,14 @@ class ActiveOrganisationContextFilter(
                 }
                 val principal = principalLoader.load(subject, context)
                 if (principal == null) {
-                    response.sendError(HttpServletResponse.SC_FORBIDDEN, "Invalid active organisation context")
+                    response.sendError(
+                        HttpServletResponse.SC_FORBIDDEN,
+                        "Invalid active organisation context",
+                    )
                     return
                 }
-                SecurityContextHolder.getContext().authentication = AppPrincipalAuthenticationToken(principal)
+                SecurityContextHolder.getContext().authentication =
+                    AppPrincipalAuthenticationToken(principal)
             }
         }
 

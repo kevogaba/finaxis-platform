@@ -7,7 +7,6 @@ import com.finaxis.platform.iam.application.selection.OrganisationSelectionDenie
 import io.micrometer.tracing.Tracer
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.validation.ConstraintViolationException
-import java.time.Instant
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
@@ -22,6 +21,7 @@ import org.springframework.web.method.annotation.HandlerMethodValidationExceptio
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException
 import org.springframework.web.server.ResponseStatusException
 import org.springframework.web.servlet.resource.NoResourceFoundException
+import java.time.Instant
 
 /**
  * Standard API error response returned by REST endpoints.
@@ -56,8 +56,14 @@ class ApiExceptionHandler(
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
 
+    /**
+     * Handles application authorization and tenant-selection denials.
+     */
     @ExceptionHandler(OrganisationSelectionDeniedException::class, AccessDeniedException::class)
-    fun forbidden(exception: RuntimeException, request: HttpServletRequest): ResponseEntity<ApiErrorResponse> {
+    fun forbidden(
+        exception: RuntimeException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
         logger.debug("Forbidden API request: {}", exception.message)
         return error(
             status = HttpStatus.FORBIDDEN,
@@ -68,6 +74,9 @@ class ApiExceptionHandler(
         )
     }
 
+    /**
+     * Handles denials raised by Spring Security method authorization.
+     */
     @ExceptionHandler(org.springframework.security.access.AccessDeniedException::class)
     fun springSecurityForbidden(
         exception: org.springframework.security.access.AccessDeniedException,
@@ -83,96 +92,181 @@ class ApiExceptionHandler(
         )
     }
 
+    /**
+     * Handles request-body validation failures.
+     */
     @ExceptionHandler(MethodArgumentNotValidException::class)
-    fun validation(exception: MethodArgumentNotValidException, request: HttpServletRequest): ResponseEntity<ApiErrorResponse> {
+    fun validation(
+        exception: MethodArgumentNotValidException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
         logger.debug("Request body validation failed: {}", exception.message)
         return validationError(fieldErrors(exception), request)
     }
 
+    /**
+     * Handles method-level validation failures.
+     */
     @ExceptionHandler(HandlerMethodValidationException::class)
-    fun methodValidation(exception: HandlerMethodValidationException, request: HttpServletRequest): ResponseEntity<ApiErrorResponse> {
+    fun methodValidation(
+        exception: HandlerMethodValidationException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
         logger.debug("Controller method validation failed: {}", exception.message)
-        val fields = exception.parameterValidationResults
-            .associate { result ->
-                val name = result.methodParameter.parameterName ?: "parameter"
-                name to result.resolvableErrors.map { it.defaultMessage ?: "Invalid value" }
-            }
+        val fields =
+            exception.parameterValidationResults
+                .associate { result ->
+                    val name = result.methodParameter.parameterName ?: "parameter"
+                    name to result.resolvableErrors.map { it.defaultMessage ?: "Invalid value" }
+                }
         return validationError(fields, request)
     }
 
+    /**
+     * Handles bean validation constraint violations.
+     */
     @ExceptionHandler(ConstraintViolationException::class)
-    fun constraintViolation(exception: ConstraintViolationException, request: HttpServletRequest): ResponseEntity<ApiErrorResponse> {
+    fun constraintViolation(
+        exception: ConstraintViolationException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
         logger.debug("Constraint validation failed: {}", exception.message)
-        val fields = exception.constraintViolations
-            .groupBy { it.propertyPath.toString().substringAfterLast('.') }
-            .mapValues { (_, violations) -> violations.map { it.message } }
+        val fields =
+            exception.constraintViolations
+                .groupBy { it.propertyPath.toString().substringAfterLast('.') }
+                .mapValues { (_, violations) -> violations.map { it.message } }
         return validationError(fields, request)
     }
 
+    /**
+     * Handles path or query parameter type mismatches.
+     */
     @ExceptionHandler(MethodArgumentTypeMismatchException::class)
-    fun typeMismatch(exception: MethodArgumentTypeMismatchException, request: HttpServletRequest): ResponseEntity<ApiErrorResponse> {
+    fun typeMismatch(
+        exception: MethodArgumentTypeMismatchException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
         logger.debug("Type mismatch for parameter '{}': {}", exception.name, exception.message)
         val expectedType = exception.requiredType?.simpleName ?: "unknown"
+        val detail = ApiErrorDetail("invalid_parameter", "Parameter type mismatch", exception.name)
+        val message =
+            "Invalid value '${exception.value}' for parameter '${exception.name}'. " +
+                "Expected type: $expectedType"
         return error(
             status = HttpStatus.BAD_REQUEST,
-            message = "Invalid value '${exception.value}' for parameter '${exception.name}'. Expected type: $expectedType",
+            message = message,
             path = request.requestURI,
             code = "invalid_parameter",
-            detail = ApiErrorDetail("invalid_parameter", "Parameter type mismatch", exception.name),
+            detail = detail,
         )
     }
 
+    /**
+     * Handles missing servlet request parameters.
+     */
     @ExceptionHandler(MissingServletRequestParameterException::class)
-    fun missingParameter(exception: MissingServletRequestParameterException, request: HttpServletRequest): ResponseEntity<ApiErrorResponse> {
-        logger.debug("Missing request parameter '{}': {}", exception.parameterName, exception.message)
+    fun missingParameter(
+        exception: MissingServletRequestParameterException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
+        logger.debug(
+            "Missing request parameter '{}': {}",
+            exception.parameterName,
+            exception.message,
+        )
         return error(
             status = HttpStatus.BAD_REQUEST,
             message = "Missing required request parameter '${exception.parameterName}'",
             path = request.requestURI,
             code = "missing_parameter",
-            detail = ApiErrorDetail("missing_parameter", exception.message, exception.parameterName),
+            detail =
+                ApiErrorDetail(
+                    "missing_parameter",
+                    exception.message,
+                    exception.parameterName,
+                ),
         )
     }
 
-    @ExceptionHandler(HttpMessageNotReadableException::class, JsonProcessingException::class, InvalidFormatException::class)
-    fun invalidJson(exception: Exception, request: HttpServletRequest): ResponseEntity<ApiErrorResponse> {
+    /**
+     * Handles malformed JSON and unreadable request bodies.
+     */
+    @ExceptionHandler(
+        HttpMessageNotReadableException::class,
+        JsonProcessingException::class,
+        InvalidFormatException::class,
+    )
+    fun invalidJson(
+        exception: Exception,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
         logger.debug("Invalid request body: {}", exception.message)
         return error(
             status = HttpStatus.BAD_REQUEST,
             message = "Invalid JSON format in request",
             path = request.requestURI,
             code = "invalid_json",
-            detail = ApiErrorDetail("invalid_json", "Request body could not be parsed", "request_body"),
+            detail =
+                ApiErrorDetail(
+                    "invalid_json",
+                    "Request body could not be parsed",
+                    "request_body",
+                ),
         )
     }
 
+    /**
+     * Handles missing static or controller resources.
+     */
     @ExceptionHandler(NoResourceFoundException::class)
-    fun noResource(exception: NoResourceFoundException, request: HttpServletRequest): ResponseEntity<ApiErrorResponse> {
+    fun noResource(
+        exception: NoResourceFoundException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
         logger.debug("Resource not found: {}", exception.message)
         return error(
             status = HttpStatus.NOT_FOUND,
             message = "The requested resource was not found",
             path = request.requestURI,
             code = "resource_not_found",
-            detail = ApiErrorDetail("resource_not_found", "No resource found for this request", "resource"),
+            detail =
+                ApiErrorDetail(
+                    "resource_not_found",
+                    "No resource found for this request",
+                    "resource",
+                ),
         )
     }
 
+    /**
+     * Handles unsupported HTTP methods.
+     */
     @ExceptionHandler(HttpRequestMethodNotSupportedException::class)
-    fun methodNotAllowed(exception: HttpRequestMethodNotSupportedException, request: HttpServletRequest): ResponseEntity<ApiErrorResponse> {
+    fun methodNotAllowed(
+        exception: HttpRequestMethodNotSupportedException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
         val supported = exception.supportedMethods?.joinToString(", ") ?: "none"
         logger.debug("Method not allowed: {}", exception.message)
         return error(
             status = HttpStatus.METHOD_NOT_ALLOWED,
-            message = "Method '${exception.method}' is not supported for this resource. Supported methods: $supported",
+            message =
+                "Method '${exception.method}' is not supported for this resource. " +
+                    "Supported methods: $supported",
             path = request.requestURI,
             code = "method_not_allowed",
             detail = ApiErrorDetail("method_not_allowed", "HTTP method not allowed", "http_method"),
         )
     }
 
+    /**
+     * Handles explicit response-status exceptions.
+     */
     @ExceptionHandler(ResponseStatusException::class)
-    fun responseStatus(exception: ResponseStatusException, request: HttpServletRequest): ResponseEntity<ApiErrorResponse> {
+    fun responseStatus(
+        exception: ResponseStatusException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
         val status = HttpStatus.valueOf(exception.statusCode.value())
         logger.debug("Response status exception: {}", exception.reason)
         return error(
@@ -183,20 +277,37 @@ class ApiExceptionHandler(
         )
     }
 
+    /**
+     * Handles invalid client arguments.
+     */
     @ExceptionHandler(IllegalArgumentException::class)
-    fun illegalArgument(exception: IllegalArgumentException, request: HttpServletRequest): ResponseEntity<ApiErrorResponse> {
+    fun illegalArgument(
+        exception: IllegalArgumentException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
         logger.debug("Illegal argument: {}", exception.message)
         return error(
             status = HttpStatus.BAD_REQUEST,
             message = exception.message ?: "Invalid argument provided",
             path = request.requestURI,
             code = "invalid_argument",
-            detail = ApiErrorDetail("invalid_argument", exception.message ?: "Invalid argument", "request"),
+            detail =
+                ApiErrorDetail(
+                    "invalid_argument",
+                    exception.message ?: "Invalid argument",
+                    "request",
+                ),
         )
     }
 
+    /**
+     * Handles all uncaught exceptions without leaking implementation details.
+     */
     @ExceptionHandler(Exception::class)
-    fun unexpected(exception: Exception, request: HttpServletRequest): ResponseEntity<ApiErrorResponse> {
+    fun unexpected(
+        exception: Exception,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiErrorResponse> {
         logger.error("Unexpected API exception", exception)
         return error(
             status = HttpStatus.INTERNAL_SERVER_ERROR,
@@ -210,21 +321,19 @@ class ApiExceptionHandler(
     private fun validationError(
         fieldErrors: Map<String, List<String>>,
         request: HttpServletRequest,
-    ): ResponseEntity<ApiErrorResponse> {
-        return error(
+    ): ResponseEntity<ApiErrorResponse> =
+        error(
             status = HttpStatus.BAD_REQUEST,
             message = "Validation failed",
             path = request.requestURI,
             code = "validation_failed",
             fieldErrors = fieldErrors,
         )
-    }
 
-    private fun fieldErrors(exception: MethodArgumentNotValidException): Map<String, List<String>> {
-        return exception.bindingResult.allErrors
+    private fun fieldErrors(exception: MethodArgumentNotValidException): Map<String, List<String>> =
+        exception.bindingResult.allErrors
             .groupBy { error -> if (error is FieldError) error.field else error.objectName }
             .mapValues { (_, errors) -> errors.map { it.defaultMessage ?: "Invalid value" } }
-    }
 
     private fun error(
         status: HttpStatus,
@@ -233,8 +342,8 @@ class ApiExceptionHandler(
         code: String,
         detail: ApiErrorDetail? = null,
         fieldErrors: Map<String, List<String>> = emptyMap(),
-    ): ResponseEntity<ApiErrorResponse> {
-        return ResponseEntity.status(status).body(
+    ): ResponseEntity<ApiErrorResponse> =
+        ResponseEntity.status(status).body(
             ApiErrorResponse(
                 timestamp = Instant.now(),
                 status = status.value(),
@@ -247,9 +356,9 @@ class ApiExceptionHandler(
                 fieldErrors = fieldErrors,
             ),
         )
-    }
 
-    private fun traceId(): String? {
-        return runCatching { tracer?.currentSpan()?.context()?.traceId() }.getOrNull()
-    }
+    private fun traceId(): String? =
+        runCatching {
+            tracer?.currentSpan()?.context()?.traceId()
+        }.getOrNull()
 }

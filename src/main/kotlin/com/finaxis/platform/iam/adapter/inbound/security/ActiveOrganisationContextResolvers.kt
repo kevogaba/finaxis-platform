@@ -18,6 +18,9 @@ data class ActiveOrganisationContextResolution(
  * Inbound security adapter contract for resolving active tenant context.
  */
 interface ActiveOrganisationContextResolver {
+    /**
+     * Resolves the active tenant context from the current servlet request.
+     */
     fun resolve(request: HttpServletRequest): ActiveOrganisationContextResolution
 }
 
@@ -35,7 +38,9 @@ class HeaderActiveOrganisationContextResolver(
         }
 
         return contextService.verify(token)?.let(::ActiveOrganisationContextResolution)
-            ?: ActiveOrganisationContextResolution(failureMessage = "Invalid active organisation context header")
+            ?: ActiveOrganisationContextResolution(
+                failureMessage = "Invalid active organisation context header",
+            )
     }
 }
 
@@ -45,10 +50,17 @@ class HeaderActiveOrganisationContextResolver(
 @Service
 class SessionActiveOrganisationContextResolver : ActiveOrganisationContextResolver {
     override fun resolve(request: HttpServletRequest): ActiveOrganisationContextResolution {
-        val context = request.getSession(false)?.getAttribute(ATTRIBUTE) as? ActiveOrganisationContext
+        val context =
+            request
+                .getSession(
+                    false,
+                )?.getAttribute(ATTRIBUTE) as? ActiveOrganisationContext
         return ActiveOrganisationContextResolution(context)
     }
 
+    /**
+     * Session attribute names used by the browser context flow.
+     */
     companion object {
         const val ATTRIBUTE = "iam.activeOrganisationContext"
     }

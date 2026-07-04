@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration scan="false">
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="finaxis-platform"/>
+    <springProperty scope="context" name="ENVIRONMENT" source="management.opentelemetry.resource-attributes.deployment.environment.name" defaultValue="local"/>
+
+    <property name="LOG_DATEFORMAT_PATTERN" value="${LOG_DATEFORMAT_PATTERN:-yyyy-MM-dd'T'HH:mm:ss.SSSXXX}"/>
+    <property name="LOG_LEVEL_PATTERN" value="${LOG_LEVEL_PATTERN:-%5p}"/>
+    <property name="LOG_QUEUE_SIZE" value="${FINAXIS_LOG_QUEUE_SIZE:-8192}"/>
+    <property name="LOG_DISCARDING_THRESHOLD" value="${FINAXIS_LOG_DISCARDING_THRESHOLD:-0}"/>
+    <property name="LOG_NEVER_BLOCK" value="${FINAXIS_LOG_NEVER_BLOCK:-false}"/>
+    <property
+        name="CONSOLE_LOG_PATTERN"
+        value="%clr(%d{${LOG_DATEFORMAT_PATTERN}}){faint} %clr(${LOG_LEVEL_PATTERN}) %clr(${PID:- }){magenta} %clr(---){faint} %clr([${APP_NAME},${ENVIRONMENT},%X{traceId:-},%X{spanId:-}]){faint} %clr([%20.20t]){faint} %clr(%-40.40logger{39}){cyan} %clr(:){faint} %m%n${LOG_EXCEPTION_CONVERSION_WORD:-%wEx}"/>
+
+    <appender name="OTEL" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender"/>
+
+    <appender name="ASYNC_OTEL" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>${LOG_QUEUE_SIZE}</queueSize>
+        <discardingThreshold>${LOG_DISCARDING_THRESHOLD}</discardingThreshold>
+        <neverBlock>${LOG_NEVER_BLOCK}</neverBlock>
+        <includeCallerData>false</includeCallerData>
+        <appender-ref ref="OTEL"/>
+    </appender>
+
+    <logger name="com.finaxis.platform" level="${FINAXIS_APP_LOG_LEVEL:-INFO}"/>
+    <logger name="org.springframework" level="${FINAXIS_SPRING_LOG_LEVEL:-INFO}"/>
+    <logger name="org.springframework.security" level="${FINAXIS_SECURITY_LOG_LEVEL:-WARN}"/>
+    <logger name="org.springframework.web" level="${FINAXIS_WEB_LOG_LEVEL:-INFO}"/>
+    <logger name="org.springframework.jdbc.core" level="${FINAXIS_SQL_LOG_LEVEL:-WARN}"/>
+    <logger name="org.springframework.transaction" level="${FINAXIS_TRANSACTION_LOG_LEVEL:-WARN}"/>
+    <logger name="io.opentelemetry.exporter" level="WARN"/>
+    <logger name="io.opentelemetry.sdk" level="WARN"/>
+
+    <springProfile name="prod | production | staging">
+        <appender name="CONSOLE_STRUCTURED" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="org.springframework.boot.logging.logback.StructuredLogEncoder">
+                <format>${FINAXIS_STRUCTURED_LOG_FORMAT:-ecs}</format>
+                <charset>${CONSOLE_LOG_CHARSET}</charset>
+            </encoder>
+        </appender>
+
+        <appender name="ASYNC_CONSOLE_STRUCTURED" class="ch.qos.logback.classic.AsyncAppender">
+            <queueSize>${LOG_QUEUE_SIZE}</queueSize>
+            <discardingThreshold>${LOG_DISCARDING_THRESHOLD}</discardingThreshold>
+            <neverBlock>${LOG_NEVER_BLOCK}</neverBlock>
+            <includeCallerData>false</includeCallerData>
+            <appender-ref ref="CONSOLE_STRUCTURED"/>
+        </appender>
+
+        <root level="${FINAXIS_ROOT_LOG_LEVEL:-INFO}">
+            <appender-ref ref="ASYNC_CONSOLE_STRUCTURED"/>
+            <appender-ref ref="ASYNC_OTEL"/>
+        </root>
+    </springProfile>
+
+    <springProfile name="!prod &amp; !production &amp; !staging">
+        <appender name="CONSOLE_PATTERN" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+                <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+                <charset>${CONSOLE_LOG_CHARSET}</charset>
+            </encoder>
+        </appender>
+
+        <appender name="ASYNC_CONSOLE_PATTERN" class="ch.qos.logback.classic.AsyncAppender">
+            <queueSize>${LOG_QUEUE_SIZE}</queueSize>
+            <discardingThreshold>${LOG_DISCARDING_THRESHOLD}</discardingThreshold>
+            <neverBlock>${LOG_NEVER_BLOCK}</neverBlock>
+            <includeCallerData>false</includeCallerData>
+            <appender-ref ref="CONSOLE_PATTERN"/>
+        </appender>
+
+        <root level="${FINAXIS_ROOT_LOG_LEVEL:-INFO}">
+            <appender-ref ref="ASYNC_CONSOLE_PATTERN"/>
+            <appender-ref ref="ASYNC_OTEL"/>
+        </root>
+    </springProfile>
+</configuration>

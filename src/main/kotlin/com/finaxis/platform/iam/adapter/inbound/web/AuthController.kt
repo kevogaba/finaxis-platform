@@ -2,6 +2,7 @@ package com.finaxis.platform.iam.adapter.inbound.web
 
 import com.finaxis.platform.iam.adapter.inbound.security.SessionActiveOrganisationContextResolver
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
+import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.selection.AuthSelectionService
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.media.Content
@@ -13,15 +14,15 @@ import io.swagger.v3.oas.annotations.tags.Tag
 import jakarta.servlet.http.HttpSession
 import jakarta.validation.Valid
 import jakarta.validation.constraints.NotNull
-import java.util.UUID
 import org.springframework.http.HttpStatus
-import org.springframework.security.core.annotation.AuthenticationPrincipal
+import org.springframework.security.core.Authentication
 import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.ResponseStatus
 import org.springframework.web.bind.annotation.RestController
+import java.util.UUID
 
 /**
  * Request body for selecting the active organisation after Keycloak authentication.
@@ -72,9 +73,14 @@ data class SelectBranchResponse(
 class AuthController(
     private val service: AuthSelectionService,
 ) {
+    /**
+     * Selects an active organisation and stores the resulting context in the browser session.
+     */
     @Operation(
         summary = "Select active organisation",
-        description = "Creates an active organisation context. Browser clients receive Redis-backed session context; headless clients may use the returned X-Active-Organisation-Context token.",
+        description =
+            "Creates an active organisation context. Browser clients receive session context; " +
+                "headless clients may use the returned X-Active-Organisation-Context token.",
         security = [SecurityRequirement(name = "bearer-key")],
     )
     @ApiResponses(
@@ -88,14 +94,15 @@ class AuthController(
     @PostMapping("/select-organisation")
     @ResponseStatus(HttpStatus.OK)
     fun selectOrganisation(
-        @AuthenticationPrincipal jwt: Jwt,
+        authentication: Authentication,
         @Valid @RequestBody request: SelectOrganisationRequest,
         session: HttpSession,
     ): SelectOrganisationResponse {
-        val result = service.selectOrganisation(
-            requireNotNull(jwt.subject) { "JWT subject is required" },
-            requireNotNull(request.organisationId),
-        )
+        val result =
+            service.selectOrganisation(
+                keycloakSubject(authentication),
+                requireNotNull(request.organisationId),
+            )
         storeContext(session, result.context)
         return SelectOrganisationResponse(
             organisationId = result.organisationId,
@@ -108,9 +115,14 @@ class AuthController(
         )
     }
 
+    /**
+     * Selects an assigned branch inside the active organisation context.
+     */
     @Operation(
         summary = "Select active branch",
-        description = "Stores a branch selection inside the active organisation context after organisation selection.",
+        description =
+            "Stores a branch selection inside the active organisation context after organisation " +
+                "selection.",
         security = [SecurityRequirement(name = "bearer-key")],
     )
     @ApiResponses(
@@ -124,15 +136,16 @@ class AuthController(
     @PostMapping("/select-branch")
     @ResponseStatus(HttpStatus.OK)
     fun selectBranch(
-        @AuthenticationPrincipal jwt: Jwt,
+        authentication: Authentication,
         @Valid @RequestBody request: SelectBranchRequest,
         session: HttpSession,
     ): SelectBranchResponse {
-        val result = service.selectBranch(
-            requireNotNull(jwt.subject) { "JWT subject is required" },
-            requireNotNull(request.branchId),
-            activeContext(session),
-        )
+        val result =
+            service.selectBranch(
+                keycloakSubject(authentication),
+                requireNotNull(request.branchId),
+                activeContext(authentication, session),
+            )
         storeContext(session, result.context)
         return SelectBranchResponse(
             organisationId = result.organisationId,
@@ -143,11 +156,35 @@ class AuthController(
         )
     }
 
-    private fun activeContext(session: HttpSession): ActiveOrganisationContext? {
-        return session.getAttribute(SessionActiveOrganisationContextResolver.ATTRIBUTE) as? ActiveOrganisationContext
+    private fun keycloakSubject(authentication: Authentication): String {
+        val principal = authentication.principal
+        return when (principal) {
+            is Jwt -> requireNotNull(principal.subject) { "JWT subject is required" }
+            is AppPrincipal -> principal.keycloakSubject
+            else -> error("Unsupported authenticated principal")
+        }
     }
 
-    private fun storeContext(session: HttpSession, context: ActiveOrganisationContext) {
+    private fun activeContext(
+        authentication: Authentication,
+        session: HttpSession,
+    ): ActiveOrganisationContext? =
+        (authentication.principal as? AppPrincipal)?.let { principal ->
+            ActiveOrganisationContext(
+                userId = principal.userId,
+                organisationId = principal.organisationId,
+                membershipId = principal.membershipId,
+                branchId = principal.branchId,
+            )
+        }
+            ?: session.getAttribute(
+                SessionActiveOrganisationContextResolver.ATTRIBUTE,
+            ) as? ActiveOrganisationContext
+
+    private fun storeContext(
+        session: HttpSession,
+        context: ActiveOrganisationContext,
+    ) {
         session.setAttribute(SessionActiveOrganisationContextResolver.ATTRIBUTE, context)
     }
 }

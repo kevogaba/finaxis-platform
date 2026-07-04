@@ -11,21 +11,25 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class ActiveOrganisationContextTests {
-
     private val clock = Clock.fixed(Instant.parse("2026-07-04T08:00:00Z"), ZoneOffset.UTC)
-    private val service = ActiveOrganisationContextService(
-        properties = ActiveOrganisationContextProperties(secret = "test-secret-with-enough-length"),
-        clock = clock,
-    )
+    private val service =
+        ActiveOrganisationContextService(
+            properties =
+                ActiveOrganisationContextProperties(
+                    secret = "test-secret-with-enough-length",
+                ),
+            clock = clock,
+        )
 
     @Test
     fun `signed active organisation context round trips`() {
-        val context = ActiveOrganisationContext(
-            userId = UUID.randomUUID(),
-            organisationId = UUID.randomUUID(),
-            membershipId = UUID.randomUUID(),
-            branchId = UUID.randomUUID(),
-        )
+        val context =
+            ActiveOrganisationContext(
+                userId = UUID.randomUUID(),
+                organisationId = UUID.randomUUID(),
+                membershipId = UUID.randomUUID(),
+                branchId = UUID.randomUUID(),
+            )
 
         val token = service.issue(context)
 
@@ -34,11 +38,12 @@ class ActiveOrganisationContextTests {
 
     @Test
     fun `tampered active organisation context is rejected`() {
-        val context = ActiveOrganisationContext(
-            userId = UUID.randomUUID(),
-            organisationId = UUID.randomUUID(),
-            membershipId = UUID.randomUUID(),
-        )
+        val context =
+            ActiveOrganisationContext(
+                userId = UUID.randomUUID(),
+                organisationId = UUID.randomUUID(),
+                membershipId = UUID.randomUUID(),
+            )
 
         val token = service.issue(context).let { "${it.dropLast(1)}x" }
 
@@ -47,16 +52,32 @@ class ActiveOrganisationContextTests {
 
     @Test
     fun `malformed and expired active organisation contexts are rejected`() {
-        val expiredService = ActiveOrganisationContextService(
-            properties = ActiveOrganisationContextProperties("test-secret-with-enough-length", Duration.ofSeconds(1)),
-            clock = clock,
-        )
-        val context = ActiveOrganisationContext(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID())
+        val ttl = Duration.ofSeconds(1)
+        val expiredService =
+            ActiveOrganisationContextService(
+                properties =
+                    ActiveOrganisationContextProperties(
+                        "test-secret-with-enough-length",
+                        ttl,
+                    ),
+                clock = clock,
+            )
+        val context =
+            ActiveOrganisationContext(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+            )
         val token = expiredService.issue(context)
-        val verifier = ActiveOrganisationContextService(
-            properties = ActiveOrganisationContextProperties("test-secret-with-enough-length", Duration.ofSeconds(1)),
-            clock = Clock.fixed(Instant.parse("2026-07-04T08:00:02Z"), ZoneOffset.UTC),
-        )
+        val verifier =
+            ActiveOrganisationContextService(
+                properties =
+                    ActiveOrganisationContextProperties(
+                        "test-secret-with-enough-length",
+                        ttl,
+                    ),
+                clock = Clock.fixed(Instant.parse("2026-07-04T08:00:02Z"), ZoneOffset.UTC),
+            )
 
         assertNull(service.verify("not-a-valid-token"))
         assertNull(service.verify("invalid-payload.${service.issue(context).substringAfter('.')}"))
@@ -65,12 +86,24 @@ class ActiveOrganisationContextTests {
 
     @Test
     fun `signed malformed payloads are rejected`() {
-        val shortPayload = Base64.getUrlEncoder().withoutPadding()
-            .encodeToString("too.short".toByteArray())
-        val invalidExpiryPayload = Base64.getUrlEncoder().withoutPadding()
-            .encodeToString("${UUID.randomUUID()}.${UUID.randomUUID()}.${UUID.randomUUID()}.-.not-a-number".toByteArray())
-        val invalidUuidPayload = Base64.getUrlEncoder().withoutPadding()
-            .encodeToString("bad.bad.bad.-.1783152000".toByteArray())
+        val shortPayload =
+            Base64
+                .getUrlEncoder()
+                .withoutPadding()
+                .encodeToString("too.short".toByteArray())
+        val invalidExpiryPayload =
+            Base64
+                .getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(
+                    "${UUID.randomUUID()}.${UUID.randomUUID()}.${UUID.randomUUID()}.-.not-a-number"
+                        .toByteArray(),
+                )
+        val invalidUuidPayload =
+            Base64
+                .getUrlEncoder()
+                .withoutPadding()
+                .encodeToString("bad.bad.bad.-.1783152000".toByteArray())
 
         assertNull(service.verify("\$\$\$.${sign("\$\$\$")}"))
         assertNull(service.verify("$shortPayload.${sign(shortPayload)}"))

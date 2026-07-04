@@ -3,9 +3,9 @@ package com.finaxis.platform.iam.application.authorization
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.PermissionEffect
-import java.util.UUID
 import org.springframework.cache.CacheManager
 import org.springframework.stereotype.Service
+import java.util.UUID
 
 /**
  * Resolves effective membership permissions from role bundles and direct grants.
@@ -15,6 +15,9 @@ class EffectivePermissionResolver(
     private val queries: PermissionResolutionQueries,
     private val cacheManager: CacheManager,
 ) {
+    /**
+     * Resolves and caches effective permission codes for a membership.
+     */
     fun effectivePermissions(membershipId: UUID): Set<String> {
         val cache = cacheManager.getCache(CACHE_NAME)
         cache?.get(membershipId, Set::class.java)?.let { cached ->
@@ -45,6 +48,9 @@ class EffectivePermissionResolver(
         return allowed.minus(denied)
     }
 
+    /**
+     * Cache constants used by permission resolution and invalidation.
+     */
     companion object {
         const val CACHE_NAME = "iam.effective-permissions"
     }
@@ -57,10 +63,16 @@ class EffectivePermissionResolver(
 class PermissionCacheInvalidator(
     private val cacheManager: CacheManager,
 ) {
+    /**
+     * Evicts one membership's effective-permission cache entry.
+     */
     fun evictMembership(membershipId: UUID) {
         cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.evict(membershipId)
     }
 
+    /**
+     * Clears the effective-permission cache.
+     */
     fun clearAll() {
         cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.clear()
     }

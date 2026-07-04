@@ -1,9 +1,20 @@
+import com.github.spotbugs.snom.Confidence
+import com.github.spotbugs.snom.Effort
+import com.github.spotbugs.snom.SpotBugsTask
+import net.ltgt.gradle.errorprone.errorprone
+
 plugins {
     jacoco
+    checkstyle
+    pmd
 
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.spring)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.detekt)
+    alias(libs.plugins.spotless)
+    alias(libs.plugins.spotbugs)
+    alias(libs.plugins.errorprone)
 
     alias(libs.plugins.spring.boot)
     alias(libs.plugins.spring.boot.aot)
@@ -44,6 +55,7 @@ dependencies {
     implementation(libs.springdoc.ui)
     implementation(libs.springdoc.api)
     implementation(libs.springdoc.scalar)
+    implementation(libs.opentelemetry.logback.appender)
     implementation(platform(libs.sentry.bom))
     implementation("io.sentry:sentry-spring-boot-4-starter")
     implementation("io.sentry:sentry-async-profiler")
@@ -71,7 +83,9 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-flyway-test")
     testImplementation("org.springframework.boot:spring-boot-starter-jooq-test")
     testImplementation("org.springframework.boot:spring-boot-starter-opentelemetry-test")
-    testImplementation("org.springframework.boot:spring-boot-starter-security-oauth2-resource-server-test")
+    testImplementation(
+        "org.springframework.boot:spring-boot-starter-security-oauth2-resource-server-test",
+    )
     testImplementation("org.springframework.boot:spring-boot-starter-validation-test")
     testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
@@ -79,25 +93,168 @@ dependencies {
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
     testImplementation("org.springframework.security:spring-security-test")
     testImplementation("org.springframework.modulith:spring-modulith-starter-test")
+    testImplementation(libs.archunit.junit5)
     testImplementation("org.testcontainers:testcontainers-grafana")
     testImplementation("org.testcontainers:testcontainers-junit-jupiter")
     testImplementation("org.testcontainers:testcontainers-postgresql")
     testImplementation("org.testcontainers:testcontainers-rabbitmq")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
+    errorprone(libs.errorprone.core)
 }
-
-
 
 dependencyManagement {
     imports {
-        mavenBom("org.springframework.modulith:spring-modulith-bom:${libs.versions.springModulithVersion.get()}")
-        mavenBom("org.springframework.cloud:spring-cloud-dependencies:${libs.versions.springCloudVersion.get()}")
+        mavenBom(
+            "org.springframework.modulith:spring-modulith-bom:${libs.versions.springModulithVersion.get()}",
+        )
+        mavenBom(
+            "org.springframework.cloud:spring-cloud-dependencies:${libs.versions.springCloudVersion.get()}",
+        )
     }
 }
 
 kotlin {
     compilerOptions {
         freeCompilerArgs.addAll("-Xjsr305=strict", "-Xannotation-default-target=param-property")
+    }
+}
+
+detekt {
+    buildUponDefaultConfig = true
+    allRules = true
+    config.setFrom(files("config/detekt/detekt.yml"))
+    parallel = true
+    ignoreFailures = false
+    basePath.set(rootProject.layout.projectDirectory)
+}
+
+tasks.withType<dev.detekt.gradle.Detekt>().configureEach {
+    jvmTarget = "25"
+}
+
+spotless {
+    kotlin {
+        target("src/**/*.kt")
+        targetExclude("build/**")
+        ktlint(libs.versions.ktlintVersion.get())
+            .editorConfigOverride(
+                mapOf(
+                    "ktlint_code_style" to "ktlint_official",
+                    "max_line_length" to "100",
+                    "ij_kotlin_allow_trailing_comma" to "true",
+                    "ij_kotlin_allow_trailing_comma_on_call_site" to "true",
+                ),
+            )
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+    kotlinGradle {
+        target("*.gradle.kts", "gradle/**/*.gradle.kts")
+        ktlint(libs.versions.ktlintVersion.get())
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+    java {
+        target("src/**/*.java")
+        targetExclude("build/**")
+        googleJavaFormat()
+        removeUnusedImports()
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+    format("misc") {
+        target(
+            "*.md",
+            "docs/**/*.md",
+            "*.yml",
+            "*.yaml",
+            ".github/**/*.yml",
+            ".github/**/*.yaml",
+            "src/main/resources/**/*.yml",
+            "src/main/resources/**/*.yaml",
+        )
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+}
+
+checkstyle {
+    toolVersion = libs.versions.checkstyleVersion.get()
+    configDirectory = file("config/checkstyle")
+    isIgnoreFailures = false
+    maxErrors = 0
+    maxWarnings = 0
+}
+
+pmd {
+    toolVersion = libs.versions.pmdVersion.get()
+    isConsoleOutput = true
+    isIgnoreFailures = false
+    ruleSetFiles = files("config/pmd/ruleset.xml")
+    ruleSets = emptyList()
+}
+
+spotbugs {
+    toolVersion = libs.versions.spotbugsVersion.get()
+    effort = Effort.MAX
+    reportLevel = Confidence.HIGH
+    excludeFilter = file("config/spotbugs/exclude.xml")
+    ignoreFailures = false
+}
+
+tasks.withType<Checkstyle>().configureEach {
+    reports {
+        xml.required = true
+        html.required = true
+    }
+}
+
+tasks.withType<Pmd>().configureEach {
+    reports {
+        xml.required = true
+        html.required = true
+    }
+}
+
+tasks.withType<SpotBugsTask>().configureEach {
+    reports {
+        maybeCreate("xml").required = true
+        maybeCreate("html").required = true
+    }
+}
+
+tasks.named<SpotBugsTask>("spotbugsMain") {
+    onlyIf {
+        sourceSets.main
+            .get()
+            .allJava.files
+            .isNotEmpty()
+    }
+    classes = files(layout.buildDirectory.dir("classes/java/main"))
+}
+
+tasks.named<SpotBugsTask>("spotbugsTest") {
+    onlyIf {
+        sourceSets.test
+            .get()
+            .allJava.files
+            .isNotEmpty()
+    }
+    classes = files(layout.buildDirectory.dir("classes/java/test"))
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    options.encoding = "UTF-8"
+    options.compilerArgs.addAll(
+        listOf(
+            "-Xlint:all",
+            "-Werror",
+        ),
+    )
+    options.errorprone {
+        disableWarningsInGeneratedCode = true
+        excludedPaths = ".*/build/.*|.*/generated/.*"
     }
 }
 
@@ -113,26 +270,27 @@ jacoco {
     toolVersion = "0.8.14"
 }
 
-val coverageExclusions = listOf(
-    "com/finaxis/platform/PlatformApplication*",
-    "com/finaxis/platform/config/**",
-    "com/finaxis/platform/iam/domain/**",
-    "com/finaxis/platform/iam/persistence/**",
-    "com/finaxis/platform/iam/security/SecurityConfiguration*",
-    "com/finaxis/platform/iam/adapter/outbound/persistence/**",
-    "com/finaxis/platform/iam/adapter/inbound/security/SecurityConfiguration*",
-    "com/finaxis/platform/iam/adapter/inbound/web/AuthController*",
-    "com/finaxis/platform/iam/adapter/inbound/web/*Request*",
-    "com/finaxis/platform/iam/adapter/inbound/web/*Response*",
-    "com/finaxis/platform/iam/adapter/inbound/web/ApiError*",
-    "com/finaxis/platform/iam/application/port/**",
-    "com/finaxis/platform/iam/application/context/AppPrincipal*",
-    "**/SecurityConfiguration*",
-    "**/AuthController*",
-    "**/*Request*",
-    "**/*Response*",
-    "**/ApiError*",
-)
+val coverageExclusions =
+    listOf(
+        "com/finaxis/platform/PlatformApplication*",
+        "com/finaxis/platform/config/**",
+        "com/finaxis/platform/iam/domain/**",
+        "com/finaxis/platform/iam/persistence/**",
+        "com/finaxis/platform/iam/security/SecurityConfiguration*",
+        "com/finaxis/platform/iam/adapter/outbound/persistence/**",
+        "com/finaxis/platform/iam/adapter/inbound/security/SecurityConfiguration*",
+        "com/finaxis/platform/iam/adapter/inbound/web/AuthController*",
+        "com/finaxis/platform/iam/adapter/inbound/web/*Request*",
+        "com/finaxis/platform/iam/adapter/inbound/web/*Response*",
+        "com/finaxis/platform/iam/adapter/inbound/web/ApiError*",
+        "com/finaxis/platform/iam/application/port/**",
+        "com/finaxis/platform/iam/application/context/AppPrincipal*",
+        "**/SecurityConfiguration*",
+        "**/AuthController*",
+        "**/*Request*",
+        "**/*Response*",
+        "**/ApiError*",
+    )
 
 tasks.jacocoTestReport {
     dependsOn(tasks.test)
@@ -179,4 +337,37 @@ tasks.matching { it.name == "processTestAot" }.configureEach {
 
 tasks.matching { it.name == "processAot" }.configureEach {
     enabled = providers.gradleProperty("enableAot").map(String::toBoolean).getOrElse(false)
+}
+
+tasks.register("ktlintCheck") {
+    group = "verification"
+    description = "Runs ktlint through Spotless for Kotlin source and Gradle Kotlin DSL files."
+    dependsOn("spotlessKotlinCheck", "spotlessKotlinGradleCheck")
+}
+
+tasks.register("staticAnalysis") {
+    group = "verification"
+    description = "Runs formatting, Kotlin, Java, bytecode, and architecture static-analysis gates."
+    dependsOn(
+        "spotlessCheck",
+        "ktlintCheck",
+        "detekt",
+        "checkstyleMain",
+        "checkstyleTest",
+        "pmdMain",
+        "pmdTest",
+        "spotbugsMain",
+        "spotbugsTest",
+    )
+}
+
+tasks.register("qualityGate") {
+    group = "verification"
+    description =
+        "Runs the complete local quality gate, including static analysis, tests, coverage, and bootJar."
+    dependsOn("staticAnalysis", "check", "bootJar")
+}
+
+tasks.check {
+    dependsOn("staticAnalysis")
 }

@@ -4,8 +4,8 @@ import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContextService
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.domain.MembershipStatus
-import java.util.UUID
 import org.springframework.stereotype.Service
+import java.util.UUID
 
 /**
  * Result returned after selecting an active organisation.
@@ -34,7 +34,9 @@ data class SelectBranchResult(
 /**
  * Raised when the authenticated user cannot select the requested organisation or branch.
  */
-class OrganisationSelectionDeniedException(message: String) : RuntimeException(message)
+class OrganisationSelectionDeniedException(
+    message: String,
+) : RuntimeException(message)
 
 /**
  * Coordinates organisation and branch selection for the authenticated user.
@@ -44,22 +46,28 @@ class AuthSelectionService(
     private val lookup: MembershipSelectionLookup,
     private val contextService: ActiveOrganisationContextService,
 ) {
+    /**
+     * Selects an active organisation and returns the resulting tenant context.
+     */
     fun selectOrganisation(
         keycloakSubject: String,
         organisationId: UUID,
     ): SelectOrganisationResult {
-        val userId = lookup.findUserIdByKeycloakSubject(keycloakSubject)
-            ?: throw OrganisationSelectionDeniedException("Authenticated user is not registered")
-        val membership = lookup.findMembership(userId, organisationId)
-            ?: throw OrganisationSelectionDeniedException("User is not an active member of the organisation")
+        val userId =
+            lookup.findUserIdByKeycloakSubject(keycloakSubject)
+                ?: denied("Authenticated user is not registered")
+        val membership =
+            lookup.findMembership(userId, organisationId)
+                ?: denied("User is not an active member of the organisation")
 
         if (membership.status != MembershipStatus.ACTIVE) {
-            throw OrganisationSelectionDeniedException("User is not an active member of the organisation")
+            denied("User is not an active member of the organisation")
         }
 
         val assignedBranchIds = lookup.findAssignedBranchIds(membership.membershipId)
         val branchId = assignedBranchIds.singleOrNull()
-        val context = ActiveOrganisationContext(userId, organisationId, membership.membershipId, branchId)
+        val context =
+            ActiveOrganisationContext(userId, organisationId, membership.membershipId, branchId)
 
         return SelectOrganisationResult(
             organisationId = organisationId,
@@ -72,26 +80,36 @@ class AuthSelectionService(
         )
     }
 
+    /**
+     * Selects an assigned branch inside the active organisation context.
+     */
     fun selectBranch(
         keycloakSubject: String,
         branchId: UUID,
         currentContext: ActiveOrganisationContext?,
     ): SelectBranchResult {
-        val existingContext = currentContext
-            ?: throw OrganisationSelectionDeniedException("Select an active organisation before selecting a branch")
-        val userId = lookup.findUserIdByKeycloakSubject(keycloakSubject)
-            ?: throw OrganisationSelectionDeniedException("Authenticated user is not registered")
+        val existingContext =
+            currentContext
+                ?: denied("Select an active organisation before selecting a branch")
+        val userId =
+            lookup.findUserIdByKeycloakSubject(keycloakSubject)
+                ?: denied("Authenticated user is not registered")
         if (existingContext.userId != userId) {
-            throw OrganisationSelectionDeniedException("Active organisation context does not belong to the authenticated user")
+            denied(
+                "Active organisation context does not belong to the authenticated user",
+            )
         }
 
-        val membership = lookup.findMembership(userId, existingContext.organisationId)
-            ?: throw OrganisationSelectionDeniedException("User is not an active member of the organisation")
-        if (membership.status != MembershipStatus.ACTIVE || membership.membershipId != existingContext.membershipId) {
-            throw OrganisationSelectionDeniedException("User is not an active member of the organisation")
+        val membership =
+            lookup.findMembership(userId, existingContext.organisationId)
+                ?: denied("User is not an active member of the organisation")
+        if (membership.status != MembershipStatus.ACTIVE ||
+            membership.membershipId != existingContext.membershipId
+        ) {
+            denied("User is not an active member of the organisation")
         }
         if (!lookup.hasAssignedBranch(existingContext.membershipId, branchId)) {
-            throw OrganisationSelectionDeniedException("User is not assigned to the selected branch")
+            denied("User is not assigned to the selected branch")
         }
 
         val selectedContext = existingContext.copy(branchId = branchId)
@@ -103,4 +121,7 @@ class AuthSelectionService(
             context = selectedContext,
         )
     }
+
+    private fun denied(message: String): Nothing =
+        throw OrganisationSelectionDeniedException(message)
 }
