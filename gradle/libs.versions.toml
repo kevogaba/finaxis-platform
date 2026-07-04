@@ -20,7 +20,7 @@ kotlin-spring = { id = "org.jetbrains.kotlin.plugin.spring", version.ref = "kotl
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlinVersion" }
 graalvm-native = { id = "org.graalvm.buildtools.native", version.ref = "graalVmVersion" }
 sentry-jvm = { id = "io.sentry.jvm.gradle", version.ref = "sentryPluginVersion" }
-sentry-kotlin-complier = { id = "io.sentry.kotlin.compiler.gradle", version.ref = "sentryPluginVersion" }
+sentry-kotlin-compiler = { id = "io.sentry.kotlin.compiler.gradle", version.ref = "sentryPluginVersion" }
 
 [libraries]
 jobrunr-spring-boot = { module = "org.jobrunr:jobrunr-spring-boot-4-starter", version.ref = "jobrunrVesrion" }
