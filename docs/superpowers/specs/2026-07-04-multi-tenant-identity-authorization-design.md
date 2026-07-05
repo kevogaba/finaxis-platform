@@ -16,9 +16,9 @@ Runtime authorization is permission-based. Roles are stored only as permission b
 
 ## Active Organisation
 
-The active organisation is request-context based, not stored on `app_user`. `POST /auth/select-organisation` verifies that the authenticated Keycloak subject maps to an app user with an ACTIVE membership in the requested organisation. It stores browser context in Redis-backed Spring Session and returns a signed app-managed context token for headless clients. The context carries `userId`, `organisationId`, `membershipId`, and optional `branchId`.
+The active organisation is request-context based, not stored on `app_user`. `POST /api/v1/auth/select-organisation` verifies that the authenticated Keycloak subject maps to an app user with an ACTIVE membership in the requested organisation. It stores browser context in Redis-backed Spring Session and returns a signed app-managed context token for headless clients. The context carries `userId`, `organisationId`, `membershipId`, and optional `branchId`.
 
-If exactly one branch is assigned to the active membership, it is auto-selected. If multiple branches are assigned, clients call `POST /auth/select-branch`; the application verifies the branch assignment and updates the same context.
+If exactly one branch is assigned to the active membership, it is auto-selected. If multiple branches are assigned, clients call `POST /api/v1/auth/select-branch`; the application verifies the branch assignment and updates the same context.
 
 Subsequent browser requests can rely on the session cookie. Headless clients pass the signed token in `X-Active-Organisation-Context`. Header context takes precedence over session context and invalid headers fail closed. The security adapter validates the Keycloak JWT, resolves the application context, resolves the active membership, and builds `AppPrincipal`.
 

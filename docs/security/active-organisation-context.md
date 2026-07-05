@@ -10,7 +10,7 @@ All tenant-scoped requests require two pieces of information:
 Browser clients call:
 
 ```http
-POST /auth/select-organisation
+POST /api/v1/auth/select-organisation
 Authorization: Bearer <keycloak-jwt>
 Content-Type: application/json
 
@@ -26,7 +26,7 @@ If the membership has exactly one assigned branch, the branch is auto-selected a
 If the membership has more than one assigned branch, the response sets `requiresBranchSelection` to `true` and includes `assignedBranchIds`. The browser then calls:
 
 ```http
-POST /auth/select-branch
+POST /api/v1/auth/select-branch
 Authorization: Bearer <keycloak-jwt>
 Content-Type: application/json
 

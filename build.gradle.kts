@@ -49,6 +49,9 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-security-oauth2-resource-server")
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-webmvc")
+    implementation(libs.bucket4j.core)
+    implementation(libs.bucket4j.redis.common)
+    implementation(libs.bucket4j.lettuce)
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     implementation(libs.jobrunr.spring.boot)
@@ -230,6 +233,11 @@ tasks.withType<SpotBugsTask>().configureEach {
 }
 
 tasks.named<SpotBugsTask>("spotbugsMain") {
+    dependsOn(
+        "compileJava",
+        "collectExternalDependenciesForSentry",
+        "generateSentryDebugMetaPropertiesjava",
+    )
     onlyIf {
         sourceSets.main
             .get()

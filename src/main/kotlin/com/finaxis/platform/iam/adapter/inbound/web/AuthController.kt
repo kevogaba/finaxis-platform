@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
+import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.adapter.inbound.security.SessionActiveOrganisationContextResolver
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.context.AppPrincipal
@@ -68,7 +69,7 @@ data class SelectBranchResponse(
  * REST adapter for active organisation and branch selection.
  */
 @RestController
-@RequestMapping("/auth")
+@RequestMapping(ApiPaths.AUTH)
 @Tag(name = "Authentication Context")
 class AuthController(
     private val service: AuthSelectionService,

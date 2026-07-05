@@ -20,9 +20,9 @@ class EffectivePermissionResolver(
      */
     fun effectivePermissions(membershipId: UUID): Set<String> {
         val cache = cacheManager.getCache(CACHE_NAME)
-        cache?.get(membershipId, Set::class.java)?.let { cached ->
-            @Suppress("UNCHECKED_CAST")
-            return cached as Set<String>
+        val cached = cache?.get(membershipId)?.get()
+        if (cached is Set<*> && cached.all { permission -> permission is String }) {
+            return cached.filterIsInstance<String>().toSet()
         }
 
         val resolved = resolve(membershipId)

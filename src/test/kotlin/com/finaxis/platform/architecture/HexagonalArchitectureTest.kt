@@ -64,6 +64,17 @@ class HexagonalArchitectureTest {
     }
 
     @Test
+    fun `web adapters do not depend directly on Spring Data repositories`() {
+        noClasses()
+            .that()
+            .resideInAPackage("..adapter.inbound.web..")
+            .should()
+            .dependOnClassesThat()
+            .resideInAPackage("org.springframework.data.repository..")
+            .check(importedClasses)
+    }
+
+    @Test
     fun `top-level application packages are cycle free`() {
         slices()
             .matching("$BASE_PACKAGE.(*)..")

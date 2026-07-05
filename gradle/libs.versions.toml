@@ -22,6 +22,7 @@ errorPronePluginVersion = "5.1.0"
 errorProneVersion = "2.50.0"
 archUnitVersion = "1.4.2"
 namastackVersion = "1.7.1"
+bucket4jVersion = "8.19.0"
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "springBootVersion" }
@@ -48,3 +49,6 @@ opentelemetry-logback-appender = { module = "io.opentelemetry.instrumentation:op
 errorprone-core = { module = "com.google.errorprone:error_prone_core", version.ref = "errorProneVersion" }
 archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archUnitVersion" }
 namastack-bom = { module = "io.namastack:namastack-outbox-bom", version.ref = "namastackVersion" }
+bucket4j-core = { module = "com.bucket4j:bucket4j_jdk17-core", version.ref = "bucket4jVersion" }
+bucket4j-redis-common = { module = "com.bucket4j:bucket4j_jdk17-redis-common", version.ref = "bucket4jVersion" }
+bucket4j-lettuce = { module = "com.bucket4j:bucket4j_jdk17-lettuce", version.ref = "bucket4jVersion" }

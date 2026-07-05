@@ -13,6 +13,7 @@ import org.springframework.web.filter.OncePerRequestFilter
 import java.io.IOException
 import java.io.PrintWriter
 import java.io.Writer
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /**
@@ -26,6 +27,8 @@ class HttpAccessLogFilter : OncePerRequestFilter() {
         filterChain: FilterChain,
     ) {
         val startedAt = System.nanoTime()
+        val requestId = request.requestId()
+        response.setHeader(REQUEST_ID_HEADER, requestId)
         val countingResponse = CountingHttpServletResponse(response)
         var failed = false
 
@@ -38,13 +41,14 @@ class HttpAccessLogFilter : OncePerRequestFilter() {
             failed = true
             throw ex
         } finally {
-            logAccess(request, countingResponse, startedAt, failed)
+            logAccess(request, countingResponse, requestId, startedAt, failed)
         }
     }
 
     private fun logAccess(
         request: HttpServletRequest,
         response: CountingHttpServletResponse,
+        requestId: String,
         startedAt: Long,
         failed: Boolean,
     ) {
@@ -62,6 +66,7 @@ class HttpAccessLogFilter : OncePerRequestFilter() {
                 protocol = request.protocol,
                 userAgent = request.getHeader("User-Agent"),
                 referer = request.getHeader("Referer"),
+                requestId = requestId,
             )
 
         withMdc(fields) {
@@ -104,10 +109,12 @@ class HttpAccessLogFilter : OncePerRequestFilter() {
         val protocol: String,
         val userAgent: String?,
         val referer: String?,
+        val requestId: String,
     ) {
         fun message(): String =
             listOf(
                 "http_access",
+                "requestId=${quoted(requestId)}",
                 "method=${token(method)}",
                 "path=${quoted(path)}",
                 "query=${nullableQuoted(query)}",
@@ -128,6 +135,7 @@ class HttpAccessLogFilter : OncePerRequestFilter() {
                 "http.duration_ms" to durationMs.toString(),
                 "http.response_bytes" to responseBytes.toString(),
                 "client.address" to remoteAddress,
+                "requestId" to requestId,
             )
     }
 
@@ -230,7 +238,13 @@ class HttpAccessLogFilter : OncePerRequestFilter() {
         private const val BAD_REQUEST_STATUS = 400
         private const val SERVER_ERROR_STATUS = 500
         private const val SINGLE_BYTE = 1
+        private const val REQUEST_ID_HEADER = "X-Request-Id"
         private val accessLogger = LoggerFactory.getLogger("com.finaxis.platform.http.access")
+
+        private fun HttpServletRequest.requestId(): String =
+            getHeader(REQUEST_ID_HEADER)
+                ?.takeIf { value -> value.isNotBlank() }
+                ?: UUID.randomUUID().toString()
 
         private fun token(value: String): String = value.replace(WHITESPACE_REGEX, "_")
 

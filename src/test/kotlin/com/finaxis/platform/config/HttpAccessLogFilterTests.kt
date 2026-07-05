@@ -37,10 +37,11 @@ class HttpAccessLogFilterTests {
     @Test
     fun `filter emits access log through slf4j with request fields`() {
         val request =
-            MockHttpServletRequest("GET", "/auth/me").apply {
+            MockHttpServletRequest("GET", "/api/v1/auth/me").apply {
                 queryString = "include=branches"
                 remoteAddr = "203.0.113.10"
                 addHeader("User-Agent", "finaxis-test")
+                addHeader("X-Request-Id", "request-1")
             }
         val response = MockHttpServletResponse()
         val filterChain =
@@ -54,22 +55,26 @@ class HttpAccessLogFilterTests {
 
         val event = appender.list.single()
         assertEquals(Level.INFO, event.level)
-        assertTrue(event.formattedMessage.contains("http_access method=GET"))
-        assertTrue(event.formattedMessage.contains("""path="/auth/me""""))
+        assertTrue(event.formattedMessage.contains("http_access requestId="))
+        assertTrue(event.formattedMessage.contains("method=GET"))
+        assertTrue(event.formattedMessage.contains("""requestId="request-1""""))
+        assertTrue(event.formattedMessage.contains("""path="/api/v1/auth/me""""))
         assertTrue(event.formattedMessage.contains("""query="include=branches""""))
         assertTrue(event.formattedMessage.contains("status=200"))
         assertTrue(event.formattedMessage.contains("responseBytes=11"))
         assertTrue(event.formattedMessage.contains("""remoteAddress="203.0.113.10""""))
         assertEquals("GET", event.mdcPropertyMap["http.method"])
-        assertEquals("/auth/me", event.mdcPropertyMap["http.path"])
+        assertEquals("/api/v1/auth/me", event.mdcPropertyMap["http.path"])
         assertEquals("200", event.mdcPropertyMap["http.status_code"])
         assertEquals("11", event.mdcPropertyMap["http.response_bytes"])
+        assertEquals("request-1", event.mdcPropertyMap["requestId"])
+        assertEquals("request-1", response.getHeader("X-Request-Id"))
         assertNotNull(event.mdcPropertyMap["http.duration_ms"])
     }
 
     @Test
     fun `filter logs failed requests as server errors and rethrows`() {
-        val request = MockHttpServletRequest("POST", "/auth/select-branch")
+        val request = MockHttpServletRequest("POST", "/api/v1/auth/select-branch")
         val response = MockHttpServletResponse()
         val filterChain =
             FilterChain { _, _ ->

@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.application.context
 
+import com.finaxis.platform.common.web.ratelimit.RateLimitPrincipal
 import org.springframework.security.authentication.AbstractAuthenticationToken
 import org.springframework.security.core.authority.SimpleGrantedAuthority
 import java.io.Serializable
@@ -17,7 +18,14 @@ data class AppPrincipal(
     val email: String?,
     val fullName: String?,
     val permissions: Set<String>,
-) : Serializable {
+) : RateLimitPrincipal,
+    Serializable {
+    override val rateLimitUserId: String
+        get() = userId.toString()
+
+    override val rateLimitTenantId: String
+        get() = organisationId.toString()
+
     /**
      * Java serialization metadata for Redis-backed Spring Security session storage.
      */

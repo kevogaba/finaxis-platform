@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.inbound.security
 
+import com.finaxis.platform.common.web.ratelimit.RateLimitFilter
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.context.AppPrincipal
@@ -29,6 +30,7 @@ import org.springframework.web.filter.OncePerRequestFilter
 @EnableMethodSecurity
 class SecurityConfiguration(
     private val activeOrganisationFilter: ActiveOrganisationContextFilter,
+    private val rateLimitFilter: RateLimitFilter,
 ) {
     /**
      * Builds the servlet security filter chain for JWT authentication and method security.
@@ -51,6 +53,7 @@ class SecurityConfiguration(
                     .authenticated()
             }.oauth2ResourceServer { resourceServer -> resourceServer.jwt { } }
             .addFilterAfter(activeOrganisationFilter, BearerTokenAuthenticationFilter::class.java)
+            .addFilterAfter(rateLimitFilter, ActiveOrganisationContextFilter::class.java)
         return http.build()
     }
 }

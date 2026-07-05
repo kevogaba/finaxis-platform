@@ -24,7 +24,7 @@ Support a hybrid active organisation context transport:
 3. If the header is present but invalid, reject the request with `403` and do not fall back to the session.
 4. If neither transport provides context, leave the request authenticated by Keycloak but without application tenant authorities.
 
-`POST /auth/select-organisation` verifies ACTIVE membership, stores the selected context in `HttpSession`, and also returns a signed context token for headless clients. If exactly one branch is assigned, that branch is auto-selected. If multiple branches are assigned, clients call `POST /auth/select-branch`; the service verifies the branch assignment and updates the same context.
+`POST /api/v1/auth/select-organisation` verifies ACTIVE membership, stores the selected context in `HttpSession`, and also returns a signed context token for headless clients. If exactly one branch is assigned, that branch is auto-selected. If multiple branches are assigned, clients call `POST /api/v1/auth/select-branch`; the service verifies the branch assignment and updates the same context.
 
 ## Consequences
 

@@ -56,6 +56,7 @@ import kotlin.test.assertTrue
 
 private val ORGANISATION_ID: UUID = UUID.fromString("22222222-2222-2222-2222-222222222222")
 private val MEMBERSHIP_ID: UUID = UUID.fromString("55555555-5555-5555-5555-555555555555")
+private const val TEST_CONTEXT_SECRET = "test-secret-with-enough-length-32bytes"
 private val HEAD_OFFICE_BRANCH_ID: UUID =
     UUID.fromString("33333333-3333-3333-3333-333333333333")
 
@@ -69,7 +70,7 @@ class WebAdapterUnitTests {
                 lookup = StaticMembershipLookup(organisationId, membershipId),
                 contextService =
                     ActiveOrganisationContextService(
-                        ActiveOrganisationContextProperties("test-secret-with-enough-length"),
+                        ActiveOrganisationContextProperties(TEST_CONTEXT_SECRET),
                         Clock.fixed(Instant.parse("2026-07-04T08:00:00Z"), ZoneOffset.UTC),
                     ),
             )
@@ -101,7 +102,7 @@ class WebAdapterUnitTests {
                 lookup = lookup,
                 contextService =
                     ActiveOrganisationContextService(
-                        ActiveOrganisationContextProperties("test-secret-with-enough-length"),
+                        ActiveOrganisationContextProperties(TEST_CONTEXT_SECRET),
                         Clock.fixed(Instant.parse("2026-07-04T08:00:00Z"), ZoneOffset.UTC),
                     ),
             )
@@ -174,7 +175,7 @@ class WebAdapterUnitTests {
         val response =
             ApiExceptionHandler().validation(
                 exception,
-                MockHttpServletRequest("POST", "/auth/select-organisation"),
+                MockHttpServletRequest("POST", "/api/v1/auth/select-organisation"),
             )
 
         assertEquals(400, response.statusCode.value())
@@ -194,7 +195,7 @@ class WebAdapterUnitTests {
         val response =
             ApiExceptionHandler().validation(
                 exception,
-                MockHttpServletRequest("POST", "/auth/select-organisation"),
+                MockHttpServletRequest("POST", "/api/v1/auth/select-organisation"),
             )
 
         assertEquals(400, response.statusCode.value())
@@ -282,7 +283,7 @@ class WebAdapterUnitTests {
         val response =
             ApiExceptionHandler().missingParameter(
                 MissingServletRequestParameterException("organisationId", "UUID"),
-                MockHttpServletRequest("GET", "/auth/select-organisation"),
+                MockHttpServletRequest("GET", "/api/v1/auth/select-organisation"),
             )
 
         assertEquals(400, response.statusCode.value())
@@ -301,7 +302,7 @@ class WebAdapterUnitTests {
         val response =
             ApiExceptionHandler().invalidJson(
                 HttpMessageNotReadableException("bad json", mock(HttpInputMessage::class.java)),
-                MockHttpServletRequest("POST", "/auth/select-organisation"),
+                MockHttpServletRequest("POST", "/api/v1/auth/select-organisation"),
             )
 
         assertEquals(400, response.statusCode.value())
@@ -332,7 +333,7 @@ class WebAdapterUnitTests {
         val response =
             ApiExceptionHandler().methodNotAllowed(
                 HttpRequestMethodNotSupportedException("PATCH", listOf("GET", "POST")),
-                MockHttpServletRequest("PATCH", "/auth/select-organisation"),
+                MockHttpServletRequest("PATCH", "/api/v1/auth/select-organisation"),
             )
 
         assertEquals(405, response.statusCode.value())
@@ -351,7 +352,7 @@ class WebAdapterUnitTests {
         val response =
             ApiExceptionHandler().methodNotAllowed(
                 HttpRequestMethodNotSupportedException("PATCH"),
-                MockHttpServletRequest("PATCH", "/auth/select-organisation"),
+                MockHttpServletRequest("PATCH", "/api/v1/auth/select-organisation"),
             )
 
         assertEquals(405, response.statusCode.value())

@@ -54,7 +54,7 @@ fi
 
 SELECT_ORG_RESPONSE="$(
   curl -fsS \
-    -X POST "$APP_URL/auth/select-organisation" \
+    -X POST "$APP_URL/api/v1/auth/select-organisation" \
     -H "Authorization: Bearer $ACCESS_TOKEN" \
     -H 'Content-Type: application/json' \
     -d "{\"organisationId\":\"$ORGANISATION_ID\"}"
@@ -67,7 +67,7 @@ CONTEXT_TOKEN="$(
 
 SELECT_BRANCH_RESPONSE="$(
   curl -fsS \
-    -X POST "$APP_URL/auth/select-branch" \
+    -X POST "$APP_URL/api/v1/auth/select-branch" \
     -H "Authorization: Bearer $ACCESS_TOKEN" \
     -H "X-Active-Organisation-Context: $CONTEXT_TOKEN" \
     -H 'Content-Type: application/json' \
@@ -80,7 +80,7 @@ BRANCH_CONTEXT_TOKEN="$(
 )"
 
 curl -fsS \
-  "$APP_URL/auth/me" \
+  "$APP_URL/api/v1/auth/me" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "X-Active-Organisation-Context: $BRANCH_CONTEXT_TOKEN"
 

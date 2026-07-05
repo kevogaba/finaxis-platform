@@ -16,7 +16,7 @@ class ActiveOrganisationContextTests {
         ActiveOrganisationContextService(
             properties =
                 ActiveOrganisationContextProperties(
-                    secret = "test-secret-with-enough-length",
+                    secret = "test-secret-with-enough-length-32bytes",
                 ),
             clock = clock,
         )
@@ -57,7 +57,7 @@ class ActiveOrganisationContextTests {
             ActiveOrganisationContextService(
                 properties =
                     ActiveOrganisationContextProperties(
-                        "test-secret-with-enough-length",
+                        "test-secret-with-enough-length-32bytes",
                         ttl,
                     ),
                 clock = clock,
@@ -73,7 +73,7 @@ class ActiveOrganisationContextTests {
             ActiveOrganisationContextService(
                 properties =
                     ActiveOrganisationContextProperties(
-                        "test-secret-with-enough-length",
+                        "test-secret-with-enough-length-32bytes",
                         ttl,
                     ),
                 clock = Clock.fixed(Instant.parse("2026-07-04T08:00:02Z"), ZoneOffset.UTC),

@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
+import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.profile.UserProfile
 import com.finaxis.platform.iam.application.profile.UserProfileService
@@ -20,7 +21,7 @@ import org.springframework.web.bind.annotation.RestController
  * REST adapter for authenticated user profile and tenant-context details.
  */
 @RestController
-@RequestMapping("/auth")
+@RequestMapping(ApiPaths.AUTH)
 @Tag(name = "User Profile")
 class UserProfileController(
     private val service: UserProfileService,

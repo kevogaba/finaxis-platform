@@ -15,7 +15,7 @@ import kotlin.test.assertNull
 class ActiveOrganisationContextResolverTests {
     private val contextService =
         ActiveOrganisationContextService(
-            ActiveOrganisationContextProperties(secret = "test-secret-with-enough-length"),
+            ActiveOrganisationContextProperties(secret = "test-secret-with-enough-length-32bytes"),
             Clock.fixed(Instant.parse("2026-07-04T08:00:00Z"), ZoneOffset.UTC),
         )
 

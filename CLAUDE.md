@@ -17,6 +17,9 @@ complex. Simplify where possible while preserving security boundaries and testab
 Authorization rules:
 
 - Keycloak authenticates users only.
+- This application is an OAuth2 resource server. Do not add application-managed password handling,
+  password authentication endpoints, password storage, or password checks. Local smoke scripts may
+  obtain dev-only Keycloak tokens, but application code must not handle user credentials.
 - The application owns users, organisations, memberships, roles, permissions, scopes,
   and authorization rules.
 - Runtime authorization evaluates permission codes, never role names.
@@ -47,6 +50,29 @@ FSM/event architecture:
 
 All public APIs must be documented with Springdoc/OpenAPI annotations. API errors
 should go through centralized exception handling.
+
+API governance:
+
+- All public API endpoints must be versioned under `/api/v1`, `/api/v2`, etc.
+- Never add an unversioned public API endpoint.
+- All listing APIs must use pagination.
+- Never return unbounded collections from listing endpoints.
+- Use DTOs at API boundaries unless explicitly documented otherwise.
+- Use Bean Validation for request DTOs and typed configuration properties.
+- Update smoke tests, docs, and examples whenever endpoint paths change.
+
+Rate limiting, logging, and audit:
+
+- Use Bucket4j + Redis for distributed production rate limiting.
+- Keep Redis access Lettuce-based so standalone Redis, Sentinel, and Cluster remain deployment
+  options. Local development may use standalone Redis.
+- Do not implement per-instance or in-memory-only rate limiting for production paths.
+- Rate-limit values must be configurable.
+- Preserve request correlation with `X-Request-Id` and MDC cleanup.
+- Do not log secrets, bearer tokens, passwords, authorization headers, session cookies, API keys,
+  or sensitive PII.
+- Audit admin actions and critical state-changing operations through the common audit service or
+  event listeners. Do not scatter audit logging in controllers.
 
 Sentry is disabled for local development by default. Use environment configuration to
 enable it outside local development.

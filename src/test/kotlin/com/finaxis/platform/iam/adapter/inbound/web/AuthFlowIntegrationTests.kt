@@ -46,7 +46,7 @@ class AuthFlowIntegrationTests {
     @Test
     fun `public controllers reject unauthenticated requests`() {
         mockMvc
-            .get("/auth/me")
+            .get("/api/v1/auth/me")
             .andExpect {
                 status { isUnauthorized() }
             }
@@ -55,7 +55,7 @@ class AuthFlowIntegrationTests {
     @Test
     fun `profile endpoint requires active organisation context`() {
         mockMvc
-            .get("/auth/me") {
+            .get("/api/v1/auth/me") {
                 with(localJwt())
             }.andExpect {
                 status { isForbidden() }
@@ -65,7 +65,7 @@ class AuthFlowIntegrationTests {
     @Test
     fun `invalid active organisation context fails closed`() {
         mockMvc
-            .get("/auth/me") {
+            .get("/api/v1/auth/me") {
                 with(localJwt())
                 header(ActiveOrganisationContextService.HEADER, "invalid-context")
             }.andExpect {
@@ -76,7 +76,7 @@ class AuthFlowIntegrationTests {
     @Test
     fun `selection endpoint returns validation errors through api exception handler`() {
         mockMvc
-            .post("/auth/select-organisation") {
+            .post("/api/v1/auth/select-organisation") {
                 with(localJwt())
                 contentType = MediaType.APPLICATION_JSON
                 content = """{}"""
@@ -90,7 +90,7 @@ class AuthFlowIntegrationTests {
     @Test
     fun `selection endpoint returns invalid json errors through api exception handler`() {
         mockMvc
-            .post("/auth/select-organisation") {
+            .post("/api/v1/auth/select-organisation") {
                 with(localJwt())
                 contentType = MediaType.APPLICATION_JSON
                 content = """{"organisationId":"""
@@ -104,7 +104,7 @@ class AuthFlowIntegrationTests {
     @Test
     fun `selection endpoint rejects unknown organisation membership`() {
         mockMvc
-            .post("/auth/select-organisation") {
+            .post("/api/v1/auth/select-organisation") {
                 with(localJwt())
                 contentType = MediaType.APPLICATION_JSON
                 content = """{"organisationId":"${UUID.randomUUID()}"}"""
@@ -116,7 +116,7 @@ class AuthFlowIntegrationTests {
 
     private fun selectOrganisation(): String =
         mockMvc
-            .post("/auth/select-organisation") {
+            .post("/api/v1/auth/select-organisation") {
                 with(localJwt())
                 contentType = MediaType.APPLICATION_JSON
                 content = """{"organisationId":"$LOCAL_ORGANISATION_ID"}"""
@@ -136,7 +136,7 @@ class AuthFlowIntegrationTests {
 
     private fun selectBranch(organisationContextToken: String): String =
         mockMvc
-            .post("/auth/select-branch") {
+            .post("/api/v1/auth/select-branch") {
                 with(localJwt())
                 header(ActiveOrganisationContextService.HEADER, organisationContextToken)
                 contentType = MediaType.APPLICATION_JSON
@@ -153,7 +153,7 @@ class AuthFlowIntegrationTests {
 
     private fun assertCurrentProfile(branchContextToken: String) {
         mockMvc
-            .get("/auth/me") {
+            .get("/api/v1/auth/me") {
                 with(localJwt())
                 header(ActiveOrganisationContextService.HEADER, branchContextToken)
             }.andExpect {

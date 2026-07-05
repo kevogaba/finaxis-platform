@@ -1,7 +1,10 @@
 package com.finaxis.platform.iam.application.context
 
+import jakarta.validation.constraints.NotBlank
+import jakarta.validation.constraints.Size
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.stereotype.Service
+import org.springframework.validation.annotation.Validated
 import java.io.Serializable
 import java.nio.charset.StandardCharsets
 import java.time.Clock
@@ -21,10 +24,23 @@ private const val DEFAULT_CONTEXT_TTL_HOURS = 8L
  * application tenant context for clients that cannot use browser sessions.
  */
 @ConfigurationProperties(prefix = "finaxis.iam.active-organisation-context")
+@Validated
 data class ActiveOrganisationContextProperties(
+    @field:NotBlank
+    @field:Size(min = MINIMUM_SECRET_LENGTH)
     val secret: String,
     val ttl: Duration = Duration.ofHours(DEFAULT_CONTEXT_TTL_HOURS),
-)
+) {
+    init {
+        require(!ttl.isZero && !ttl.isNegative) {
+            "Active organisation context TTL must be positive"
+        }
+    }
+
+    private companion object {
+        private const val MINIMUM_SECRET_LENGTH = 32
+    }
+}
 
 /**
  * Selected application tenant context for the authenticated Keycloak subject.

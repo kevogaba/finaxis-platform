@@ -53,11 +53,11 @@ Run the smoke script:
 ```
 
 The script obtains a Keycloak access token, selects the seeded organisation, selects a
-branch using the `X-Active-Organisation-Context` header, and calls `GET /auth/me`.
+branch using the `X-Active-Organisation-Context` header, and calls `GET /api/v1/auth/me`.
 
 ## Smoke Endpoint
 
-`GET /auth/me` returns the authenticated application user profile, including:
+`GET /api/v1/auth/me` returns the authenticated application user profile, including:
 
 - selected organisation
 - selected branch
