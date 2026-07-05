@@ -8,6 +8,24 @@ Before adding code, pause and evaluate whether the implementation is the simples
 
 Business authorization must use permission codes, not role names. Controllers may use `@PreAuthorize("hasAuthority('permission.code')")`; services must use `AuthorizationService` for resource-specific checks.
 
+Reusable FSM transition infrastructure lives in `com.finaxis.platform.common.transitions`.
+Domain modules must define their own state enums, transition enums, transition graphs, guards,
+policies, persistence adapters, and explicit business events. Transition direction must be
+deterministic and declared through `TransitionDefinition`; do not infer legal moves from enum order,
+role names, UI actions, or old status strings.
+
+Keep state mutation, transition validation, transition log creation, event publication, broker
+publishing, and background jobs separated. Use Spring Modulith for module boundaries, application
+events, cross-module reactions, observability, and module verification. Use Namastack Outbox as the
+transactional outbox engine. Externalize only selected Modulith events to RabbitMQ with strongly
+named routing destinations. Keep RabbitMQ listeners thin: deserialize, validate, delegate to an
+application service, handle idempotency where needed, and ack/nack based on outcome. Use JobRunr for
+durable background jobs such as email, SMS, reports, imports, exports, retries, scheduled jobs, and
+long-running operational work. Do not use JobRunr as the primary outbox or event externalization
+engine. See `docs/architecture/fsm-transitions.md` and
+`docs/adr/0002-fsm-transition-infrastructure.md` before touching transitions, events, modular
+boundaries, outbox, RabbitMQ, or background processing.
+
 Do not introduce WebFlux or reactive types. This is a Spring Web MVC application.
 
 Use Springdoc annotations for all public APIs. Use centralized API exception handling for predictable error responses.

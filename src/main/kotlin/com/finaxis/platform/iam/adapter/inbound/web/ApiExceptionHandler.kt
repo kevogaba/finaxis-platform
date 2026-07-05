@@ -8,6 +8,8 @@ import io.micrometer.tracing.Tracer
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.validation.ConstraintViolationException
 import org.slf4j.LoggerFactory
+import org.springframework.core.Ordered
+import org.springframework.core.annotation.Order
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.http.converter.HttpMessageNotReadableException
@@ -51,6 +53,7 @@ data class ApiErrorDetail(
  * Central MVC exception handler for all REST controllers.
  */
 @RestControllerAdvice
+@Order(Ordered.HIGHEST_PRECEDENCE)
 class ApiExceptionHandler(
     private val tracer: Tracer? = null,
 ) {

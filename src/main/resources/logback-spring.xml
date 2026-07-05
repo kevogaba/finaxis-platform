@@ -12,7 +12,7 @@
     <property name="LOG_NEVER_BLOCK" value="${FINAXIS_LOG_NEVER_BLOCK:-false}"/>
     <property
         name="CONSOLE_LOG_PATTERN"
-        value="%clr(%d{${LOG_DATEFORMAT_PATTERN}}){faint} %clr(${LOG_LEVEL_PATTERN}) %clr(${PID:- }){magenta} %clr(---){faint} %clr([${APP_NAME},${ENVIRONMENT},%X{traceId:-},%X{spanId:-}]){faint} %clr([%20.20t]){faint} %clr(%-40.40logger{39}){cyan} %clr(:){faint} %m%n${LOG_EXCEPTION_CONVERSION_WORD:-%wEx}"/>
+        value="%clr(%d{${LOG_DATEFORMAT_PATTERN}}){faint} %clr(${LOG_LEVEL_PATTERN}) %clr(${PID:- }){magenta} %clr(---){faint} %clr([${APP_NAME},${ENVIRONMENT},%X{traceId:-},%X{spanId:-}]){faint} %clr(:){faint} %m%n${LOG_EXCEPTION_CONVERSION_WORD:-%wEx}"/>
 
     <appender name="OTEL" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender"/>
 

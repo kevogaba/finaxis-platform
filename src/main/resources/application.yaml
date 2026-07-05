@@ -1,13 +1,44 @@
 server:
   port: ${FINAXIS_SERVER_PORT:8081}
+  shutdown: graceful
+  forward-headers-strategy: framework
   compression:
     enabled: true
+    min-response-size: 1KB
+    mime-types:
+      - application/json
+      - application/problem+json
+      - application/xml
+      - text/html
+      - text/xml
+      - text/plain
   http2:
     enabled: true
-
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: ${FINAXIS_SESSION_COOKIE_SECURE:false}
+  tomcat:
+    accept-count: ${FINAXIS_TOMCAT_ACCEPT_COUNT:100}
+    connection-timeout: ${FINAXIS_TOMCAT_CONNECTION_TIMEOUT:20s}
+    keep-alive-timeout: ${FINAXIS_TOMCAT_KEEP_ALIVE_TIMEOUT:20s}
+    max-connections: ${FINAXIS_TOMCAT_MAX_CONNECTIONS:8192}
+    max-http-form-post-size: 2MB
+    max-http-response-header-size: 16KB
+    max-keep-alive-requests: ${FINAXIS_TOMCAT_MAX_KEEP_ALIVE_REQUESTS:100}
+    max-parameter-count: 1000
+    accesslog:
+      enabled: false
 spring:
   application:
     name: platform
+  mvc:
+    problemdetails:
+      enabled: true
+  lifecycle:
+    timeout-per-shutdown-phase: ${FINAXIS_SHUTDOWN_PHASE_TIMEOUT:30s}
   devtools:
     restart:
       enabled: true
@@ -39,11 +70,22 @@ spring:
       port: ${FINAXIS_REDIS_PORT:6379}
       repositories:
         enabled: false
+  modulith:
+    events:
+      externalization:
+        mode: outbox
+        serialize-externalization: true
+    runtime:
+      verification-enabled: true
   rabbitmq:
     host: ${FINAXIS_RABBITMQ_HOST:localhost}
     port: ${FINAXIS_RABBITMQ_PORT:5673}
     username: ${FINAXIS_RABBITMQ_USERNAME:finaxis}
     password: ${FINAXIS_RABBITMQ_PASSWORD:finaxis}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
   security:
     oauth2:
       resourceserver:
@@ -51,6 +93,11 @@ spring:
           issuer-uri: ${FINAXIS_KEYCLOAK_ISSUER_URI:http://localhost:8080/realms/finaxis}
           audiences:
             - ${FINAXIS_KEYCLOAK_AUDIENCE:finaxis-platform}
+
+namastack:
+  outbox:
+    rabbit:
+      fail-on-unroutable: true
 
 management:
   endpoints:
@@ -163,5 +210,6 @@ logging:
     org.springframework.transaction: WARN
     org.hibernate.validator: WARN
     org.flywaydb: INFO
+    com.finaxis.platform.http.access: INFO
     io.opentelemetry.exporter: WARN
     io.opentelemetry.sdk: WARN

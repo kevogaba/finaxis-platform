@@ -21,6 +21,7 @@ spotbugsVersion = "4.10.2"
 errorPronePluginVersion = "5.1.0"
 errorProneVersion = "2.50.0"
 archUnitVersion = "1.4.2"
+namastackVersion = "1.7.1"
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "springBootVersion" }
@@ -31,7 +32,6 @@ kotlin-spring = { id = "org.jetbrains.kotlin.plugin.spring", version.ref = "kotl
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlinVersion" }
 graalvm-native = { id = "org.graalvm.buildtools.native", version.ref = "graalVmVersion" }
 sentry-jvm = { id = "io.sentry.jvm.gradle", version.ref = "sentryPluginVersion" }
-sentry-kotlin-compiler = { id = "io.sentry.kotlin.compiler.gradle", version.ref = "sentryPluginVersion" }
 detekt = { id = "dev.detekt", version.ref = "detektVersion" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotlessVersion" }
 spotbugs = { id = "com.github.spotbugs", version.ref = "spotbugsPluginVersion" }
@@ -47,3 +47,4 @@ sentry-bom = { module = "io.sentry:sentry-bom", version.ref = "sentryVersion" }
 opentelemetry-logback-appender = { module = "io.opentelemetry.instrumentation:opentelemetry-logback-appender-1.0", version.ref = "opentelemetryInstrumentationAlphaVersion" }
 errorprone-core = { module = "com.google.errorprone:error_prone_core", version.ref = "errorProneVersion" }
 archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archUnitVersion" }
+namastack-bom = { module = "io.namastack:namastack-outbox-bom", version.ref = "namastackVersion" }

@@ -24,6 +24,27 @@ Authorization rules:
 - Controllers use permission authorities for coarse gates.
 - Application services enforce resource-specific authorization.
 
+FSM/event architecture:
+
+- Reusable transition infrastructure lives in `com.finaxis.platform.common.transitions`.
+- Domain modules define their own state enums, transition enums, graphs, guards, policies,
+  persistence adapters, and explicit domain events.
+- Transition direction must be deterministic; declare every legal source state, transition name,
+  and target state in a `TransitionDefinition`.
+- Keep state mutation, transition validation, log creation, event publication, broker publishing,
+  and background jobs separated.
+- Use Spring Modulith for module boundaries, application events, cross-module listeners, and
+  verification.
+- Use Namastack Outbox for transactional event externalization.
+- Externalize only selected events to RabbitMQ with clear routing names.
+- Keep RabbitMQ listeners thin: deserialize, validate, delegate to an application service, handle
+  idempotency, and ack/nack based on outcome.
+- Use JobRunr for durable background jobs such as email, SMS, reports, imports, exports, retries,
+  and recurring work. Do not use JobRunr as the primary outbox/event externalization engine.
+- See `docs/architecture/fsm-transitions.md` and
+  `docs/adr/0002-fsm-transition-infrastructure.md` before touching transitions, events,
+  Modulith boundaries, outbox, RabbitMQ, or background processing.
+
 All public APIs must be documented with Springdoc/OpenAPI annotations. API errors
 should go through centralized exception handling.
 
