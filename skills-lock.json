@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "skills": {
+    "312-frameworks-spring-data-jdbc": {
+      "source": "jabrena/cursor-rules-java",
+      "sourceType": "github",
+      "skillPath": "skills/312-frameworks-spring-data-jdbc/SKILL.md",
+      "computedHash": "f5db0be5a0a7a2e00d278b5376338ccdfbd9ea0f440326462a347c5885da58e3"
+    },
+    "hexagonal-architecture": {
+      "source": "affaan-m/everything-claude-code",
+      "sourceType": "github",
+      "skillPath": "skills/hexagonal-architecture/SKILL.md",
+      "computedHash": "423c177b1d49c286960da0d20f0788d57f5cbde3c0a8b706a0f99ba400c47dad"
+    },
+    "spring-boot-engineer": {
+      "source": "jeffallan/claude-skills",
+      "sourceType": "github",
+      "skillPath": "skills/spring-boot-engineer/SKILL.md",
+      "computedHash": "ed065f5db45afe9dc2739cff713927d0b6b6ad3e667bdf7b40340d1a5543bb0f"
+    },
+    "springboot-patterns": {
+      "source": "affaan-m/everything-claude-code",
+      "sourceType": "github",
+      "skillPath": "skills/springboot-patterns/SKILL.md",
+      "computedHash": "d2c003485e50a3e0f7ca325df55ea72c2810e9a0ab099313bd350b979733015c"
+    }
+  }
+}

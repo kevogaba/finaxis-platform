@@ -10,6 +10,19 @@ jooqVersion = "3.21.5"
 springDoc = "3.0.3"
 sentryPluginVersion = "6.14.0"
 sentryVersion = "8.47.0"
+opentelemetryInstrumentationAlphaVersion = "2.28.1-alpha"
+detektVersion = "2.0.0-alpha.3"
+spotlessVersion = "8.8.0"
+ktlintVersion = "1.8.0"
+checkstyleVersion = "13.7.0"
+pmdVersion = "7.25.0"
+spotbugsPluginVersion = "6.5.8"
+spotbugsVersion = "4.10.2"
+errorPronePluginVersion = "5.1.0"
+errorProneVersion = "2.50.0"
+archUnitVersion = "1.4.2"
+namastackVersion = "1.7.1"
+bucket4jVersion = "8.19.0"
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "springBootVersion" }
@@ -20,7 +33,10 @@ kotlin-spring = { id = "org.jetbrains.kotlin.plugin.spring", version.ref = "kotl
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlinVersion" }
 graalvm-native = { id = "org.graalvm.buildtools.native", version.ref = "graalVmVersion" }
 sentry-jvm = { id = "io.sentry.jvm.gradle", version.ref = "sentryPluginVersion" }
-sentry-kotlin-complier = { id = "io.sentry.kotlin.compiler.gradle", version.ref = "sentryPluginVersion" }
+detekt = { id = "dev.detekt", version.ref = "detektVersion" }
+spotless = { id = "com.diffplug.spotless", version.ref = "spotlessVersion" }
+spotbugs = { id = "com.github.spotbugs", version.ref = "spotbugsPluginVersion" }
+errorprone = { id = "net.ltgt.errorprone", version.ref = "errorPronePluginVersion" }
 
 [libraries]
 jobrunr-spring-boot = { module = "org.jobrunr:jobrunr-spring-boot-4-starter", version.ref = "jobrunrVesrion" }
@@ -29,5 +45,10 @@ springdoc-ui = { module = "org.springdoc:springdoc-openapi-starter-webmvc-ui", v
 springdoc-api = { module = "org.springdoc:springdoc-openapi-starter-webmvc-api", version.ref = "springDoc" }
 springdoc-scalar = { module = "org.springdoc:springdoc-openapi-starter-webmvc-scalar", version.ref = "springDoc" }
 sentry-bom = { module = "io.sentry:sentry-bom", version.ref = "sentryVersion" }
-
-
+opentelemetry-logback-appender = { module = "io.opentelemetry.instrumentation:opentelemetry-logback-appender-1.0", version.ref = "opentelemetryInstrumentationAlphaVersion" }
+errorprone-core = { module = "com.google.errorprone:error_prone_core", version.ref = "errorProneVersion" }
+archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archUnitVersion" }
+namastack-bom = { module = "io.namastack:namastack-outbox-bom", version.ref = "namastackVersion" }
+bucket4j-core = { module = "com.bucket4j:bucket4j_jdk17-core", version.ref = "bucket4jVersion" }
+bucket4j-redis-common = { module = "com.bucket4j:bucket4j_jdk17-redis-common", version.ref = "bucket4jVersion" }
+bucket4j-lettuce = { module = "com.bucket4j:bucket4j_jdk17-lettuce", version.ref = "bucket4jVersion" }

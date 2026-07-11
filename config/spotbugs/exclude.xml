@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FindBugsFilter>
+  <!-- Generated framework artifacts are not reviewed as source-owned Java code. -->
+  <Match>
+    <Class name="~.*(\$\$.*|Generated.*|.*Generated)$"/>
+  </Match>
+</FindBugsFilter>

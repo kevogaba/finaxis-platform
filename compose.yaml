@@ -1,26 +1,65 @@
 services:
   grafana-lgtm:
-    image: 'grafana/otel-lgtm:latest'
+    image: 'grafana/otel-lgtm:0.28.0'
     ports:
       - '3000:3000'
       - '4317'
-      - '4318'
+      - '4318:4318'
+    labels:
+      org.springframework.boot.ignore: true
+  keycloak:
+    image: 'quay.io/keycloak/keycloak:26.6.4'
+    command:
+      - start-dev
+      - --import-realm
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: finaxis
+      KC_DB_PASSWORD: finaxis
+      KC_HEALTH_ENABLED: 'true'
+      KC_HOSTNAME_STRICT: 'false'
+      KC_HTTP_ENABLED: 'true'
+    ports:
+      - '8080:8080'
+      - '9000:9000'
+    volumes:
+      - './docker/keycloak/import:/opt/keycloak/data/import:ro'
+    labels:
+      org.springframework.boot.ignore: true
   postgres:
-    image: 'postgres:latest'
+    image: 'postgres:18.4'
     environment:
-      - 'POSTGRES_DB=mydatabase'
-      - 'POSTGRES_PASSWORD=secret'
-      - 'POSTGRES_USER=myuser'
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: finaxis
+      POSTGRES_USER: finaxis
     ports:
-      - '5432'
+      - '5433:5432'
+    volumes:
+      - 'postgres-data:/var/lib/postgresql'
+      - './docker/postgres/initdb:/docker-entrypoint-initdb.d:ro'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U finaxis -d postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 20
   rabbitmq:
-    image: 'rabbitmq:latest'
+    image: 'rabbitmq:4.3.2-management'
     environment:
-      - 'RABBITMQ_DEFAULT_PASS=secret'
-      - 'RABBITMQ_DEFAULT_USER=myuser'
+      RABBITMQ_DEFAULT_PASS: finaxis
+      RABBITMQ_DEFAULT_USER: finaxis
     ports:
-      - '5672'
+      - '5673:5672'
+      - '15672:15672'
   redis:
-    image: 'redis:latest'
+    image: 'redis:8.8.0'
     ports:
-      - '6379'
+      - '6379:6379'
+
+volumes:
+  postgres-data:

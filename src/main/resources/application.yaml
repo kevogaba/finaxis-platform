@@ -1,3 +1,239 @@
+server:
+  port: ${FINAXIS_SERVER_PORT:8081}
+  shutdown: graceful
+  forward-headers-strategy: framework
+  compression:
+    enabled: true
+    min-response-size: 1KB
+    mime-types:
+      - application/json
+      - application/problem+json
+      - application/xml
+      - text/html
+      - text/xml
+      - text/plain
+  http2:
+    enabled: true
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: ${FINAXIS_SESSION_COOKIE_SECURE:false}
+  tomcat:
+    accept-count: ${FINAXIS_TOMCAT_ACCEPT_COUNT:100}
+    connection-timeout: ${FINAXIS_TOMCAT_CONNECTION_TIMEOUT:20s}
+    keep-alive-timeout: ${FINAXIS_TOMCAT_KEEP_ALIVE_TIMEOUT:20s}
+    max-connections: ${FINAXIS_TOMCAT_MAX_CONNECTIONS:8192}
+    max-http-form-post-size: 2MB
+    max-http-response-header-size: 16KB
+    max-keep-alive-requests: ${FINAXIS_TOMCAT_MAX_KEEP_ALIVE_REQUESTS:100}
+    max-parameter-count: 1000
+    accesslog:
+      enabled: false
 spring:
   application:
     name: platform
+  mvc:
+    problemdetails:
+      enabled: true
+  lifecycle:
+    timeout-per-shutdown-phase: ${FINAXIS_SHUTDOWN_PHASE_TIMEOUT:30s}
+  devtools:
+    restart:
+      enabled: true
+  docker:
+    compose:
+      enabled: true
+  datasource:
+    url: ${FINAXIS_DATASOURCE_URL:jdbc:postgresql://localhost:5433/platform}
+    username: ${FINAXIS_DATASOURCE_USERNAME:finaxis}
+    password: ${FINAXIS_DATASOURCE_PASSWORD:finaxis}
+  flyway:
+    enabled: true
+    postgresql:
+      transactional-lock: true
+  threads:
+    virtual:
+      enabled: true
+  cache:
+    cache-names:
+      - iam.effective-permissions
+  session:
+    timeout: 8h
+    data:
+      redis:
+        namespace: finaxis:platform:sessions
+  data:
+    redis:
+      host: ${FINAXIS_REDIS_HOST:localhost}
+      port: ${FINAXIS_REDIS_PORT:6379}
+      repositories:
+        enabled: false
+  modulith:
+    events:
+      externalization:
+        mode: outbox
+        serialize-externalization: true
+    runtime:
+      verification-enabled: true
+  rabbitmq:
+    host: ${FINAXIS_RABBITMQ_HOST:localhost}
+    port: ${FINAXIS_RABBITMQ_PORT:5673}
+    username: ${FINAXIS_RABBITMQ_USERNAME:finaxis}
+    password: ${FINAXIS_RABBITMQ_PASSWORD:finaxis}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${FINAXIS_KEYCLOAK_ISSUER_URI:http://localhost:8080/realms/finaxis}
+          audiences:
+            - ${FINAXIS_KEYCLOAK_AUDIENCE:finaxis-platform}
+
+namastack:
+  outbox:
+    rabbit:
+      fail-on-unroutable: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include:
+          - health
+          - info
+          - metrics
+          - prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized
+  info:
+    java:
+      enabled: true
+    env:
+      enabled: true
+    process:
+      enabled: true
+  observations:
+    annotations:
+      enabled: true
+  tracing:
+    propagation:
+      type: b3
+    sampling:
+      probability: ${FINAXIS_TRACING_SAMPLING_PROBABILITY:0.10}
+    export:
+      otlp:
+        enabled: ${FINAXIS_OTEL_TRACES_ENABLED:false}
+  opentelemetry:
+    enabled: ${FINAXIS_OTEL_ENABLED:true}
+    map-environment-variables: true
+    resource-attributes:
+      service.name: ${OTEL_SERVICE_NAME:finaxis-platform}
+      service.namespace: ${OTEL_SERVICE_NAMESPACE:finaxis}
+      service.version: ${FINAXIS_SERVICE_VERSION:0.0.1-SNAPSHOT}
+      deployment.environment.name: ${FINAXIS_DEPLOYMENT_ENVIRONMENT:local}
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}
+          transport: http
+          timeout: 10s
+          connect-timeout: 5s
+      limits:
+        max-attributes: 128
+        max-attribute-value-length: 4096
+    logging:
+      export:
+        max-queue-size: ${FINAXIS_OTEL_LOGS_MAX_QUEUE_SIZE:8192}
+        max-batch-size: ${FINAXIS_OTEL_LOGS_MAX_BATCH_SIZE:512}
+        schedule-delay: ${FINAXIS_OTEL_LOGS_SCHEDULE_DELAY:5s}
+        timeout: ${FINAXIS_OTEL_LOGS_TIMEOUT:10s}
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:http://localhost:4318/v1/logs}
+          transport: http
+          timeout: 10s
+          connect-timeout: 5s
+      limits:
+        max-attributes: 128
+        max-attribute-value-length: 4096
+  otlp:
+    metrics:
+      export:
+        enabled: ${FINAXIS_OTEL_METRICS_ENABLED:false}
+        url: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:http://localhost:4318/v1/metrics}
+        step: ${FINAXIS_OTEL_METRICS_STEP:30s}
+        batch-size: ${FINAXIS_OTEL_METRICS_BATCH_SIZE:10000}
+        connect-timeout: 5s
+        read-timeout: 10s
+  logging:
+    export:
+      otlp:
+        enabled: ${FINAXIS_OTEL_LOGS_ENABLED:false}
+
+sentry:
+  enabled: false
+  dsn: ""
+
+finaxis:
+  pagination:
+    default-page-size: ${FINAXIS_PAGINATION_DEFAULT_PAGE_SIZE:50}
+    max-page-size: ${FINAXIS_PAGINATION_MAX_PAGE_SIZE:200}
+  rate-limit:
+    enabled: ${FINAXIS_RATE_LIMIT_ENABLED:true}
+    include-headers: ${FINAXIS_RATE_LIMIT_INCLUDE_HEADERS:true}
+    fail-open: ${FINAXIS_RATE_LIMIT_FAIL_OPEN:true}
+    anonymous:
+      capacity: ${FINAXIS_RATE_LIMIT_ANONYMOUS_CAPACITY:100}
+      refill-tokens: ${FINAXIS_RATE_LIMIT_ANONYMOUS_REFILL_TOKENS:100}
+      refill-period: ${FINAXIS_RATE_LIMIT_ANONYMOUS_REFILL_PERIOD:1m}
+    authenticated:
+      capacity: ${FINAXIS_RATE_LIMIT_AUTHENTICATED_CAPACITY:1000}
+      refill-tokens: ${FINAXIS_RATE_LIMIT_AUTHENTICATED_REFILL_TOKENS:1000}
+      refill-period: ${FINAXIS_RATE_LIMIT_AUTHENTICATED_REFILL_PERIOD:1m}
+    paths:
+      enabled: true
+      excluded:
+        - /actuator/health/**
+        - /actuator/prometheus
+        - /error
+        - /docs/**
+        - /v3/api-docs/**
+        - /swagger-ui/**
+  iam:
+    active-organisation-context:
+      secret: ${FINAXIS_ACTIVE_ORGANISATION_CONTEXT_SECRET:local-development-change-me-active-organisation-context-secret}
+      ttl: 8h
+
+springdoc:
+  swagger-ui:
+    enabled: false
+  api-docs:
+    enabled: true
+scalar:
+  enabled: true
+  telemetry: true
+
+logging:
+  include-application-name: false
+  pattern:
+    correlation: "[${spring.application.name:finaxis-platform},%X{traceId:-},%X{spanId:-}] "
+  level:
+    root: INFO
+    com.finaxis.platform: INFO
+    org.springframework: INFO
+    org.springframework.security: WARN
+    org.springframework.web: INFO
+    org.springframework.jdbc.core: WARN
+    org.springframework.transaction: WARN
+    org.hibernate.validator: WARN
+    org.flywaydb: INFO
+    com.finaxis.platform.http.access: INFO
+    io.opentelemetry.exporter: WARN
+    io.opentelemetry.sdk: WARN

@@ -11,29 +11,23 @@ import org.testcontainers.utility.DockerImageName
 
 @TestConfiguration(proxyBeanMethods = false)
 class TestcontainersConfiguration {
+    @Bean
+    @ServiceConnection
+    fun grafanaLgtmContainer(): LgtmStackContainer =
+        LgtmStackContainer(DockerImageName.parse(TestContainerImages.GRAFANA_OTEL_LGTM))
 
     @Bean
     @ServiceConnection
-    fun grafanaLgtmContainer(): LgtmStackContainer {
-        return LgtmStackContainer(DockerImageName.parse("grafana/otel-lgtm:latest"))
-    }
+    fun postgresContainer(): PostgreSQLContainer =
+        PostgreSQLContainer(DockerImageName.parse(TestContainerImages.POSTGRES))
 
     @Bean
     @ServiceConnection
-    fun postgresContainer(): PostgreSQLContainer {
-        return PostgreSQLContainer(DockerImageName.parse("postgres:latest"))
-    }
-
-    @Bean
-    @ServiceConnection
-    fun rabbitContainer(): RabbitMQContainer {
-        return RabbitMQContainer(DockerImageName.parse("rabbitmq:latest"))
-    }
+    fun rabbitContainer(): RabbitMQContainer =
+        RabbitMQContainer(DockerImageName.parse(TestContainerImages.RABBITMQ))
 
     @Bean
     @ServiceConnection(name = "redis")
-    fun redisContainer(): GenericContainer<*> {
-        return GenericContainer(DockerImageName.parse("redis:latest")).withExposedPorts(6379)
-    }
-
+    fun redisContainer(): GenericContainer<*> =
+        GenericContainer(DockerImageName.parse(TestContainerImages.REDIS)).withExposedPorts(6379)
 }

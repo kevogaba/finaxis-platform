@@ -1,0 +1,2 @@
+CREATE DATABASE platform;
+CREATE DATABASE keycloak;
