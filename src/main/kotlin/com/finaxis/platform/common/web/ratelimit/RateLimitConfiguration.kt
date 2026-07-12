@@ -14,6 +14,7 @@ import io.lettuce.core.codec.StringCodec
 import org.springframework.beans.factory.DisposableBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
+import org.springframework.boot.data.redis.autoconfigure.DataRedisConnectionDetails
 import org.springframework.boot.data.redis.autoconfigure.DataRedisProperties
 import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.context.annotation.Bean
@@ -38,12 +39,15 @@ class RateLimitConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    fun rateLimitRedisBackend(redisProperties: DataRedisProperties): RateLimitRedisBackend {
-        val clusterNodes = redisProperties.cluster?.nodes.orEmpty()
+    fun rateLimitRedisBackend(
+        redisProperties: DataRedisProperties,
+        connectionDetails: DataRedisConnectionDetails,
+    ): RateLimitRedisBackend {
+        val clusterNodes = connectionDetails.cluster?.nodes.orEmpty()
         return if (clusterNodes.isEmpty()) {
-            standaloneOrSentinelBackend(redisProperties)
+            standaloneOrSentinelBackend(redisProperties, connectionDetails)
         } else {
-            clusterBackend(redisProperties, clusterNodes)
+            clusterBackend(redisProperties, connectionDetails, clusterNodes)
         }
     }
 
@@ -118,8 +122,9 @@ class RateLimitConfiguration {
 
     private fun standaloneOrSentinelBackend(
         properties: DataRedisProperties,
+        connectionDetails: DataRedisConnectionDetails,
     ): RateLimitRedisBackend {
-        val client = RedisClient.create(redisUri(properties))
+        val client = RedisClient.create(redisUri(properties, connectionDetails))
         val connection = client.connect(stringBytesCodec())
         val manager =
             Bucket4jLettuce
@@ -131,11 +136,12 @@ class RateLimitConfiguration {
 
     private fun clusterBackend(
         properties: DataRedisProperties,
-        nodes: List<String>,
+        connectionDetails: DataRedisConnectionDetails,
+        nodes: List<DataRedisConnectionDetails.Node>,
     ): RateLimitRedisBackend {
         val client =
             RedisClusterClient.create(
-                nodes.map { node -> redisUri(properties, node) },
+                nodes.map { node -> redisUri(properties, connectionDetails, node) },
             )
         val connection = client.connect(stringBytesCodec())
         val manager =
@@ -146,60 +152,60 @@ class RateLimitConfiguration {
         return LettuceRateLimitRedisBackend(manager, connection, client)
     }
 
-    private fun redisUri(properties: DataRedisProperties): RedisURI {
+    private fun redisUri(
+        properties: DataRedisProperties,
+        connectionDetails: DataRedisConnectionDetails,
+    ): RedisURI {
         val url = properties.url
         if (!url.isNullOrBlank()) {
             return RedisURI.create(url)
         }
-        val sentinel = properties.sentinel
-        val sentinelMaster = sentinel?.master
-        val sentinelNodes = sentinel?.nodes.orEmpty()
-        if (!sentinelMaster.isNullOrBlank() && sentinelNodes.isNotEmpty()) {
-            val builder = RedisURI.builder().withSentinelMasterId(sentinelMaster)
-            sentinelNodes.forEach { node ->
-                val endpoint = parseNode(node)
-                builder.withSentinel(endpoint.host, endpoint.port)
+        val sentinel = connectionDetails.sentinel
+        if (sentinel != null) {
+            val builder = RedisURI.builder().withSentinelMasterId(sentinel.master)
+            sentinel.nodes.forEach { node ->
+                builder.withSentinel(node.host(), node.port())
             }
-            return builder.applySharedSettings(properties).build()
+            return builder.applySharedSettings(properties, connectionDetails).build()
         }
+        val standalone =
+            checkNotNull(
+                connectionDetails.standalone,
+            ) { "Redis standalone connection details are required" }
         val builder =
             RedisURI
                 .builder()
-                .withHost(properties.host)
-                .withPort(properties.port)
-        return builder.applySharedSettings(properties).build()
+                .withHost(standalone.host)
+                .withPort(standalone.port)
+        return builder.applySharedSettings(properties, connectionDetails).build()
     }
 
     private fun redisUri(
         properties: DataRedisProperties,
-        node: String,
-    ): RedisURI {
-        val endpoint = parseNode(node)
-        return RedisURI
+        connectionDetails: DataRedisConnectionDetails,
+        node: DataRedisConnectionDetails.Node,
+    ): RedisURI =
+        RedisURI
             .builder()
-            .withHost(endpoint.host)
-            .withPort(endpoint.port)
-            .applySharedSettings(properties)
+            .withHost(node.host())
+            .withPort(node.port())
+            .applySharedSettings(properties, connectionDetails)
             .build()
-    }
 
-    private fun Builder.applySharedSettings(properties: DataRedisProperties): Builder {
+    private fun Builder.applySharedSettings(
+        properties: DataRedisProperties,
+        connectionDetails: DataRedisConnectionDetails,
+    ): Builder {
         withDatabase(properties.database)
         withTimeout(properties.timeout ?: DEFAULT_REDIS_TIMEOUT)
         withSsl(properties.ssl.isEnabled)
-        val password = properties.password
-        if (!properties.username.isNullOrBlank() && !password.isNullOrBlank()) {
-            withAuthentication(properties.username, password.toCharArray())
+        val password = connectionDetails.password
+        if (!connectionDetails.username.isNullOrBlank() && !password.isNullOrBlank()) {
+            withAuthentication(connectionDetails.username, password.toCharArray())
         } else if (!password.isNullOrBlank()) {
             withPassword(password)
         }
         return this
-    }
-
-    private fun parseNode(node: String): RedisEndpoint {
-        val parts = node.split(":", limit = NODE_PARTS)
-        require(parts.size == NODE_PARTS) { "Redis node must be formatted as host:port" }
-        return RedisEndpoint(parts[0], parts[1].toInt())
     }
 
     private fun stringBytesCodec(): RedisCodec<String, ByteArray> =
@@ -210,13 +216,7 @@ class RateLimitConfiguration {
             BUCKET_STATE_TTL_AFTER_FULL_REFILL,
         )
 
-    private data class RedisEndpoint(
-        val host: String,
-        val port: Int,
-    )
-
     private companion object {
-        private const val NODE_PARTS = 2
         private val DEFAULT_REDIS_TIMEOUT: Duration = Duration.ofSeconds(5)
         private val BUCKET_STATE_TTL_AFTER_FULL_REFILL: Duration = Duration.ofMinutes(5)
     }

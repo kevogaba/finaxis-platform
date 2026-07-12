@@ -1,8 +1,11 @@
 name: Static Analysis, Qodana, and Jacoco Verification
 
 on:
-  push:
   pull_request:
+  push:
+    branches-ignore:
+      - "dependabot*"
+      - "dependabot/**"
   workflow_dispatch:
 
 permissions:
@@ -23,16 +26,15 @@ jobs:
       pull-requests: write
       checks: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       - name: Set up Java
         uses: actions/setup-java@v5
         with:
-          distribution: temurin
-          java-version: "25"
+          distribution: graalvm-community
+          java-version-file: '.sdkmanrc'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
@@ -43,7 +45,7 @@ jobs:
           QODANA_TOKEN: ${{ secrets.QODANA_TOKEN }}
         with:
           # When pr-mode is set to true, Qodana analyzes only the files that have been changed
-          pr-mode: true
+          pr-mode: ${{ github.event_name == 'pull_request' }}
           use-caches: true
           post-pr-comment: true
           use-annotations: true
@@ -59,13 +61,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Java
         uses: actions/setup-java@v5
         with:
-          distribution: temurin
-          java-version: "25"
+          distribution: graalvm-community
+          java-version-file: '.sdkmanrc'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
@@ -75,7 +77,7 @@ jobs:
 
       - name: Upload reports on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: quality-reports
           path: |

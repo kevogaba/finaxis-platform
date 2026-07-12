@@ -5,7 +5,7 @@
       "source": "jabrena/cursor-rules-java",
       "sourceType": "github",
       "skillPath": "skills/312-frameworks-spring-data-jdbc/SKILL.md",
-      "computedHash": "f5db0be5a0a7a2e00d278b5376338ccdfbd9ea0f440326462a347c5885da58e3"
+      "computedHash": "a141e690f3df88555707e5135e6988372fbd2ad26691de9d0efc6895dd1674ce"
     },
     "hexagonal-architecture": {
       "source": "affaan-m/everything-claude-code",
@@ -13,11 +13,35 @@
       "skillPath": "skills/hexagonal-architecture/SKILL.md",
       "computedHash": "423c177b1d49c286960da0d20f0788d57f5cbde3c0a8b706a0f99ba400c47dad"
     },
+    "jooq-patterns": {
+      "source": "ashchupliak/dream-team",
+      "sourceType": "github",
+      "skillPath": "skills/jooq-patterns/SKILL.md",
+      "computedHash": "9623a1182f39ff41ae4b64b4197ff45080ab6b8b4ab7619f95c9b4e864ea1267"
+    },
+    "kotlin-springboot": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/kotlin-springboot/SKILL.md",
+      "computedHash": "beaa34d307bfcce5dd026e3b03c357f98f471b0de1b9fc6a0b7a64d132b74e95"
+    },
     "spring-boot-engineer": {
       "source": "jeffallan/claude-skills",
       "sourceType": "github",
       "skillPath": "skills/spring-boot-engineer/SKILL.md",
       "computedHash": "ed065f5db45afe9dc2739cff713927d0b6b6ad3e667bdf7b40340d1a5543bb0f"
+    },
+    "spring-boot-testing": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/spring-boot-testing/SKILL.md",
+      "computedHash": "4e6153fd6eed64dfc6b0f9a2a38ef8e636a88977702a49f3c5691fafcc02d8a8"
+    },
+    "spring-modulith": {
+      "source": "claude-dev-suite/claude-dev-suite",
+      "sourceType": "github",
+      "skillPath": "skills/backend-frameworks/spring-modulith/SKILL.md",
+      "computedHash": "c33443bf20937a8d24ead1a6a1c74079487cc577b47738c842b2140231bed49b"
     },
     "springboot-patterns": {
       "source": "affaan-m/everything-claude-code",

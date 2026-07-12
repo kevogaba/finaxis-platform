@@ -4,7 +4,7 @@ description: Use when you need to use Spring Data JDBC with Java records — inc
 license: Apache-2.0
 metadata:
   author: Juan Antonio Breña Moral
-  version: 0.16.0
+  version: 0.17.0
 ---
 # Spring Data JDBC with Records
 
@@ -14,7 +14,7 @@ You are a Senior software engineer with extensive experience in Spring Data and 
 
 ## Goal
 
-Spring Data JDBC maps rows to domain types with minimal magic: one repository call typically loads a whole aggregate in predictable SQL. Java records fit this model because they are immutable, constructor-friendly, and explicit. Success means correct `@Column`/`@Id` mapping, repositories that express intent through naming or `@Query`, small aggregates with `Set` children or foreign keys—not JPA-style graphs—and transactions declared at the service layer. For programmatic JDBC, reporting, or batch SQL without Spring Data repositories, use `@311-frameworks-spring-jdbc` instead of forcing everything through repositories.
+Spring Data JDBC maps rows to domain types with minimal magic: one repository call typically loads a whole aggregate in predictable SQL. Java records fit this model because they are immutable, constructor-friendly, and explicit. Success means correct `@Column`/`@Id` mapping, repositories that express intent through naming or `@Query`, small aggregates with `Set` children or foreign keys—not JDBC aggregate-style graphs—and transactions declared at the service layer. For programmatic JDBC, reporting, or batch SQL without Spring Data repositories, use `@311-frameworks-spring-jdbc` instead of forcing everything through repositories.
 
 ## Constraints
 
@@ -297,7 +297,7 @@ public record OrderItem(
     Order order
 ) {}
 
-// Direct many-to-many sets — not supported like JPA
+// Direct many-to-many sets — not supported as implicit ORM relationships
 public record Student(@Id Long id, String name, Set<Course> courses) {}
 public record Course(@Id Long id, String title, Set<Student> students) {}
 
@@ -437,8 +437,8 @@ class CustomerService {
 
 ### Example 7: Single-query aggregate loading
 
-Title: Prefer Spring Data JDBC aggregate load over JPA lazy N+1 or manual fan-out
-Description: Loading an aggregate root typically runs one SQL statement with joins for its collection. Iterate `order.items()` without expecting extra lazy queries (unlike JPA `LAZY`). Design aggregates so that payload size stays acceptable; avoid pulling huge graphs in one root.
+Title: Prefer Spring Data JDBC aggregate load over ORM lazy-loading N+1 or manual fan-out
+Description: Loading an aggregate root typically runs one SQL statement with joins for its collection. Iterate `order.items()` without expecting extra lazy queries (unlike ORM lazy loading). Design aggregates so that payload size stays acceptable; avoid pulling huge graphs in one root.
 
 **Good example:**
 
@@ -544,7 +544,7 @@ interface OrderItemRepository {
 
 record OrderSummary(Long orderId, java.time.LocalDateTime orderDate, java.math.BigDecimal totalAmount, int itemCount, double lineTotal) {}
 
-// JPA-style mental model: lazy collections causing N+1 if misapplied
+// JDBC aggregate-style mental model: lazy collections causing N+1 if misapplied
 // @Entity class Order { @jakarta.persistence.OneToMany(fetch = jakarta.persistence.FetchType.LAZY) Set<OrderItem> items; }
 ```
 
