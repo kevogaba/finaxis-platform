@@ -12,14 +12,14 @@ This skill provides expert guide for testing Spring Boot 4 applications with mod
 1. **Test Pyramid**: Unit (fast) > Slice (focused) > Integration (complete)
 2. **Right Tool**: Use the narrowest slice that gives you confidence
 3. **AssertJ Style**: Fluent, readable assertions over verbose matchers
-4. **Modern APIs**: Prefer MockMvcTester and RestTestClient over legacy alternatives
+4. **Modern APIs**: Prefer MockMvcTester and MockMvc over legacy alternatives
 
 ## Which Test Slice?
 
 | Scenario | Annotation | Reference |
 |----------|------------|-----------|
 | Controller + HTTP semantics | `@WebMvcTest` | [references/webmvctest.md](references/webmvctest.md) |
-| Repository + JPA queries | `@DataJpaTest` | [references/datajpatest.md](references/datajpatest.md) |
+| Repository + JDBC queries | `@JdbcTest` | [references/jdbctest.md](references/jdbctest.md) |
 | REST client + external APIs | `@RestClientTest` | [references/restclienttest.md](references/restclienttest.md) |
 | JSON (de)serialization | `@JsonTest` | [references/test-slices-overview.md](references/test-slices-overview.md) |
 | Full application | `@SpringBootTest` | [references/test-slices-overview.md](references/test-slices-overview.md) |
@@ -28,7 +28,7 @@ This skill provides expert guide for testing Spring Boot 4 applications with mod
 
 - [references/test-slices-overview.md](references/test-slices-overview.md) - Decision matrix and comparison
 - [references/webmvctest.md](references/webmvctest.md) - Web layer with MockMvc
-- [references/datajpatest.md](references/datajpatest.md) - Data layer with Testcontainers
+- [references/jdbctest.md](references/jdbctest.md) - Data layer with Testcontainers
 - [references/restclienttest.md](references/restclienttest.md) - REST client testing
 
 ## Testing Tools Reference
@@ -63,7 +63,7 @@ Testing a controller endpoint?
   Yes → @WebMvcTest with MockMvcTester
 
 Testing repository queries?
-  Yes → @DataJpaTest with Testcontainers (real DB)
+  Yes → @JdbcTest with Testcontainers (real DB)
 
 Testing business logic in service?
   Yes → Plain JUnit + Mockito (no Spring context)
@@ -80,7 +80,7 @@ Need full integration test?
 
 ## Spring Boot 4 Highlights
 
-- **RestTestClient**: Modern alternative to TestRestTemplate
+- **MockMvc**: Modern alternative to TestRestTemplate
 - **@MockitoBean**: Replaces @MockBean (deprecated)
 - **MockMvcTester**: AssertJ-style assertions for web tests
 - **Modular starters**: Technology-specific test starters
@@ -149,13 +149,13 @@ Write tests with real production scenarios in mind. This makes tests more relata
 
 ### Test Coverage Goals
 
-Aim for 80% code coverage as a practical balance between quality and effort. Higher coverage is beneficial but not the only goal.
+Maintain 100% JaCoCo line coverage for the checked source set, matching the repository quality gate. Coverage should come from meaningful assertions rather than superficial execution.
 
-Use Jacoco maven plugin for coverage reporting and tracking.
+Use the Gradle JaCoCo tasks configured by this repository for coverage reporting and verification.
 
 
 **Coverage Rules:**
-- 80+% coverage minimum
+- 100% line coverage minimum for the configured JaCoCo verification scope
 - Focus on meaningful assertions, not just execution
 
 **What to Prioritize:**
@@ -176,7 +176,7 @@ Use Jacoco maven plugin for coverage reporting and tracking.
 <!-- For WebMvc tests -->
 <dependency>
   <groupId>org.springframework.boot</groupId>
-  <artifactId>spring-boot-starter-webmvc-test</artifactId>
+  <artifactId>spring-boot-starter-webmvcmvc-test</artifactId>
   <scope>test</scope>
 </dependency>
 

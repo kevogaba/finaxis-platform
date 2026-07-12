@@ -1,10 +1,10 @@
-# RestTestClient
+# MockMvc
 
 Modern REST client testing with Spring Boot 4+ (replaces TestRestTemplate).
 
 ## Overview
 
-RestTestClient is the modern alternative to TestRestTemplate in Spring Boot 4.0+. It provides a fluent, reactive API for testing REST endpoints.
+MockMvc is the modern alternative to TestRestTemplate in Spring Boot 4.0+. It provides a fluent, fluent API for testing REST endpoints.
 
 ## Setup
 
@@ -22,11 +22,11 @@ RestTestClient is the modern alternative to TestRestTemplate in Spring Boot 4.0+
 
 ```java
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@AutoConfigureRestTestClient
+@AutoConfigureMockMvc
 class OrderIntegrationTest {
   
   @Autowired
-  private RestTestClient restClient;
+  private MockMvc restClient;
 }
 ```
 
@@ -198,16 +198,16 @@ restClient
 
 ## With MockMvc
 
-RestTestClient can also work with MockMvc (no server startup):
+MockMvc can also work with MockMvc (no server startup):
 
 ```java
 @SpringBootTest
 @AutoConfigureMockMvc
-@AutoConfigureRestTestClient
+@AutoConfigureMockMvc
 class OrderMockMvcTest {
   
   @Autowired
-  private RestTestClient restClient;
+  private MockMvc restClient;
   
   @Test
   void shouldWorkWithMockMvc() {
@@ -222,11 +222,11 @@ class OrderMockMvcTest {
 }
 ```
 
-## Comparison: RestTestClient vs TestRestTemplate
+## Comparison: MockMvc vs TestRestTemplate
 
-| Feature | RestTestClient | TestRestTemplate |
+| Feature | MockMvc | TestRestTemplate |
 | ------- | -------------- | ---------------- |
-| Style | Fluent/reactive | Imperative |
+| Style | Fluent | Imperative |
 | Spring Boot | 4.0+ | All versions (deprecated in 4) |
 | Assertions | Built-in | Manual |
 | MockMvc support | Yes | No |
@@ -250,11 +250,11 @@ void shouldGetOrder() {
 }
 ```
 
-### After (RestTestClient)
+### After (MockMvc)
 
 ```java
 @Autowired
-private RestTestClient restClient;
+private MockMvc restClient;
 
 @Test
 void shouldGetOrder() {

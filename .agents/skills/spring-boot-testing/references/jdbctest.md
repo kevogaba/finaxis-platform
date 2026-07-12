@@ -1,11 +1,11 @@
-# @DataJpaTest
+# @JdbcTest
 
-Testing JPA repositories with isolated data layer slice.
+Testing Spring Data JDBC repositories with isolated data layer slice.
 
 ## Basic Structure
 
 ```java
-@DataJpaTest
+@JdbcTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Testcontainers
 class OrderRepositoryTest {
@@ -154,7 +154,7 @@ void shouldFindRecentOrders() {
 ### H2 (Default - Not Recommended for Production Parity)
 
 ```java
-@DataJpaTest // Uses embedded H2 by default
+@JdbcTest // Uses embedded H2 by default
 class OrderRepositoryH2Test {
   // Fast but may miss DB-specific issues
 }
@@ -163,7 +163,7 @@ class OrderRepositoryH2Test {
 ### Testcontainers (Recommended)
 
 ```java
-@DataJpaTest
+@JdbcTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Testcontainers
 class OrderRepositoryPostgresTest {

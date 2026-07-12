@@ -1,12 +1,12 @@
 ---
 name: spring-boot-engineer
-description: Generates Spring Boot 3.x configurations, creates REST controllers, implements Spring Security 6 authentication flows, sets up Spring Data JPA repositories, and configures reactive WebFlux endpoints. Use when building Spring Boot 3.x applications, microservices, or reactive Java applications; invoke for Spring Data JPA, Spring Security 6, WebFlux, Spring Cloud integration, Java REST API design, or Microservices Java architecture.
+description: Generates Spring Boot 3.x configurations, creates REST controllers, implements Spring Security 6 authentication flows, sets up Spring Data JDBC repositories, and configures Spring Web MVC endpoints. Use when building Spring Boot 3.x applications, microservices, or Spring MVC applications; invoke for Spring Data JDBC, Spring Security 6, Spring Web MVC, Spring Cloud integration, Java REST API design, or Microservices Java architecture.
 license: MIT
 metadata:
   author: https://github.com/Jeffallan
   version: "1.1.0"
   domain: backend
-  triggers: Spring Boot, Spring Framework, Spring Cloud, Spring Security, Spring Data JPA, Spring WebFlux, Microservices Java, Java REST API, Reactive Java
+  triggers: Spring Boot, Spring Framework, Spring Cloud, Spring Security, Spring Data JDBC, Spring Web MVC, Microservices Java, Java REST API, Spring MVC Java
   role: specialist
   scope: implementation
   output-format: code
@@ -31,7 +31,7 @@ Load detailed guidance based on context:
 | Topic | Reference | Load When |
 |-------|-----------|-----------|
 | Web Layer | `references/web.md` | Controllers, REST APIs, validation, exception handling |
-| Data Access | `references/data.md` | Spring Data JPA, repositories, transactions, projections |
+| Data Access | `references/data.md` | Spring Data JDBC, repositories, transactions, projections |
 | Security | `references/security.md` | Spring Security 6, OAuth2, JWT, method security |
 | Cloud Native | `references/cloud.md` | Spring Cloud, Config, Discovery, Gateway, resilience |
 | Testing | `references/testing.md` | @SpringBootTest, MockMvc, Testcontainers, test slices |
@@ -43,27 +43,19 @@ A standard Spring Boot feature consists of these layers. Use these as copy-paste
 ### Entity
 
 ```java
-@Entity
-@Table(name = "products")
-public class Product {
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+@Table("products")
+public record Product(
+    @Id Long id,
 
-    @NotBlank
-    private String name;
-
-    @DecimalMin("0.0")
-    private BigDecimal price;
-
-    // getters / setters or use @Data (Lombok)
-}
+    @NotBlank String name,
+    @DecimalMin("0.0") BigDecimal price
+) {}
 ```
 
 ### Repository
 
 ```java
-public interface ProductRepository extends JpaRepository<Product, Long> {
+public interface ProductRepository extends CrudRepository<Product, Long> {
     List<Product> findByNameContainingIgnoreCase(String name);
 }
 ```
@@ -86,10 +78,7 @@ public class ProductService {
 
     @Transactional
     public Product create(ProductRequest request) {
-        var product = new Product();
-        product.setName(request.name());
-        product.setPrice(request.price());
-        return repo.save(product);
+        return repo.save(new Product(null, request.name(), request.price()));
     }
 }
 ```
@@ -108,13 +97,13 @@ public class ProductController {
     }
 
     @GetMapping
-    public List<Product> search(@RequestParam(defaultValue = "") String name) {
-        return service.search(name);
+    public Page<ProductResponse> search(Pageable pageable, @RequestParam(defaultValue = "") String name) {
+        return service.search(name, pageable);
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public Product create(@Valid @RequestBody ProductRequest request) {
+    public ProductResponse create(@Valid @RequestBody ProductRequest request) {
         return service.create(request);
     }
 }
@@ -159,7 +148,7 @@ class ProductControllerTest {
 
     @Test
     void createProduct_validRequest_returns201() throws Exception {
-        var product = new Product(); product.setName("Widget"); product.setPrice(BigDecimal.TEN);
+        var product = new ProductResponse(1L, "Widget", BigDecimal.TEN);
         when(service.create(any())).thenReturn(product);
 
         mockMvc.perform(post("/api/v1/products")
@@ -189,7 +178,7 @@ class ProductControllerTest {
 - Use field injection (`@Autowired` on fields)
 - Skip input validation on API endpoints
 - Use `@Component` when `@Service`/`@Repository`/`@Controller` applies
-- Mix blocking and reactive code (e.g., calling `.block()` inside a WebFlux chain)
+- Introduce non-MVC web stacks or asynchronous controller return types; this project uses Spring Web MVC only
 - Store secrets or credentials in `application.properties`/`application.yml`
 - Hardcode URLs, credentials, or environment-specific values
 - Use deprecated Spring Boot 2.x patterns (e.g., `WebSecurityConfigurerAdapter`)

@@ -8,10 +8,10 @@ Quick reference for selecting the right Spring Boot test slice.
 | ---------- | -------- | ----- | ----- |
 | **None** (plain JUnit) | Testing pure business logic | Nothing | Fastest |
 | `@WebMvcTest` | Controller + HTTP layer | Controllers, MVC, Jackson | Fast |
-| `@DataJpaTest` | Repository queries | Repositories, JPA, DataSource | Fast |
+| `@JdbcTest` | Repository queries | Repositories, JDBC, DataSource | Fast |
 | `@RestClientTest` | REST client code | RestTemplate/RestClient, Jackson | Fast |
 | `@JsonTest` | JSON serialization | ObjectMapper only | Fastest slice |
-| `@WebFluxTest` | Reactive controllers | Controllers, WebFlux | Fast |
+| `@WebMvcTest` | Spring MVC controllers | Controllers, Spring Web MVC | Fast |
 | `@DataJdbcTest` | JDBC repositories | Repositories, JDBC | Fast |
 | `@DataMongoTest` | MongoDB repositories | Repositories, MongoDB | Fast |
 | `@DataRedisTest` | Redis repositories | Repositories, Redis | Fast |
@@ -49,10 +49,10 @@ class OrderControllerTest {
 
 **What you get**: MockMvc, ObjectMapper, Spring Security (if present), exception handlers.
 
-### Use @DataJpaTest
+### Use @JdbcTest
 
 ```java
-@DataJpaTest
+@JdbcTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Testcontainers
 class OrderRepositoryTest {
@@ -61,7 +61,7 @@ class OrderRepositoryTest {
 }
 ```
 
-**When**: Testing custom JPA queries, entity mappings, transaction behavior, cascade operations.
+**When**: Testing custom JDBC queries, entity mappings, transaction behavior, cascade operations.
 
 **What you get**: Repository beans, EntityManager, TestEntityManager, transaction support.
 
@@ -94,9 +94,9 @@ class OrderJsonTest {
 
 ```java
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@AutoConfigureRestTestClient
+@AutoConfigureMockMvc
 class OrderIntegrationTest {
-  @Autowired private RestTestClient restClient;
+  @Autowired private MockMvc restClient;
 }
 ```
 
@@ -108,7 +108,7 @@ class OrderIntegrationTest {
 
 1. **Using @SpringBootTest for everything** - Slows down your test suite unnecessarily
 2. **@WebMvcTest without mocking services** - Causes context loading failures
-3. **@DataJpaTest with @MockBean** - Defeats the purpose (you want real repositories)
+3. **@JdbcTest with @MockBean** - Defeats the purpose (you want real repositories)
 4. **Multiple slices in one test** - Each slice is a separate test class
 
 ## Java 25 Features in Tests
@@ -177,14 +177,14 @@ void shouldReturnOrdersInSequence() {
 <!-- WebMvcTest -->
 <dependency>
   <groupId>org.springframework.boot</groupId>
-  <artifactId>spring-boot-starter-webmvc-test</artifactId>
+  <artifactId>spring-boot-starter-webmvcmvc-test</artifactId>
   <scope>test</scope>
 </dependency>
 
-<!-- DataJpaTest -->
+<!-- JdbcTest -->
 <dependency>
   <groupId>org.springframework.boot</groupId>
-  <artifactId>spring-boot-starter-data-jpa</artifactId>
+  <artifactId>spring-boot-starter-data-jdbc</artifactId>
 </dependency>
 
 <!-- RestClientTest -->
