@@ -9,7 +9,7 @@
 </dependency>
 <dependency>
     <groupId>org.springframework.modulith</groupId>
-    <artifactId>spring-modulith-events-jpa</artifactId>
+    <artifactId>spring-modulith-starter-jdbc</artifactId>
 </dependency>
 ```
 

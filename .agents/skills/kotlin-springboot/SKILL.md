@@ -10,8 +10,8 @@ Your goal is to help me write high-quality, idiomatic Spring Boot applications u
 ## Project Setup & Structure
 
 - **Build Tool:** Use Maven (`pom.xml`) or Gradle (`build.gradle`) with the Kotlin plugins (`kotlin-maven-plugin` or `org.jetbrains.kotlin.jvm`).
-- **Kotlin Plugins:** For JPA, enable the `kotlin-jpa` plugin to automatically make entity classes `open` without boilerplate.
-- **Starters:** Use Spring Boot starters (e.g., `spring-boot-starter-web`, `spring-boot-starter-data-jpa`) as usual.
+- **Kotlin Plugins:** Use `org.jetbrains.kotlin.jvm`, `org.jetbrains.kotlin.plugin.spring`, and serialization as needed; do not add the ORM plugin for this JDBC project.
+- **Starters:** Use Spring Boot starters (e.g., `spring-boot-starter-webmvc`, `spring-boot-starter-data-jdbc`) as usual.
 - **Package Structure:** Organize code by feature/domain (e.g., `com.example.app.order`, `com.example.app.user`) rather than by layer.
 
 ## Dependency Injection & Components
@@ -42,10 +42,9 @@ Your goal is to help me write high-quality, idiomatic Spring Boot applications u
 
 ## Data Layer (Repositories)
 
-- **JPA Entities:** Define entities as classes. Remember they must be `open`. It's highly recommended to use the `kotlin-jpa` compiler plugin to handle this automatically.
-- **Null Safety:** Leverage Kotlin's null-safety (`?`) to clearly define which entity fields are optional or required at the type level.
-- **Spring Data JPA:** Use Spring Data JPA repositories by extending `JpaRepository` or `CrudRepository`.
-- **Coroutines:** For reactive applications, leverage Spring Boot's support for Kotlin Coroutines in the data layer.
+- **Spring Data JDBC Aggregates:** Model aggregate roots explicitly for Spring Data JDBC; prefer immutable data classes/records where practical and avoid lazy-loading assumptions.
+- **Null Safety:** Leverage Kotlin's null-safety (`?`) to clearly define optional or required fields at the type level.
+- **Spring Data JDBC:** Use Spring Data JDBC repositories by extending `CrudRepository` or custom ports/adapters when hexagonal boundaries require them.
 
 ## Logging
 
@@ -61,10 +60,10 @@ Your goal is to help me write high-quality, idiomatic Spring Boot applications u
 
 - **JUnit 5:** JUnit 5 is the default and works seamlessly with Kotlin.
 - **Idiomatic Testing Libraries:** For more fluent and idiomatic tests, consider using **Kotest** for assertions and **MockK** for mocking. They are designed for Kotlin and offer a more expressive syntax.
-- **Test Slices:** Use test slice annotations like `@WebMvcTest` or `@DataJpaTest` to test specific parts of the application.
+- **Test Slices:** Use test slice annotations like `@WebMvcTest` or `@JdbcTest` to test specific parts of the application.
 - **Testcontainers:** Use Testcontainers for reliable integration tests with real databases, message brokers, etc.
 
-## Coroutines & Asynchronous Programming
+## Background and Asynchronous Work
 
-- **`suspend` functions:** For non-blocking asynchronous code, use `suspend` functions in your controllers and services. Spring Boot has excellent support for coroutines.
-- **Structured Concurrency:** Use `coroutineScope` or `supervisorScope` to manage the lifecycle of coroutines.
+- **Durable jobs:** Use JobRunr for email, SMS, reports, imports, exports, retries, scheduled jobs, and long-running operational work.
+- **Application events:** Use Spring Modulith events and Namastack Outbox for selected externalization; do not add non-MVC web APIs.

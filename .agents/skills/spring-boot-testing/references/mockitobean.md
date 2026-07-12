@@ -23,7 +23,7 @@ class OrderControllerTest {
 ## Supported Test Slices
 
 - `@WebMvcTest` - Mock service/repository dependencies
-- `@WebFluxTest` - Mock reactive service dependencies
+- `@WebMvcTest` - Mock Spring MVC service dependencies
 - `@SpringBootTest` - Replace real beans with mocks
 
 ## Stubbing Methods

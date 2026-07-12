@@ -87,7 +87,7 @@ final var randomOrder = Instancio.create(Order.class);
 ### Repository Test Setup
 
 ```java
-@DataJpaTest
+@JdbcTest
 @AutoConfigureTestDatabase
 @Testcontainers
 class OrderRepositoryTest {

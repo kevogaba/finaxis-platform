@@ -1,6 +1,6 @@
 # Testcontainers JDBC
 
-Testing JPA repositories with real databases using Testcontainers.
+Testing Spring Data JDBC repositories with real databases using Testcontainers.
 
 ## Overview
 
@@ -26,7 +26,7 @@ Testcontainers provides real database instances in Docker containers for integra
 ### Basic Test
 
 ```java
-@DataJpaTest
+@JdbcTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Testcontainers
 class OrderRepositoryPostgresTest {
@@ -62,7 +62,7 @@ static MySQLContainer<?> mysql = new MySQLContainer<>("mysql:8.4");
 ## Multiple Databases
 
 ```java
-@DataJpaTest
+@JdbcTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Testcontainers
 class MultiDatabaseTest {
@@ -138,7 +138,7 @@ class MigrationTest {
 static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18")
   .withDatabaseName("testdb")
   .withUsername("testuser")
-  .withPassword("testpass")
+  .withCredential("testpass")
   .withInitScript("init-schema.sql");
 ```
 
@@ -153,7 +153,7 @@ static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18"
 ## Test Example
 
 ```java
-@DataJpaTest
+@JdbcTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Testcontainers
 class OrderRepositoryTest {
@@ -209,7 +209,7 @@ class OrderServiceTest {
   static void configureProperties(DynamicPropertyRegistry registry) {
     registry.add("spring.datasource.url", postgres::getJdbcUrl);
     registry.add("spring.datasource.username", postgres::getUsername);
-    registry.add("spring.datasource.password", postgres::getPassword);
+    registry.add("spring.datasource.credential", postgres::getCredential);
   }
 }
 ```
@@ -231,4 +231,4 @@ class OrderServiceTest {
 2. Enable container reuse for faster local builds
 3. Use specific versions (postgres:18) not latest
 4. Keep container config in static field
-5. Use @DataJpaTest with AutoConfigureTestDatabase.Replace.NONE
+5. Use @JdbcTest with AutoConfigureTestDatabase.Replace.NONE

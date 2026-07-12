@@ -125,7 +125,7 @@ public record OrderCreatedEvent(Long orderId, Money total) {}
 // Internal implementation (not accessible from other modules)
 // order/internal/OrderRepository.java
 @Repository
-interface OrderRepository extends JpaRepository<Order, Long> {
+interface OrderRepository extends CrudRepository<Order, Long> {
     List<Order> findByCustomerId(Long customerId);
 }
 ```
@@ -284,7 +284,7 @@ public record OrderCreatedEvent(Long orderId) {}
 | Circular dependency | Modules reference each other | Use events or shared kernel |
 | Internal class exposed | Wrong package structure | Move to `internal/` package |
 | Event not published | Missing transaction | Verify @Transactional |
-| Event lost | No persistence | Use spring-modulith-events-jpa |
+| Event lost | No persistence | Use spring-modulith-starter-jdbc |
 | Callback events | Events require calling back | Include all data in event |
 | Exposing repositories | Tight coupling | Keep repositories internal |
 

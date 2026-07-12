@@ -1,25 +1,19 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
 import com.finaxis.platform.PostgresTestConfiguration
-import com.finaxis.platform.TestContainerImages
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContextService
 import org.hamcrest.Matchers.containsInAnyOrder
 import org.hamcrest.Matchers.hasItem
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.boot.test.context.TestConfiguration
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
-import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.http.MediaType
 import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
-import org.testcontainers.containers.GenericContainer
-import org.testcontainers.utility.DockerImageName
 import java.util.UUID
 
 private const val LOCAL_USER_SUBJECT = "11111111-1111-1111-1111-111111111111"
@@ -28,7 +22,7 @@ private const val HEAD_OFFICE_BRANCH_ID = "33333333-3333-3333-3333-333333333333"
 private const val OPERATIONS_BRANCH_ID = "44444444-4444-4444-4444-444444444444"
 private const val LOCAL_MEMBERSHIP_ID = "55555555-5555-5555-5555-555555555555"
 
-@Import(PostgresTestConfiguration::class, AuthFlowIntegrationTests.RedisTestConfiguration::class)
+@Import(PostgresTestConfiguration::class)
 @SpringBootTest
 @AutoConfigureMockMvc
 class AuthFlowIntegrationTests {
@@ -190,13 +184,4 @@ class AuthFlowIntegrationTests {
     private fun org.springframework.mock.web.MockHttpServletResponse.jsonContextToken(): String =
         com.jayway.jsonpath.JsonPath
             .read(contentAsString, "$.contextToken")
-
-    @TestConfiguration(proxyBeanMethods = false)
-    class RedisTestConfiguration {
-        @Bean
-        @ServiceConnection(name = "redis")
-        fun redisContainer(): GenericContainer<*> =
-            GenericContainer(DockerImageName.parse(TestContainerImages.REDIS))
-                .withExposedPorts(6379)
-    }
 }

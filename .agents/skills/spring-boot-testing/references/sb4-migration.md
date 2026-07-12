@@ -23,7 +23,7 @@ Spring Boot 4.0 introduces modular test starters:
 ```xml
 <dependency>
   <groupId>org.springframework.boot</groupId>
-  <artifactId>spring-boot-starter-webmvc-test</artifactId>
+  <artifactId>spring-boot-starter-webmvcmvc-test</artifactId>
   <scope>test</scope>
 </dependency>
 ```
@@ -74,17 +74,17 @@ private PaymentGatewayClient paymentClient;
 
 ## New Testing Features
 
-### RestTestClient
+### MockMvc
 
 Replaces TestRestTemplate (deprecated):
 
 ```java
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-@AutoConfigureRestTestClient
+@AutoConfigureMockMvc
 class OrderIntegrationTest {
   
   @Autowired
-  private RestTestClient restClient;
+  private MockMvc restClient;
   
   @Test
   void shouldCreateOrder() {
@@ -161,7 +161,7 @@ class OrderTest {
 - [ ] Replace @SpyBean with @MockitoSpyBean
 - [ ] Update Testcontainers dependencies to 2.0 naming
 - [ ] Add modular test starters as needed
-- [ ] Migrate TestRestTemplate to RestTestClient
+- [ ] Migrate TestRestTemplate to MockMvc
 - [ ] Remove JUnit 4 dependencies
 - [ ] Update custom TestExecutionListener implementations
 - [ ] Test @Nested class behavior
