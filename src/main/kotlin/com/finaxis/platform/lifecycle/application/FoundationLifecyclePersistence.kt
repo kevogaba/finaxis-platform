@@ -5,7 +5,6 @@ import com.finaxis.platform.lifecycle.domain.LifecycleAggregate
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
-import java.time.Instant
 import java.util.UUID
 
 /**
@@ -66,20 +65,3 @@ interface FoundationLifecycleWriter {
         userId: UUID,
     )
 }
-
-/** Outbound port that persists lifecycle integration records in the transactional outbox. */
-interface LifecycleOutboxEventStore {
-    /** Persists one lifecycle event for later reliable publication. */
-    fun enqueue(event: LifecycleOutboxEvent)
-}
-
-/** Application-owned outbox visibility record; delivery remains Namastack's responsibility. */
-data class LifecycleOutboxEvent(
-    val organisationId: UUID,
-    val aggregateType: String,
-    val aggregateId: UUID,
-    val eventType: String,
-    val routingKey: String,
-    val occurredAt: Instant,
-    val metadata: Map<String, Any?>,
-)

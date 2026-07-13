@@ -74,7 +74,7 @@ spring:
     events:
       externalization:
         mode: outbox
-        serialize-externalization: true
+        serialize-externalization: false
     runtime:
       verification-enabled: true
   rabbitmq:
@@ -98,6 +98,12 @@ namastack:
   outbox:
     rabbit:
       fail-on-unroutable: true
+
+jobrunr:
+  background-job-server:
+    enabled: true
+  dashboard:
+    enabled: true
 
 management:
   endpoints:
@@ -210,6 +216,11 @@ finaxis:
     active-organisation-context:
       secret: ${FINAXIS_ACTIVE_ORGANISATION_CONTEXT_SECRET:local-development-change-me-active-organisation-context-secret}
       ttl: 8h
+  security:
+    cors:
+      enabled: false
+    headers:
+      hsts-enabled: false
 
 springdoc:
   swagger-ui:
@@ -218,7 +229,7 @@ springdoc:
     enabled: true
 scalar:
   enabled: true
-  telemetry: true
+  telemetry: false
 
 logging:
   include-application-name: false

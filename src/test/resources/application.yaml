@@ -1,0 +1,18 @@
+spring:
+  config:
+    import: optional:file:src/main/resources/application.yaml
+  profiles:
+    active: test
+
+---
+
+spring:
+  config:
+    activate:
+      on-profile: test
+
+jobrunr:
+  dashboard:
+    enabled: false
+  background-job-server:
+    enabled: false

@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.application.context
 
 import jakarta.validation.constraints.NotBlank
+import jakarta.validation.constraints.Pattern
 import jakarta.validation.constraints.Size
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.stereotype.Service
@@ -27,6 +28,10 @@ private const val DEFAULT_CONTEXT_TTL_HOURS = 8L
 @Validated
 data class ActiveOrganisationContextProperties(
     @field:NotBlank
+    @field:Pattern(
+        regexp = "^(?!\\$\\{).+$",
+        message = "must resolve from configuration rather than an unresolved placeholder",
+    )
     @field:Size(min = MINIMUM_SECRET_LENGTH)
     val secret: String,
     val ttl: Duration = Duration.ofHours(DEFAULT_CONTEXT_TTL_HOURS),
