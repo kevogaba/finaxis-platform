@@ -27,7 +27,11 @@ import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter
 import org.springframework.security.web.SecurityFilterChain
+import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy
 import org.springframework.stereotype.Service
+import org.springframework.web.cors.CorsConfiguration
+import org.springframework.web.cors.CorsConfigurationSource
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource
 import org.springframework.web.filter.OncePerRequestFilter
 
 /**
@@ -39,6 +43,8 @@ import org.springframework.web.filter.OncePerRequestFilter
 class SecurityConfiguration(
     private val activeOrganisationFilter: ActiveOrganisationContextFilter,
     private val rateLimitFilter: RateLimitFilter,
+    private val corsProperties: CorsProperties,
+    private val securityHeadersProperties: SecurityHeadersProperties,
 ) {
     /**
      * Builds the servlet security filter chain for JWT authentication and method security.
@@ -46,8 +52,29 @@ class SecurityConfiguration(
     @Bean
     fun securityFilterChain(http: HttpSecurity): SecurityFilterChain {
         http
+            // See docs/security/production-hardening.md: JWTs authenticate every request; the
+            // Redis session carries active-organisation context only, never authentication.
             .csrf { csrf -> csrf.disable() }
-            .sessionManagement { sessions ->
+            .cors { cors -> cors.configurationSource(corsConfigurationSource()) }
+            .headers { headers ->
+                headers
+                    .contentTypeOptions { }
+                    .frameOptions { frameOptions -> frameOptions.deny() }
+                    .referrerPolicy { policy ->
+                        policy.policy(ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN)
+                    }.httpStrictTransportSecurity { hsts ->
+                        if (!securityHeadersProperties.hstsEnabled) {
+                            hsts.disable()
+                        }
+                    }
+                securityHeadersProperties.contentSecurityPolicy
+                    .takeIf(String::isNotBlank)
+                    ?.let { contentSecurityPolicy ->
+                        headers.contentSecurityPolicy { csp ->
+                            csp.policyDirectives(contentSecurityPolicy)
+                        }
+                    }
+            }.sessionManagement { sessions ->
                 sessions.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
             }.authorizeHttpRequests { requests ->
                 requests
@@ -64,6 +91,25 @@ class SecurityConfiguration(
             .addFilterAfter(rateLimitFilter, ActiveOrganisationContextFilter::class.java)
         return http.build()
     }
+
+    /**
+     * Provides no registered CORS mapping until a deployment explicitly enables one.
+     */
+    @Bean
+    fun corsConfigurationSource(): CorsConfigurationSource =
+        UrlBasedCorsConfigurationSource().also { source ->
+            if (corsProperties.enabled) {
+                source.registerCorsConfiguration(
+                    "/**",
+                    CorsConfiguration().apply {
+                        allowedOrigins = corsProperties.allowedOrigins
+                        allowedMethods = corsProperties.allowedMethods
+                        allowedHeaders = corsProperties.allowedHeaders
+                        allowCredentials = corsProperties.allowCredentials
+                    },
+                )
+            }
+        }
 }
 
 /**

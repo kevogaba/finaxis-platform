@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.bind.Bindable
 import org.springframework.boot.context.properties.bind.Binder
 import org.springframework.boot.env.YamlPropertySourceLoader
 import org.springframework.core.env.StandardEnvironment
-import org.springframework.core.io.ClassPathResource
+import org.springframework.core.io.FileSystemResource
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -14,7 +14,7 @@ class RateLimitPropertiesTests {
     fun `application yaml binds distributed rate limit defaults`() {
         val environment = StandardEnvironment()
         YamlPropertySourceLoader()
-            .load("application", ClassPathResource("application.yaml"))
+            .load("application", FileSystemResource("src/main/resources/application.yaml"))
             .forEach { source -> environment.propertySources.addLast(source) }
 
         val properties =

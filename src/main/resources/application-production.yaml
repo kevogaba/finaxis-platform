@@ -1,0 +1,33 @@
+server:
+  servlet:
+    session:
+      cookie:
+        secure: true
+        same-site: strict
+
+spring:
+  devtools:
+    restart:
+      enabled: false
+  docker:
+    compose:
+      enabled: false
+
+springdoc:
+  api-docs:
+    enabled: false
+
+scalar:
+  enabled: false
+
+finaxis:
+  iam:
+    active-organisation-context:
+      secret: ${FINAXIS_ACTIVE_ORGANISATION_CONTEXT_SECRET}
+  security:
+    cors:
+      enabled: true
+      allowed-origins: ${FINAXIS_CORS_ALLOWED_ORIGINS}
+    headers:
+      hsts-enabled: true
+      content-security-policy: "default-src 'none'"

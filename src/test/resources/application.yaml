@@ -1,46 +1,15 @@
 spring:
   config:
     import: optional:file:src/main/resources/application.yaml
-  modulith:
-    events:
-      externalization:
-        mode: outbox
-        serialize-externalization: false
-  rabbitmq:
-    publisher-confirm-type: correlated
-    publisher-returns: true
-    template:
-      mandatory: true
-
-namastack:
-  outbox:
-    rabbit:
-      fail-on-unroutable: true
-
-finaxis:
-  rate-limit:
-    enabled: true
-    include-headers: true
-    fail-open: true
-    anonymous:
-      capacity: 100
-      refill-tokens: 100
-      refill-period: 1m
-    authenticated:
-      capacity: 1000
-      refill-tokens: 1000
-      refill-period: 1m
-    paths:
-      enabled: true
-      excluded:
-        - /actuator/health/**
-        - /actuator/prometheus
-        - /error
-        - /docs/**
-        - /v3/api-docs/**
-        - /swagger-ui/**
+  profiles:
+    active: test
 
 ---
+
+spring:
+  config:
+    activate:
+      on-profile: test
 
 jobrunr:
   dashboard:

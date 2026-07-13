@@ -3,7 +3,7 @@ package com.finaxis.platform.common.transitions
 import org.junit.jupiter.api.Test
 import org.springframework.boot.env.YamlPropertySourceLoader
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
-import org.springframework.core.io.ClassPathResource
+import org.springframework.core.io.FileSystemResource
 import org.springframework.modulith.events.EventExternalizationConfiguration
 import java.time.Instant
 import kotlin.test.assertEquals
@@ -30,7 +30,7 @@ class TransitionModuleConfigurationTests {
     fun `application yaml configures Modulith Namastack outbox and RabbitMQ publishing`() {
         val source =
             YamlPropertySourceLoader()
-                .load("application", ClassPathResource("application.yaml"))
+                .load("application", FileSystemResource("src/main/resources/application.yaml"))
                 .first()
 
         assertEquals("outbox", source.getProperty("spring.modulith.events.externalization.mode"))
