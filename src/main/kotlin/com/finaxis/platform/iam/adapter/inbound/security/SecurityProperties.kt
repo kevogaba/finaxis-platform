@@ -36,5 +36,5 @@ data class CorsProperties(
 @Validated
 data class SecurityHeadersProperties(
     val hstsEnabled: Boolean = false,
-    val contentSecurityPolicy: String = "default-src 'none'",
+    val contentSecurityPolicy: String = "",
 )

@@ -26,6 +26,7 @@ class SecurityHeadersIntegrationTests {
                 header { string("X-Content-Type-Options", "nosniff") }
                 header { string("X-Frame-Options", "DENY") }
                 header { string("Referrer-Policy", "strict-origin-when-cross-origin") }
+                header { doesNotExist("Content-Security-Policy") }
             }
     }
 
