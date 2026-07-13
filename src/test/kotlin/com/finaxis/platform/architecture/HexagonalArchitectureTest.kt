@@ -64,6 +64,17 @@ class HexagonalArchitectureTest {
     }
 
     @Test
+    fun `core layers do not depend on generated jooq schema metadata`() {
+        noClasses()
+            .that()
+            .resideInAnyPackage("..domain..", "..application..", "..adapter.inbound..")
+            .should()
+            .dependOnClassesThat()
+            .resideInAPackage("com.finaxis.platform.jooq..")
+            .check(importedClasses)
+    }
+
+    @Test
     fun `web adapters do not depend directly on Spring Data repositories`() {
         noClasses()
             .that()

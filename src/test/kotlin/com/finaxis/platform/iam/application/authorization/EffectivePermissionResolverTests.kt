@@ -126,7 +126,7 @@ class EffectivePermissionResolverTests {
             )
         val cacheManager = ConcurrentMapCacheManager(EffectivePermissionResolver.CACHE_NAME)
         val resolver = EffectivePermissionResolver(queries, cacheManager)
-        val invalidator = PermissionCacheInvalidator(cacheManager)
+        val invalidator = PermissionCacheInvalidator(cacheManager, resolver)
 
         assertEquals(
             setOf("logistics.shipment.approve"),
@@ -158,7 +158,11 @@ class EffectivePermissionResolverTests {
 
     @Test
     fun `permission cache invalidator tolerates missing cache`() {
-        val invalidator = PermissionCacheInvalidator(NoOpCacheManager())
+        val invalidator =
+            PermissionCacheInvalidator(
+                NoOpCacheManager(),
+                EffectivePermissionResolver(FakePermissionQueries(), NoOpCacheManager()),
+            )
 
         invalidator.evictMembership(UUID.randomUUID())
         invalidator.clearAll()
@@ -179,8 +183,10 @@ private class FakePermissionQueries(
     override fun membershipStatus(membershipId: UUID): MembershipStatus? =
         membershipStatuses[membershipId]
 
-    override fun rolePermissionCodes(membershipId: UUID): Set<String> =
-        rolePermissions[membershipId].orEmpty()
+    override fun rolePermissionCodes(
+        membershipId: UUID,
+        branchId: UUID?,
+    ): Set<String> = rolePermissions[membershipId].orEmpty()
 
     override fun directPermissionEffects(membershipId: UUID): List<PermissionEffectAssignment> =
         directPermissions[membershipId].orEmpty()

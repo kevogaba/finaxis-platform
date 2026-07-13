@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches-ignore:
+      - "main"
       - "dependabot*"
       - "dependabot/**"
   workflow_dispatch:
@@ -58,6 +59,9 @@ jobs:
     name: Quality Gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      DOCKER_BUILDKIT: 1 # Enable Buildkit and let compose use it to speed up image building
+      COMPOSE_DOCKER_CLI_BUILD: 1
 
     steps:
       - name: Checkout

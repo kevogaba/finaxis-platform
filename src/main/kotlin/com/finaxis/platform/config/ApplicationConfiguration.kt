@@ -1,5 +1,6 @@
 package com.finaxis.platform.config
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import io.swagger.v3.oas.models.Components
 import io.swagger.v3.oas.models.OpenAPI
 import io.swagger.v3.oas.models.info.Info
@@ -17,6 +18,13 @@ import java.time.Clock
 @Configuration
 @EnableCaching
 class ApplicationConfiguration {
+    /**
+     * JSONB persistence uses the Jackson 2 API required by Namastack and existing Springdoc
+     * integrations. Spring Boot 4 otherwise auto-configures only Jackson 3's JsonMapper.
+     */
+    @Bean
+    fun jackson2ObjectMapper(): ObjectMapper = ObjectMapper().findAndRegisterModules()
+
     /**
      * Provides a central UTC clock for deterministic time handling.
      */
