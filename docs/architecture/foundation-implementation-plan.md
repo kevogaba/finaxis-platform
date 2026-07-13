@@ -75,7 +75,7 @@ check. It will not preserve the old physical schema.
 
 | Area | Current gap | Foundation outcome |
 | --- | --- | --- |
-| Schema | No complete organisation ownership model; branch, assignment, setting, business-date, identity-link, lifecycle, audit, and application outbox tables are absent. | One PostgreSQL baseline with tenant-safe FKs, checks, comments, indexes, and seed data. |
+| Schema | No complete organisation ownership model; branch, assignment, setting, business-date, identity-link, lifecycle, and audit tables are absent. | One PostgreSQL baseline with tenant-safe FKs, checks, comments, indexes, and seed data. |
 | Lifecycle | Common FSM is unbound to real aggregates and logs only through an in-memory/logging port. | Organisation, branch, user, and membership graphs with persistence-backed logs and guards. |
 | Security | Keycloak subject and selected context are resolved, but user/membership lifecycle status and branch/role assignment state are not uniformly enforced. | Context-resolution port plus explicit active status checks and tenant-safe access patterns. |
 | Audit | Audit events are only structured logs. JDBC auditing is not enabled. | Auditing callbacks, durable audit-event adapter, system actor, and contextual MDC. |
@@ -156,9 +156,9 @@ enforce this direction.
   branch-bound logs require it. A generic log table is not sufficient for traceable ownership.
 - `audit_event` remains append-only and can reference any entity. Audit event payloads exclude
   credentials, bearer tokens, cookies, and sensitive PII.
-- `outbox_event` is an application-owned visibility/retry record only if required by Namastack's
-  library contract. The source of truth for externalization remains Namastack's transactional
-  outbox; do not build a competing publisher.
+- Transition `eventFactories` publish in-process events or selected externalized events. Spring
+  Modulith and Namastack perform the transactional externalization path; do not build a competing
+  application-owned outbox publisher.
 
 ## Verification plan
 
@@ -176,9 +176,9 @@ enforce this direction.
 ## Implementation and verification result
 
 The greenfield V1/V2 baseline, Spring Data JDBC auditing/context, tenant-safe jOOQ persistence
-adapters, durable audit/outbox records, and the four lifecycle services are implemented. The
-existing FSM executor is reused for all status mutation; each transition writes its log, audit
-event, and selected outbox event in the same application transaction.
+adapters, durable audit records, and the four lifecycle services are implemented. The existing FSM
+executor is reused for all status mutation; each transition writes its log and audit event, then
+publishes events through transition `eventFactories` for Modulith/Namastack externalization.
 
 `./gradlew --no-daemon --max-workers=1 qualityGate` passed on 2026-07-13. It ran PostgreSQL jOOQ
 code generation, compilation, `bootJar`, Checkstyle, Detekt, PMD, SpotBugs, Spotless, ktlint,

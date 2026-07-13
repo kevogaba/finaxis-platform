@@ -19,7 +19,6 @@ erDiagram
     ORGANISATION ||--o{ ORGANISATION_SETTING : configures
     ORGANISATION ||--|| BUSINESS_DATE : has
     ORGANISATION ||--o{ AUDIT_EVENT : audits
-    ORGANISATION ||--o{ OUTBOX_EVENT : owns
     ORGANISATION ||--o{ ORGANISATION_TRANSITION_LOG : changes
     BRANCH ||--o{ BRANCH_TRANSITION_LOG : changes
     USER_ACCOUNT ||--o{ USER_ACCOUNT_TRANSITION_LOG : changes
@@ -27,15 +26,14 @@ erDiagram
 ```
 
 `user_account` is global. `user_organisation_membership`, branch assignments, role assignments,
-settings, business date, audit events, outbox events, and logs carry `organisation_id`. Composite
-foreign keys keep branch, role, membership, and assignment relationships inside that organisation.
+settings, business date, audit events, and logs carry `organisation_id`. Composite foreign keys
+keep branch, role, membership, and assignment relationships inside that organisation.
 
 Lifecycle logs are append-only per aggregate: `organisation_transition_log`,
 `branch_transition_log`, `user_account_transition_log`, and
 `user_organisation_membership_transition_log`. `audit_event` is the business/security audit
-record; it must not contain credentials, bearer tokens, cookies, or raw sensitive PII. The
-application `outbox_event` table records integration intent and retry visibility; Namastack remains
-the transactional delivery mechanism for RabbitMQ.
+record; it must not contain credentials, bearer tokens, cookies, or raw sensitive PII. Selected
+transition events are externalized through Spring Modulith and Namastack for RabbitMQ delivery.
 
 ## Table notes
 
@@ -52,7 +50,6 @@ the transactional delivery mechanism for RabbitMQ.
 | `business_date` | One optimistic-locked controlled business date per organisation. |
 | `*_transition_log` | Append-only lifecycle history. Each log is owned by the relevant organisation and uses a composite FK where a branch or membership must not cross organisation boundaries. |
 | `audit_event` | Append-only business/security audit evidence, indexed by organisation/time and entity. It must never contain credentials, bearer tokens, cookies, or raw sensitive PII. |
-| `outbox_event` | Application-owned selected-event visibility/retry record. Its `publish_status, next_retry_at` index supports publishing workers; it does not replace Namastack's transactional outbox. |
 
 Mutable tables use UTC `created_at`, `updated_at`, `created_by`, `updated_by`, and optimistic
 `row_version` where their lifecycle allows updates, with two intentional exceptions:

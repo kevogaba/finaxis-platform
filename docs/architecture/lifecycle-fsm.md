@@ -2,8 +2,10 @@
 
 The foundation uses `common.transitions.TransitionGraph` and `TransitionExecutor`; it does not add
 a second FSM engine. State changes must go through lifecycle application services, persist a
-per-aggregate transition log, record an audit event, and publish selected Modulith events for
-Namastack/RabbitMQ externalization.
+per-aggregate transition log, record an audit event, and publish events through transition
+`eventFactories`. `InternalTransitionEvent` remains in-process; selected
+`ExternalizedTransitionEvent` instances are externalized through Modulith and Namastack to
+RabbitMQ.
 
 ```mermaid
 stateDiagram-v2
@@ -60,6 +62,7 @@ stateDiagram-v2
 
 Each transition is an explicit command. Guard failures expose a safe business message and retain
 diagnostic logging. A successful lifecycle transaction updates only through its lifecycle service,
-writes the per-aggregate transition log and `audit_event`, and records the required selected
-outbox event such as `TenantActivated`, `BranchSuspended`, `UserInvited`, or
-`MembershipActivated`.
+writes the per-aggregate transition log and `audit_event`, then publishes the events created by
+its `eventFactories`. The membership activation factory produces an
+`ExternalizedTransitionEvent`; the notifications module consumes it after Namastack externalizes
+it to RabbitMQ.
