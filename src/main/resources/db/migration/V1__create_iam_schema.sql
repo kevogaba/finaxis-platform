@@ -485,32 +485,3 @@ CREATE INDEX idx_audit_event_organisation_time ON audit_event (organisation_id, 
 CREATE INDEX idx_audit_event_entity ON audit_event (entity_type, entity_id);
 CREATE INDEX idx_audit_event_actor ON audit_event (actor_user_id);
 COMMENT ON TABLE audit_event IS 'Append-only business and security audit trail; never store credentials, tokens, or session cookies.';
-
-CREATE TABLE outbox_event (
-    id UUID PRIMARY KEY,
-    organisation_id UUID NOT NULL REFERENCES organisation (id),
-    aggregate_type TEXT NOT NULL,
-    aggregate_id UUID NOT NULL,
-    event_type TEXT NOT NULL,
-    routing_key TEXT NOT NULL,
-    payload_jsonb JSONB NOT NULL,
-    publish_status TEXT NOT NULL,
-    publish_attempts INTEGER NOT NULL DEFAULT 0,
-    next_retry_at TIMESTAMPTZ,
-    published_at TIMESTAMPTZ,
-    last_error TEXT,
-    created_at TIMESTAMPTZ NOT NULL,
-    created_by UUID,
-    updated_at TIMESTAMPTZ NOT NULL,
-    updated_by UUID,
-    row_version BIGINT NOT NULL DEFAULT 0,
-    CONSTRAINT chk_outbox_event_status CHECK (
-        publish_status IN ('PENDING', 'PUBLISHED', 'FAILED', 'DEAD_LETTER')
-    ),
-    CONSTRAINT chk_outbox_event_attempts CHECK (publish_attempts >= 0),
-    CONSTRAINT chk_outbox_event_version CHECK (row_version >= 0)
-);
-
-CREATE INDEX idx_outbox_event_publish_status_retry ON outbox_event (publish_status, next_retry_at);
-CREATE INDEX idx_outbox_event_organisation_created ON outbox_event (organisation_id, created_at);
-COMMENT ON TABLE outbox_event IS 'Application visibility record for selected integration events; Namastack remains the delivery outbox.';

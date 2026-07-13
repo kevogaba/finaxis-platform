@@ -338,25 +338,3 @@ data class AuditEventJdbcEntity(
     val afterJsonb: String? = null,
     val metadataJsonb: String = "{}",
 )
-
-/** Spring Data JDBC row model for a transactional integration outbox record. */
-@Table("outbox_event")
-data class OutboxEventJdbcEntity(
-    @Id val id: UUID,
-    val organisationId: UUID,
-    val aggregateType: String,
-    val aggregateId: UUID,
-    val eventType: String,
-    val routingKey: String,
-    val payloadJsonb: String,
-    val publishStatus: String,
-    val publishAttempts: Int = 0,
-    val nextRetryAt: Instant? = null,
-    val publishedAt: Instant? = null,
-    val lastError: String? = null,
-    @CreatedDate override val createdAt: Instant? = null,
-    @CreatedBy override val createdBy: UUID? = null,
-    @LastModifiedDate override val updatedAt: Instant? = null,
-    @LastModifiedBy override val updatedBy: UUID? = null,
-    @Version override val rowVersion: Long? = null,
-) : AuditedJdbcAggregate

@@ -10,7 +10,6 @@ import com.finaxis.platform.jooq.tables.references.BRANCH_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.KEYCLOAK_IDENTITY_LINK
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_TRANSITION_LOG
-import com.finaxis.platform.jooq.tables.references.OUTBOX_EVENT
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
@@ -19,8 +18,6 @@ import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP_
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
 import com.finaxis.platform.lifecycle.application.FoundationLifecycleReader
 import com.finaxis.platform.lifecycle.application.FoundationLifecycleWriter
-import com.finaxis.platform.lifecycle.application.LifecycleOutboxEvent
-import com.finaxis.platform.lifecycle.application.LifecycleOutboxEventStore
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.LifecycleAggregate
 import com.finaxis.platform.lifecycle.domain.LifecyclePrerequisites
@@ -37,7 +34,7 @@ import java.util.UUID
 
 /**
  * PostgreSQL/jOOQ lifecycle persistence adapter. Tenant-owned records are always read with their
- * organisation id, and the same transaction writes state, transition log, audit, and outbox rows.
+ * organisation id, and the same transaction writes state and transition-log rows.
  */
 @Component
 class JooqFoundationLifecyclePersistence(
@@ -46,7 +43,6 @@ class JooqFoundationLifecyclePersistence(
     private val objectMapper: ObjectMapper,
 ) : FoundationLifecycleReader,
     FoundationLifecycleWriter,
-    LifecycleOutboxEventStore,
     LifecyclePrerequisites,
     TransitionLogRepository {
     override fun findOrganisation(id: UUID): LifecycleAggregate<OrganisationLifecycleState>? =
@@ -305,24 +301,6 @@ class JooqFoundationLifecyclePersistence(
                 .and(USER_ROLE_ASSIGNMENT.STATUS.eq(ACTIVE)),
         )
 
-    override fun enqueue(event: LifecycleOutboxEvent) {
-        dsl
-            .insertInto(OUTBOX_EVENT)
-            .set(OUTBOX_EVENT.ID, UUID.randomUUID())
-            .set(OUTBOX_EVENT.ORGANISATION_ID, event.organisationId)
-            .set(OUTBOX_EVENT.AGGREGATE_TYPE, event.aggregateType)
-            .set(OUTBOX_EVENT.AGGREGATE_ID, event.aggregateId)
-            .set(OUTBOX_EVENT.EVENT_TYPE, event.eventType)
-            .set(OUTBOX_EVENT.ROUTING_KEY, event.routingKey)
-            .set(OUTBOX_EVENT.PAYLOAD_JSONB, JSONB.jsonb(objectMapper.writeValueAsString(event)))
-            .set(OUTBOX_EVENT.PUBLISH_STATUS, PENDING)
-            .set(OUTBOX_EVENT.CREATED_AT, now())
-            .set(OUTBOX_EVENT.CREATED_BY, actorId())
-            .set(OUTBOX_EVENT.UPDATED_AT, now())
-            .set(OUTBOX_EVENT.UPDATED_BY, actorId())
-            .execute()
-    }
-
     override fun save(log: TransitionLog) {
         val organisationId =
             UUID.fromString(
@@ -366,7 +344,6 @@ class JooqFoundationLifecyclePersistence(
     private companion object {
         const val ACTIVE = "ACTIVE"
         const val REVOKED = "REVOKED"
-        const val PENDING = "PENDING"
         const val ORGANISATION_ID = "organisationId"
         const val BRANCH_ID = "branchId"
         const val ORGANISATION_TYPE = "ORGANISATION"

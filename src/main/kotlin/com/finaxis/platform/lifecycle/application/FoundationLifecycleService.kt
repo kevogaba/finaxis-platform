@@ -23,13 +23,11 @@ import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleTransition
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
-import java.time.Clock
 import java.util.UUID
 
 /**
  * Transactional lifecycle application service. All state changes use the shared TransitionExecutor;
- * the service is the only path that persists lifecycle status, logs, audit records, and outbox
- * rows.
+ * the service is the only path that persists lifecycle status, logs, and audit records.
  */
 @Service
 class FoundationLifecycleService(
@@ -37,9 +35,7 @@ class FoundationLifecycleService(
     private val reader: FoundationLifecycleReader,
     private val writer: FoundationLifecycleWriter,
     private val prerequisites: LifecyclePrerequisites,
-    private val outbox: LifecycleOutboxEventStore,
     private val auditService: AuditService,
-    private val clock: Clock,
 ) {
     /** Applies an explicit transition to an organisation lifecycle aggregate. */
     @Transactional
@@ -59,7 +55,7 @@ class FoundationLifecycleService(
                     persist = writer::saveOrganisation,
                 ),
             )
-        recordOutcome(result, command.organisationId, null)
+        recordOutcome(result, command.organisationId)
         return result
     }
 
@@ -91,7 +87,7 @@ class FoundationLifecycleService(
                     persist = writer::saveBranch,
                 ),
             )
-        recordOutcome(result, command.organisationId, command.branchId)
+        recordOutcome(result, command.organisationId)
         return result
     }
 
@@ -121,7 +117,7 @@ class FoundationLifecycleService(
         if (command.transition == UserLifecycleTransition.COMPLETE_DEACTIVATION) {
             writer.revokeActiveAssignments(command.organisationId, command.userId)
         }
-        recordOutcome(result, command.organisationId, command.branchId)
+        recordOutcome(result, command.organisationId)
         return result
     }
 
@@ -134,6 +130,7 @@ class FoundationLifecycleService(
             ) {
                 "Membership was not found in the selected organisation."
             }
+        val userId = aggregateUserId(command.organisationId, command.membershipId)
         val result =
             transitionExecutor.execute(
                 TransitionExecution(
@@ -143,37 +140,22 @@ class FoundationLifecycleService(
                         FoundationLifecycleDefinitions.membershipGraph(
                             prerequisites,
                             command.organisationId,
-                            aggregateUserId(command.organisationId, command.membershipId),
+                            userId,
                         ),
                     command =
                         contextualise(
                             command.command,
                             command.organisationId,
                             command.branchId,
+                            userId,
                         ),
                     actor = actor(),
                     persist = writer::saveMembership,
                 ),
             )
-        recordOutcome(result, command.organisationId, command.branchId)
+        recordOutcome(result, command.organisationId)
         return result
     }
-
-    /** Emits a role-assignment integration record after IAM grants a role. */
-    @Transactional
-    fun roleAssigned(
-        organisationId: UUID,
-        userId: UUID,
-        roleId: UUID,
-    ) = enqueueAssignmentEvent(organisationId, userId, roleId, ROLE_ASSIGNED)
-
-    /** Emits a branch-assignment integration record after IAM grants a branch. */
-    @Transactional
-    fun branchAssigned(
-        organisationId: UUID,
-        userId: UUID,
-        branchId: UUID,
-    ) = enqueueAssignmentEvent(organisationId, userId, branchId, BRANCH_ASSIGNED)
 
     private fun aggregateUserId(
         organisationId: UUID,
@@ -187,9 +169,7 @@ class FoundationLifecycleService(
     private fun <S : Enum<S>, T : Enum<T>> recordOutcome(
         result: TransitionResult<S, T, LifecycleAggregate<S>>,
         organisationId: UUID,
-        branchId: UUID?,
     ) {
-        val eventType = eventType(result.aggregate.aggregateType, result.transition.name)
         auditService.record(
             AuditCommand(
                 actorType = actor().type,
@@ -205,50 +185,13 @@ class FoundationLifecycleService(
                 metadata = mapOf("from" to result.fromState.name, "to" to result.toState.name),
             ),
         )
-        if (eventType != null) {
-            outbox.enqueue(
-                LifecycleOutboxEvent(
-                    organisationId = organisationId,
-                    aggregateType = result.aggregate.aggregateType,
-                    aggregateId = UUID.fromString(result.aggregate.aggregateId),
-                    eventType = eventType,
-                    routingKey = "platform.lifecycle.${eventType.toSnakeCase()}",
-                    occurredAt = result.log.occurredAt,
-                    metadata =
-                        mapOf(
-                            "branchId" to branchId?.toString(),
-                            "from" to result.fromState.name,
-                            "to" to result.toState.name,
-                            "transition" to result.transition.name,
-                        ),
-                ),
-            )
-        }
-    }
-
-    private fun enqueueAssignmentEvent(
-        organisationId: UUID,
-        userId: UUID,
-        scopeId: UUID,
-        eventType: String,
-    ) {
-        outbox.enqueue(
-            LifecycleOutboxEvent(
-                organisationId = organisationId,
-                aggregateType = "USER_ACCOUNT",
-                aggregateId = userId,
-                eventType = eventType,
-                routingKey = "platform.lifecycle.${eventType.toSnakeCase()}",
-                occurredAt = clock.instant(),
-                metadata = mapOf("scopeId" to scopeId.toString()),
-            ),
-        )
     }
 
     private fun contextualise(
         command: TransitionCommand,
         organisationId: UUID,
         branchId: UUID?,
+        userId: UUID? = null,
     ): TransitionCommand =
         command.copy(
             metadata =
@@ -256,7 +199,8 @@ class FoundationLifecycleService(
                     mapOf(
                         ORGANISATION_ID to organisationId.toString(),
                         BRANCH_ID to branchId?.toString(),
-                    ),
+                    ) +
+                    (userId?.let { mapOf(USER_ID to it.toString()) } ?: emptyMap()),
         )
 
     private fun actor(): TransitionActor =
@@ -264,35 +208,12 @@ class FoundationLifecycleService(
             TransitionActor(USER, actor.userId.toString(), actor.username)
         } ?: TransitionActor(SYSTEM, SystemActor.ID.toString(), SYSTEM)
 
-    private fun eventType(
-        aggregateType: String,
-        transition: String,
-    ): String? = lifecycleEvents[aggregateType to transition]
-
-    private fun String.toSnakeCase(): String = replace(Regex("(?<!^)([A-Z])"), "_$1").lowercase()
-
     private companion object {
         const val ORGANISATION_ID = "organisationId"
         const val BRANCH_ID = "branchId"
+        const val USER_ID = "userId"
         const val USER = "USER"
         const val SYSTEM = "SYSTEM"
-        const val ROLE_ASSIGNED = "RoleAssigned"
-        const val BRANCH_ASSIGNED = "BranchAssigned"
-
-        val lifecycleEvents =
-            mapOf(
-                "ORGANISATION" to "START_PROVISIONING" to "TenantProvisioningRequested",
-                "ORGANISATION" to "ACTIVATE" to "TenantActivated",
-                "ORGANISATION" to "SUSPEND" to "TenantSuspended",
-                "ORGANISATION" to "START_DEPROVISIONING" to "TenantDeprovisioningRequested",
-                "BRANCH" to "ACTIVATE" to "BranchActivated",
-                "BRANCH" to "SUSPEND" to "BranchSuspended",
-                "USER_ACCOUNT" to "START_IDP_PROVISIONING" to "UserProvisioningRequested",
-                "USER_ACCOUNT" to "INVITE" to "UserInvited",
-                "USER_ACCOUNT" to "ACTIVATE" to "UserActivated",
-                "USER_ACCOUNT" to "SUSPEND" to "UserSuspended",
-                "MEMBERSHIP" to "ACTIVATE" to "MembershipActivated",
-            )
     }
 }
 

@@ -3,6 +3,8 @@ package com.finaxis.platform.lifecycle.application
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
+import com.finaxis.platform.common.transitions.InternalTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.common.transitions.TransitionExecutor
@@ -32,19 +34,18 @@ class FoundationLifecycleServiceTests {
     private val persistence = FakeLifecyclePersistence()
     private val logs = CapturingTransitionLogs()
     private val audits = CapturingAudits()
+    private val events = CapturingTransitionPublisher()
     private val service =
         FoundationLifecycleService(
-            TransitionExecutor(clock, logs, NoopTransitionPublisher),
-            persistence,
+            TransitionExecutor(clock, logs, events),
             persistence,
             persistence,
             persistence,
             AuditService(audits, clock),
-            clock,
         )
 
     @Test
-    fun `organisation provisioning persists status log audit and outbox event`() {
+    fun `organisation provisioning publishes an internal transition event`() {
         val organisationId = UUID.randomUUID()
         persistence.organisations[organisationId] =
             LifecycleAggregate(
@@ -64,7 +65,10 @@ class FoundationLifecycleServiceTests {
         assertEquals(OrganisationLifecycleState.PROVISIONING, result.aggregate.state)
         assertEquals("START_PROVISIONING", logs.items.single().transition)
         assertEquals("organisation.start_provisioning", audits.items.single().action)
-        assertEquals("TenantProvisioningRequested", persistence.outbox.single().eventType)
+        val event = events.published.single() as InternalTransitionEvent
+        assertEquals(ORGANISATION, event.aggregateType)
+        assertEquals(organisationId.toString(), event.aggregateId)
+        assertEquals(OrganisationLifecycleTransition.START_PROVISIONING.name, event.transition)
     }
 
     @Test
@@ -153,18 +157,46 @@ class FoundationLifecycleServiceTests {
             persistence.memberships.getValue(organisationId to membershipId).state,
         )
         assertTrue(audits.items.isEmpty())
-        assertTrue(persistence.outbox.isEmpty())
     }
 
     @Test
-    fun `roleAssigned enqueues an outbox event stamped with the injected clock`() {
+    fun `membership activation publishes its externalized event with resolved user metadata`() {
         val organisationId = UUID.randomUUID()
         val userId = UUID.randomUUID()
-        val roleId = UUID.randomUUID()
+        val membershipId = UUID.randomUUID()
+        val branchId = UUID.randomUUID()
+        persistence.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        persistence.membershipUsers[organisationId to membershipId] = userId
+        persistence.memberships[organisationId to membershipId] =
+            LifecycleAggregate(membershipId, MembershipLifecycleState.PENDING_APPROVAL, MEMBERSHIP)
+        persistence.userStates[userId] = UserLifecycleState.ACTIVE
+        persistence.branchAssignments = true
+        persistence.roleAssignments = true
 
-        service.roleAssigned(organisationId, userId, roleId)
+        service.transition(
+            MembershipTransitionCommand(
+                organisationId,
+                membershipId,
+                branchId = branchId,
+                transition = MembershipLifecycleTransition.ACTIVATE,
+            ),
+        )
 
-        assertEquals(clock.instant(), persistence.outbox.single().occurredAt)
+        val event = events.published.single() as ExternalizedTransitionEvent
+        assertEquals("finaxis.lifecycle.membership.activated", event.target)
+        assertEquals(MEMBERSHIP, event.aggregateType)
+        assertEquals(membershipId.toString(), event.aggregateId)
+        assertEquals(MembershipLifecycleTransition.ACTIVATE.name, event.transition)
+        assertEquals(
+            mapOf(
+                "membershipId" to membershipId.toString(),
+                "userId" to userId.toString(),
+                "organisationId" to organisationId.toString(),
+                "branchId" to branchId.toString(),
+                "occurredAt" to clock.instant().toString(),
+            ),
+            event.metadata,
+        )
     }
 
     @Test
@@ -200,8 +232,7 @@ class FoundationLifecycleServiceTests {
 private class FakeLifecyclePersistence :
     FoundationLifecycleReader,
     FoundationLifecycleWriter,
-    com.finaxis.platform.lifecycle.domain.LifecyclePrerequisites,
-    LifecycleOutboxEventStore {
+    com.finaxis.platform.lifecycle.domain.LifecyclePrerequisites {
     val organisations = mutableMapOf<UUID, LifecycleAggregate<OrganisationLifecycleState>>()
     val branches = mutableMapOf<Pair<UUID, UUID>, LifecycleAggregate<BranchLifecycleState>>()
     val users = mutableMapOf<UUID, LifecycleAggregate<UserLifecycleState>>()
@@ -209,7 +240,6 @@ private class FakeLifecyclePersistence :
     val organisationStates = mutableMapOf<UUID, OrganisationLifecycleState>()
     val userStates = mutableMapOf<UUID, UserLifecycleState>()
     val membershipUsers = mutableMapOf<Pair<UUID, UUID>, UUID>()
-    val outbox = mutableListOf<LifecycleOutboxEvent>()
     val revokedUsers = mutableSetOf<Pair<UUID, UUID>>()
     var branchAssignments = false
     var roleAssignments = false
@@ -247,10 +277,6 @@ private class FakeLifecyclePersistence :
         userId: UUID,
     ) {
         revokedUsers.add(organisationId to userId)
-    }
-
-    override fun enqueue(event: LifecycleOutboxEvent) {
-        outbox.add(event)
     }
 
     override fun organisationState(organisationId: UUID) = organisationStates[organisationId]
@@ -291,8 +317,12 @@ private class CapturingAudits : AuditEventRepository {
     }
 }
 
-private object NoopTransitionPublisher : TransitionEventPublisher {
-    override fun publish(event: TransitionEvent) = Unit
+private class CapturingTransitionPublisher : TransitionEventPublisher {
+    val published = mutableListOf<TransitionEvent>()
+
+    override fun publish(event: TransitionEvent) {
+        published.add(event)
+    }
 }
 
 private const val ORGANISATION = "ORGANISATION"
