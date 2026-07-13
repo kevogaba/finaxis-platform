@@ -1,153 +1,127 @@
 # Project Guidance
 
-This is a Kotlin-first Spring Boot Web MVC service running on Java 25. Prefer Kotlin
-for application code. Do not mix Java into new code unless there is a specific
-framework or runtime reason, and document that reason in the change.
+Canonical rules for this repository. `AGENTS.md` points here; keep this file authoritative
+and update it (not a copy elsewhere) when a rule changes. Prefer pointing to `docs/` over
+restating detail here.
 
-The architecture is hexagonal:
+Kotlin-first Spring Boot Web MVC OAuth2 resource server on Java 25. Prefer Kotlin for
+application code; do not add Java to new code without a specific framework/runtime reason,
+and document that reason in the change.
 
-- `domain`: framework-independent model and value objects
-- `application`: ports and use-case services
-- `adapter`: persistence, web, and security adapters
-- `config`: application configuration
+Hexagonal layers: `domain` (framework-independent model/value objects), `application` (ports
+and use-case services), `adapter` (persistence/web/security/messaging inbound & outbound),
+`config`. Before changing code, ask whether the approach is overly complex; simplify while
+preserving security boundaries and testability.
 
-Before implementing or changing code, pause and ask whether the approach is overly
-complex. Simplify where possible while preserving security boundaries and testability.
+## Implementation status
 
-Authorization rules:
+Modules (`com.finaxis.platform`): `iam` (the only public REST surface today), `lifecycle`
+(organisation/branch/user/membership FSMs), `notifications` (RabbitMQ listener → JobRunr
+job), `common` (reusable transitions/audit/context/persistence/web infra), `config`.
 
-- Keycloak authenticates users only.
-- This application is an OAuth2 resource server. Do not add application-managed password handling,
-  password authentication endpoints, password storage, or password checks. Local smoke scripts may
-  obtain dev-only Keycloak tokens, but application code must not handle user credentials.
-- The application owns users, organisations, memberships, roles, permissions, scopes,
-  and authorization rules.
-- Runtime authorization evaluates permission codes, never role names.
-- Active organisation is request/session context, not a permanent `app_user` field.
-- Controllers use permission authorities for coarse gates.
-- Application services enforce resource-specific authorization.
+The membership-activation pipeline is the **reference event pattern** — copy it for new
+domain events rather than inventing another mechanism: transition `eventFactory` →
+`ExternalizedTransitionEvent` → Modulith/Namastack outbox → RabbitMQ (routed by the event's
+`target`) → thin `@RabbitListener` → application service → JobRunr job. See
+`docs/adr/0004-membership-activation-notification-pipeline.md`.
 
-FSM/event architecture:
+Known follow-ups (do not treat as bugs): `lifecycle` has no inbound adapter yet (transitions
+are driven internally/by tests); `notifications` email delivery is stubbed (logs only);
+`iam` and `config` still lack explicit `@ApplicationModule` `package-info`; JaCoCo coverage
+verification is scoped to `iam` only.
+
+## Authorization
+
+- Keycloak authenticates users only. This app is an OAuth2 resource server: no
+  application-managed passwords, password endpoints, password storage, or password checks.
+  Smoke scripts may fetch dev-only Keycloak tokens; application code must not handle
+  credentials.
+- The application owns users, organisations, memberships, roles, permissions, scopes, and
+  authorization rules. Runtime authorization evaluates **permission codes, never role names**.
+- Active organisation is request/session context, not a permanent `app_user` field. The
+  Redis-backed HTTP session carries active-organisation context only — never authentication
+  (every request authenticates via the bearer JWT).
+- Controllers use permission authorities for coarse gates; application services enforce
+  resource-specific authorization.
+
+## FSM / events / async
 
 - Reusable transition infrastructure lives in `com.finaxis.platform.common.transitions`.
-- Domain modules define their own state enums, transition enums, graphs, guards, policies,
+  Domain modules define their own state/transition enums, graphs, guards, policies,
   persistence adapters, and explicit domain events.
-- Transition direction must be deterministic; declare every legal source state, transition name,
-  and target state in a `TransitionDefinition`.
-- Keep state mutation, transition validation, log creation, event publication, broker publishing,
-  and background jobs separated.
-- Use Spring Modulith for module boundaries, application events, cross-module listeners, and
-  verification.
-- Use Namastack Outbox for transactional event externalization.
-- Externalize only selected events to RabbitMQ with clear routing names.
-- Keep RabbitMQ listeners thin: deserialize, validate, delegate to an application service, handle
-  idempotency, and ack/nack based on outcome.
-- Use JobRunr for durable background jobs such as email, SMS, reports, imports, exports, retries,
-  and recurring work. Do not use JobRunr as the primary outbox/event externalization engine.
-- See `docs/architecture/fsm-transitions.md` and
+- Declare every legal source state, transition name, and target state in a
+  `TransitionDefinition`; direction must be deterministic. Attach events via
+  `eventFactories` — publish `InternalTransitionEvent` for in-process signals and
+  `ExternalizedTransitionEvent` (with a `target`) for integration events.
+- **Never** hand-write a module-private outbox table or ad-hoc broker publish. Externalize
+  only through `eventFactories` + Spring Modulith + Namastack Outbox. The RabbitMQ exchange is
+  chosen by a Namastack `RabbitOutboxRouting` bean keyed on the event `target` (the Modulith
+  bridge drops the exchange), so a new externalized event needs a matching route.
+- Keep RabbitMQ listeners thin: deserialize, validate, delegate to an application service,
+  ensure idempotency (deterministic job/keys), ack/nack on outcome.
+- Use JobRunr for durable background work (email, SMS, reports, imports/exports, retries,
+  recurring). Do not use JobRunr as the outbox/externalization engine.
+- Keep state mutation, transition validation, log creation, event publication, broker
+  publishing, and background jobs separated.
+- Read `docs/architecture/fsm-transitions.md` and
   `docs/adr/0002-fsm-transition-infrastructure.md` before touching transitions, events,
   Modulith boundaries, outbox, RabbitMQ, or background processing.
 
-All public APIs must be documented with Springdoc/OpenAPI annotations. API errors
-should go through centralized exception handling.
+## Modules (Spring Modulith)
 
-API governance:
+- Every module must declare its boundary in a `package-info.java` with `@ApplicationModule`
+  and explicit `allowedDependencies`. New modules without it will fail Modulith verification.
+- Spring Modulith `verify()` and ArchUnit hexagonal boundaries are first-class quality gates,
+  equal to the static-analysis tools.
 
-- All public API endpoints must be versioned under `/api/v1`, `/api/v2`, etc.
-- Never add an unversioned public API endpoint.
-- All listing APIs must use pagination.
-- Never return unbounded collections from listing endpoints.
-- Use DTOs at API boundaries unless explicitly documented otherwise.
-- Use Bean Validation for request DTOs and typed configuration properties.
+## API governance
+
+- All public endpoints versioned under `/api/v1`, `/api/v2`, … — never add an unversioned
+  public endpoint. Document all public APIs with Springdoc/OpenAPI; route API errors through
+  centralized exception handling.
+- All listing APIs must paginate; never return unbounded collections.
+- Use DTOs at API boundaries unless explicitly documented otherwise. Use Bean Validation for
+  request DTOs and typed configuration properties.
 - Update smoke tests, docs, and examples whenever endpoint paths change.
+- See `docs/architecture/api-governance.md` and `docs/architecture/api-versioning.md`.
 
-Rate limiting, logging, and audit:
+## Security, rate limiting, logging, audit
 
-- Use Bucket4j + Redis for distributed production rate limiting.
-- Keep Redis access Lettuce-based so standalone Redis, Sentinel, and Cluster remain deployment
-  options. Local development may use standalone Redis.
-- Do not implement per-instance or in-memory-only rate limiting for production paths.
-- Rate-limit values must be configurable.
-- Preserve request correlation with `X-Request-Id` and MDC cleanup.
-- Do not log secrets, bearer tokens, passwords, authorization headers, session cookies, API keys,
-  or sensitive PII.
-- Audit admin actions and critical state-changing operations through the common audit service or
-  event listeners. Do not scatter audit logging in controllers.
-
-Sentry is disabled for local development by default. Use environment configuration to
-enable it outside local development.
+- Distributed rate limiting via Bucket4j + Redis (Lettuce-based, so standalone/Sentinel/
+  Cluster stay options). No per-instance or in-memory-only limiting on production paths;
+  rate-limit values must be configurable. See `docs/architecture/rate-limiting.md`.
+- Preserve request correlation via `X-Request-Id` with MDC cleanup. Never log secrets, bearer
+  tokens, passwords, authorization headers, session cookies, API keys, or sensitive PII.
+- Audit admin actions and all critical state-changing operations through the common audit
+  service or event listeners — not scattered in controllers. See
+  `docs/architecture/audit-logging.md`.
+- The `production` profile (`SPRING_PROFILES_ACTIVE=production`) turns on browser hardening:
+  CORS (explicit origins), secure/strict session cookie, HSTS + CSP, docs UI off, and a
+  fail-fast active-organisation secret (no default). CSRF stays disabled because auth is
+  bearer-JWT only. See `docs/security/production-hardening.md` and
+  `docs/security/active-organisation-context.md`.
+- Sentry is off for local development by default; enable it via environment config elsewhere.
 
 ## Testing
 
-Every implementation must maintain both unit tests and Spring integration tests in the
-test hierarchy.
+- Every change ships focused unit tests **and** Spring integration tests. Integration tests
+  use Testcontainers (Postgres/Redis/RabbitMQ/observability) — never rely on manually running
+  local infrastructure.
+- Because the architecture is hexagonal, every module's public interfaces (inbound adapters
+  and cross-boundary application ports) need regression-focused integration coverage. Prefer
+  tests of stable external behavior over tests coupled to private implementation.
 
-- Unit tests cover focused domain, application-service, and adapter behavior.
-- Spring integration tests exercise wired application paths across controllers, security,
-  application services, persistence adapters, Flyway-managed schema/data, and external
-  infrastructure boundaries.
-- Use Testcontainers for infrastructure dependencies such as PostgreSQL, Redis, RabbitMQ,
-  observability backends, or other services instead of relying on manually running local
-  instances.
+## Static analysis & quality gates
 
-Because this project uses hexagonal architecture, public interfaces for every module must
-have regression-focused integration coverage. This includes public-facing controllers and
-other inbound adapters, plus meaningful public application ports/services where behavior
-crosses module or adapter boundaries. Prefer tests that verify stable external behavior and
-contracts over tests coupled to private implementation details.
+Run before finalizing any change. Shortcut: `./gradlew qualityGate` (staticAnalysis + check +
+JaCoCo verification + `bootJar`). Individually: `spotlessCheck`, `ktlintCheck`, `detekt`,
+`checkstyleMain checkstyleTest`, `pmdMain pmdTest`, `spotbugsMain spotbugsTest`, `test`.
 
-## Static Analysis
-
-Static checks are intentionally strict while the project is still small:
-
-- Spotless formats Kotlin, Gradle Kotlin DSL, Java, Markdown, YAML, XML, and related
-  text files.
-- ktlint runs through Spotless for Kotlin and Gradle Kotlin DSL.
-- Detekt analyzes Kotlin with all rules enabled, zero allowed findings, and KDoc
-  required for public production classes/functions.
-- Checkstyle enforces Java style, naming, import, line-length, and JavaDoc rules.
-- PMD enforces Java source-level maintainability and best-practice rules.
-- SpotBugs enforces high-confidence Java bytecode bug checks.
-- Error Prone runs as a `javac` plugin for Java compilation only.
-- ArchUnit enforces project-specific hexagonal package boundaries.
-- Spring Modulith verifies Spring application module boundaries.
-
-The maximum line length is 100 characters across Kotlin, Java, Gradle files, YAML,
-XML, and Markdown where feasible. Spotless is the primary formatter.
-
-Prefer code cleanup over suppressions. When a suppression is unavoidable, keep it
-narrow and explain why.
-
-## Mandatory quality gates
-
-After every implementation, run the relevant checks before finalizing work:
-
-```bash
-./gradlew spotlessCheck
-./gradlew ktlintCheck
-./gradlew detekt
-./gradlew checkstyleMain checkstyleTest
-./gradlew pmdMain pmdTest
-./gradlew spotbugsMain spotbugsTest
-./gradlew test
-./gradlew check
-```
-
-The shortcut command is:
-
-```bash
-./gradlew qualityGate
-```
-
-For Kotlin sources, Spotless, ktlint, and Detekt must pass.
-
-For Java sources, Checkstyle, PMD, SpotBugs, Error Prone, and tests must pass.
-
-For architecture-sensitive changes, both ArchUnit and Spring Modulith verification
-tests must pass. Spring Modulith verification is mandatory and should be treated as a
-first-class architecture quality gate, just like ArchUnit and the static-analysis tools.
-
-Do not bypass, disable, weaken, or suppress these checks without documenting the reason.
-
-See `docs/development/static-analysis.md` for the static-analysis setup and command
-reference.
+- Kotlin: Spotless (formatter), ktlint (via Spotless), Detekt (all rules, zero findings, KDoc
+  required on public production classes/functions).
+- Java: Checkstyle, PMD, SpotBugs, Error Prone, tests.
+- Architecture-sensitive changes: ArchUnit **and** Spring Modulith verification must pass.
+- Max line length 100 across Kotlin/Java/Gradle/YAML/XML/Markdown where feasible.
+- Prefer cleanup over suppressions; keep any unavoidable suppression narrow and explained.
+- Do not bypass, disable, weaken, or suppress these checks without documenting why.
+- See `docs/development/static-analysis.md`.
