@@ -74,7 +74,7 @@ spring:
     events:
       externalization:
         mode: outbox
-        serialize-externalization: true
+        serialize-externalization: false
     runtime:
       verification-enabled: true
   rabbitmq:

@@ -22,7 +22,7 @@ class TransitionModuleConfigurationTests {
                 assertTrue(config.supports(event))
                 assertFalse(config.supports(internalEvent()))
                 assertEquals("tradestack.sample.changed", config.determineTarget(event).target)
-                assertTrue(config.serializeExternalization())
+                assertFalse(config.serializeExternalization())
             }
     }
 
@@ -35,7 +35,7 @@ class TransitionModuleConfigurationTests {
 
         assertEquals("outbox", source.getProperty("spring.modulith.events.externalization.mode"))
         assertEquals(
-            true,
+            false,
             source.getProperty("spring.modulith.events.externalization.serialize-externalization"),
         )
         assertEquals("correlated", source.getProperty("spring.rabbitmq.publisher-confirm-type"))

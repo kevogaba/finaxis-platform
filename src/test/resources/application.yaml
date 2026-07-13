@@ -5,7 +5,7 @@ spring:
     events:
       externalization:
         mode: outbox
-        serialize-externalization: true
+        serialize-externalization: false
   rabbitmq:
     publisher-confirm-type: correlated
     publisher-returns: true
