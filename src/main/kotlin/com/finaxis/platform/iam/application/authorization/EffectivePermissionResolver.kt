@@ -6,6 +6,8 @@ import com.finaxis.platform.iam.domain.PermissionEffect
 import org.springframework.cache.CacheManager
 import org.springframework.stereotype.Service
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArraySet
 
 /**
  * Resolves effective membership permissions from role bundles and direct grants.
@@ -15,27 +17,48 @@ class EffectivePermissionResolver(
     private val queries: PermissionResolutionQueries,
     private val cacheManager: CacheManager,
 ) {
+    private val cachedBranchesByMembership = ConcurrentHashMap<UUID, MutableSet<UUID?>>()
+
     /**
-     * Resolves and caches effective permission codes for a membership.
+     * Resolves and caches effective permission codes for a membership in [branchId]'s context.
+     * Branch-scoped role grants only apply while that branch is selected, so the cache key must
+     * include it to avoid serving another branch's permissions after a branch switch.
      */
-    fun effectivePermissions(membershipId: UUID): Set<String> {
+    fun effectivePermissions(
+        membershipId: UUID,
+        branchId: UUID? = null,
+    ): Set<String> {
         val cache = cacheManager.getCache(CACHE_NAME)
-        val cached = cache?.get(membershipId)?.get()
+        val cacheKey = cacheKey(membershipId, branchId)
+        val cached = cache?.get(cacheKey)?.get()
         if (cached is Set<*> && cached.all { permission -> permission is String }) {
             return cached.filterIsInstance<String>().toSet()
         }
 
-        val resolved = resolve(membershipId)
-        cache?.put(membershipId, resolved)
+        val resolved = resolve(membershipId, branchId)
+        cache?.put(cacheKey, resolved)
+        cachedBranchesByMembership
+            .computeIfAbsent(membershipId) {
+                CopyOnWriteArraySet()
+            }.add(branchId)
         return resolved
     }
 
-    private fun resolve(membershipId: UUID): Set<String> {
+    /**
+     * Returns the branch selections previously cached for [membershipId], for eviction.
+     */
+    internal fun cachedBranchSelections(membershipId: UUID): Set<UUID?> =
+        cachedBranchesByMembership.remove(membershipId).orEmpty()
+
+    private fun resolve(
+        membershipId: UUID,
+        branchId: UUID?,
+    ): Set<String> {
         if (queries.membershipStatus(membershipId) != MembershipStatus.ACTIVE) {
             return emptySet()
         }
 
-        val allowed = queries.rolePermissionCodes(membershipId).toMutableSet()
+        val allowed = queries.rolePermissionCodes(membershipId, branchId).toMutableSet()
         val denied = mutableSetOf<String>()
 
         for (assignment in queries.directPermissionEffects(membershipId)) {
@@ -53,6 +76,11 @@ class EffectivePermissionResolver(
      */
     companion object {
         const val CACHE_NAME = "iam.effective-permissions"
+
+        internal fun cacheKey(
+            membershipId: UUID,
+            branchId: UUID?,
+        ): String = "$membershipId:${branchId ?: "none"}"
     }
 }
 
@@ -62,12 +90,18 @@ class EffectivePermissionResolver(
 @Service
 class PermissionCacheInvalidator(
     private val cacheManager: CacheManager,
+    private val resolver: EffectivePermissionResolver,
 ) {
     /**
-     * Evicts one membership's effective-permission cache entry.
+     * Evicts every branch-scoped cache entry previously resolved for [membershipId]. Entries are
+     * keyed by membership and selected branch, so each cached branch selection is evicted in
+     * turn instead of only the no-branch entry.
      */
     fun evictMembership(membershipId: UUID) {
-        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.evict(membershipId)
+        val cache = cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME) ?: return
+        resolver.cachedBranchSelections(membershipId).forEach { branchId ->
+            cache.evict(EffectivePermissionResolver.cacheKey(membershipId, branchId))
+        }
     }
 
     /**

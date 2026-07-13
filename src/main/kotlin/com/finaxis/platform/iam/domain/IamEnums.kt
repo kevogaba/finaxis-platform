@@ -4,17 +4,30 @@ package com.finaxis.platform.iam.domain
  * Lifecycle state for a global application user.
  */
 enum class UserStatus {
+    DRAFT,
+    PENDING_APPROVAL,
+    PROVISIONING_IDP,
+    INVITED,
     ACTIVE,
     SUSPENDED,
-    DISABLED,
+    LOCKED,
+    DEACTIVATING,
+    DEACTIVATED,
+    ARCHIVED,
 }
 
 /**
  * Lifecycle state for an organisation tenant.
  */
 enum class OrganisationStatus {
+    DRAFT,
+    PENDING_APPROVAL,
+    PROVISIONING,
     ACTIVE,
     SUSPENDED,
+    DEPROVISIONING,
+    DEPROVISIONED,
+    REJECTED,
     ARCHIVED,
 }
 
@@ -22,9 +35,10 @@ enum class OrganisationStatus {
  * Lifecycle state for a user's organisation membership.
  */
 enum class MembershipStatus {
+    PENDING_APPROVAL,
     ACTIVE,
     SUSPENDED,
-    LEFT,
+    REVOKED,
 }
 
 /**
@@ -42,6 +56,7 @@ enum class PermissionStatus {
 enum class RoleStatus {
     ACTIVE,
     DISABLED,
+    ARCHIVED,
 }
 
 /**

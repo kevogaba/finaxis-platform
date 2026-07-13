@@ -22,9 +22,14 @@ interface PermissionResolutionQueries {
     fun membershipStatus(membershipId: UUID): MembershipStatus?
 
     /**
-     * Reads active permission codes granted through assigned roles.
+     * Reads active permission codes granted through tenant-scoped roles, plus roles scoped to
+     * [branchId] when a branch is selected. Branch-scoped role grants for other branches are
+     * excluded.
      */
-    fun rolePermissionCodes(membershipId: UUID): Set<String>
+    fun rolePermissionCodes(
+        membershipId: UUID,
+        branchId: UUID?,
+    ): Set<String>
 
     /**
      * Reads direct allow and deny permission assignments.

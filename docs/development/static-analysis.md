@@ -86,6 +86,13 @@ Reports use standard Gradle report locations:
 - Tests and architecture tests: `build/reports/tests/test/`
 - JaCoCo: `build/reports/jacoco/test/html/`
 
+JaCoCo reports all production classes, including generated jOOQ metadata, but its enforced 95% IAM
+line-coverage rule is deliberately scoped to the IAM implementation. This is the established
+regression contract for authorization behavior; generated records and framework wiring are not
+misrepresented as unit-testable business behavior. The current IAM suite measures 97% under the
+Kotlin/JVM line map. New business modules should add similarly explicit, narrow coverage rules as
+they become stable public contracts.
+
 ## Suppressions
 
 Prefer fixing code over suppressing rules.

@@ -1,5 +1,7 @@
 package com.finaxis.platform.iam.application.port.outbound
 
+import com.finaxis.platform.iam.domain.MembershipStatus
+import com.finaxis.platform.iam.domain.UserStatus
 import java.util.UUID
 
 /**
@@ -10,6 +12,7 @@ data class PrincipalUser(
     val keycloakSubject: String,
     val email: String?,
     val fullName: String?,
+    val status: UserStatus = UserStatus.ACTIVE,
 )
 
 /**
@@ -19,6 +22,7 @@ data class PrincipalMembership(
     val id: UUID,
     val userId: UUID,
     val organisationId: UUID,
+    val status: MembershipStatus = MembershipStatus.ACTIVE,
 )
 
 /**

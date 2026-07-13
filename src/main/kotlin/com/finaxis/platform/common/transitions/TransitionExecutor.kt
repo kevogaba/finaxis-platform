@@ -5,7 +5,7 @@ import java.time.Clock
 /**
  * Coordinates transition validation, state mutation, audit logging, and event publication.
  */
-class TransitionExecutor(
+open class TransitionExecutor(
     private val clock: Clock,
     private val transitionLogRepository: TransitionLogRepository,
     private val transitionEventPublisher: TransitionEventPublisher,

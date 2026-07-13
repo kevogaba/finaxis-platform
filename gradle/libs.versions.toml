@@ -37,10 +37,12 @@ detekt = { id = "dev.detekt", version.ref = "detektVersion" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotlessVersion" }
 spotbugs = { id = "com.github.spotbugs", version.ref = "spotbugsPluginVersion" }
 errorprone = { id = "net.ltgt.errorprone", version.ref = "errorPronePluginVersion" }
+jooq-codegen = { id = "org.jooq.jooq-codegen-gradle", version.ref = "jooqVersion" }
 
 [libraries]
 jobrunr-spring-boot = { module = "org.jobrunr:jobrunr-spring-boot-4-starter", version.ref = "jobrunrVersion" }
 jooq-kotlin = { module = "org.jooq:jooq-kotlin", version.ref = "jooqVersion" }
+jooq-meta-extensions = { module = "org.jooq:jooq-meta-extensions", version.ref = "jooqVersion" }
 springdoc-ui = { module = "org.springdoc:springdoc-openapi-starter-webmvc-ui", version.ref = "springDoc" }
 springdoc-api = { module = "org.springdoc:springdoc-openapi-starter-webmvc-api", version.ref = "springDoc" }
 springdoc-scalar = { module = "org.springdoc:springdoc-openapi-starter-webmvc-scalar", version.ref = "springDoc" }
