@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.TestcontainersConfiguration
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
@@ -41,10 +42,10 @@ class HeadOfficeBootstrapIntegrationTests(
             organisationProvisioningService
                 .createDraft(
                     CreateOrganisationDraftCommand(
-                        tenantCode = "head-office-${UUID.randomUUID()}",
+                        tenantCode = "head-office-${uuidV7()}",
                         displayName = "Head Office Audit Organisation",
                         legalName = "Head Office Audit Organisation Limited",
-                        registrationNumber = "HO-${UUID.randomUUID()}",
+                        registrationNumber = "HO-${uuidV7()}",
                         countryCode = "KE",
                         baseCurrencyCode = "KES",
                         timezone = "Africa/Nairobi",

@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContextService
@@ -136,7 +137,7 @@ class AuthFlowIntegrationTests {
             contextService.issue(
                 ActiveOrganisationContext(
                     userId = uuid(LOCAL_USER_SUBJECT),
-                    organisationId = UUID.randomUUID(),
+                    organisationId = uuidV7(),
                     membershipId = uuid(LOCAL_MEMBERSHIP_ID),
                     branchId = null,
                 ),
@@ -269,7 +270,7 @@ class AuthFlowIntegrationTests {
             .post("/api/v1/auth/select-organisation") {
                 with(localJwt())
                 contentType = MediaType.APPLICATION_JSON
-                content = """{"organisationId":"${UUID.randomUUID()}"}"""
+                content = """{"organisationId":"${uuidV7()}"}"""
             }.andExpect {
                 status { isForbidden() }
                 jsonPath("$.code") { value("forbidden") }

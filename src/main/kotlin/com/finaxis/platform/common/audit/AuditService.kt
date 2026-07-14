@@ -1,5 +1,6 @@
 package com.finaxis.platform.common.audit
 
+import com.finaxis.platform.common.id.uuidV7
 import org.springframework.stereotype.Service
 import java.time.Clock
 import java.util.UUID
@@ -18,7 +19,7 @@ class AuditService(
     fun record(command: AuditCommand): AuditEvent {
         val event =
             AuditEvent(
-                id = UUID.randomUUID(),
+                id = uuidV7(),
                 actorType = command.actorType,
                 actorId = command.actorId,
                 tenantId = command.tenantId,

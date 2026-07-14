@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.inbound.security
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
 import org.junit.jupiter.api.AfterEach
@@ -13,8 +14,8 @@ import kotlin.test.assertTrue
 /** Exercises method-security permission checks against the active application principal. */
 class MethodSecurityAuthorizerTests {
     private val authorizer = MethodSecurityAuthorizer()
-    private val organisationId = UUID.randomUUID()
-    private val branchId = UUID.randomUUID()
+    private val organisationId = uuidV7()
+    private val branchId = uuidV7()
 
     @AfterEach
     fun clearSecurityContext() {
@@ -28,7 +29,7 @@ class MethodSecurityAuthorizerTests {
 
         assertTrue(authorizer.hasPermission(organisationId, "branch.create"))
         assertFalse(authorizer.hasPermission(organisationId, "branch.delete"))
-        assertFalse(authorizer.hasPermission(UUID.randomUUID(), "branch.create"))
+        assertFalse(authorizer.hasPermission(uuidV7(), "branch.create"))
     }
 
     /** Grants branch-scoped permission only when organisation and branch context match. */
@@ -38,8 +39,8 @@ class MethodSecurityAuthorizerTests {
 
         assertTrue(authorizer.hasPermission(organisationId, branchId, "cashier.open"))
         assertFalse(authorizer.hasPermission(organisationId, branchId, "cashier.close"))
-        assertFalse(authorizer.hasPermission(UUID.randomUUID(), branchId, "cashier.open"))
-        assertFalse(authorizer.hasPermission(organisationId, UUID.randomUUID(), "cashier.open"))
+        assertFalse(authorizer.hasPermission(uuidV7(), branchId, "cashier.open"))
+        assertFalse(authorizer.hasPermission(organisationId, uuidV7(), "cashier.open"))
     }
 
     /** Denies access when no AppPrincipal is installed in the security context. */
@@ -61,10 +62,10 @@ class MethodSecurityAuthorizerTests {
     ) {
         val principal =
             AppPrincipal(
-                userId = UUID.randomUUID(),
+                userId = uuidV7(),
                 keycloakSubject = "kc-subject",
                 organisationId = organisationId,
-                membershipId = UUID.randomUUID(),
+                membershipId = uuidV7(),
                 branchId = branchId,
                 email = "admin@example.test",
                 fullName = "Admin User",

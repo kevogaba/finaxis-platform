@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.adapter.inbound.security.ActiveOrganisationContextResolver
 import com.finaxis.platform.iam.adapter.inbound.security.AppPrincipalLoader
 import com.finaxis.platform.iam.adapter.inbound.security.MethodSecurityAuthorizer
@@ -63,7 +64,7 @@ class MethodSecurityTests {
 
     @Test
     fun `authz bean allows matching organisation permission code`() {
-        val organisationId = UUID.randomUUID()
+        val organisationId = uuidV7()
 
         mockMvc
             .get("/test/authz/$organisationId") {
@@ -83,7 +84,7 @@ class MethodSecurityTests {
 
     @Test
     fun `authz bean denies missing permission code`() {
-        val organisationId = UUID.randomUUID()
+        val organisationId = uuidV7()
 
         mockMvc
             .get("/test/authz/$organisationId") {
@@ -95,7 +96,7 @@ class MethodSecurityTests {
 
     @Test
     fun `authz bean denies different organisation context`() {
-        val requestedOrganisationId = UUID.randomUUID()
+        val requestedOrganisationId = uuidV7()
 
         mockMvc
             .get("/test/authz/$requestedOrganisationId") {
@@ -103,7 +104,7 @@ class MethodSecurityTests {
                     authentication(
                         tokenWithPermissions(
                             permissions = setOf("branch.create"),
-                            organisationId = UUID.randomUUID(),
+                            organisationId = uuidV7(),
                         ),
                     ),
                 )
@@ -114,15 +115,15 @@ class MethodSecurityTests {
 
     private fun tokenWithPermissions(
         permissions: Set<String>,
-        organisationId: UUID = UUID.randomUUID(),
+        organisationId: UUID = uuidV7(),
         branchId: UUID? = null,
     ): AppPrincipalAuthenticationToken {
         val principal =
             AppPrincipal(
-                userId = UUID.randomUUID(),
+                userId = uuidV7(),
                 keycloakSubject = "subject",
                 organisationId = organisationId,
-                membershipId = UUID.randomUUID(),
+                membershipId = uuidV7(),
                 branchId = branchId,
                 email = "user@example.com",
                 fullName = "Example User",

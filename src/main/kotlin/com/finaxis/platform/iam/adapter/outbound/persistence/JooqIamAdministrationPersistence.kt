@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.outbound.persistence
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.port.outbound.IamAdministrationPersistence
 import com.finaxis.platform.iam.application.port.outbound.MembershipSnapshot
 import com.finaxis.platform.iam.application.port.outbound.RoleSnapshot
@@ -65,7 +66,7 @@ class JooqIamAdministrationPersistence(
         description: String?,
         actorId: UUID,
     ): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = now()
         dsl
             .insertInto(ROLE)
@@ -153,7 +154,7 @@ class JooqIamAdministrationPersistence(
         val now = now()
         return dsl
             .insertInto(ROLE_PERMISSION)
-            .set(ROLE_PERMISSION.ID, UUID.randomUUID())
+            .set(ROLE_PERMISSION.ID, uuidV7())
             .set(ROLE_PERMISSION.ORGANISATION_ID, organisationId)
             .set(ROLE_PERMISSION.ROLE_ID, roleId)
             .set(ROLE_PERMISSION.PERMISSION_ID, permissionId)
@@ -255,7 +256,7 @@ class JooqIamAdministrationPersistence(
         branchId: UUID?,
         actorId: UUID,
     ): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = now()
         val created =
             dsl

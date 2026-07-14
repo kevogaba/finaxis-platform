@@ -20,7 +20,7 @@ class KeycloakUserProvisioningJobRequestHandler(
     private val gateway: IdentityProvisioningGateway,
     private val store: UserProvisioningStore,
     private val lifecycleService: FoundationLifecycleService,
-    @Value("\${finaxis.keycloak.admin.realm:finaxis}") private val realm: String = "finaxis",
+    @Value($$"${finaxis.keycloak.admin.realm:finaxis}") private val realm: String = "finaxis",
 ) : JobRequestHandler<KeycloakUserProvisioningJobRequest> {
     /** Runs Keycloak provisioning idempotently and advances the local user and membership FSMs. */
     override fun run(jobRequest: KeycloakUserProvisioningJobRequest) {

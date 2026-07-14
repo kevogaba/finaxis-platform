@@ -351,6 +351,14 @@ class RoleManagementService(
             branchId?.let { put("branchId", it.toString()) }
         }
 
+    /** Scopes the event aggregate id by branch so branch-scoped assignments stay distinct. */
+    private fun roleAssignmentAggregateId(
+        userId: UUID,
+        roleId: UUID,
+        scopeType: RoleScopeType,
+        branchId: UUID?,
+    ): String = "$userId:$roleId:$scopeType" + (branchId?.let { ":$it" } ?: "")
+
     private fun publishAssignment(
         command: AssignRoleToUser,
         transition: String,
@@ -362,7 +370,13 @@ class RoleManagementService(
             ExternalizedTransitionEvent(
                 target = target,
                 aggregateType = "USER_ROLE_ASSIGNMENT",
-                aggregateId = "${command.userId}:${command.roleId}:${command.scopeType}",
+                aggregateId =
+                    roleAssignmentAggregateId(
+                        command.userId,
+                        command.roleId,
+                        command.scopeType,
+                        command.branchId,
+                    ),
                 transition = transition,
                 fromState = fromState,
                 toState = toState,
@@ -384,7 +398,13 @@ class RoleManagementService(
             ExternalizedTransitionEvent(
                 target = ROLE_REVOKED_TARGET,
                 aggregateType = "USER_ROLE_ASSIGNMENT",
-                aggregateId = "${command.userId}:${command.roleId}:${command.scopeType}",
+                aggregateId =
+                    roleAssignmentAggregateId(
+                        command.userId,
+                        command.roleId,
+                        command.scopeType,
+                        command.branchId,
+                    ),
                 transition = REVOKE,
                 fromState = ACTIVE,
                 toState = REVOKED,

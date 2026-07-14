@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.port.outbound.IamAdministrationPersistence
 import com.finaxis.platform.iam.application.role.RoleScopeType
 import com.finaxis.platform.iam.domain.OrganisationStatus
@@ -44,7 +45,7 @@ class JooqIamAdministrationPersistenceTests(
     @Test
     fun `creates and reads an organisation scoped tenant role`() {
         val organisationId = insertOrganisation()
-        val actorId = UUID.randomUUID()
+        val actorId = uuidV7()
 
         val roleId =
             persistence.createRole(
@@ -59,7 +60,7 @@ class JooqIamAdministrationPersistenceTests(
         assertEquals("OPS", role.roleCode)
         assertFalse(role.systemRole)
         assertEquals(RoleStatus.ACTIVE, role.status)
-        assertNull(persistence.findRole(UUID.randomUUID(), roleId))
+        assertNull(persistence.findRole(uuidV7(), roleId))
     }
 
     /** Resolves the lifecycle status for a seeded organisation. */
@@ -80,15 +81,15 @@ class JooqIamAdministrationPersistenceTests(
                 "OPS",
                 "Operations",
                 null,
-                UUID.randomUUID(),
+                uuidV7(),
             )
-        val permissionId = insertPermission("test.permission.${UUID.randomUUID()}")
+        val permissionId = insertPermission("test.permission.${uuidV7()}")
 
         assertTrue(
-            persistence.grantPermission(organisationId, roleId, permissionId, UUID.randomUUID()),
+            persistence.grantPermission(organisationId, roleId, permissionId, uuidV7()),
         )
         assertFalse(
-            persistence.grantPermission(organisationId, roleId, permissionId, UUID.randomUUID()),
+            persistence.grantPermission(organisationId, roleId, permissionId, uuidV7()),
         )
         assertEquals(
             1,
@@ -101,10 +102,10 @@ class JooqIamAdministrationPersistenceTests(
             ),
         )
         assertTrue(
-            persistence.removePermission(organisationId, roleId, permissionId, UUID.randomUUID()),
+            persistence.removePermission(organisationId, roleId, permissionId, uuidV7()),
         )
         assertFalse(
-            persistence.removePermission(organisationId, roleId, permissionId, UUID.randomUUID()),
+            persistence.removePermission(organisationId, roleId, permissionId, uuidV7()),
         )
     }
 
@@ -161,7 +162,7 @@ class JooqIamAdministrationPersistenceTests(
                 "OPS",
                 "Operations",
                 null,
-                UUID.randomUUID(),
+                uuidV7(),
             )
         val snapshot = requireNotNull(persistence.findRole(organisationId, roleId))
 
@@ -172,7 +173,7 @@ class JooqIamAdministrationPersistenceTests(
                 roleId,
                 RoleStatus.DISABLED,
                 snapshot.rowVersion,
-                UUID.randomUUID(),
+                uuidV7(),
             )
         }
         assertEquals(RoleStatus.ACTIVE, persistence.findRole(organisationId, roleId)?.status)
@@ -281,7 +282,7 @@ class JooqIamAdministrationPersistenceTests(
             .fetchOne(USER_ROLE_ASSIGNMENT.STATUS)
 
     private fun insertOrganisation(): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(ORGANISATION)
@@ -299,7 +300,7 @@ class JooqIamAdministrationPersistenceTests(
     }
 
     private fun insertUser(): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(USER_ACCOUNT)
@@ -318,7 +319,7 @@ class JooqIamAdministrationPersistenceTests(
         organisationId: UUID,
         userId: UUID,
     ): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(USER_ORGANISATION_MEMBERSHIP)
@@ -334,7 +335,7 @@ class JooqIamAdministrationPersistenceTests(
     }
 
     private fun insertBranch(organisationId: UUID): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(BRANCH)
@@ -359,7 +360,7 @@ class JooqIamAdministrationPersistenceTests(
         val now = OffsetDateTime.now()
         dsl
             .insertInto(USER_BRANCH_ASSIGNMENT)
-            .set(USER_BRANCH_ASSIGNMENT.ID, UUID.randomUUID())
+            .set(USER_BRANCH_ASSIGNMENT.ID, uuidV7())
             .set(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID, organisationId)
             .set(USER_BRANCH_ASSIGNMENT.USER_ID, userId)
             .set(USER_BRANCH_ASSIGNMENT.BRANCH_ID, branchId)
@@ -372,7 +373,7 @@ class JooqIamAdministrationPersistenceTests(
     }
 
     private fun insertPermission(permissionCode: String): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(PERMISSION)

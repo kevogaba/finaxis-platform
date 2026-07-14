@@ -15,6 +15,10 @@ buildscript {
     }
     dependencies {
         classpath("io.zonky.test:embedded-postgres:2.1.0")
+        // Pins the Dockerless embedded Postgres used for jOOQ codegen bootstrapping to the
+        // Postgres 18 binaries (library default is 14.22). See
+        // https://github.com/zonkyio/embedded-postgres#postgres-version.
+        classpath(enforcedPlatform("io.zonky.test.postgres:embedded-postgres-binaries-bom:18.3.0"))
         classpath("org.flywaydb:flyway-database-postgresql:12.4.0")
         classpath("org.postgresql:postgresql:42.7.11")
     }
@@ -148,7 +152,24 @@ kotlin {
         freeCompilerArgs.addAll(
             "-Xjsr305=strict",
             "-java-parameters", // Retain parameter names for reflection
+            "-opt-in=kotlin.uuid.ExperimentalUuidApi",
         )
+    }
+}
+
+// jOOQ generates sources into this directory at task-execution time (see the EmbeddedPostgres
+// block below), but Qodana's own project-model sync runs with an empty task list, and the
+// conditional block never registers this as a source root in that case - leaving every jOOQ
+// consumer with unresolved-reference sanity findings even though qodana.yaml's bootstrap step has
+// already generated the files on disk. Registering the (possibly still-empty) directory
+// unconditionally is harmless for Gradle/IDE tooling and fixes that sync gap.
+sourceSets.named("main") {
+    java.srcDir(layout.buildDirectory.dir("generated-src/jooq/main"))
+}
+
+kotlin {
+    sourceSets.named("main") {
+        kotlin.srcDir(layout.buildDirectory.dir("generated-src/jooq/main"))
     }
 }
 
@@ -201,16 +222,6 @@ if (gradle.startParameter.taskNames.isNotEmpty()) {
                             .asFile.absolutePath
                 }
             }
-        }
-    }
-
-    sourceSets.named("main") {
-        java.srcDir(layout.buildDirectory.dir("generated-src/jooq/main"))
-    }
-
-    kotlin {
-        sourceSets.named("main") {
-            kotlin.srcDir(layout.buildDirectory.dir("generated-src/jooq/main"))
         }
     }
 

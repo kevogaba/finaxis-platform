@@ -3,6 +3,7 @@ package com.finaxis.platform.lifecycle.application
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
@@ -161,9 +162,9 @@ private class ProvisioningWorkerStoreFake :
     val dispatches = mutableMapOf<String, DispatchState>()
 
     fun activePendingProvisioningContext(): ProvisioningWorkerContext {
-        val organisationId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
-        val userId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val userId = uuidV7()
         val dispatchKey = "$userId:KEYCLOAK_PROVISIONING"
         organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
         users[userId] = LifecycleAggregate(userId, UserLifecycleState.PROVISIONING_IDP, "USER")
@@ -225,7 +226,7 @@ private class ProvisioningWorkerStoreFake :
         displayName: String,
         phoneE164: String?,
         actorId: UUID,
-    ): UUID = UUID.randomUUID()
+    ): UUID = uuidV7()
 
     override fun userStatus(userId: UUID): UserLifecycleState? = users[userId]?.state
 
@@ -237,7 +238,7 @@ private class ProvisioningWorkerStoreFake :
         membershipType: MembershipType,
         primaryBranchId: UUID?,
         actorId: UUID,
-    ): UUID = UUID.randomUUID()
+    ): UUID = uuidV7()
 
     override fun saveInvitationPreferences(
         organisationId: UUID,
@@ -261,13 +262,14 @@ private class ProvisioningWorkerStoreFake :
             type = requireNotNull(membershipTypes[key]),
             email = "member@example.test",
             username = "member",
+            displayName = "Member",
             userStatus = requireNotNull(userStatus(userId)),
             sendKeycloakInvite = true,
             sendApplicationInvite = true,
         )
     }
 
-    override fun activeMembershipExists(
+    override fun membershipExists(
         organisationId: UUID,
         userId: UUID,
     ): Boolean = false
@@ -289,7 +291,7 @@ private class ProvisioningWorkerStoreFake :
         scopeType: RoleAssignmentScopeType,
         branchId: UUID?,
         actorId: UUID,
-    ): UUID = UUID.randomUUID()
+    ): UUID = uuidV7()
 
     override fun hasActiveBranchAssignment(
         organisationId: UUID,
@@ -376,6 +378,11 @@ private class ProvisioningWorkerStoreFake :
     override fun userHasKeycloakIdentity(userId: UUID): Boolean = linkedSubjects.containsKey(userId)
 
     override fun userState(userId: UUID): UserLifecycleState? = userStatus(userId)
+
+    override fun membershipIsBranchExempt(
+        organisationId: UUID,
+        userId: UUID,
+    ): Boolean = false
 
     override fun membershipHasActiveBranchAssignment(
         organisationId: UUID,

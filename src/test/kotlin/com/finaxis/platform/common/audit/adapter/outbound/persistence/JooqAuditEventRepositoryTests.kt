@@ -3,6 +3,7 @@ package com.finaxis.platform.common.audit.adapter.outbound.persistence
 import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditOutcome
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
@@ -29,7 +30,7 @@ class JooqAuditEventRepositoryTests(
     @Test
     fun `save persists the audit event source IP address`() {
         val organisationId = insertOrganisation()
-        val eventId = UUID.randomUUID()
+        val eventId = uuidV7()
 
         repository.save(
             AuditEvent(
@@ -62,7 +63,7 @@ class JooqAuditEventRepositoryTests(
     @Test
     fun `save stores the common system actor without a user foreign key`() {
         val organisationId = insertOrganisation()
-        val eventId = UUID.randomUUID()
+        val eventId = uuidV7()
 
         repository.save(
             AuditEvent(
@@ -96,7 +97,7 @@ class JooqAuditEventRepositoryTests(
     }
 
     private fun insertOrganisation(): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(ORGANISATION)

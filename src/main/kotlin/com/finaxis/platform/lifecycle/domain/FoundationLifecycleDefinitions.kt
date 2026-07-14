@@ -151,6 +151,12 @@ interface LifecyclePrerequisites {
     /** Looks up the current lifecycle state of a global application user. */
     fun userState(userId: UUID): UserLifecycleState?
 
+    /** Returns whether the membership's type exempts it from requiring a branch assignment. */
+    fun membershipIsBranchExempt(
+        organisationId: UUID,
+        userId: UUID,
+    ): Boolean
+
     /** Returns whether the membership grants at least one active branch assignment. */
     fun membershipHasActiveBranchAssignment(
         organisationId: UUID,
@@ -607,7 +613,8 @@ private fun membershipActivationGuards(
         },
         TransitionGuard {
             requireLifecycleGuard(
-                prerequisites.membershipHasActiveBranchAssignment(organisationId, userId),
+                prerequisites.membershipIsBranchExempt(organisationId, userId) ||
+                    prerequisites.membershipHasActiveBranchAssignment(organisationId, userId),
                 "Membership requires an active branch assignment.",
             )
         },

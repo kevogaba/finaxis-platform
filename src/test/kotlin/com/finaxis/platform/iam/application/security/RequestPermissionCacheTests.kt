@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.application.security
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
 import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
@@ -10,7 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class RequestPermissionCacheTests {
-    private val membershipId = UUID.randomUUID()
+    private val membershipId = uuidV7()
 
     @Test
     fun `same membership and branch resolve once per request cache`() {
@@ -28,7 +29,7 @@ class RequestPermissionCacheTests {
 
     @Test
     fun `different branch keys resolve separately`() {
-        val branchId = UUID.randomUUID()
+        val branchId = uuidV7()
         val queries =
             CountingPermissionQueries(
                 permissions =

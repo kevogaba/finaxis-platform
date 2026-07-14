@@ -3,6 +3,7 @@ package com.finaxis.platform.iam.application.role
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
@@ -470,13 +471,13 @@ class RoleManagementServiceTests {
 
     /** Builds deterministic dependencies for role service tests. */
     private class Fixture {
-        val organisationId: UUID = UUID.randomUUID()
-        val roleId: UUID = UUID.randomUUID()
-        val userId: UUID = UUID.randomUUID()
-        val branchId: UUID = UUID.randomUUID()
-        val actorId: UUID = UUID.randomUUID()
-        val membershipId: UUID = UUID.randomUUID()
-        val permissionId: UUID = UUID.randomUUID()
+        val organisationId: UUID = uuidV7()
+        val roleId: UUID = uuidV7()
+        val userId: UUID = uuidV7()
+        val branchId: UUID = uuidV7()
+        val actorId: UUID = uuidV7()
+        val membershipId: UUID = uuidV7()
+        val permissionId: UUID = uuidV7()
         val clock: Clock = Clock.fixed(Instant.parse("2026-07-14T10:00:00Z"), ZoneOffset.UTC)
         val persistence = AdministrationFake()
         val assignmentId: UUID = persistence.assignmentId
@@ -590,7 +591,7 @@ class RoleManagementServiceTests {
         val grantedPermissions = mutableListOf<UUID>()
         val removedPermissions = mutableListOf<UUID>()
         val assignedScopes = mutableListOf<Pair<RoleScopeType, UUID?>>()
-        val assignmentId: UUID = UUID.randomUUID()
+        val assignmentId: UUID = uuidV7()
         var currentOrganisationStatus: OrganisationStatus? = OrganisationStatus.ACTIVE
         var revokeCalls = 0
 
@@ -610,7 +611,7 @@ class RoleManagementServiceTests {
             roleName: String,
             description: String?,
             actorId: UUID,
-        ): UUID = UUID.randomUUID().also { roleCodes += organisationId to roleCode }
+        ): UUID = uuidV7().also { roleCodes += organisationId to roleCode }
 
         override fun updateRole(
             organisationId: UUID,

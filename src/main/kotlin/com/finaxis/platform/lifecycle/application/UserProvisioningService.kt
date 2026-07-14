@@ -48,8 +48,8 @@ class UserProvisioningService(
                     command.phoneE164,
                     command.invitedBy,
                 )
-        require(!store.activeMembershipExists(command.organisationId, userId)) {
-            "User already has an active membership in the selected organisation."
+        require(!store.membershipExists(command.organisationId, userId)) {
+            "User already has a membership in the selected organisation."
         }
         val membershipId =
             store.createMembership(
@@ -401,7 +401,7 @@ class UserProvisioningService(
         command: ApproveUserCommand,
         snapshot: MembershipProvisioningSnapshot,
     ) {
-        val dispatchKey = "${snapshot.userId}:KEYCLOAK_PROVISIONING"
+        val dispatchKey = "${command.organisationId}:${snapshot.userId}:KEYCLOAK_PROVISIONING"
         store.recordDispatch(
             command.organisationId,
             snapshot.userId,
@@ -418,6 +418,7 @@ class UserProvisioningService(
                 mapOf(
                     EMAIL to snapshot.email,
                     USERNAME to snapshot.username,
+                    DISPLAY_NAME to snapshot.displayName,
                     "sendKeycloakInvite" to snapshot.sendKeycloakInvite,
                     DISPATCH_KEY to dispatchKey,
                 ),
@@ -545,6 +546,7 @@ class UserProvisioningService(
         const val USER_ID = "userId"
         const val EMAIL = "email"
         const val USERNAME = "username"
+        const val DISPLAY_NAME = "displayName"
         const val DISPATCH_KEY = "dispatchKey"
     }
 }

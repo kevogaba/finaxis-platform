@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.application.context
 
+import com.finaxis.platform.common.id.uuidV7
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -25,10 +26,10 @@ class ActiveOrganisationContextTests {
     fun `signed active organisation context round trips`() {
         val context =
             ActiveOrganisationContext(
-                userId = UUID.randomUUID(),
-                organisationId = UUID.randomUUID(),
-                membershipId = UUID.randomUUID(),
-                branchId = UUID.randomUUID(),
+                userId = uuidV7(),
+                organisationId = uuidV7(),
+                membershipId = uuidV7(),
+                branchId = uuidV7(),
             )
 
         val token = service.issue(context)
@@ -40,9 +41,9 @@ class ActiveOrganisationContextTests {
     fun `tampered active organisation context is rejected`() {
         val context =
             ActiveOrganisationContext(
-                userId = UUID.randomUUID(),
-                organisationId = UUID.randomUUID(),
-                membershipId = UUID.randomUUID(),
+                userId = uuidV7(),
+                organisationId = uuidV7(),
+                membershipId = uuidV7(),
             )
 
         val token = service.issue(context).let { "${it.dropLast(1)}x" }
@@ -64,9 +65,9 @@ class ActiveOrganisationContextTests {
             )
         val context =
             ActiveOrganisationContext(
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                UUID.randomUUID(),
+                uuidV7(),
+                uuidV7(),
+                uuidV7(),
             )
         val token = expiredService.issue(context)
         val verifier =
@@ -96,7 +97,7 @@ class ActiveOrganisationContextTests {
                 .getUrlEncoder()
                 .withoutPadding()
                 .encodeToString(
-                    "${UUID.randomUUID()}.${UUID.randomUUID()}.${UUID.randomUUID()}.-.not-a-number"
+                    "${uuidV7()}.${uuidV7()}.${uuidV7()}.-.not-a-number"
                         .toByteArray(),
                 )
         val invalidUuidPayload =

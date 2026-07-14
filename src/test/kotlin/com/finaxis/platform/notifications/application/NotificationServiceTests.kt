@@ -1,5 +1,6 @@
 package com.finaxis.platform.notifications.application
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.notifications.application.port.outbound.WelcomeEmailScheduler
@@ -12,9 +13,9 @@ class NotificationServiceTests {
     @Test
     fun `membership activation maps to a welcome email command`() {
         val scheduler = CapturingWelcomeEmailScheduler()
-        val membershipId = UUID.randomUUID()
-        val userId = UUID.randomUUID()
-        val organisationId = UUID.randomUUID()
+        val membershipId = uuidV7()
+        val userId = uuidV7()
+        val organisationId = uuidV7()
         val occurredAt = Instant.parse("2026-07-13T10:15:30Z")
 
         NotificationService(scheduler).handleMembershipActivated(

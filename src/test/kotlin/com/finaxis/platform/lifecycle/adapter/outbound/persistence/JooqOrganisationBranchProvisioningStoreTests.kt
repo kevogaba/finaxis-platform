@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_SETTING
@@ -39,17 +40,17 @@ class JooqOrganisationBranchProvisioningStoreTests(
         val organisationId =
             store.createDraft(
                 CreateOrganisationDraftCommand(
-                    tenantCode = "tenant-quote-${UUID.randomUUID()}",
+                    tenantCode = "tenant-quote-${uuidV7()}",
                     displayName = "Quote Org",
                     legalName = null,
                     registrationNumber = null,
                     countryCode = "KE",
                     baseCurrencyCode = "KES",
                     timezone = "Africa/Nairobi",
-                    requestedBy = UUID.randomUUID(),
+                    requestedBy = uuidV7(),
                 ),
             )
-        val actorId = UUID.randomUUID()
+        val actorId = uuidV7()
         val trickyValue = """He said "hello\world" and left"""
 
         store.saveSettings(organisationId, mapOf("greeting" to trickyValue), actorId)
@@ -119,7 +120,7 @@ class JooqOrganisationBranchProvisioningStoreTests(
         )
 
     private fun insertOrganisation(): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(ORGANISATION)
@@ -137,7 +138,7 @@ class JooqOrganisationBranchProvisioningStoreTests(
     }
 
     private fun insertRole(organisationId: UUID): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(ROLE)
@@ -154,7 +155,7 @@ class JooqOrganisationBranchProvisioningStoreTests(
     }
 
     private fun insertBranch(organisationId: UUID): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(BRANCH)
@@ -172,7 +173,7 @@ class JooqOrganisationBranchProvisioningStoreTests(
     }
 
     private fun insertUserAccount(): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(USER_ACCOUNT)
@@ -194,7 +195,7 @@ class JooqOrganisationBranchProvisioningStoreTests(
         val now = OffsetDateTime.now()
         dsl
             .insertInto(USER_ORGANISATION_MEMBERSHIP)
-            .set(USER_ORGANISATION_MEMBERSHIP.ID, UUID.randomUUID())
+            .set(USER_ORGANISATION_MEMBERSHIP.ID, uuidV7())
             .set(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID, organisationId)
             .set(USER_ORGANISATION_MEMBERSHIP.USER_ID, userId)
             .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, "ACTIVE")
@@ -209,7 +210,7 @@ class JooqOrganisationBranchProvisioningStoreTests(
         userId: UUID,
         branchId: UUID,
     ): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(USER_BRANCH_ASSIGNMENT)
@@ -231,7 +232,7 @@ class JooqOrganisationBranchProvisioningStoreTests(
         userId: UUID,
         roleId: UUID,
     ): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(USER_ROLE_ASSIGNMENT)

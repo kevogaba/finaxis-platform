@@ -3,6 +3,7 @@ package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.common.context.ActorContext
 import com.finaxis.platform.common.context.RequestContexts
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.TransitionCommand
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
@@ -271,7 +272,7 @@ class JooqFoundationLifecyclePersistenceTests(
     fun `saveOrganisation attributes the actor when a request context is installed`() {
         val organisationId = insertOrganisation()
         val read = requireNotNull(persistence.findOrganisation(organisationId))
-        val actorId = UUID.randomUUID()
+        val actorId = uuidV7()
 
         RequestContexts.withActor(
             ActorContext(actorId, "subject", "actor", "actor@example.test"),
@@ -529,7 +530,7 @@ class JooqFoundationLifecyclePersistenceTests(
         countryCode: String = "KE",
         createdAt: String = "2026-07-14T10:00:00Z",
     ): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.parse(createdAt)
         dsl
             .insertInto(ORGANISATION)
@@ -550,7 +551,7 @@ class JooqFoundationLifecyclePersistenceTests(
         organisationId: UUID,
         state: BranchLifecycleState = BranchLifecycleState.PENDING_APPROVAL,
     ): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(BRANCH)
@@ -568,7 +569,7 @@ class JooqFoundationLifecyclePersistenceTests(
     }
 
     private fun insertUser(): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(USER_ACCOUNT)
@@ -588,7 +589,7 @@ class JooqFoundationLifecyclePersistenceTests(
         userId: UUID,
         state: MembershipLifecycleState = MembershipLifecycleState.PENDING_APPROVAL,
     ): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(USER_ORGANISATION_MEMBERSHIP)
@@ -611,7 +612,7 @@ class JooqFoundationLifecyclePersistenceTests(
         branchId: UUID,
     ) {
         val now = OffsetDateTime.now()
-        val roleId = UUID.randomUUID()
+        val roleId = uuidV7()
         dsl
             .insertInto(ROLE)
             .set(ROLE.ID, roleId)
@@ -625,7 +626,7 @@ class JooqFoundationLifecyclePersistenceTests(
             .execute()
         dsl
             .insertInto(USER_BRANCH_ASSIGNMENT)
-            .set(USER_BRANCH_ASSIGNMENT.ID, UUID.randomUUID())
+            .set(USER_BRANCH_ASSIGNMENT.ID, uuidV7())
             .set(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID, organisationId)
             .set(USER_BRANCH_ASSIGNMENT.USER_ID, userId)
             .set(USER_BRANCH_ASSIGNMENT.BRANCH_ID, branchId)
@@ -637,7 +638,7 @@ class JooqFoundationLifecyclePersistenceTests(
             .execute()
         dsl
             .insertInto(USER_ROLE_ASSIGNMENT)
-            .set(USER_ROLE_ASSIGNMENT.ID, UUID.randomUUID())
+            .set(USER_ROLE_ASSIGNMENT.ID, uuidV7())
             .set(USER_ROLE_ASSIGNMENT.ORGANISATION_ID, organisationId)
             .set(USER_ROLE_ASSIGNMENT.USER_ID, userId)
             .set(USER_ROLE_ASSIGNMENT.ROLE_ID, roleId)
@@ -671,6 +672,7 @@ class JooqFoundationLifecyclePersistenceTests(
                 "role.update",
                 "role.assign_permission",
                 "audit.view",
+                "iam.profile.read",
             )
         val REQUIRED_PERMISSION_CODES =
             setOf(
@@ -699,6 +701,7 @@ class JooqFoundationLifecyclePersistenceTests(
                 "settings.update",
                 "business_date.view",
                 "business_date.advance",
+                "iam.profile.read",
             )
     }
 }

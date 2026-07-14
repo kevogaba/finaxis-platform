@@ -65,8 +65,8 @@ interface UserProvisioningMembershipStore {
         membershipId: UUID,
     ): MembershipProvisioningSnapshot?
 
-    /** Returns whether the user already has an active membership in the organisation. */
-    fun activeMembershipExists(
+    /** Returns whether the user already has a membership row (any status) in the organisation. */
+    fun membershipExists(
         organisationId: UUID,
         userId: UUID,
     ): Boolean
@@ -166,6 +166,7 @@ data class MembershipProvisioningSnapshot(
     val type: MembershipType,
     val email: String,
     val username: String,
+    val displayName: String,
     val userStatus: UserLifecycleState,
     val sendKeycloakInvite: Boolean,
     val sendApplicationInvite: Boolean,

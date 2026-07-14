@@ -6,6 +6,7 @@ import com.finaxis.platform.common.context.CorrelationContext
 import com.finaxis.platform.common.context.RequestContext
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.context.TenantContext
+import com.finaxis.platform.common.id.uuidV7
 import org.junit.jupiter.api.Test
 import org.slf4j.MDC
 import java.util.UUID
@@ -30,9 +31,9 @@ class ContextAuditorAwareTests {
 
     @Test
     fun `installs and clears tenant branch actor and correlation MDC fields`() {
-        val organisationId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
-        val actorId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val branchId = uuidV7()
+        val actorId = uuidV7()
 
         RequestContexts.with(
             RequestContext(

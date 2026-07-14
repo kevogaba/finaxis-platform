@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.application.selection
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContextProperties
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContextService
@@ -26,9 +27,9 @@ class AuthSelectionServiceTests {
 
     @Test
     fun `select organisation returns signed context for active membership`() {
-        val userId = UUID.randomUUID()
-        val organisationId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
         val lookup =
             FakeMembershipLookup(
                 userId = userId,
@@ -56,9 +57,9 @@ class AuthSelectionServiceTests {
 
     @Test
     fun `select organisation returns active context for browser session storage`() {
-        val userId = UUID.randomUUID()
-        val organisationId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
         val service =
             AuthSelectionService(
                 FakeMembershipLookup(
@@ -84,10 +85,10 @@ class AuthSelectionServiceTests {
 
     @Test
     fun `select organisation auto selects the only assigned branch`() {
-        val userId = UUID.randomUUID()
-        val organisationId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val branchId = uuidV7()
         val service =
             AuthSelectionService(
                 FakeMembershipLookup(
@@ -120,9 +121,9 @@ class AuthSelectionServiceTests {
 
     @Test
     fun `select organisation rejects inactive organisation`() {
-        val userId = UUID.randomUUID()
-        val organisationId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
         val service =
             AuthSelectionService(
                 FakeMembershipLookup(
@@ -146,11 +147,11 @@ class AuthSelectionServiceTests {
 
     @Test
     fun `select organisation asks client to select branch when multiple branches are assigned`() {
-        val userId = UUID.randomUUID()
-        val organisationId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
-        val firstBranchId = UUID.randomUUID()
-        val secondBranchId = UUID.randomUUID()
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val firstBranchId = uuidV7()
+        val secondBranchId = uuidV7()
         val service =
             AuthSelectionService(
                 FakeMembershipLookup(
@@ -180,10 +181,10 @@ class AuthSelectionServiceTests {
 
     @Test
     fun `select branch stores selected assigned branch in existing organisation context`() {
-        val userId = UUID.randomUUID()
-        val organisationId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val branchId = uuidV7()
         val currentContext = ActiveOrganisationContext(userId, organisationId, membershipId)
         val service =
             AuthSelectionService(
@@ -216,9 +217,9 @@ class AuthSelectionServiceTests {
 
     @Test
     fun `select branch rejects unassigned branch`() {
-        val userId = UUID.randomUUID()
-        val organisationId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
         val currentContext = ActiveOrganisationContext(userId, organisationId, membershipId)
         val service =
             AuthSelectionService(
@@ -231,44 +232,44 @@ class AuthSelectionServiceTests {
                             organisationId,
                             MembershipStatus.ACTIVE,
                         ),
-                    branchIds = listOf(UUID.randomUUID()),
+                    branchIds = listOf(uuidV7()),
                 ),
                 contextService,
             )
 
         assertThrows<OrganisationSelectionDeniedException> {
-            service.selectBranch("keycloak-subject", UUID.randomUUID(), currentContext)
+            service.selectBranch("keycloak-subject", uuidV7(), currentContext)
         }
     }
 
     @Test
     fun `select branch rejects missing organisation context`() {
         val service =
-            AuthSelectionService(FakeMembershipLookup(userId = UUID.randomUUID()), contextService)
+            AuthSelectionService(FakeMembershipLookup(userId = uuidV7()), contextService)
 
         assertThrows<OrganisationSelectionDeniedException> {
-            service.selectBranch("keycloak-subject", UUID.randomUUID(), currentContext = null)
+            service.selectBranch("keycloak-subject", uuidV7(), currentContext = null)
         }
     }
 
     @Test
     fun `select branch rejects context for another authenticated user`() {
-        val userId = UUID.randomUUID()
+        val userId = uuidV7()
         val service = AuthSelectionService(FakeMembershipLookup(userId = userId), contextService)
         val context =
-            ActiveOrganisationContext(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID())
+            ActiveOrganisationContext(uuidV7(), uuidV7(), uuidV7())
 
         assertThrows<OrganisationSelectionDeniedException> {
-            service.selectBranch("keycloak-subject", UUID.randomUUID(), context)
+            service.selectBranch("keycloak-subject", uuidV7(), context)
         }
     }
 
     @Test
     fun `select branch rejects inactive membership`() {
-        val userId = UUID.randomUUID()
-        val organisationId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val branchId = uuidV7()
         val service =
             AuthSelectionService(
                 FakeMembershipLookup(
@@ -296,11 +297,11 @@ class AuthSelectionServiceTests {
 
     @Test
     fun `select branch rejects membership that does not match active context`() {
-        val userId = UUID.randomUUID()
-        val organisationId = UUID.randomUUID()
-        val contextMembershipId = UUID.randomUUID()
-        val lookupMembershipId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val contextMembershipId = uuidV7()
+        val lookupMembershipId = uuidV7()
+        val branchId = uuidV7()
         val service =
             AuthSelectionService(
                 FakeMembershipLookup(
@@ -328,10 +329,10 @@ class AuthSelectionServiceTests {
 
     @Test
     fun `select branch rejects inactive organisation`() {
-        val userId = UUID.randomUUID()
-        val organisationId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val branchId = uuidV7()
         val service =
             AuthSelectionService(
                 FakeMembershipLookup(
@@ -360,15 +361,15 @@ class AuthSelectionServiceTests {
 
     @Test
     fun `select branch rejects missing membership`() {
-        val userId = UUID.randomUUID()
-        val organisationId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
         val service = AuthSelectionService(FakeMembershipLookup(userId = userId), contextService)
 
         assertThrows<OrganisationSelectionDeniedException> {
             service.selectBranch(
                 "keycloak-subject",
-                UUID.randomUUID(),
+                uuidV7(),
                 ActiveOrganisationContext(userId, organisationId, membershipId),
             )
         }
@@ -377,11 +378,11 @@ class AuthSelectionServiceTests {
     @Test
     fun `select branch rejects missing registered user`() {
         val context =
-            ActiveOrganisationContext(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID())
+            ActiveOrganisationContext(uuidV7(), uuidV7(), uuidV7())
         val service = AuthSelectionService(FakeMembershipLookup(), contextService)
 
         assertThrows<OrganisationSelectionDeniedException> {
-            service.selectBranch("keycloak-subject", UUID.randomUUID(), context)
+            service.selectBranch("keycloak-subject", uuidV7(), context)
         }
     }
 
@@ -390,31 +391,31 @@ class AuthSelectionServiceTests {
         val service = AuthSelectionService(FakeMembershipLookup(), contextService)
 
         assertThrows<OrganisationSelectionDeniedException> {
-            service.selectOrganisation("keycloak-subject", UUID.randomUUID())
+            service.selectOrganisation("keycloak-subject", uuidV7())
         }
     }
 
     @Test
     fun `select organisation rejects registered user without membership`() {
         val service =
-            AuthSelectionService(FakeMembershipLookup(userId = UUID.randomUUID()), contextService)
+            AuthSelectionService(FakeMembershipLookup(userId = uuidV7()), contextService)
 
         assertThrows<OrganisationSelectionDeniedException> {
-            service.selectOrganisation("keycloak-subject", UUID.randomUUID())
+            service.selectOrganisation("keycloak-subject", uuidV7())
         }
     }
 
     @Test
     fun `select organisation rejects suspended membership`() {
-        val userId = UUID.randomUUID()
-        val organisationId = UUID.randomUUID()
+        val userId = uuidV7()
+        val organisationId = uuidV7()
         val service =
             AuthSelectionService(
                 FakeMembershipLookup(
                     userId = userId,
                     membership =
                         MembershipSelection(
-                            UUID.randomUUID(),
+                            uuidV7(),
                             userId,
                             organisationId,
                             MembershipStatus.SUSPENDED,

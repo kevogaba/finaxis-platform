@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.IDENTITY_DISPATCH_LOG
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
@@ -38,7 +39,7 @@ class JooqUserProvisioningStoreTests(
 ) {
     @Test
     fun `creates draft user and finds it by lower-case email`() {
-        val actorId = UUID.randomUUID()
+        val actorId = uuidV7()
 
         val userId =
             store.createUserAccount(
@@ -202,7 +203,7 @@ class JooqUserProvisioningStoreTests(
     private fun insertOrganisation(
         status: OrganisationLifecycleState = OrganisationLifecycleState.ACTIVE,
     ): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(ORGANISATION)
@@ -223,7 +224,7 @@ class JooqUserProvisioningStoreTests(
         organisationId: UUID,
         status: BranchLifecycleState = BranchLifecycleState.ACTIVE,
     ): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(BRANCH)
@@ -241,7 +242,7 @@ class JooqUserProvisioningStoreTests(
     }
 
     private fun insertRole(organisationId: UUID): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(ROLE)
@@ -257,5 +258,5 @@ class JooqUserProvisioningStoreTests(
         return id
     }
 
-    private fun userId(): UUID = UUID.randomUUID()
+    private fun userId(): UUID = uuidV7()
 }

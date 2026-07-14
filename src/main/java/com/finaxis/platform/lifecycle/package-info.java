@@ -4,6 +4,7 @@
     allowedDependencies = {
       "common::audit",
       "common::context",
+      "common::id",
       "common::persistence",
       "common::transitions",
       "jooq"

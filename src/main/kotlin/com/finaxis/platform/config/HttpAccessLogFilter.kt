@@ -1,5 +1,6 @@
 package com.finaxis.platform.config
 
+import com.finaxis.platform.common.id.uuidV7
 import jakarta.servlet.FilterChain
 import jakarta.servlet.ServletException
 import jakarta.servlet.ServletOutputStream
@@ -244,7 +245,7 @@ class HttpAccessLogFilter : OncePerRequestFilter() {
         private fun HttpServletRequest.requestId(): String =
             getHeader(REQUEST_ID_HEADER)
                 ?.takeIf { value -> value.isNotBlank() }
-                ?: UUID.randomUUID().toString()
+                ?: uuidV7().toString()
 
         private fun token(value: String): String = value.replace(WHITESPACE_REGEX, "_")
 

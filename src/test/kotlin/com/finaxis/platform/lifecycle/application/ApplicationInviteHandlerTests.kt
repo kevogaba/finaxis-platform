@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityDispatchType
 import com.finaxis.platform.lifecycle.application.port.outbound.MembershipProvisioningSnapshot
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
@@ -40,9 +41,9 @@ class ApplicationInviteHandlerTests {
 
     private fun applicationInviteRequest(dispatchKey: String): ApplicationInviteJobRequest =
         ApplicationInviteJobRequest(
-            organisationId = UUID.randomUUID(),
-            membershipId = UUID.randomUUID(),
-            userId = UUID.randomUUID(),
+            organisationId = uuidV7(),
+            membershipId = uuidV7(),
+            userId = uuidV7(),
             email = "member@example.test",
             dispatchKey = dispatchKey,
         )
@@ -94,7 +95,7 @@ private class ApplicationInviteStoreFake : UserProvisioningStore {
         displayName: String,
         phoneE164: String?,
         actorId: UUID,
-    ): UUID = UUID.randomUUID()
+    ): UUID = uuidV7()
 
     override fun userStatus(userId: UUID): UserLifecycleState? = null
 
@@ -106,7 +107,7 @@ private class ApplicationInviteStoreFake : UserProvisioningStore {
         membershipType: MembershipType,
         primaryBranchId: UUID?,
         actorId: UUID,
-    ): UUID = UUID.randomUUID()
+    ): UUID = uuidV7()
 
     override fun saveInvitationPreferences(
         organisationId: UUID,
@@ -121,7 +122,7 @@ private class ApplicationInviteStoreFake : UserProvisioningStore {
         membershipId: UUID,
     ): MembershipProvisioningSnapshot? = null
 
-    override fun activeMembershipExists(
+    override fun membershipExists(
         organisationId: UUID,
         userId: UUID,
     ): Boolean = false
@@ -143,7 +144,7 @@ private class ApplicationInviteStoreFake : UserProvisioningStore {
         scopeType: RoleAssignmentScopeType,
         branchId: UUID?,
         actorId: UUID,
-    ): UUID = UUID.randomUUID()
+    ): UUID = uuidV7()
 
     override fun hasActiveBranchAssignment(
         organisationId: UUID,

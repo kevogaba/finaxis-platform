@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.inbound.security
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContextProperties
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContextService
@@ -103,8 +104,8 @@ class ActiveOrganisationContextResolverTests {
 
     private fun context(): ActiveOrganisationContext =
         ActiveOrganisationContext(
-            userId = UUID.randomUUID(),
-            organisationId = UUID.randomUUID(),
-            membershipId = UUID.randomUUID(),
+            userId = uuidV7(),
+            organisationId = uuidV7(),
+            membershipId = uuidV7(),
         )
 }

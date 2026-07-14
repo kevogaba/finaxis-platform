@@ -3,6 +3,7 @@ package com.finaxis.platform.lifecycle.application
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
@@ -146,7 +147,7 @@ class UserProvisioningServiceTests {
                 DispatchRecord(
                     invitation.userId,
                     IdentityDispatchType.KEYCLOAK_PROVISIONING,
-                    "${invitation.userId}:KEYCLOAK_PROVISIONING",
+                    "${context.org}:${invitation.userId}:KEYCLOAK_PROVISIONING",
                 ),
             ),
         )
@@ -198,8 +199,8 @@ class UserProvisioningServiceTests {
 
     @Test
     fun `suspend reactivate and deactivate drive user lifecycle transitions`() {
-        val org = UUID.randomUUID()
-        val actor = UUID.randomUUID()
+        val org = uuidV7()
+        val actor = uuidV7()
         val userId = fake.addUser("user@example.test", "user", UserLifecycleState.ACTIVE)
         fake.organisationStates[org] = OrganisationLifecycleState.ACTIVE
         fake.identityLinks += userId
@@ -219,13 +220,13 @@ class UserProvisioningServiceTests {
 
     @Test
     fun `completed deactivation revokes active assignments with audit and externalized events`() {
-        val org = UUID.randomUUID()
-        val actor = UUID.randomUUID()
+        val org = uuidV7()
+        val actor = uuidV7()
         val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
         fake.organisationStates[org] = OrganisationLifecycleState.ACTIVE
         fake.identityLinks += userId
         fake.branchAssignments += BranchAssignmentKey(org, userId)
-        val roleId = UUID.randomUUID()
+        val roleId = uuidV7()
         fake.roleAssignments += RoleAssignmentKey(org, userId, roleId, null)
 
         service.deactivateUser(DeactivateUserCommand(org, userId, actor, "left"))
@@ -270,10 +271,10 @@ class UserProvisioningServiceTests {
     private fun activeInvitationContext(): InvitationContext {
         val context =
             InvitationContext(
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                UUID.randomUUID(),
+                uuidV7(),
+                uuidV7(),
+                uuidV7(),
+                uuidV7(),
             )
         fake.organisationStates[context.org] = OrganisationLifecycleState.ACTIVE
         fake.branchStates[context.org to context.branch] = BranchLifecycleState.ACTIVE
@@ -314,6 +315,7 @@ private class UserProvisioningFake :
     val users = mutableMapOf<UUID, LifecycleAggregate<UserLifecycleState>>()
     val userEmails = mutableMapOf<UUID, String>()
     val usernames = mutableMapOf<UUID, String>()
+    val displayNames = mutableMapOf<UUID, String>()
     val memberships = mutableMapOf<Pair<UUID, UUID>, LifecycleAggregate<MembershipLifecycleState>>()
     val membershipUsers = mutableMapOf<Pair<UUID, UUID>, UUID>()
     val membershipTypes = mutableMapOf<Pair<UUID, UUID>, MembershipType>()
@@ -328,11 +330,13 @@ private class UserProvisioningFake :
         email: String,
         username: String,
         status: UserLifecycleState,
+        displayName: String = username,
     ): UUID {
-        val userId = UUID.randomUUID()
+        val userId = uuidV7()
         users[userId] = LifecycleAggregate(userId, status, "USER_ACCOUNT")
         userEmails[userId] = email
         usernames[userId] = username
+        displayNames[userId] = displayName
         return userId
     }
 
@@ -342,7 +346,7 @@ private class UserProvisioningFake :
         status: MembershipLifecycleState,
         type: MembershipType = MembershipType.STAFF,
     ): UUID {
-        val membershipId = UUID.randomUUID()
+        val membershipId = uuidV7()
         memberships[organisationId to membershipId] =
             LifecycleAggregate(membershipId, status, "MEMBERSHIP", organisationId)
         membershipUsers[organisationId to membershipId] = userId
@@ -362,7 +366,7 @@ private class UserProvisioningFake :
         displayName: String,
         phoneE164: String?,
         actorId: UUID,
-    ): UUID = addUser(email, username, UserLifecycleState.DRAFT)
+    ): UUID = addUser(email, username, UserLifecycleState.DRAFT, displayName)
 
     override fun userStatus(userId: UUID): UserLifecycleState? = users[userId]?.state
 
@@ -405,20 +409,19 @@ private class UserProvisioningFake :
             requireNotNull(membershipTypes[key]),
             requireNotNull(userEmails[userId]),
             requireNotNull(usernames[userId]),
+            requireNotNull(displayNames[userId]),
             requireNotNull(userStatus(userId)),
             preference.first,
             preference.second,
         )
     }
 
-    override fun activeMembershipExists(
+    override fun membershipExists(
         organisationId: UUID,
         userId: UUID,
     ): Boolean =
-        memberships.any { (key, aggregate) ->
-            key.first == organisationId &&
-                membershipUsers[key] == userId &&
-                aggregate.state == MembershipLifecycleState.ACTIVE
+        memberships.any { (key, _) ->
+            key.first == organisationId && membershipUsers[key] == userId
         }
 
     override fun branchState(
@@ -426,7 +429,7 @@ private class UserProvisioningFake :
         branchId: UUID,
     ): BranchLifecycleState? = branchStates[organisationId to branchId]
 
-    override fun createDraft(command: CreateBranchCommand): UUID = UUID.randomUUID()
+    override fun createDraft(command: CreateBranchCommand): UUID = uuidV7()
 
     override fun branchCodeExists(
         organisationId: UUID,
@@ -465,7 +468,7 @@ private class UserProvisioningFake :
         actorId: UUID,
     ): UUID {
         roleAssignments += RoleAssignmentKey(organisationId, userId, roleId, branchId)
-        return UUID.randomUUID()
+        return uuidV7()
     }
 
     override fun hasActiveBranchAssignment(
@@ -577,9 +580,9 @@ private class UserProvisioningFake :
         branchAssignments.removeAll(matchingBranch.toSet())
         roleAssignments.removeAll(matchingRole.toSet())
         return matchingBranch.map {
-            DeprovisionedAssignment(UUID.randomUUID(), "USER_BRANCH_ASSIGNMENT")
+            DeprovisionedAssignment(uuidV7(), "USER_BRANCH_ASSIGNMENT")
         } +
-            matchingRole.map { DeprovisionedAssignment(UUID.randomUUID(), "USER_ROLE_ASSIGNMENT") }
+            matchingRole.map { DeprovisionedAssignment(uuidV7(), "USER_ROLE_ASSIGNMENT") }
     }
 
     override fun branchHasActiveAssignments(
@@ -595,6 +598,20 @@ private class UserProvisioningFake :
     override fun userHasKeycloakIdentity(userId: UUID): Boolean = identityLinks.contains(userId)
 
     override fun userState(userId: UUID): UserLifecycleState? = userStatus(userId)
+
+    override fun membershipIsBranchExempt(
+        organisationId: UUID,
+        userId: UUID,
+    ): Boolean {
+        val key =
+            membershipUsers.entries
+                .find {
+                    it.key.first == organisationId &&
+                        it.value == userId
+                }?.key
+        val type = key?.let { membershipTypes[it] }
+        return type == MembershipType.SYSTEM || type == MembershipType.AUDITOR
+    }
 
     override fun membershipHasActiveBranchAssignment(
         organisationId: UUID,

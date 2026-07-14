@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.IDENTITY_DISPATCH_LOG
 import com.finaxis.platform.jooq.tables.references.KEYCLOAK_IDENTITY_LINK
@@ -67,7 +68,7 @@ private class JooqUserProvisioningAccountStore(
         phoneE164: String?,
         actorId: UUID,
     ): UUID {
-        val userId = UUID.randomUUID()
+        val userId = uuidV7()
         val now = now(clock)
         dsl
             .insertInto(USER_ACCOUNT)
@@ -114,7 +115,7 @@ private class JooqUserProvisioningMembershipStore(
         primaryBranchId: UUID?,
         actorId: UUID,
     ): UUID {
-        val membershipId = UUID.randomUUID()
+        val membershipId = uuidV7()
         val now = now(clock)
         val inserted =
             dsl
@@ -185,6 +186,7 @@ private class JooqUserProvisioningMembershipStore(
                 USER_ORGANISATION_MEMBERSHIP.PENDING_APPLICATION_INVITE,
                 USER_ACCOUNT.EMAIL,
                 USER_ACCOUNT.USERNAME,
+                USER_ACCOUNT.DISPLAY_NAME,
                 USER_ACCOUNT.STATUS,
             ).from(USER_ORGANISATION_MEMBERSHIP)
             .join(USER_ACCOUNT)
@@ -203,6 +205,7 @@ private class JooqUserProvisioningMembershipStore(
                     ),
                     requireNotNull(record[USER_ACCOUNT.EMAIL]),
                     requireNotNull(record[USER_ACCOUNT.USERNAME]),
+                    requireNotNull(record[USER_ACCOUNT.DISPLAY_NAME]),
                     UserLifecycleState.valueOf(requireNotNull(record[USER_ACCOUNT.STATUS])),
                     requireNotNull(
                         record[USER_ORGANISATION_MEMBERSHIP.PENDING_KEYCLOAK_INVITE],
@@ -213,22 +216,10 @@ private class JooqUserProvisioningMembershipStore(
                 )
             }
 
-    override fun activeMembershipExists(
+    override fun membershipExists(
         organisationId: UUID,
         userId: UUID,
-    ): Boolean =
-        dsl.fetchExists(
-            dsl
-                .selectOne()
-                .from(USER_ORGANISATION_MEMBERSHIP)
-                .where(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId))
-                .and(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(userId))
-                .and(
-                    USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS.eq(
-                        MembershipLifecycleState.ACTIVE.name,
-                    ),
-                ),
-        )
+    ): Boolean = existingMembershipId(organisationId, userId) != null
 
     private fun existingMembershipId(
         organisationId: UUID,
@@ -279,7 +270,7 @@ private class JooqUserProvisioningAccessStore(
         branchId: UUID?,
         actorId: UUID,
     ): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = now(clock)
         val created =
             dsl
@@ -317,9 +308,12 @@ private class JooqUserProvisioningAccessStore(
             dsl
                 .selectOne()
                 .from(USER_BRANCH_ASSIGNMENT)
+                .join(BRANCH)
+                .on(BRANCH.ID.eq(USER_BRANCH_ASSIGNMENT.BRANCH_ID))
                 .where(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID.eq(organisationId))
                 .and(USER_BRANCH_ASSIGNMENT.USER_ID.eq(userId))
-                .and(USER_BRANCH_ASSIGNMENT.STATUS.eq(ACTIVE)),
+                .and(USER_BRANCH_ASSIGNMENT.STATUS.eq(ACTIVE))
+                .and(BRANCH.STATUS.eq(BranchLifecycleState.ACTIVE.name)),
         )
 
     override fun hasActiveRoleAssignment(
@@ -330,9 +324,12 @@ private class JooqUserProvisioningAccessStore(
             dsl
                 .selectOne()
                 .from(USER_ROLE_ASSIGNMENT)
+                .join(ROLE)
+                .on(ROLE.ID.eq(USER_ROLE_ASSIGNMENT.ROLE_ID))
                 .where(USER_ROLE_ASSIGNMENT.ORGANISATION_ID.eq(organisationId))
                 .and(USER_ROLE_ASSIGNMENT.USER_ID.eq(userId))
-                .and(USER_ROLE_ASSIGNMENT.STATUS.eq(ACTIVE)),
+                .and(USER_ROLE_ASSIGNMENT.STATUS.eq(ACTIVE))
+                .and(ROLE.STATUS.eq(ACTIVE)),
         )
 
     override fun revokeBranchAssignmentsForMembership(
@@ -423,7 +420,7 @@ private class JooqUserProvisioningDispatchStore(
         val now = now(clock)
         dsl
             .insertInto(IDENTITY_DISPATCH_LOG)
-            .set(IDENTITY_DISPATCH_LOG.ID, UUID.randomUUID())
+            .set(IDENTITY_DISPATCH_LOG.ID, uuidV7())
             .set(IDENTITY_DISPATCH_LOG.ORGANISATION_ID, organisationId)
             .set(IDENTITY_DISPATCH_LOG.USER_ID, userId)
             .set(IDENTITY_DISPATCH_LOG.DISPATCH_TYPE, dispatchType.name)
@@ -448,7 +445,7 @@ private class JooqUserProvisioningDispatchStore(
         val now = now(clock)
         dsl
             .insertInto(KEYCLOAK_IDENTITY_LINK)
-            .set(KEYCLOAK_IDENTITY_LINK.ID, UUID.randomUUID())
+            .set(KEYCLOAK_IDENTITY_LINK.ID, uuidV7())
             .set(KEYCLOAK_IDENTITY_LINK.USER_ID, userId)
             .set(KEYCLOAK_IDENTITY_LINK.PROVIDER, KEYCLOAK)
             .set(KEYCLOAK_IDENTITY_LINK.SUBJECT, subject)

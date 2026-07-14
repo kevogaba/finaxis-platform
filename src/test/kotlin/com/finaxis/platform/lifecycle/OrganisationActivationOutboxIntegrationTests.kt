@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle
 
 import com.finaxis.platform.TestcontainersConfiguration
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
 import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
@@ -28,10 +29,10 @@ class OrganisationActivationOutboxIntegrationTests(
             organisationProvisioningService
                 .createDraft(
                     CreateOrganisationDraftCommand(
-                        tenantCode = "outbox-${UUID.randomUUID()}",
+                        tenantCode = "outbox-${uuidV7()}",
                         displayName = "Outbox Organisation",
                         legalName = "Outbox Organisation Limited",
-                        registrationNumber = "OUTBOX-${UUID.randomUUID()}",
+                        registrationNumber = "OUTBOX-${uuidV7()}",
                         countryCode = "KE",
                         baseCurrencyCode = "KES",
                         timezone = "Africa/Nairobi",

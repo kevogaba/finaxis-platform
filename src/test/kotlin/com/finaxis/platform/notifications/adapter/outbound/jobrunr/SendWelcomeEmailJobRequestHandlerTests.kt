@@ -3,6 +3,7 @@ package com.finaxis.platform.notifications.adapter.outbound.jobrunr
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import com.finaxis.platform.common.id.uuidV7
 import org.slf4j.LoggerFactory
 import java.util.UUID
 import kotlin.test.AfterTest
@@ -31,12 +32,12 @@ class SendWelcomeEmailJobRequestHandlerTests {
 
     @Test
     fun `handler logs the welcome email stub without error`() {
-        val userId = UUID.randomUUID()
-        val organisationId = UUID.randomUUID()
+        val userId = uuidV7()
+        val organisationId = uuidV7()
 
         SendWelcomeEmailJobRequestHandler().run(
             SendWelcomeEmailJobRequest(
-                membershipId = UUID.randomUUID(),
+                membershipId = uuidV7(),
                 userId = userId,
                 organisationId = organisationId,
             ),

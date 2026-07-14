@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.application.authorization
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
@@ -16,9 +17,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class AuthorizationServiceTests {
-    private val organisationId = UUID.randomUUID()
-    private val userId = UUID.randomUUID()
-    private val membershipId = UUID.randomUUID()
+    private val organisationId = uuidV7()
+    private val userId = uuidV7()
+    private val membershipId = uuidV7()
     private val principal =
         AppPrincipal(
             userId = userId,
@@ -53,8 +54,8 @@ class AuthorizationServiceTests {
         val resourceRef =
             ResourceRef(
                 resourceType = "shipment",
-                resourceId = UUID.randomUUID(),
-                organisationId = UUID.randomUUID(),
+                resourceId = uuidV7(),
+                organisationId = uuidV7(),
             )
 
         assertFalse(service.can(principal, "logistics.shipment.approve", resourceRef))
@@ -66,13 +67,13 @@ class AuthorizationServiceTests {
     @Test
     fun `resource authorization allows same organisation with permission`() {
         val service = authorizationService()
-        val branchId = UUID.randomUUID()
-        val warehouseId = UUID.randomUUID()
-        val ownerId = UUID.randomUUID()
+        val branchId = uuidV7()
+        val warehouseId = uuidV7()
+        val ownerId = uuidV7()
         val resourceRef =
             ResourceRef(
                 resourceType = "shipment",
-                resourceId = UUID.randomUUID(),
+                resourceId = uuidV7(),
                 organisationId = organisationId,
                 branchId = branchId,
                 warehouseId = warehouseId,
@@ -110,7 +111,7 @@ class AuthorizationServiceTests {
 
     @Test
     fun `branch permissions resolve with branch cache key`() {
-        val branchId = UUID.randomUUID()
+        val branchId = uuidV7()
         val service =
             authorizationService(
                 memberships = mapOf(userId to selection()),
@@ -144,7 +145,7 @@ class AuthorizationServiceTests {
 
     @Test
     fun `listEffectiveBranchPermissions returns empty when organisation is not active`() {
-        val branchId = UUID.randomUUID()
+        val branchId = uuidV7()
         val service =
             authorizationService(
                 memberships = mapOf(userId to selection()),
@@ -175,7 +176,7 @@ class AuthorizationServiceTests {
 
     @Test
     fun `requirePermission for arbitrary user returns when permission is present`() {
-        val branchId = UUID.randomUUID()
+        val branchId = uuidV7()
         val service =
             authorizationService(
                 memberships = mapOf(userId to selection()),

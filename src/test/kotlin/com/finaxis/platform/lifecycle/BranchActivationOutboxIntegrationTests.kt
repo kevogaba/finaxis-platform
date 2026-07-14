@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle
 
 import com.finaxis.platform.TestcontainersConfiguration
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.lifecycle.application.ActivateBranchCommand
 import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
@@ -37,7 +38,7 @@ class BranchActivationOutboxIntegrationTests(
                 .createDraft(
                     CreateBranchCommand(
                         organisationId = organisationId,
-                        branchCode = "outbox-${UUID.randomUUID()}",
+                        branchCode = "outbox-${uuidV7()}",
                         branchName = "Outbox Branch",
                         branchType = "SERVICE",
                         timezone = "Africa/Nairobi",
@@ -71,10 +72,10 @@ class BranchActivationOutboxIntegrationTests(
             organisationProvisioningService
                 .createDraft(
                     CreateOrganisationDraftCommand(
-                        tenantCode = "branch-outbox-${UUID.randomUUID()}",
+                        tenantCode = "branch-outbox-${uuidV7()}",
                         displayName = "Branch Outbox Organisation",
                         legalName = "Branch Outbox Organisation Limited",
-                        registrationNumber = "BRANCH-OUTBOX-${UUID.randomUUID()}",
+                        registrationNumber = "BRANCH-OUTBOX-${uuidV7()}",
                         countryCode = "KE",
                         baseCurrencyCode = "KES",
                         timezone = "Africa/Nairobi",

@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.BRANCH_TRANSITION_LOG
@@ -68,7 +69,7 @@ class JooqOrganisationBranchProvisioningStore(
             ?.let(OrganisationLifecycleState::valueOf)
 
     override fun createDraft(command: CreateOrganisationDraftCommand): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = now()
         dsl
             .insertInto(ORGANISATION)
@@ -97,7 +98,7 @@ class JooqOrganisationBranchProvisioningStore(
         settings.forEach { (key, value) ->
             dsl
                 .insertInto(ORGANISATION_SETTING)
-                .set(ORGANISATION_SETTING.ID, UUID.randomUUID())
+                .set(ORGANISATION_SETTING.ID, uuidV7())
                 .set(ORGANISATION_SETTING.ORGANISATION_ID, organisationId)
                 .set(ORGANISATION_SETTING.SETTING_KEY, key)
                 .set(
@@ -181,7 +182,7 @@ class JooqOrganisationBranchProvisioningStore(
         lifecycleState(organisationId)
 
     override fun createDraft(command: CreateBranchCommand): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         dsl
             .insertInto(
                 BRANCH,
@@ -207,7 +208,7 @@ class JooqOrganisationBranchProvisioningStore(
             .execute()
         dsl
             .insertInto(BRANCH_TRANSITION_LOG)
-            .set(BRANCH_TRANSITION_LOG.ID, UUID.randomUUID())
+            .set(BRANCH_TRANSITION_LOG.ID, uuidV7())
             .set(BRANCH_TRANSITION_LOG.ORGANISATION_ID, command.organisationId)
             .set(BRANCH_TRANSITION_LOG.BRANCH_ID, id)
             .set(BRANCH_TRANSITION_LOG.ENTITY_ID, id)
@@ -306,7 +307,7 @@ class JooqOrganisationBootstrapStore(
         if (hasBusinessDate(organisationId)) return
         dsl
             .insertInto(BUSINESS_DATE)
-            .set(BUSINESS_DATE.ID, UUID.randomUUID())
+            .set(BUSINESS_DATE.ID, uuidV7())
             .set(BUSINESS_DATE.ORGANISATION_ID, organisationId)
             .set(BUSINESS_DATE.CURRENT_BUSINESS_DATE, date)
             .set(BUSINESS_DATE.STATUS, "OPEN")
@@ -330,7 +331,7 @@ class JooqOrganisationBootstrapStore(
             .and(BRANCH.BRANCH_CODE.eq(OrganisationBootstrapDefaults.HEAD_OFFICE_CODE))
             .fetchOne(BRANCH.ID)
             ?.let { return HeadOfficeDraftResult(it, false) }
-        val branchId = UUID.randomUUID()
+        val branchId = uuidV7()
         val now = now()
         dsl
             .insertInto(BRANCH)
@@ -348,7 +349,7 @@ class JooqOrganisationBootstrapStore(
             .execute()
         dsl
             .insertInto(BRANCH_TRANSITION_LOG)
-            .set(BRANCH_TRANSITION_LOG.ID, UUID.randomUUID())
+            .set(BRANCH_TRANSITION_LOG.ID, uuidV7())
             .set(BRANCH_TRANSITION_LOG.ORGANISATION_ID, organisationId)
             .set(BRANCH_TRANSITION_LOG.BRANCH_ID, branchId)
             .set(BRANCH_TRANSITION_LOG.ENTITY_ID, branchId)
@@ -368,7 +369,7 @@ class JooqOrganisationBootstrapStore(
         OrganisationBootstrapDefaults.SEQUENCE_CODES.forEach { code ->
             dsl
                 .insertInto(REFERENCE_SEQUENCE)
-                .set(REFERENCE_SEQUENCE.ID, UUID.randomUUID())
+                .set(REFERENCE_SEQUENCE.ID, uuidV7())
                 .set(REFERENCE_SEQUENCE.ORGANISATION_ID, organisationId)
                 .set(REFERENCE_SEQUENCE.SEQUENCE_CODE, code)
                 .set(REFERENCE_SEQUENCE.NEXT_VALUE, 1)
@@ -386,7 +387,7 @@ class JooqOrganisationBootstrapStore(
         OrganisationBootstrapDefaults.ROLE_PERMISSIONS.forEach { (roleCode, permissions) ->
             dsl
                 .insertInto(ROLE)
-                .set(ROLE.ID, UUID.randomUUID())
+                .set(ROLE.ID, uuidV7())
                 .set(ROLE.ORGANISATION_ID, organisationId)
                 .set(ROLE.ROLE_CODE, roleCode)
                 .set(ROLE.ROLE_NAME, roleCode.toDisplayName())
@@ -397,7 +398,10 @@ class JooqOrganisationBootstrapStore(
                 .set(ROLE.UPDATED_AT, now())
                 .set(ROLE.UPDATED_BY, SystemActor.ID)
                 .onConflict(ROLE.ORGANISATION_ID, ROLE.ROLE_CODE)
-                .doNothing()
+                .doUpdate()
+                .set(ROLE.SYSTEM_ROLE, true)
+                .set(ROLE.UPDATED_AT, now())
+                .set(ROLE.UPDATED_BY, SystemActor.ID)
                 .execute()
             dsl.grantPermissions(organisationId, roleCode, permissions, clock)
         }
@@ -456,11 +460,12 @@ private object OrganisationBootstrapDefaults {
             "settings.update",
             "business_date.view",
             "business_date.advance",
+            "iam.profile.read",
         )
     val ROLE_PERMISSIONS =
         mapOf(
             "TENANT_ADMIN" to BASELINE_PERMISSION_CODES,
-            "TENANT_AUDITOR" to setOf("audit.view", "business_date.view"),
+            "TENANT_AUDITOR" to setOf("audit.view", "business_date.view", "iam.profile.read"),
             "IAM_ADMIN" to
                 setOf(
                     "user.invite",
@@ -474,6 +479,7 @@ private object OrganisationBootstrapDefaults {
                     "role.update",
                     "role.assign_permission",
                     "audit.view",
+                    "iam.profile.read",
                 ),
             "BRANCH_MANAGER" to
                 setOf(
@@ -484,8 +490,9 @@ private object OrganisationBootstrapDefaults {
                     "branch.close",
                     "user.assign_branch",
                     "business_date.view",
+                    "iam.profile.read",
                 ),
-            "BRANCH_OPERATOR" to setOf("business_date.view"),
+            "BRANCH_OPERATOR" to setOf("business_date.view", "iam.profile.read"),
         )
 }
 
@@ -520,7 +527,7 @@ private fun DSLContext.grantPermissions(
         .forEach { permissionId ->
             val now = clock.instant().atOffset(ZoneOffset.UTC)
             insertInto(ROLE_PERMISSION)
-                .set(ROLE_PERMISSION.ID, UUID.randomUUID())
+                .set(ROLE_PERMISSION.ID, uuidV7())
                 .set(ROLE_PERMISSION.ORGANISATION_ID, organisationId)
                 .set(ROLE_PERMISSION.ROLE_ID, roleId)
                 .set(ROLE_PERMISSION.PERMISSION_ID, permissionId)
@@ -604,7 +611,7 @@ class JooqBranchAssignmentStore(
         val now = clock.instant().atOffset(ZoneOffset.UTC)
         dsl
             .insertInto(USER_BRANCH_ASSIGNMENT)
-            .set(USER_BRANCH_ASSIGNMENT.ID, UUID.randomUUID())
+            .set(USER_BRANCH_ASSIGNMENT.ID, uuidV7())
             .set(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID, command.organisationId)
             .set(USER_BRANCH_ASSIGNMENT.USER_ID, command.userId)
             .set(USER_BRANCH_ASSIGNMENT.BRANCH_ID, command.branchId)

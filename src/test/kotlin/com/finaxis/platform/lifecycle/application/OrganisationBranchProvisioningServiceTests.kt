@@ -3,6 +3,7 @@ package com.finaxis.platform.lifecycle.application
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
@@ -68,7 +69,7 @@ class OrganisationBranchProvisioningServiceTests {
                     baseCurrencyCode = "KES",
                     timezone = "Africa/Nairobi",
                     initialSettings = mapOf("settings.locale" to "en-KE"),
-                    requestedBy = UUID.randomUUID(),
+                    requestedBy = uuidV7(),
                 ),
             )
 
@@ -178,7 +179,7 @@ class OrganisationBranchProvisioningServiceTests {
 
     @Test
     fun `suspending and reactivating an organisation publish their external lifecycle events`() {
-        val organisationId = UUID.randomUUID()
+        val organisationId = uuidV7()
         lifecyclePersistence.organisations[organisationId] =
             aggregate(organisationId, OrganisationLifecycleState.ACTIVE, "ORGANISATION")
         store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
@@ -206,7 +207,7 @@ class OrganisationBranchProvisioningServiceTests {
     @Test
     fun `reactivation rejects every missing mandatory setup prerequisite`() {
         OrganisationSetupRequirement.entries.forEach { missing ->
-            val organisationId = UUID.randomUUID()
+            val organisationId = uuidV7()
             lifecyclePersistence.organisations[organisationId] =
                 aggregate(organisationId, OrganisationLifecycleState.SUSPENDED, "ORGANISATION")
             store.organisationStates[organisationId] = OrganisationLifecycleState.SUSPENDED
@@ -238,7 +239,7 @@ class OrganisationBranchProvisioningServiceTests {
             OrganisationPage(
                 listOf(
                     OrganisationSummary(
-                        UUID.randomUUID(),
+                        uuidV7(),
                         "KE-ONE",
                         "Kenya One",
                         "KE",
@@ -256,7 +257,7 @@ class OrganisationBranchProvisioningServiceTests {
 
     @Test
     fun `deprovisioning revokes access and retains organisation metadata`() {
-        val organisationId = UUID.randomUUID()
+        val organisationId = uuidV7()
         lifecyclePersistence.organisations[organisationId] =
             aggregate(organisationId, OrganisationLifecycleState.ACTIVE, "ORGANISATION")
         store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
@@ -273,9 +274,9 @@ class OrganisationBranchProvisioningServiceTests {
 
     @Test
     fun `branch assignment rejects an inactive organisation and protects ordinary membership`() {
-        val organisationId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
-        val userId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val branchId = uuidV7()
+        val userId = uuidV7()
         store.organisationStates[organisationId] = OrganisationLifecycleState.SUSPENDED
         store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
 
@@ -286,7 +287,7 @@ class OrganisationBranchProvisioningServiceTests {
                     userId,
                     branchId,
                     BranchAssignmentType.OPERATE,
-                    UUID.randomUUID(),
+                    uuidV7(),
                 ),
             )
         }
@@ -300,7 +301,7 @@ class OrganisationBranchProvisioningServiceTests {
                 userId,
                 branchId,
                 BranchAssignmentType.OPERATE,
-                UUID.randomUUID(),
+                uuidV7(),
             ),
         )
 
@@ -311,7 +312,7 @@ class OrganisationBranchProvisioningServiceTests {
                     userId,
                     branchId,
                     BranchAssignmentType.OPERATE,
-                    UUID.randomUUID(),
+                    uuidV7(),
                 ),
             )
         }
@@ -319,9 +320,9 @@ class OrganisationBranchProvisioningServiceTests {
 
     @Test
     fun `branch assignment rejects an inactive branch`() {
-        val organisationId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
-        val userId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val branchId = uuidV7()
+        val userId = uuidV7()
         store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
         store.branchStates[organisationId to branchId] = BranchLifecycleState.SUSPENDED
         store.memberships[organisationId to userId] =
@@ -334,7 +335,7 @@ class OrganisationBranchProvisioningServiceTests {
                     userId,
                     branchId,
                     BranchAssignmentType.OPERATE,
-                    UUID.randomUUID(),
+                    uuidV7(),
                 ),
             )
         }
@@ -344,10 +345,10 @@ class OrganisationBranchProvisioningServiceTests {
 
     @Test
     fun `branch assignment is idempotent and cannot cross organisation boundaries`() {
-        val organisationId = UUID.randomUUID()
-        val otherOrganisationId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
-        val userId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val otherOrganisationId = uuidV7()
+        val branchId = uuidV7()
+        val userId = uuidV7()
         store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
         store.organisationStates[otherOrganisationId] = OrganisationLifecycleState.ACTIVE
         store.branchStates[otherOrganisationId to branchId] = BranchLifecycleState.ACTIVE
@@ -361,7 +362,7 @@ class OrganisationBranchProvisioningServiceTests {
                     userId,
                     branchId,
                     BranchAssignmentType.VIEW,
-                    UUID.randomUUID(),
+                    uuidV7(),
                 ),
             )
         }
@@ -373,7 +374,7 @@ class OrganisationBranchProvisioningServiceTests {
                 userId,
                 branchId,
                 BranchAssignmentType.VIEW,
-                UUID.randomUUID(),
+                uuidV7(),
             )
         branches.assignUser(command)
         branches.assignUser(command)
@@ -391,9 +392,9 @@ class OrganisationBranchProvisioningServiceTests {
 
     @Test
     fun `repeating a completed assignment revocation emits no duplicate audit or outbox event`() {
-        val organisationId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
-        val userId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val branchId = uuidV7()
+        val userId = uuidV7()
         store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
         store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
         store.memberships[organisationId to userId] =
@@ -404,7 +405,7 @@ class OrganisationBranchProvisioningServiceTests {
                 userId,
                 branchId,
                 BranchAssignmentType.VIEW,
-                UUID.randomUUID(),
+                uuidV7(),
             )
         branches.assignUser(assignment)
         events.events.clear()
@@ -414,7 +415,7 @@ class OrganisationBranchProvisioningServiceTests {
                 userId,
                 branchId,
                 BranchAssignmentType.VIEW,
-                UUID.randomUUID(),
+                uuidV7(),
             )
 
         branches.revokeUserAssignment(revocation)
@@ -426,8 +427,8 @@ class OrganisationBranchProvisioningServiceTests {
 
     @Test
     fun `branch lifecycle emits externalized events for each operational transition`() {
-        val organisationId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val branchId = uuidV7()
         lifecyclePersistence.organisations[organisationId] =
             aggregate(organisationId, OrganisationLifecycleState.ACTIVE, "ORGANISATION")
         lifecyclePersistence.branches[organisationId to branchId] =
@@ -458,8 +459,8 @@ class OrganisationBranchProvisioningServiceTests {
 
     @Test
     fun `closing a branch rejects active child branches`() {
-        val organisationId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val branchId = uuidV7()
         lifecyclePersistence.organisations[organisationId] =
             aggregate(organisationId, OrganisationLifecycleState.ACTIVE, "ORGANISATION")
         lifecyclePersistence.branches[organisationId to branchId] =
@@ -478,7 +479,7 @@ class OrganisationBranchProvisioningServiceTests {
     }
 
     private fun activeDraft(): UUID {
-        val organisationId = UUID.randomUUID()
+        val organisationId = uuidV7()
         lifecyclePersistence.organisations[organisationId] =
             aggregate(organisationId, OrganisationLifecycleState.DRAFT, "ORGANISATION")
         store.metadataComplete += organisationId
@@ -511,7 +512,7 @@ private class ProvisioningFake(
     var listResult = OrganisationPage(emptyList(), 0)
     var lastListFilter: OrganisationListFilter? = null
 
-    override fun createDraft(command: CreateOrganisationDraftCommand): UUID = UUID.randomUUID()
+    override fun createDraft(command: CreateOrganisationDraftCommand): UUID = uuidV7()
 
     override fun lifecycleState(organisationId: UUID) = organisationStates[organisationId]
 
@@ -538,7 +539,7 @@ private class ProvisioningFake(
 
     override fun ensureHeadOfficeDraft(organisationId: UUID): HeadOfficeDraftResult {
         headOfficeIds[organisationId]?.let { return HeadOfficeDraftResult(it, false) }
-        val branchId = UUID.randomUUID()
+        val branchId = uuidV7()
         headOfficeIds[organisationId] = branchId
         headOffices += organisationId
         lifecycle.branches[organisationId to branchId] =
@@ -595,7 +596,7 @@ private class ProvisioningFake(
 
     override fun organisationState(organisationId: UUID) = organisationStates[organisationId]
 
-    override fun createDraft(command: CreateBranchCommand): UUID = UUID.randomUUID()
+    override fun createDraft(command: CreateBranchCommand): UUID = uuidV7()
 
     override fun branchCodeExists(
         organisationId: UUID,
@@ -679,7 +680,7 @@ private class ProvisioningFake(
         businessDates[organisationId] = LocalDate.of(2026, 7, 14)
         referenceSequences += organisationId
         defaultRoles += organisationId
-        val branchId = UUID.randomUUID()
+        val branchId = uuidV7()
         headOfficeIds[organisationId] = branchId
         headOffices += organisationId
         lifecycle.branches[organisationId to branchId] =
@@ -760,6 +761,11 @@ private class LifecycleFake :
     override fun userHasKeycloakIdentity(userId: UUID) = true
 
     override fun userState(userId: UUID) = UserLifecycleState.ACTIVE
+
+    override fun membershipIsBranchExempt(
+        organisationId: UUID,
+        userId: UUID,
+    ) = false
 
     override fun membershipHasActiveBranchAssignment(
         organisationId: UUID,

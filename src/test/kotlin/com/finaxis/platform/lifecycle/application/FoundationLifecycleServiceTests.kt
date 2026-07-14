@@ -5,6 +5,7 @@ import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.context.ActorContext
 import com.finaxis.platform.common.context.RequestContexts
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.InternalTransitionEvent
@@ -56,7 +57,7 @@ class FoundationLifecycleServiceTests {
 
     @Test
     fun `organisation provisioning publishes an internal transition event`() {
-        val organisationId = UUID.randomUUID()
+        val organisationId = uuidV7()
         persistence.organisations[organisationId] =
             LifecycleAggregate(
                 organisationId,
@@ -83,7 +84,7 @@ class FoundationLifecycleServiceTests {
 
     @Test
     fun `transition audit treats a context carrying the system actor id as system`() {
-        val organisationId = UUID.randomUUID()
+        val organisationId = uuidV7()
         persistence.organisations[organisationId] =
             LifecycleAggregate(
                 organisationId,
@@ -108,8 +109,8 @@ class FoundationLifecycleServiceTests {
 
     @Test
     fun `branch activation is rejected until its organisation is active or provisioning`() {
-        val organisationId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val branchId = uuidV7()
         persistence.organisationStates[organisationId] = OrganisationLifecycleState.DRAFT
         persistence.branches[organisationId to branchId] =
             LifecycleAggregate(branchId, BranchLifecycleState.PENDING_APPROVAL, BRANCH)
@@ -138,8 +139,8 @@ class FoundationLifecycleServiceTests {
 
     @Test
     fun `branch reactivation is rejected when its organisation is suspended`() {
-        val organisationId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val branchId = uuidV7()
         persistence.organisationStates[organisationId] = OrganisationLifecycleState.SUSPENDED
         persistence.branches[organisationId to branchId] =
             LifecycleAggregate(branchId, BranchLifecycleState.SUSPENDED, BRANCH)
@@ -168,8 +169,8 @@ class FoundationLifecycleServiceTests {
 
     @Test
     fun `branch close is rejected while an active child branch exists`() {
-        val organisationId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val branchId = uuidV7()
         persistence.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
         persistence.activeChildBranches = true
         persistence.branches[organisationId to branchId] =
@@ -194,9 +195,9 @@ class FoundationLifecycleServiceTests {
 
     @Test
     fun `membership activation requires active organisation user branch and role`() {
-        val organisationId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
-        val userId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val userId = uuidV7()
         persistence.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
         persistence.membershipUsers[organisationId to membershipId] = userId
         persistence.memberships[organisationId to membershipId] =
@@ -222,10 +223,10 @@ class FoundationLifecycleServiceTests {
 
     @Test
     fun `membership activation publishes its externalized event with resolved user metadata`() {
-        val organisationId = UUID.randomUUID()
-        val userId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val userId = uuidV7()
+        val membershipId = uuidV7()
+        val branchId = uuidV7()
         persistence.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
         persistence.membershipUsers[organisationId to membershipId] = userId
         persistence.memberships[organisationId to membershipId] =
@@ -264,8 +265,8 @@ class FoundationLifecycleServiceTests {
     fun `completed user deactivation does not mutate assignment aggregates`() {
         // Assignment revocation on deactivation is owned by UserProvisioningService, not the
         // generic FSM transition; see UserProvisioningServiceTests for that behaviour.
-        val organisationId = UUID.randomUUID()
-        val userId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val userId = uuidV7()
         persistence.users[userId] =
             LifecycleAggregate(
                 userId,
@@ -293,8 +294,8 @@ class FoundationLifecycleServiceTests {
 
     @Test
     fun `first login activation transitions invited user and updates last login`() {
-        val organisationId = UUID.randomUUID()
-        val userId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val userId = uuidV7()
         persistence.users[userId] =
             LifecycleAggregate(
                 userId,
@@ -311,8 +312,8 @@ class FoundationLifecycleServiceTests {
 
     @Test
     fun `first login activation only updates last login for active user`() {
-        val organisationId = UUID.randomUUID()
-        val userId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val userId = uuidV7()
         persistence.users[userId] =
             LifecycleAggregate(
                 userId,
@@ -402,6 +403,11 @@ private class FakeLifecyclePersistence :
     override fun userHasKeycloakIdentity(userId: UUID) = true
 
     override fun userState(userId: UUID) = userStates[userId]
+
+    override fun membershipIsBranchExempt(
+        organisationId: UUID,
+        userId: UUID,
+    ) = false
 
     override fun membershipHasActiveBranchAssignment(
         organisationId: UUID,

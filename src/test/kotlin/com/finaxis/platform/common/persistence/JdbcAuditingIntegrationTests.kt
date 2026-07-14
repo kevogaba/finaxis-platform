@@ -3,6 +3,7 @@ package com.finaxis.platform.common.persistence
 import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.common.context.ActorContext
 import com.finaxis.platform.common.context.RequestContexts
+import com.finaxis.platform.common.id.uuidV7
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
@@ -31,7 +32,7 @@ class JdbcAuditingIntegrationTests(
 
     @Test
     fun `jdbc auditing writes authenticated actor metadata`() {
-        val actorId = UUID.randomUUID()
+        val actorId = uuidV7()
 
         val saved =
             RequestContexts.withActor(
@@ -46,8 +47,8 @@ class JdbcAuditingIntegrationTests(
 
     private fun organisation(suffix: String): OrganisationJdbcEntity =
         OrganisationJdbcEntity(
-            id = UUID.randomUUID(),
-            tenantCode = "test-$suffix-${UUID.randomUUID()}",
+            id = uuidV7(),
+            tenantCode = "test-$suffix-${uuidV7()}",
             displayName = "Test $suffix",
             countryCode = "KE",
             baseCurrencyCode = "KES",

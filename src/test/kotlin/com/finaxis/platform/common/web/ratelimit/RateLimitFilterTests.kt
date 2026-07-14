@@ -1,5 +1,6 @@
 package com.finaxis.platform.common.web.ratelimit
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import org.junit.jupiter.api.Test
 import org.springframework.mock.web.MockFilterChain
@@ -65,7 +66,7 @@ class RateLimitFilterTests {
                     userId = UUID.fromString("11111111-1111-1111-1111-111111111111"),
                     keycloakSubject = "subject",
                     organisationId = UUID.fromString("22222222-2222-2222-2222-222222222222"),
-                    membershipId = UUID.randomUUID(),
+                    membershipId = uuidV7(),
                     branchId = null,
                     email = "user@example.com",
                     fullName = "User",

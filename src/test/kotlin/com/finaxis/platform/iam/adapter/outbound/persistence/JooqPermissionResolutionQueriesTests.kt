@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.domain.PermissionEffect
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.MEMBERSHIP_PERMISSION
@@ -117,7 +118,7 @@ class JooqPermissionResolutionQueriesTests(
     }
 
     private fun insertOrganisation(): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(ORGANISATION)
@@ -135,7 +136,7 @@ class JooqPermissionResolutionQueriesTests(
     }
 
     private fun insertUser(): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(USER_ACCOUNT)
@@ -154,7 +155,7 @@ class JooqPermissionResolutionQueriesTests(
         organisationId: UUID,
         userId: UUID,
     ): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(USER_ORGANISATION_MEMBERSHIP)
@@ -170,7 +171,7 @@ class JooqPermissionResolutionQueriesTests(
     }
 
     private fun insertBranch(organisationId: UUID): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(BRANCH)
@@ -188,7 +189,7 @@ class JooqPermissionResolutionQueriesTests(
     }
 
     private fun insertRole(organisationId: UUID): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(ROLE)
@@ -211,7 +212,7 @@ class JooqPermissionResolutionQueriesTests(
         val now = OffsetDateTime.now()
         dsl
             .insertInto(ROLE_PERMISSION)
-            .set(ROLE_PERMISSION.ID, UUID.randomUUID())
+            .set(ROLE_PERMISSION.ID, uuidV7())
             .set(ROLE_PERMISSION.ORGANISATION_ID, organisationId)
             .set(ROLE_PERMISSION.ROLE_ID, roleId)
             .set(ROLE_PERMISSION.PERMISSION_ID, permissionId)
@@ -230,7 +231,7 @@ class JooqPermissionResolutionQueriesTests(
         val now = OffsetDateTime.now()
         dsl
             .insertInto(USER_ROLE_ASSIGNMENT)
-            .set(USER_ROLE_ASSIGNMENT.ID, UUID.randomUUID())
+            .set(USER_ROLE_ASSIGNMENT.ID, uuidV7())
             .set(USER_ROLE_ASSIGNMENT.ORGANISATION_ID, organisationId)
             .set(USER_ROLE_ASSIGNMENT.USER_ID, userId)
             .set(USER_ROLE_ASSIGNMENT.ROLE_ID, roleId)
@@ -244,7 +245,7 @@ class JooqPermissionResolutionQueriesTests(
     }
 
     private fun insertPermission(code: String): UUID {
-        val id = UUID.randomUUID()
+        val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
             .insertInto(PERMISSION)
@@ -269,7 +270,7 @@ class JooqPermissionResolutionQueriesTests(
         val now = OffsetDateTime.now()
         dsl
             .insertInto(MEMBERSHIP_PERMISSION)
-            .set(MEMBERSHIP_PERMISSION.ID, UUID.randomUUID())
+            .set(MEMBERSHIP_PERMISSION.ID, uuidV7())
             .set(MEMBERSHIP_PERMISSION.ORGANISATION_ID, organisationId)
             .set(MEMBERSHIP_PERMISSION.MEMBERSHIP_ID, membershipId)
             .set(MEMBERSHIP_PERMISSION.PERMISSION_ID, permissionId)
