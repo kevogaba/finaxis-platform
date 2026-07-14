@@ -3,12 +3,14 @@ package com.finaxis.platform.notifications
 import com.finaxis.platform.TestcontainersConfiguration
 import com.finaxis.platform.common.context.ActorContext
 import com.finaxis.platform.common.context.RequestContexts
+import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionCommand
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.lifecycle.application.FoundationLifecycleService
 import com.finaxis.platform.lifecycle.application.MembershipTransitionCommand
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleTransition
+import io.namastack.outbox.OutboxRecordRepository
 import org.awaitility.Awaitility.await
 import org.jobrunr.jobs.states.StateName
 import org.jobrunr.storage.JobNotFoundException
@@ -22,6 +24,7 @@ import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 @Import(TestcontainersConfiguration::class)
 @SpringBootTest(
@@ -35,6 +38,7 @@ import kotlin.test.assertEquals
 class MembershipActivationPipelineIntegrationTests(
     private val lifecycleService: FoundationLifecycleService,
     private val storageProvider: StorageProvider,
+    private val outboxRecords: OutboxRecordRepository,
     private val dsl: DSLContext,
 ) {
     @Test
@@ -63,6 +67,12 @@ class MembershipActivationPipelineIntegrationTests(
                 assertEquals(
                     StateName.SUCCEEDED,
                     storageProvider.getJobById(deterministicWelcomeEmailJobId()).state,
+                )
+                assertTrue(
+                    outboxRecords
+                        .findCompletedRecords()
+                        .mapNotNull { it.payload as? ExternalizedTransitionEvent }
+                        .any { it.target == MEMBERSHIP_ACTIVATED_TARGET },
                 )
             }
     }
@@ -93,5 +103,6 @@ class MembershipActivationPipelineIntegrationTests(
         val HEAD_OFFICE_BRANCH_ID: UUID = UUID.fromString("33333333-3333-3333-3333-333333333333")
         val LOCAL_MEMBERSHIP_ID: UUID = UUID.fromString("55555555-5555-5555-5555-555555555555")
         val ACTIVATED_AT: Instant = Instant.parse("2026-07-13T12:00:00Z")
+        const val MEMBERSHIP_ACTIVATED_TARGET = "finaxis.lifecycle.membership.activated"
     }
 }

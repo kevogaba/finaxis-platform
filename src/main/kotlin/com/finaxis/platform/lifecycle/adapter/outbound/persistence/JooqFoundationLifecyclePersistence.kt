@@ -16,6 +16,7 @@ import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
+import com.finaxis.platform.lifecycle.application.DeprovisionedAssignment
 import com.finaxis.platform.lifecycle.application.FoundationLifecycleReader
 import com.finaxis.platform.lifecycle.application.FoundationLifecycleWriter
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
@@ -137,6 +138,7 @@ class JooqFoundationLifecyclePersistence(
             dsl
                 .update(ORGANISATION)
                 .set(ORGANISATION.STATUS, aggregate.state.name)
+                .set(ORGANISATION.STATUS_REASON, aggregate.transitionReason)
                 .set(ORGANISATION.UPDATED_AT, now())
                 .set(ORGANISATION.UPDATED_BY, actorId())
                 .set(ORGANISATION.ROW_VERSION, ORGANISATION.ROW_VERSION.plus(1))
@@ -156,6 +158,7 @@ class JooqFoundationLifecyclePersistence(
             dsl
                 .update(BRANCH)
                 .set(BRANCH.STATUS, aggregate.state.name)
+                .set(BRANCH.STATUS_REASON, aggregate.transitionReason)
                 .set(BRANCH.UPDATED_AT, now())
                 .set(BRANCH.UPDATED_BY, actorId())
                 .set(BRANCH.ROW_VERSION, BRANCH.ROW_VERSION.plus(1))
@@ -194,6 +197,7 @@ class JooqFoundationLifecyclePersistence(
             dsl
                 .update(USER_ORGANISATION_MEMBERSHIP)
                 .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, aggregate.state.name)
+                .set(USER_ORGANISATION_MEMBERSHIP.STATUS_REASON, aggregate.transitionReason)
                 .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT, now())
                 .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_BY, actorId())
                 .set(
@@ -210,7 +214,25 @@ class JooqFoundationLifecyclePersistence(
     override fun revokeActiveAssignments(
         organisationId: UUID,
         userId: UUID,
-    ) {
+    ): List<DeprovisionedAssignment> {
+        val branchAssignmentIds =
+            dsl
+                .select(USER_BRANCH_ASSIGNMENT.ID)
+                .from(USER_BRANCH_ASSIGNMENT)
+                .where(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID.eq(organisationId))
+                .and(USER_BRANCH_ASSIGNMENT.USER_ID.eq(userId))
+                .and(USER_BRANCH_ASSIGNMENT.STATUS.eq(ACTIVE))
+                .fetch(USER_BRANCH_ASSIGNMENT.ID)
+                .filterNotNull()
+        val roleAssignmentIds =
+            dsl
+                .select(USER_ROLE_ASSIGNMENT.ID)
+                .from(USER_ROLE_ASSIGNMENT)
+                .where(USER_ROLE_ASSIGNMENT.ORGANISATION_ID.eq(organisationId))
+                .and(USER_ROLE_ASSIGNMENT.USER_ID.eq(userId))
+                .and(USER_ROLE_ASSIGNMENT.STATUS.eq(ACTIVE))
+                .fetch(USER_ROLE_ASSIGNMENT.ID)
+                .filterNotNull()
         dsl
             .update(USER_BRANCH_ASSIGNMENT)
             .set(USER_BRANCH_ASSIGNMENT.STATUS, REVOKED)
@@ -235,6 +257,8 @@ class JooqFoundationLifecyclePersistence(
             .and(USER_ROLE_ASSIGNMENT.USER_ID.eq(userId))
             .and(USER_ROLE_ASSIGNMENT.STATUS.eq(ACTIVE))
             .execute()
+        return branchAssignmentIds.map { DeprovisionedAssignment(it, "USER_BRANCH_ASSIGNMENT") } +
+            roleAssignmentIds.map { DeprovisionedAssignment(it, "USER_ROLE_ASSIGNMENT") }
     }
 
     override fun organisationState(organisationId: UUID): OrganisationLifecycleState? =
@@ -256,6 +280,19 @@ class JooqFoundationLifecyclePersistence(
                 .where(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID.eq(organisationId))
                 .and(USER_BRANCH_ASSIGNMENT.BRANCH_ID.eq(branchId))
                 .and(USER_BRANCH_ASSIGNMENT.STATUS.eq(ACTIVE)),
+        )
+
+    override fun branchHasActiveChildren(
+        organisationId: UUID,
+        branchId: UUID,
+    ): Boolean =
+        dsl.fetchExists(
+            dsl
+                .selectOne()
+                .from(BRANCH)
+                .where(BRANCH.ORGANISATION_ID.eq(organisationId))
+                .and(BRANCH.PARENT_BRANCH_ID.eq(branchId))
+                .and(BRANCH.STATUS.eq(BranchLifecycleState.ACTIVE.name)),
         )
 
     override fun userHasKeycloakIdentity(userId: UUID): Boolean =
@@ -369,6 +406,7 @@ private fun saveOrganisationLog(
         .set(ORGANISATION_TRANSITION_LOG.TRANSITION_NAME, log.transition)
         .set(ORGANISATION_TRANSITION_LOG.STATUS_FROM, log.fromState)
         .set(ORGANISATION_TRANSITION_LOG.STATUS_TO, log.toState)
+        .set(ORGANISATION_TRANSITION_LOG.REASON, log.reason)
         .set(ORGANISATION_TRANSITION_LOG.CREATED_AT, log.createdAt.atOffset(ZoneOffset.UTC))
         .set(ORGANISATION_TRANSITION_LOG.CREATED_BY, log.actorId.toUuidOrNull())
         .set(ORGANISATION_TRANSITION_LOG.UPDATED_AT, now)
@@ -399,6 +437,7 @@ private fun saveBranchLog(
         .set(BRANCH_TRANSITION_LOG.TRANSITION_NAME, log.transition)
         .set(BRANCH_TRANSITION_LOG.STATUS_FROM, log.fromState)
         .set(BRANCH_TRANSITION_LOG.STATUS_TO, log.toState)
+        .set(BRANCH_TRANSITION_LOG.REASON, log.reason)
         .set(BRANCH_TRANSITION_LOG.CREATED_AT, log.createdAt.atOffset(ZoneOffset.UTC))
         .set(BRANCH_TRANSITION_LOG.CREATED_BY, log.actorId.toUuidOrNull())
         .set(BRANCH_TRANSITION_LOG.UPDATED_AT, now)
@@ -429,6 +468,7 @@ private fun saveUserLog(
         .set(USER_ACCOUNT_TRANSITION_LOG.TRANSITION_NAME, log.transition)
         .set(USER_ACCOUNT_TRANSITION_LOG.STATUS_FROM, log.fromState)
         .set(USER_ACCOUNT_TRANSITION_LOG.STATUS_TO, log.toState)
+        .set(USER_ACCOUNT_TRANSITION_LOG.REASON, log.reason)
         .set(USER_ACCOUNT_TRANSITION_LOG.CREATED_AT, log.createdAt.atOffset(ZoneOffset.UTC))
         .set(USER_ACCOUNT_TRANSITION_LOG.CREATED_BY, log.actorId.toUuidOrNull())
         .set(USER_ACCOUNT_TRANSITION_LOG.UPDATED_AT, now)
@@ -461,6 +501,7 @@ private fun saveMembershipLog(
         ).set(USER_ORGANISATION_MEMBERSHIP_TRANSITION_LOG.TRANSITION_NAME, log.transition)
         .set(USER_ORGANISATION_MEMBERSHIP_TRANSITION_LOG.STATUS_FROM, log.fromState)
         .set(USER_ORGANISATION_MEMBERSHIP_TRANSITION_LOG.STATUS_TO, log.toState)
+        .set(USER_ORGANISATION_MEMBERSHIP_TRANSITION_LOG.REASON, log.reason)
         .set(
             USER_ORGANISATION_MEMBERSHIP_TRANSITION_LOG.CREATED_AT,
             log.createdAt.atOffset(ZoneOffset.UTC),

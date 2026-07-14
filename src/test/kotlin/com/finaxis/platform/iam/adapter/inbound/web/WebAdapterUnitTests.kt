@@ -551,6 +551,9 @@ private class StaticMembershipLookup(
         return MembershipSelection(membershipId, userId, organisationId, MembershipStatus.ACTIVE)
     }
 
+    override fun organisationStatus(organisationId: UUID): OrganisationStatus? =
+        OrganisationStatus.ACTIVE.takeIf { this.organisationId == organisationId }
+
     override fun findAssignedBranchIds(membershipId: UUID): List<UUID> = branchIds
 
     override fun hasAssignedBranch(

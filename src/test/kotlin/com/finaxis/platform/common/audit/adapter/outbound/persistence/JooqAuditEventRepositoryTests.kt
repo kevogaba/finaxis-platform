@@ -3,6 +3,7 @@ package com.finaxis.platform.common.audit.adapter.outbound.persistence
 import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditOutcome
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
 import org.jooq.DSLContext
@@ -15,6 +16,7 @@ import java.time.Instant
 import java.time.OffsetDateTime
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -55,6 +57,42 @@ class JooqAuditEventRepositoryTests(
                 .fetchOne(AUDIT_EVENT.IP_ADDRESS)
 
         assertEquals("203.0.113.7", persistedIp)
+    }
+
+    @Test
+    fun `save stores the common system actor without a user foreign key`() {
+        val organisationId = insertOrganisation()
+        val eventId = UUID.randomUUID()
+
+        repository.save(
+            AuditEvent(
+                id = eventId,
+                actorType = "USER",
+                actorId = SystemActor.ID.toString(),
+                tenantId = organisationId.toString(),
+                action = "organisation.create_draft",
+                resourceType = "ORGANISATION",
+                resourceId = organisationId.toString(),
+                outcome = AuditOutcome.SUCCESS,
+                reason = null,
+                requestId = null,
+                sourceIp = null,
+                metadata = emptyMap(),
+                occurredAt = Instant.parse("2026-07-13T10:00:00Z"),
+            ),
+        )
+
+        val audit =
+            requireNotNull(
+                dsl
+                    .select(AUDIT_EVENT.ACTOR_TYPE, AUDIT_EVENT.ACTOR_USER_ID)
+                    .from(AUDIT_EVENT)
+                    .where(AUDIT_EVENT.ID.eq(eventId))
+                    .fetchOne(),
+            )
+
+        assertEquals("SYSTEM", audit.get(AUDIT_EVENT.ACTOR_TYPE))
+        assertNull(audit.get(AUDIT_EVENT.ACTOR_USER_ID))
     }
 
     private fun insertOrganisation(): UUID {

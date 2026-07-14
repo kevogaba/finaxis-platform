@@ -20,6 +20,10 @@ springdoc:
 scalar:
   enabled: false
 
+jobrunr:
+  dashboard:
+    enabled: false
+
 finaxis:
   iam:
     active-organisation-context:

@@ -13,7 +13,9 @@ import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
 import com.finaxis.platform.iam.application.port.outbound.AppPrincipalLookup
 import com.finaxis.platform.iam.domain.MembershipStatus
+import com.finaxis.platform.iam.domain.OrganisationStatus
 import com.finaxis.platform.iam.domain.UserStatus
+import com.finaxis.platform.lifecycle.UserFirstLoginActivation
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
@@ -119,6 +121,7 @@ class SecurityConfiguration(
 class AppPrincipalLoader(
     private val principalLookup: AppPrincipalLookup,
     private val resolver: EffectivePermissionResolver,
+    private val userFirstLoginActivation: UserFirstLoginActivation,
 ) {
     /**
      * Loads the application principal for a matching Keycloak subject and tenant context.
@@ -136,8 +139,24 @@ class AppPrincipalLoader(
                     ?.takeIf {
                         it.userId == user.id && it.organisationId == context.organisationId
                     }?.takeIf {
-                        user.status == UserStatus.ACTIVE && it.status == MembershipStatus.ACTIVE
+                        user.status in LOGIN_ALLOWED_USER_STATUSES &&
+                            it.status == MembershipStatus.ACTIVE
+                    }?.takeIf {
+                        principalLookup.organisationStatus(it.organisationId) ==
+                            OrganisationStatus.ACTIVE
+                    }?.takeIf { membership ->
+                        context.branchId?.let { branchId ->
+                            principalLookup.hasActiveAssignedBranch(
+                                membership.id,
+                                membership.organisationId,
+                                branchId,
+                            )
+                        } ?: true
                     }?.let { membership ->
+                        userFirstLoginActivation.activateOnFirstLogin(
+                            user.id,
+                            membership.organisationId,
+                        )
                         AppPrincipal(
                             userId = user.id,
                             keycloakSubject = user.keycloakSubject,
@@ -151,6 +170,10 @@ class AppPrincipalLoader(
                         )
                     }
             }
+
+    private companion object {
+        val LOGIN_ALLOWED_USER_STATUSES = setOf(UserStatus.ACTIVE, UserStatus.INVITED)
+    }
 }
 
 /**

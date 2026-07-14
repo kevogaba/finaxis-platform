@@ -32,6 +32,7 @@ enum class OrganisationLifecycleTransition {
     SUSPEND,
     REACTIVATE,
     START_DEPROVISIONING,
+    START_SUSPENDED_DEPROVISIONING,
     COMPLETE_DEPROVISIONING,
     ARCHIVE,
 }
@@ -51,8 +52,12 @@ enum class BranchLifecycleTransition {
     SUBMIT,
     ACTIVATE,
     SUSPEND,
+    SUSPEND_DRAFT,
+    SUSPEND_PENDING_APPROVAL,
+    CONFIRM_SUSPENDED,
     REACTIVATE,
     CLOSE,
+    CLOSE_SUSPENDED,
     ARCHIVE,
 }
 
@@ -77,6 +82,7 @@ enum class UserLifecycleTransition {
     INVITE,
     ACTIVATE,
     SUSPEND,
+    REACTIVATE,
     LOCK,
     UNLOCK,
     START_DEACTIVATION,
@@ -98,6 +104,8 @@ enum class MembershipLifecycleTransition {
     SUSPEND,
     REACTIVATE,
     REVOKE,
+    REVOKE_PENDING,
+    REVOKE_SUSPENDED,
 }
 
 /** Mutable transition target owned by the lifecycle application service. */
@@ -112,6 +120,9 @@ class LifecycleAggregate<S : Enum<S>>(
 ) : Transitionable<S> {
     override val aggregateId: String = id.toString()
 
+    /** Reason attached to the status currently being persisted, when the command supplied one. */
+    var transitionReason: String? = null
+
     override fun transitionTo(state: S) {
         this.state = state
     }
@@ -124,6 +135,12 @@ interface LifecyclePrerequisites {
 
     /** Returns whether an active branch assignment would prevent a branch closure. */
     fun branchHasActiveAssignments(
+        organisationId: UUID,
+        branchId: UUID,
+    ): Boolean
+
+    /** Returns whether an active child branch prevents closure of its parent. */
+    fun branchHasActiveChildren(
         organisationId: UUID,
         branchId: UUID,
     ): Boolean
@@ -152,57 +169,85 @@ object FoundationLifecycleDefinitions {
     /** Defines the complete explicit organisation lifecycle graph. */
     fun organisationGraph(): OrganisationGraph =
         TransitionGraph(
-            listOf(
-                definition(
-                    OrganisationLifecycleTransition.SUBMIT,
-                    OrganisationLifecycleState.DRAFT,
-                    OrganisationLifecycleState.PENDING_APPROVAL,
-                    internalEventFactories(),
-                ),
-                definition(
-                    OrganisationLifecycleTransition.START_PROVISIONING,
-                    OrganisationLifecycleState.PENDING_APPROVAL,
-                    OrganisationLifecycleState.PROVISIONING,
-                    internalEventFactories(),
-                ),
-                definition(
-                    OrganisationLifecycleTransition.ACTIVATE,
-                    OrganisationLifecycleState.PROVISIONING,
-                    OrganisationLifecycleState.ACTIVE,
-                    internalEventFactories(),
-                ),
-                definition(
-                    OrganisationLifecycleTransition.REJECT,
-                    OrganisationLifecycleState.PENDING_APPROVAL,
-                    OrganisationLifecycleState.REJECTED,
-                ),
-                definition(
-                    OrganisationLifecycleTransition.SUSPEND,
-                    OrganisationLifecycleState.ACTIVE,
-                    OrganisationLifecycleState.SUSPENDED,
-                    internalEventFactories(),
-                ),
-                definition(
-                    OrganisationLifecycleTransition.REACTIVATE,
-                    OrganisationLifecycleState.SUSPENDED,
-                    OrganisationLifecycleState.ACTIVE,
-                ),
-                definition(
-                    OrganisationLifecycleTransition.START_DEPROVISIONING,
-                    OrganisationLifecycleState.ACTIVE,
-                    OrganisationLifecycleState.DEPROVISIONING,
-                    internalEventFactories(),
-                ),
-                definition(
-                    OrganisationLifecycleTransition.COMPLETE_DEPROVISIONING,
-                    OrganisationLifecycleState.DEPROVISIONING,
-                    OrganisationLifecycleState.DEPROVISIONED,
-                ),
-                definition(
-                    OrganisationLifecycleTransition.ARCHIVE,
-                    OrganisationLifecycleState.DEPROVISIONED,
-                    OrganisationLifecycleState.ARCHIVED,
-                ),
+            organisationProvisioningDefinitions() + organisationDeprovisioningDefinitions(),
+        )
+
+    private fun organisationProvisioningDefinitions(): List<
+        TransitionDefinition<
+            OrganisationLifecycleState,
+            OrganisationLifecycleTransition,
+            LifecycleAggregate<OrganisationLifecycleState>,
+        >,
+    > =
+        listOf(
+            definition(
+                OrganisationLifecycleTransition.SUBMIT,
+                OrganisationLifecycleState.DRAFT,
+                OrganisationLifecycleState.PENDING_APPROVAL,
+                externalizedEventFactories(ORGANISATION_APPROVAL_REQUESTED_TARGET),
+            ),
+            definition(
+                OrganisationLifecycleTransition.START_PROVISIONING,
+                OrganisationLifecycleState.PENDING_APPROVAL,
+                OrganisationLifecycleState.PROVISIONING,
+                internalEventFactories(),
+            ),
+            definition(
+                OrganisationLifecycleTransition.ACTIVATE,
+                OrganisationLifecycleState.PROVISIONING,
+                OrganisationLifecycleState.ACTIVE,
+                externalizedEventFactories(ORGANISATION_ACTIVATED_TARGET),
+            ),
+            definition(
+                OrganisationLifecycleTransition.REJECT,
+                OrganisationLifecycleState.PENDING_APPROVAL,
+                OrganisationLifecycleState.REJECTED,
+                externalizedEventFactories(ORGANISATION_REJECTED_TARGET),
+            ),
+            definition(
+                OrganisationLifecycleTransition.SUSPEND,
+                OrganisationLifecycleState.ACTIVE,
+                OrganisationLifecycleState.SUSPENDED,
+                externalizedEventFactories(ORGANISATION_SUSPENDED_TARGET),
+            ),
+            definition(
+                OrganisationLifecycleTransition.REACTIVATE,
+                OrganisationLifecycleState.SUSPENDED,
+                OrganisationLifecycleState.ACTIVE,
+                externalizedEventFactories(ORGANISATION_REACTIVATED_TARGET),
+            ),
+        )
+
+    private fun organisationDeprovisioningDefinitions(): List<
+        TransitionDefinition<
+            OrganisationLifecycleState,
+            OrganisationLifecycleTransition,
+            LifecycleAggregate<OrganisationLifecycleState>,
+        >,
+    > =
+        listOf(
+            definition(
+                OrganisationLifecycleTransition.START_DEPROVISIONING,
+                OrganisationLifecycleState.ACTIVE,
+                OrganisationLifecycleState.DEPROVISIONING,
+                internalEventFactories(),
+            ),
+            definition(
+                OrganisationLifecycleTransition.START_SUSPENDED_DEPROVISIONING,
+                OrganisationLifecycleState.SUSPENDED,
+                OrganisationLifecycleState.DEPROVISIONING,
+                internalEventFactories(),
+            ),
+            definition(
+                OrganisationLifecycleTransition.COMPLETE_DEPROVISIONING,
+                OrganisationLifecycleState.DEPROVISIONING,
+                OrganisationLifecycleState.DEPROVISIONED,
+                externalizedEventFactories(ORGANISATION_DEPROVISIONED_TARGET),
+            ),
+            definition(
+                OrganisationLifecycleTransition.ARCHIVE,
+                OrganisationLifecycleState.DEPROVISIONED,
+                OrganisationLifecycleState.ARCHIVED,
             ),
         )
 
@@ -213,25 +258,73 @@ object FoundationLifecycleDefinitions {
         branchId: UUID,
     ): BranchGraph =
         TransitionGraph(
+            BranchDefinitions.approval(prerequisites, organisationId) +
+                BranchDefinitions.operational(prerequisites, organisationId, branchId),
+        )
+
+    private object BranchDefinitions {
+        fun approval(
+            prerequisites: LifecyclePrerequisites,
+            organisationId: UUID,
+        ): List<
+            TransitionDefinition<
+                BranchLifecycleState,
+                BranchLifecycleTransition,
+                LifecycleAggregate<BranchLifecycleState>,
+            >,
+        > =
             listOf(
                 definition(
                     BranchLifecycleTransition.SUBMIT,
                     BranchLifecycleState.DRAFT,
                     BranchLifecycleState.PENDING_APPROVAL,
+                    externalizedEventFactories(BRANCH_APPROVAL_REQUESTED_TARGET),
                 ),
                 definition(
                     BranchLifecycleTransition.ACTIVATE,
                     BranchLifecycleState.PENDING_APPROVAL,
                     BranchLifecycleState.ACTIVE,
-                    internalEventFactories(),
+                    externalizedEventFactories(BRANCH_ACTIVATED_TARGET),
                     guards =
                         listOf(
                             branchActivationGuard(prerequisites, organisationId),
                         ),
                 ),
+            )
+
+        fun operational(
+            prerequisites: LifecyclePrerequisites,
+            organisationId: UUID,
+            branchId: UUID,
+        ): List<
+            TransitionDefinition<
+                BranchLifecycleState,
+                BranchLifecycleTransition,
+                LifecycleAggregate<BranchLifecycleState>,
+            >,
+        > =
+            listOf(
                 definition(
                     BranchLifecycleTransition.SUSPEND,
                     BranchLifecycleState.ACTIVE,
+                    BranchLifecycleState.SUSPENDED,
+                    externalizedEventFactories(BRANCH_SUSPENDED_TARGET),
+                ),
+                definition(
+                    BranchLifecycleTransition.SUSPEND_DRAFT,
+                    BranchLifecycleState.DRAFT,
+                    BranchLifecycleState.SUSPENDED,
+                    internalEventFactories(),
+                ),
+                definition(
+                    BranchLifecycleTransition.SUSPEND_PENDING_APPROVAL,
+                    BranchLifecycleState.PENDING_APPROVAL,
+                    BranchLifecycleState.SUSPENDED,
+                    internalEventFactories(),
+                ),
+                definition(
+                    BranchLifecycleTransition.CONFIRM_SUSPENDED,
+                    BranchLifecycleState.SUSPENDED,
                     BranchLifecycleState.SUSPENDED,
                     internalEventFactories(),
                 ),
@@ -239,6 +332,7 @@ object FoundationLifecycleDefinitions {
                     BranchLifecycleTransition.REACTIVATE,
                     BranchLifecycleState.SUSPENDED,
                     BranchLifecycleState.ACTIVE,
+                    externalizedEventFactories(BRANCH_REACTIVATED_TARGET),
                     guards =
                         listOf(
                             branchActivationGuard(prerequisites, organisationId, "reactivated"),
@@ -252,14 +346,22 @@ object FoundationLifecycleDefinitions {
                         listOf(
                             branchClosureGuard(prerequisites, organisationId, branchId),
                         ),
+                    eventFactories = externalizedEventFactories(BRANCH_CLOSED_TARGET),
+                ),
+                definition(
+                    BranchLifecycleTransition.CLOSE_SUSPENDED,
+                    BranchLifecycleState.SUSPENDED,
+                    BranchLifecycleState.CLOSED,
+                    guards = listOf(branchClosureGuard(prerequisites, organisationId, branchId)),
+                    eventFactories = externalizedEventFactories(BRANCH_CLOSED_TARGET),
                 ),
                 definition(
                     BranchLifecycleTransition.ARCHIVE,
                     BranchLifecycleState.CLOSED,
                     BranchLifecycleState.ARCHIVED,
                 ),
-            ),
-        )
+            )
+    }
 
     /** Defines the user lifecycle graph and its Keycloak-link guard. */
     fun userGraph(
@@ -328,6 +430,16 @@ object FoundationLifecycleDefinitions {
                     MembershipLifecycleState.ACTIVE,
                     MembershipLifecycleState.REVOKED,
                 ),
+                definition(
+                    MembershipLifecycleTransition.REVOKE_PENDING,
+                    MembershipLifecycleState.PENDING_APPROVAL,
+                    MembershipLifecycleState.REVOKED,
+                ),
+                definition(
+                    MembershipLifecycleTransition.REVOKE_SUSPENDED,
+                    MembershipLifecycleState.SUSPENDED,
+                    MembershipLifecycleState.REVOKED,
+                ),
             ),
         )
 
@@ -339,25 +451,6 @@ object FoundationLifecycleDefinitions {
         guards: List<TransitionGuard<S, T, LifecycleAggregate<S>>> = emptyList(),
     ): TransitionDefinition<S, T, LifecycleAggregate<S>> =
         TransitionDefinition(transition, from, to, guards = guards, eventFactories = eventFactories)
-
-    private fun <S : Enum<S>, T : Enum<T>> guard(
-        predicate: () -> Boolean,
-        message: String,
-    ): TransitionGuard<S, T, LifecycleAggregate<S>> =
-        TransitionGuard {
-            require(predicate(), message)
-        }
-
-    private fun require(
-        condition: Boolean,
-        message: String,
-    ) {
-        if (!condition) {
-            throw TransitionGuardException(message)
-        }
-    }
-
-    const val ASSIGNMENTS_HANDLED = "assignmentsHandled"
 }
 
 private fun <S : Enum<S>, T : Enum<T>> internalEventFactories():
@@ -372,6 +465,25 @@ private fun <S : Enum<S>, T : Enum<T>> internalEventFactories():
                 toState = context.toState.name,
                 actor = context.actor,
                 occurredAt = context.occurredAt,
+            )
+        },
+    )
+
+private fun <S : Enum<S>, T : Enum<T>> externalizedEventFactories(
+    target: String,
+): List<TransitionEventFactory<S, T, LifecycleAggregate<S>>> =
+    listOf(
+        TransitionEventFactory { context ->
+            ExternalizedTransitionEvent(
+                target = target,
+                aggregateType = context.aggregate.aggregateType,
+                aggregateId = context.aggregate.aggregateId,
+                transition = context.transition.name,
+                fromState = context.fromState.name,
+                toState = context.toState.name,
+                actor = context.actor,
+                occurredAt = context.occurredAt,
+                metadata = context.command.metadata,
             )
         },
     )
@@ -403,6 +515,18 @@ private fun membershipActivationEventFactory(): TransitionEventFactory<
     }
 
 private const val MEMBERSHIP_ACTIVATED_TARGET = "finaxis.lifecycle.membership.activated"
+private const val ORGANISATION_APPROVAL_REQUESTED_TARGET =
+    "finaxis.lifecycle.organisation.approval-requested"
+private const val ORGANISATION_ACTIVATED_TARGET = "finaxis.lifecycle.organisation.activated"
+private const val ORGANISATION_REJECTED_TARGET = "finaxis.lifecycle.organisation.rejected"
+private const val ORGANISATION_DEPROVISIONED_TARGET = "finaxis.lifecycle.organisation.deprovisioned"
+private const val ORGANISATION_SUSPENDED_TARGET = "finaxis.lifecycle.organisation.suspended"
+private const val ORGANISATION_REACTIVATED_TARGET = "finaxis.lifecycle.organisation.reactivated"
+private const val BRANCH_APPROVAL_REQUESTED_TARGET = "finaxis.lifecycle.branch.approval-requested"
+private const val BRANCH_ACTIVATED_TARGET = "finaxis.lifecycle.branch.activated"
+private const val BRANCH_SUSPENDED_TARGET = "finaxis.lifecycle.branch.suspended"
+private const val BRANCH_REACTIVATED_TARGET = "finaxis.lifecycle.branch.reactivated"
+private const val BRANCH_CLOSED_TARGET = "finaxis.lifecycle.branch.closed"
 private const val MEMBERSHIP_ID = "membershipId"
 private const val USER_ID = "userId"
 private const val ORGANISATION_ID = "organisationId"
@@ -445,6 +569,12 @@ private fun userProvisioningDefinitions(
             UserLifecycleTransition.SUSPEND,
             UserLifecycleState.ACTIVE,
             UserLifecycleState.SUSPENDED,
+        ),
+        internalDefinition(
+            UserLifecycleTransition.REACTIVATE,
+            UserLifecycleState.SUSPENDED,
+            UserLifecycleState.ACTIVE,
+            guards = listOf(userIdentityGuard(prerequisites, userId)),
         ),
     )
 
@@ -539,12 +669,13 @@ private fun branchClosureGuard(
     branchId: UUID,
 ): BranchLifecycleGuard =
     TransitionGuard { context ->
-        val assignmentsHandled =
-            context.command.metadata[FoundationLifecycleDefinitions.ASSIGNMENTS_HANDLED] == true
         requireLifecycleGuard(
-            assignmentsHandled ||
-                !prerequisites.branchHasActiveAssignments(organisationId, branchId),
+            !prerequisites.branchHasActiveAssignments(organisationId, branchId),
             "Reassign or revoke active branch assignments before closing this branch.",
+        )
+        requireLifecycleGuard(
+            !prerequisites.branchHasActiveChildren(organisationId, branchId),
+            "Close or re-parent active child branches before closing this branch.",
         )
     }
 

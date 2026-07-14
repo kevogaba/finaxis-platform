@@ -26,7 +26,9 @@ profile:
 projectJDK: "25" #(Applied in CI/CD pipeline)
 
 #Execute shell command before Qodana execution (Applied in CI/CD pipeline)
-#bootstrap: sh ./prepare-qodana.sh
+# Generates jOOQ table classes via a Dockerless embedded Postgres (see build.gradle.kts) so
+# the jOOQ-heavy adapters resolve cleanly instead of reporting unresolved-reference sanity errors.
+bootstrap: sh ./gradlew jooqCodegen --console=plain
 
 #Install IDE plugins before Qodana execution (Applied in CI/CD pipeline)
 #plugins:

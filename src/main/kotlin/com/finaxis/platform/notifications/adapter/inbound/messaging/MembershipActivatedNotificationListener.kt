@@ -1,12 +1,15 @@
 package com.finaxis.platform.notifications.adapter.inbound.messaging
 
+import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.notifications.application.NotificationService
+import org.springframework.amqp.AmqpRejectAndDontRequeueException
 import org.springframework.amqp.rabbit.annotation.RabbitListener
 import org.springframework.stereotype.Component
 import java.time.Instant
+import java.util.UUID
 
 /**
  * Consumes membership-activation integration events and delegates notification scheduling.
@@ -19,20 +22,57 @@ class MembershipActivatedNotificationListener(
     /**
      * Deserializes and validates a membership-activation event before delegating to the service.
      *
-     * Exceptions are intentionally allowed to propagate so Spring AMQP nacks and requeues the
-     * message according to its configured default behavior.
+     * Malformed payloads, missing metadata, or a message whose target/aggregate/transition/state
+     * does not match membership activation are permanent failures: they are rejected without
+     * requeue so a poison message cannot loop forever ahead of valid notifications. Failures from
+     * [notificationService] are left to propagate so Spring AMQP's default nack/requeue behavior
+     * retries genuinely transient downstream failures.
      *
      * @param body the unconverted RabbitMQ JSON message body
      */
     @RabbitListener(queues = [MEMBERSHIP_ACTIVATED_QUEUE])
     fun onMembershipActivated(body: ByteArray) {
-        val event = objectMapper.readExternalizedTransitionEvent(body)
-        event.validateRequiredMetadata()
+        val event = parseMembershipActivation(body)
         notificationService.handleMembershipActivated(event)
     }
 
+    private fun parseMembershipActivation(body: ByteArray): ExternalizedTransitionEvent =
+        runCatching {
+            val event = objectMapper.readExternalizedTransitionEvent(body)
+            event.requireMembershipActivationShape()
+            event
+        }.getOrElse { cause ->
+            throw AmqpRejectAndDontRequeueException(
+                "Rejecting unprocessable membership activation message: ${cause.message}",
+                cause,
+            )
+        }
+
     private companion object {
         const val MEMBERSHIP_ACTIVATED_QUEUE = "finaxis.notifications.membership-activated"
+        const val EXPECTED_TARGET = "finaxis.lifecycle.membership.activated"
+        const val EXPECTED_AGGREGATE_TYPE = "MEMBERSHIP"
+        const val EXPECTED_TRANSITION = "ACTIVATE"
+        const val EXPECTED_TO_STATE = "ACTIVE"
+        val REQUIRED_METADATA = setOf("membershipId", "userId", "organisationId")
+    }
+
+    private fun ExternalizedTransitionEvent.requireMembershipActivationShape() {
+        require(target == EXPECTED_TARGET) { "Unexpected event target: $target" }
+        require(aggregateType == EXPECTED_AGGREGATE_TYPE) {
+            "Unexpected aggregate type: $aggregateType"
+        }
+        require(transition == EXPECTED_TRANSITION) { "Unexpected transition: $transition" }
+        require(toState == EXPECTED_TO_STATE) { "Unexpected target state: $toState" }
+        REQUIRED_METADATA.forEach { field ->
+            val value = metadata[field]?.toString()
+            require(!value.isNullOrBlank()) {
+                "Membership activation event is missing required metadata: $field"
+            }
+            requireNotNull(runCatching { UUID.fromString(value) }.getOrNull()) {
+                "Membership activation event has an invalid UUID metadata value for $field: $value"
+            }
+        }
     }
 }
 
@@ -59,7 +99,7 @@ private fun ObjectMapper.readExternalizedTransitionEvent(
     )
 }
 
-private fun com.fasterxml.jackson.databind.JsonNode.metadata(): Map<String, Any?> {
+private fun JsonNode.metadata(): Map<String, Any?> {
     val values = linkedMapOf<String, Any?>()
     get("metadata")?.properties()?.forEach { (key, value) ->
         values[key] =
@@ -73,13 +113,3 @@ private fun com.fasterxml.jackson.databind.JsonNode.metadata(): Map<String, Any?
     }
     return values
 }
-
-private fun ExternalizedTransitionEvent.validateRequiredMetadata() {
-    REQUIRED_METADATA.forEach { field ->
-        require(!metadata[field]?.toString().isNullOrBlank()) {
-            "Membership activation event is missing required metadata: $field"
-        }
-    }
-}
-
-private val REQUIRED_METADATA = setOf("membershipId", "userId", "organisationId")

@@ -6,6 +6,7 @@ import com.finaxis.platform.iam.application.context.ActiveOrganisationContextSer
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.domain.MembershipStatus
+import com.finaxis.platform.iam.domain.OrganisationStatus
 import org.junit.jupiter.api.assertThrows
 import java.time.Clock
 import java.time.Instant
@@ -115,6 +116,32 @@ class AuthSelectionServiceTests {
             ActiveOrganisationContext(userId, organisationId, membershipId, branchId),
             response.context,
         )
+    }
+
+    @Test
+    fun `select organisation rejects inactive organisation`() {
+        val userId = UUID.randomUUID()
+        val organisationId = UUID.randomUUID()
+        val membershipId = UUID.randomUUID()
+        val service =
+            AuthSelectionService(
+                FakeMembershipLookup(
+                    userId = userId,
+                    membership =
+                        MembershipSelection(
+                            membershipId,
+                            userId,
+                            organisationId,
+                            MembershipStatus.ACTIVE,
+                        ),
+                    organisationStatus = OrganisationStatus.SUSPENDED,
+                ),
+                contextService,
+            )
+
+        assertThrows<OrganisationSelectionDeniedException> {
+            service.selectOrganisation("keycloak-subject", organisationId)
+        }
     }
 
     @Test
@@ -268,6 +295,70 @@ class AuthSelectionServiceTests {
     }
 
     @Test
+    fun `select branch rejects membership that does not match active context`() {
+        val userId = UUID.randomUUID()
+        val organisationId = UUID.randomUUID()
+        val contextMembershipId = UUID.randomUUID()
+        val lookupMembershipId = UUID.randomUUID()
+        val branchId = UUID.randomUUID()
+        val service =
+            AuthSelectionService(
+                FakeMembershipLookup(
+                    userId = userId,
+                    membership =
+                        MembershipSelection(
+                            lookupMembershipId,
+                            userId,
+                            organisationId,
+                            MembershipStatus.ACTIVE,
+                        ),
+                    branchIds = listOf(branchId),
+                ),
+                contextService,
+            )
+
+        assertThrows<OrganisationSelectionDeniedException> {
+            service.selectBranch(
+                "keycloak-subject",
+                branchId,
+                ActiveOrganisationContext(userId, organisationId, contextMembershipId),
+            )
+        }
+    }
+
+    @Test
+    fun `select branch rejects inactive organisation`() {
+        val userId = UUID.randomUUID()
+        val organisationId = UUID.randomUUID()
+        val membershipId = UUID.randomUUID()
+        val branchId = UUID.randomUUID()
+        val service =
+            AuthSelectionService(
+                FakeMembershipLookup(
+                    userId = userId,
+                    membership =
+                        MembershipSelection(
+                            membershipId,
+                            userId,
+                            organisationId,
+                            MembershipStatus.ACTIVE,
+                        ),
+                    branchIds = listOf(branchId),
+                    organisationStatus = OrganisationStatus.SUSPENDED,
+                ),
+                contextService,
+            )
+
+        assertThrows<OrganisationSelectionDeniedException> {
+            service.selectBranch(
+                "keycloak-subject",
+                branchId,
+                ActiveOrganisationContext(userId, organisationId, membershipId),
+            )
+        }
+    }
+
+    @Test
     fun `select branch rejects missing membership`() {
         val userId = UUID.randomUUID()
         val organisationId = UUID.randomUUID()
@@ -342,6 +433,7 @@ private class FakeMembershipLookup(
     private val userId: UUID? = null,
     private val membership: MembershipSelection? = null,
     private val branchIds: List<UUID> = emptyList(),
+    private val organisationStatus: OrganisationStatus? = OrganisationStatus.ACTIVE,
 ) : MembershipSelectionLookup {
     override fun findUserIdByKeycloakSubject(keycloakSubject: String): UUID? = userId
 
@@ -349,6 +441,8 @@ private class FakeMembershipLookup(
         userId: UUID,
         organisationId: UUID,
     ): MembershipSelection? = membership
+
+    override fun organisationStatus(organisationId: UUID): OrganisationStatus? = organisationStatus
 
     override fun findAssignedBranchIds(membershipId: UUID): List<UUID> = branchIds
 

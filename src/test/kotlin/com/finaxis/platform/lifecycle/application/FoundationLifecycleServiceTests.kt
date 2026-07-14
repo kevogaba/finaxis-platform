@@ -3,6 +3,9 @@ package com.finaxis.platform.lifecycle.application
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.context.ActorContext
+import com.finaxis.platform.common.context.RequestContexts
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.InternalTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
@@ -43,6 +46,13 @@ class FoundationLifecycleServiceTests {
             persistence,
             AuditService(audits, clock),
         )
+    private val firstLoginActivation =
+        UserFirstLoginActivationService(
+            service,
+            persistence,
+            persistence,
+            AuditService(audits, clock),
+        )
 
     @Test
     fun `organisation provisioning publishes an internal transition event`() {
@@ -69,6 +79,31 @@ class FoundationLifecycleServiceTests {
         assertEquals(ORGANISATION, event.aggregateType)
         assertEquals(organisationId.toString(), event.aggregateId)
         assertEquals(OrganisationLifecycleTransition.START_PROVISIONING.name, event.transition)
+    }
+
+    @Test
+    fun `transition audit treats a context carrying the system actor id as system`() {
+        val organisationId = UUID.randomUUID()
+        persistence.organisations[organisationId] =
+            LifecycleAggregate(
+                organisationId,
+                OrganisationLifecycleState.PENDING_APPROVAL,
+                ORGANISATION,
+            )
+
+        RequestContexts.withActor(
+            ActorContext(SystemActor.ID, "system", "system", null),
+        ) {
+            service.transition(
+                OrganisationTransitionCommand(
+                    organisationId,
+                    OrganisationLifecycleTransition.START_PROVISIONING,
+                ),
+            )
+        }
+
+        assertEquals("SYSTEM", audits.items.single().actorType)
+        assertEquals(SystemActor.ID.toString(), audits.items.single().actorId)
     }
 
     @Test
@@ -129,6 +164,32 @@ class FoundationLifecycleServiceTests {
             persistence.branches.getValue(organisationId to branchId).state,
         )
         assertTrue(logs.items.isEmpty())
+    }
+
+    @Test
+    fun `branch close is rejected while an active child branch exists`() {
+        val organisationId = UUID.randomUUID()
+        val branchId = UUID.randomUUID()
+        persistence.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        persistence.activeChildBranches = true
+        persistence.branches[organisationId to branchId] =
+            LifecycleAggregate(branchId, BranchLifecycleState.ACTIVE, BRANCH)
+
+        val exception =
+            assertThrows<com.finaxis.platform.common.transitions.TransitionGuardException> {
+                service.transition(
+                    BranchTransitionCommand(
+                        organisationId,
+                        branchId,
+                        BranchLifecycleTransition.CLOSE,
+                    ),
+                )
+            }
+
+        assertEquals(
+            "Close or re-parent active child branches before closing this branch.",
+            exception.message,
+        )
     }
 
     @Test
@@ -200,7 +261,9 @@ class FoundationLifecycleServiceTests {
     }
 
     @Test
-    fun `completed user deactivation revokes active assignments`() {
+    fun `completed user deactivation does not mutate assignment aggregates`() {
+        // Assignment revocation on deactivation is owned by UserProvisioningService, not the
+        // generic FSM transition; see UserProvisioningServiceTests for that behaviour.
         val organisationId = UUID.randomUUID()
         val userId = UUID.randomUUID()
         persistence.users[userId] =
@@ -218,7 +281,7 @@ class FoundationLifecycleServiceTests {
             ),
         )
 
-        assertTrue(persistence.revokedUsers.contains(organisationId to userId))
+        assertTrue(persistence.revokedUsers.isEmpty())
         assertFalse(audits.items.isEmpty())
         assertEquals(
             "DEACTIVATED",
@@ -227,11 +290,49 @@ class FoundationLifecycleServiceTests {
                 .state.name,
         )
     }
+
+    @Test
+    fun `first login activation transitions invited user and updates last login`() {
+        val organisationId = UUID.randomUUID()
+        val userId = UUID.randomUUID()
+        persistence.users[userId] =
+            LifecycleAggregate(
+                userId,
+                UserLifecycleState.INVITED,
+                USER_ACCOUNT,
+            )
+
+        firstLoginActivation.activateOnFirstLogin(userId, organisationId)
+
+        assertEquals(UserLifecycleState.ACTIVE, persistence.users.getValue(userId).state)
+        assertEquals(listOf(userId), persistence.lastLoginUsers)
+        assertTrue(audits.items.any { event -> event.action == "user.first_login_activation" })
+    }
+
+    @Test
+    fun `first login activation only updates last login for active user`() {
+        val organisationId = UUID.randomUUID()
+        val userId = UUID.randomUUID()
+        persistence.users[userId] =
+            LifecycleAggregate(
+                userId,
+                UserLifecycleState.ACTIVE,
+                USER_ACCOUNT,
+            )
+
+        firstLoginActivation.activateOnFirstLogin(userId, organisationId)
+
+        assertEquals(UserLifecycleState.ACTIVE, persistence.users.getValue(userId).state)
+        assertEquals(listOf(userId), persistence.lastLoginUsers)
+        assertTrue(logs.items.isEmpty())
+        assertTrue(audits.items.isEmpty())
+    }
 }
 
 private class FakeLifecyclePersistence :
     FoundationLifecycleReader,
     FoundationLifecycleWriter,
+    FirstLoginActivationStore,
     com.finaxis.platform.lifecycle.domain.LifecyclePrerequisites {
     val organisations = mutableMapOf<UUID, LifecycleAggregate<OrganisationLifecycleState>>()
     val branches = mutableMapOf<Pair<UUID, UUID>, LifecycleAggregate<BranchLifecycleState>>()
@@ -241,8 +342,10 @@ private class FakeLifecyclePersistence :
     val userStates = mutableMapOf<UUID, UserLifecycleState>()
     val membershipUsers = mutableMapOf<Pair<UUID, UUID>, UUID>()
     val revokedUsers = mutableSetOf<Pair<UUID, UUID>>()
+    val lastLoginUsers = mutableListOf<UUID>()
     var branchAssignments = false
     var roleAssignments = false
+    var activeChildBranches = false
 
     override fun findOrganisation(id: UUID) = organisations[id]
 
@@ -275,8 +378,13 @@ private class FakeLifecyclePersistence :
     override fun revokeActiveAssignments(
         organisationId: UUID,
         userId: UUID,
-    ) {
+    ): List<DeprovisionedAssignment> {
         revokedUsers.add(organisationId to userId)
+        return emptyList()
+    }
+
+    override fun updateLastLoginAt(userId: UUID) {
+        lastLoginUsers.add(userId)
     }
 
     override fun organisationState(organisationId: UUID) = organisationStates[organisationId]
@@ -285,6 +393,11 @@ private class FakeLifecyclePersistence :
         organisationId: UUID,
         branchId: UUID,
     ) = false
+
+    override fun branchHasActiveChildren(
+        organisationId: UUID,
+        branchId: UUID,
+    ) = activeChildBranches
 
     override fun userHasKeycloakIdentity(userId: UUID) = true
 

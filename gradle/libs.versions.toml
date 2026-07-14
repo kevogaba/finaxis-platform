@@ -7,6 +7,7 @@ springDependencyManagementVersion = "1.1.7"
 graalVmVersion = "1.1.4"
 jobrunrVersion = "8.7.1"
 jooqVersion = "3.21.6"
+keycloakAdminClientVersion = "26.0.10"
 springDoc = "3.0.3"
 sentryPluginVersion = "6.14.0"
 sentryVersion = "8.48.0"
@@ -43,6 +44,7 @@ jooq-codegen = { id = "org.jooq.jooq-codegen-gradle", version.ref = "jooqVersion
 jobrunr-spring-boot = { module = "org.jobrunr:jobrunr-spring-boot-4-starter", version.ref = "jobrunrVersion" }
 jooq-kotlin = { module = "org.jooq:jooq-kotlin", version.ref = "jooqVersion" }
 jooq-meta-extensions = { module = "org.jooq:jooq-meta-extensions", version.ref = "jooqVersion" }
+keycloak-admin-client = { module = "org.keycloak:keycloak-admin-client", version.ref = "keycloakAdminClientVersion" }
 springdoc-ui = { module = "org.springdoc:springdoc-openapi-starter-webmvc-ui", version.ref = "springDoc" }
 springdoc-api = { module = "org.springdoc:springdoc-openapi-starter-webmvc-api", version.ref = "springDoc" }
 springdoc-scalar = { module = "org.springdoc:springdoc-openapi-starter-webmvc-scalar", version.ref = "springDoc" }

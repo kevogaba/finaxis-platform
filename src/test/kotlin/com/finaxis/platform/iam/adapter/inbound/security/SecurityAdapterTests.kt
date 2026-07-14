@@ -8,10 +8,18 @@ import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
 import com.finaxis.platform.iam.application.port.outbound.AppPrincipalLookup
+import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.application.port.outbound.PrincipalMembership
 import com.finaxis.platform.iam.application.port.outbound.PrincipalUser
+import com.finaxis.platform.iam.application.security.RequestPermissionCache
+import com.finaxis.platform.iam.domain.MembershipStatus
+import com.finaxis.platform.iam.domain.OrganisationStatus
+import com.finaxis.platform.iam.domain.UserStatus
+import com.finaxis.platform.lifecycle.UserFirstLoginActivation
 import org.junit.jupiter.api.assertThrows
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.never
+import org.mockito.Mockito.verify
 import org.mockito.Mockito.`when`
 import org.springframework.mock.web.MockFilterChain
 import org.springframework.mock.web.MockHttpServletRequest
@@ -61,9 +69,10 @@ class SecurityAdapterTests {
     fun `authorization require succeeds when permission and organisation match`() {
         val principal = principal(permissions = setOf("logistics.shipment.approve"))
         val resource = ResourceRef("shipment", UUID.randomUUID(), principal.organisationId)
+        val authorizationService = authorizationService()
 
-        AuthorizationService().requirePermission(principal, "logistics.shipment.approve")
-        AuthorizationService().require(principal, "logistics.shipment.approve", resource)
+        authorizationService.requirePermission(principal, "logistics.shipment.approve")
+        authorizationService.require(principal, "logistics.shipment.approve", resource)
     }
 
     @Test
@@ -73,15 +82,22 @@ class SecurityAdapterTests {
 
         assertEquals(
             false,
-            AuthorizationService().can(principal, "logistics.shipment.approve", resource),
+            authorizationService().can(principal, "logistics.shipment.approve", resource),
         )
     }
+
+    private fun authorizationService(): AuthorizationService =
+        AuthorizationService(
+            mock(MembershipSelectionLookup::class.java),
+            mock(RequestPermissionCache::class.java),
+        )
 
     @Test
     fun `principal loader rejects missing and mismatched identity context`() {
         val principalLookup = mock(AppPrincipalLookup::class.java)
         val resolver = mock(EffectivePermissionResolver::class.java)
-        val loader = AppPrincipalLoader(principalLookup, resolver)
+        val activation = mock(UserFirstLoginActivation::class.java)
+        val loader = AppPrincipalLoader(principalLookup, resolver, activation)
         val context =
             ActiveOrganisationContext(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID())
 
@@ -100,7 +116,8 @@ class SecurityAdapterTests {
         val membershipId = UUID.randomUUID()
         val principalLookup = mock(AppPrincipalLookup::class.java)
         val resolver = mock(EffectivePermissionResolver::class.java)
-        val loader = AppPrincipalLoader(principalLookup, resolver)
+        val activation = mock(UserFirstLoginActivation::class.java)
+        val loader = AppPrincipalLoader(principalLookup, resolver, activation)
 
         `when`(
             principalLookup.findPrincipalUserByKeycloakSubject("subject"),
@@ -108,6 +125,9 @@ class SecurityAdapterTests {
         `when`(
             principalLookup.findPrincipalMembershipById(membershipId),
         ).thenReturn(principalMembership(membershipId, userId, organisationId))
+        `when`(principalLookup.organisationStatus(organisationId)).thenReturn(
+            OrganisationStatus.ACTIVE,
+        )
         `when`(resolver.effectivePermissions(membershipId)).thenReturn(setOf("iam.user.invite"))
 
         val loaded =
@@ -118,6 +138,7 @@ class SecurityAdapterTests {
 
         assertEquals(setOf("iam.user.invite"), loaded?.permissions)
         assertEquals(organisationId, loaded?.organisationId)
+        verify(activation).activateOnFirstLogin(userId, organisationId)
     }
 
     @Test
@@ -125,7 +146,8 @@ class SecurityAdapterTests {
         val userId = UUID.randomUUID()
         val principalLookup = mock(AppPrincipalLookup::class.java)
         val resolver = mock(EffectivePermissionResolver::class.java)
-        val loader = AppPrincipalLoader(principalLookup, resolver)
+        val activation = mock(UserFirstLoginActivation::class.java)
+        val loader = AppPrincipalLoader(principalLookup, resolver, activation)
         val membershipId = UUID.randomUUID()
 
         `when`(
@@ -141,6 +163,137 @@ class SecurityAdapterTests {
                 ActiveOrganisationContext(userId, UUID.randomUUID(), membershipId),
             ),
         )
+    }
+
+    @Test
+    fun `principal loader rejects suspended users`() {
+        val userId = UUID.randomUUID()
+        val organisationId = UUID.randomUUID()
+        val membershipId = UUID.randomUUID()
+        val principalLookup = mock(AppPrincipalLookup::class.java)
+        val resolver = mock(EffectivePermissionResolver::class.java)
+        val activation = mock(UserFirstLoginActivation::class.java)
+        val loader = AppPrincipalLoader(principalLookup, resolver, activation)
+
+        `when`(
+            principalLookup.findPrincipalUserByKeycloakSubject("subject"),
+        ).thenReturn(principalUser(userId, UserStatus.SUSPENDED))
+        `when`(
+            principalLookup.findPrincipalMembershipById(membershipId),
+        ).thenReturn(principalMembership(membershipId, userId, organisationId))
+        `when`(principalLookup.organisationStatus(organisationId)).thenReturn(
+            OrganisationStatus.ACTIVE,
+        )
+
+        assertNull(
+            loader.load(
+                "subject",
+                ActiveOrganisationContext(userId, organisationId, membershipId),
+            ),
+        )
+        verify(activation, never()).activateOnFirstLogin(userId, organisationId)
+    }
+
+    @Test
+    fun `principal loader rejects suspended and deprovisioned organisations`() {
+        val userId = UUID.randomUUID()
+        val organisationId = UUID.randomUUID()
+        val membershipId = UUID.randomUUID()
+        val principalLookup = mock(AppPrincipalLookup::class.java)
+        val resolver = mock(EffectivePermissionResolver::class.java)
+        val activation = mock(UserFirstLoginActivation::class.java)
+        val loader = AppPrincipalLoader(principalLookup, resolver, activation)
+
+        `when`(
+            principalLookup.findPrincipalUserByKeycloakSubject("subject"),
+        ).thenReturn(principalUser(userId))
+        `when`(
+            principalLookup.findPrincipalMembershipById(membershipId),
+        ).thenReturn(principalMembership(membershipId, userId, organisationId))
+
+        listOf(OrganisationStatus.SUSPENDED, OrganisationStatus.DEPROVISIONED).forEach { status ->
+            `when`(principalLookup.organisationStatus(organisationId)).thenReturn(status)
+
+            assertNull(
+                loader.load(
+                    "subject",
+                    ActiveOrganisationContext(userId, organisationId, membershipId),
+                ),
+            )
+        }
+
+        verify(activation, never()).activateOnFirstLogin(userId, organisationId)
+    }
+
+    @Test
+    fun `principal loader rejects branch context without active branch assignment`() {
+        val userId = UUID.randomUUID()
+        val organisationId = UUID.randomUUID()
+        val membershipId = UUID.randomUUID()
+        val branchId = UUID.randomUUID()
+        val principalLookup = mock(AppPrincipalLookup::class.java)
+        val resolver = mock(EffectivePermissionResolver::class.java)
+        val activation = mock(UserFirstLoginActivation::class.java)
+        val loader = AppPrincipalLoader(principalLookup, resolver, activation)
+
+        `when`(
+            principalLookup.findPrincipalUserByKeycloakSubject("subject"),
+        ).thenReturn(principalUser(userId))
+        `when`(
+            principalLookup.findPrincipalMembershipById(membershipId),
+        ).thenReturn(principalMembership(membershipId, userId, organisationId))
+        `when`(principalLookup.organisationStatus(organisationId)).thenReturn(
+            OrganisationStatus.ACTIVE,
+        )
+        `when`(
+            principalLookup.hasActiveAssignedBranch(membershipId, organisationId, branchId),
+        ).thenReturn(false)
+
+        assertNull(
+            loader.load(
+                "subject",
+                ActiveOrganisationContext(userId, organisationId, membershipId, branchId),
+            ),
+        )
+        verify(activation, never()).activateOnFirstLogin(userId, organisationId)
+    }
+
+    @Test
+    fun `principal loader activates invited user before building principal`() {
+        val userId = UUID.randomUUID()
+        val organisationId = UUID.randomUUID()
+        val membershipId = UUID.randomUUID()
+        val branchId = UUID.randomUUID()
+        val principalLookup = mock(AppPrincipalLookup::class.java)
+        val resolver = mock(EffectivePermissionResolver::class.java)
+        val activation = mock(UserFirstLoginActivation::class.java)
+        val loader = AppPrincipalLoader(principalLookup, resolver, activation)
+
+        `when`(
+            principalLookup.findPrincipalUserByKeycloakSubject("subject"),
+        ).thenReturn(principalUser(userId, UserStatus.INVITED))
+        `when`(
+            principalLookup.findPrincipalMembershipById(membershipId),
+        ).thenReturn(principalMembership(membershipId, userId, organisationId))
+        `when`(principalLookup.organisationStatus(organisationId)).thenReturn(
+            OrganisationStatus.ACTIVE,
+        )
+        `when`(
+            principalLookup.hasActiveAssignedBranch(membershipId, organisationId, branchId),
+        ).thenReturn(true)
+        `when`(
+            resolver.effectivePermissions(membershipId, branchId),
+        ).thenReturn(setOf("iam.profile.read"))
+
+        val loaded =
+            loader.load(
+                "subject",
+                ActiveOrganisationContext(userId, organisationId, membershipId, branchId),
+            )
+
+        assertEquals(branchId, loaded?.branchId)
+        assertEquals(setOf("iam.profile.read"), loaded?.permissions)
+        verify(activation).activateOnFirstLogin(userId, organisationId)
     }
 
     @Test
@@ -271,22 +424,28 @@ class SecurityAdapterTests {
             permissions = permissions,
         )
 
-    private fun principalUser(userId: UUID): PrincipalUser =
+    private fun principalUser(
+        userId: UUID,
+        status: UserStatus = UserStatus.ACTIVE,
+    ): PrincipalUser =
         PrincipalUser(
             userId,
             "subject",
             "user@example.com",
             "Example User",
+            status,
         )
 
     private fun principalMembership(
         membershipId: UUID,
         userId: UUID,
         organisationId: UUID,
+        status: MembershipStatus = MembershipStatus.ACTIVE,
     ): PrincipalMembership =
         PrincipalMembership(
             membershipId,
             userId,
             organisationId,
+            status,
         )
 }

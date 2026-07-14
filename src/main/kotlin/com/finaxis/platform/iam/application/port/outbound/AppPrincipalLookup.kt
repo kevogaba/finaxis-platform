@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.application.port.outbound
 
 import com.finaxis.platform.iam.domain.MembershipStatus
+import com.finaxis.platform.iam.domain.OrganisationStatus
 import com.finaxis.platform.iam.domain.UserStatus
 import java.util.UUID
 
@@ -38,4 +39,19 @@ interface AppPrincipalLookup {
      * Finds a principal membership by membership id.
      */
     fun findPrincipalMembershipById(membershipId: UUID): PrincipalMembership?
+
+    /**
+     * Returns the current lifecycle status for the selected organisation.
+     */
+    fun organisationStatus(organisationId: UUID): OrganisationStatus?
+
+    /**
+     * Returns whether [branchId] is active, belongs to [organisationId], and is actively assigned
+     * to [membershipId]'s user.
+     */
+    fun hasActiveAssignedBranch(
+        membershipId: UUID,
+        organisationId: UUID,
+        branchId: UUID,
+    ): Boolean
 }

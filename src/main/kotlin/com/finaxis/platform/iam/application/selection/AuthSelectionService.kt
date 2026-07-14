@@ -4,6 +4,7 @@ import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContextService
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.domain.MembershipStatus
+import com.finaxis.platform.iam.domain.OrganisationStatus
 import org.springframework.stereotype.Service
 import java.util.UUID
 
@@ -63,6 +64,9 @@ class AuthSelectionService(
         if (membership.status != MembershipStatus.ACTIVE) {
             denied("User is not an active member of the organisation")
         }
+        if (lookup.organisationStatus(organisationId) != OrganisationStatus.ACTIVE) {
+            denied("User is not an active member of the organisation")
+        }
 
         val assignedBranchIds = lookup.findAssignedBranchIds(membership.membershipId)
         val branchId = assignedBranchIds.singleOrNull()
@@ -105,6 +109,11 @@ class AuthSelectionService(
                 ?: denied("User is not an active member of the organisation")
         if (membership.status != MembershipStatus.ACTIVE ||
             membership.membershipId != existingContext.membershipId
+        ) {
+            denied("User is not an active member of the organisation")
+        }
+        if (lookup.organisationStatus(existingContext.organisationId) !=
+            OrganisationStatus.ACTIVE
         ) {
             denied("User is not an active member of the organisation")
         }

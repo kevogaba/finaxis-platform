@@ -8,10 +8,13 @@ import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQu
 import com.finaxis.platform.iam.application.port.outbound.PrincipalMembership
 import com.finaxis.platform.iam.application.port.outbound.PrincipalUser
 import com.finaxis.platform.iam.domain.MembershipStatus
+import com.finaxis.platform.iam.domain.OrganisationStatus
 import com.finaxis.platform.iam.domain.PermissionEffect
 import com.finaxis.platform.iam.domain.UserStatus
+import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.KEYCLOAK_IDENTITY_LINK
 import com.finaxis.platform.jooq.tables.references.MEMBERSHIP_PERMISSION
+import com.finaxis.platform.jooq.tables.references.ORGANISATION
 import com.finaxis.platform.jooq.tables.references.PERMISSION
 import com.finaxis.platform.jooq.tables.references.ROLE
 import com.finaxis.platform.jooq.tables.references.ROLE_PERMISSION
@@ -61,6 +64,14 @@ class JooqMembershipSelectionLookup(
                 )
             }
 
+    override fun organisationStatus(organisationId: UUID): OrganisationStatus? =
+        dsl
+            .select(ORGANISATION.STATUS)
+            .from(ORGANISATION)
+            .where(ORGANISATION.ID.eq(organisationId))
+            .fetchOne(ORGANISATION.STATUS)
+            ?.let(OrganisationStatus::valueOf)
+
     override fun findAssignedBranchIds(membershipId: UUID): List<UUID> =
         dsl
             .select(USER_BRANCH_ASSIGNMENT.BRANCH_ID)
@@ -71,8 +82,12 @@ class JooqMembershipSelectionLookup(
                     USER_BRANCH_ASSIGNMENT.ORGANISATION_ID,
                 ),
             ).and(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_BRANCH_ASSIGNMENT.USER_ID))
+            .join(BRANCH)
+            .on(BRANCH.ORGANISATION_ID.eq(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID))
+            .and(BRANCH.ID.eq(USER_BRANCH_ASSIGNMENT.BRANCH_ID))
             .where(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
             .and(USER_BRANCH_ASSIGNMENT.STATUS.eq(ACTIVE))
+            .and(BRANCH.STATUS.eq(ACTIVE))
             .orderBy(USER_BRANCH_ASSIGNMENT.BRANCH_ID)
             .fetch(USER_BRANCH_ASSIGNMENT.BRANCH_ID)
             .filterNotNull()
@@ -91,9 +106,13 @@ class JooqMembershipSelectionLookup(
                         USER_BRANCH_ASSIGNMENT.ORGANISATION_ID,
                     ),
                 ).and(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_BRANCH_ASSIGNMENT.USER_ID))
+                .join(BRANCH)
+                .on(BRANCH.ORGANISATION_ID.eq(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID))
+                .and(BRANCH.ID.eq(USER_BRANCH_ASSIGNMENT.BRANCH_ID))
                 .where(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
                 .and(USER_BRANCH_ASSIGNMENT.BRANCH_ID.eq(branchId))
-                .and(USER_BRANCH_ASSIGNMENT.STATUS.eq(ACTIVE)),
+                .and(USER_BRANCH_ASSIGNMENT.STATUS.eq(ACTIVE))
+                .and(BRANCH.STATUS.eq(ACTIVE)),
         )
 }
 
@@ -217,6 +236,39 @@ class JooqAppPrincipalLookup(
                     ),
                 )
             }
+
+    override fun organisationStatus(organisationId: UUID): OrganisationStatus? =
+        dsl
+            .select(ORGANISATION.STATUS)
+            .from(ORGANISATION)
+            .where(ORGANISATION.ID.eq(organisationId))
+            .fetchOne(ORGANISATION.STATUS)
+            ?.let(OrganisationStatus::valueOf)
+
+    override fun hasActiveAssignedBranch(
+        membershipId: UUID,
+        organisationId: UUID,
+        branchId: UUID,
+    ): Boolean =
+        dsl.fetchExists(
+            dsl
+                .selectOne()
+                .from(USER_BRANCH_ASSIGNMENT)
+                .join(USER_ORGANISATION_MEMBERSHIP)
+                .on(
+                    USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(
+                        USER_BRANCH_ASSIGNMENT.ORGANISATION_ID,
+                    ),
+                ).and(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_BRANCH_ASSIGNMENT.USER_ID))
+                .join(BRANCH)
+                .on(BRANCH.ORGANISATION_ID.eq(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID))
+                .and(BRANCH.ID.eq(USER_BRANCH_ASSIGNMENT.BRANCH_ID))
+                .where(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
+                .and(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId))
+                .and(USER_BRANCH_ASSIGNMENT.BRANCH_ID.eq(branchId))
+                .and(USER_BRANCH_ASSIGNMENT.STATUS.eq(ACTIVE))
+                .and(BRANCH.STATUS.eq(ACTIVE)),
+        )
 }
 
 private const val ACTIVE = "ACTIVE"
