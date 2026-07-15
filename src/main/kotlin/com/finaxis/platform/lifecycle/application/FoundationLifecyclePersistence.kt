@@ -59,9 +59,13 @@ interface FoundationLifecycleWriter {
         aggregate: LifecycleAggregate<MembershipLifecycleState>,
     ): LifecycleAggregate<MembershipLifecycleState>
 
-    /** Revokes branch and role assignments during completed user deactivation. */
+    /**
+     * Revokes branch and role assignments during completed user deactivation and returns the
+     * durable identity of every assignment revoked so the caller can audit and externalize the
+     * outcome per assignment.
+     */
     fun revokeActiveAssignments(
         organisationId: UUID,
         userId: UUID,
-    )
+    ): List<DeprovisionedAssignment>
 }

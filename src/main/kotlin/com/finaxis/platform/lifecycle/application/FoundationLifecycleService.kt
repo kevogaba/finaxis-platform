@@ -44,6 +44,7 @@ class FoundationLifecycleService(
             requireNotNull(reader.findOrganisation(command.organisationId)) {
                 "Organisation was not found."
             }
+        aggregate.transitionReason = command.command.reason
         val result =
             transitionExecutor.execute(
                 TransitionExecution(
@@ -66,6 +67,7 @@ class FoundationLifecycleService(
             requireNotNull(reader.findBranch(command.organisationId, command.branchId)) {
                 "Branch was not found in the selected organisation."
             }
+        aggregate.transitionReason = command.command.reason
         val result =
             transitionExecutor.execute(
                 TransitionExecution(
@@ -98,6 +100,7 @@ class FoundationLifecycleService(
             requireNotNull(reader.findUser(command.userId)) {
                 "User account was not found."
             }
+        aggregate.transitionReason = command.command.reason
         val result =
             transitionExecutor.execute(
                 TransitionExecution(
@@ -114,9 +117,6 @@ class FoundationLifecycleService(
                     persist = writer::saveUser,
                 ),
             )
-        if (command.transition == UserLifecycleTransition.COMPLETE_DEACTIVATION) {
-            writer.revokeActiveAssignments(command.organisationId, command.userId)
-        }
         recordOutcome(result, command.organisationId)
         return result
     }
@@ -130,6 +130,7 @@ class FoundationLifecycleService(
             ) {
                 "Membership was not found in the selected organisation."
             }
+        aggregate.transitionReason = command.command.reason
         val userId = aggregateUserId(command.organisationId, command.membershipId)
         val result =
             transitionExecutor.execute(
@@ -181,6 +182,7 @@ class FoundationLifecycleService(
                 resourceType = result.aggregate.aggregateType,
                 resourceId = result.aggregate.aggregateId,
                 outcome = AuditOutcome.SUCCESS,
+                reason = result.log.reason,
                 requestId = result.log.requestId,
                 metadata = mapOf("from" to result.fromState.name, "to" to result.toState.name),
             ),
@@ -205,7 +207,11 @@ class FoundationLifecycleService(
 
     private fun actor(): TransitionActor =
         RequestContexts.actor()?.let { actor ->
-            TransitionActor(USER, actor.userId.toString(), actor.username)
+            if (SystemActor.isSystemActor(actor.userId)) {
+                TransitionActor(SYSTEM, actor.userId.toString(), SYSTEM)
+            } else {
+                TransitionActor(USER, actor.userId.toString(), actor.username)
+            }
         } ?: TransitionActor(SYSTEM, SystemActor.ID.toString(), SYSTEM)
 
     private companion object {

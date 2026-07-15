@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.application.port.outbound
 
 import com.finaxis.platform.iam.domain.MembershipStatus
+import com.finaxis.platform.iam.domain.OrganisationStatus
 import java.util.UUID
 
 /**
@@ -29,6 +30,11 @@ interface MembershipSelectionLookup {
         userId: UUID,
         organisationId: UUID,
     ): MembershipSelection?
+
+    /**
+     * Returns the current lifecycle status for an organisation.
+     */
+    fun organisationStatus(organisationId: UUID): OrganisationStatus?
 
     /**
      * Lists branch ids assigned to a membership.

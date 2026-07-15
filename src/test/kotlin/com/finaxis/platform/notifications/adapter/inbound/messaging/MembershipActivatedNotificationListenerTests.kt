@@ -4,9 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.notifications.application.NotificationService
 import org.junit.jupiter.api.assertThrows
 import org.mockito.Mockito.mock
+import org.springframework.amqp.AmqpRejectAndDontRequeueException
 import java.nio.charset.StandardCharsets
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class MembershipActivatedNotificationListenerTests {
     private val objectMapper = ObjectMapper().findAndRegisterModules()
@@ -44,10 +47,31 @@ class MembershipActivatedNotificationListenerTests {
 
     @Test
     fun `listener rejects payloads without required membership metadata`() {
-        assertThrows<IllegalArgumentException> {
-            listener.onMembershipActivated(
-                missingMembershipIdPayload().toByteArray(StandardCharsets.UTF_8),
-            )
+        val exception =
+            assertThrows<AmqpRejectAndDontRequeueException> {
+                listener.onMembershipActivated(
+                    missingMembershipIdPayload().toByteArray(StandardCharsets.UTF_8),
+                )
+            }
+
+        val cause = assertIs<IllegalArgumentException>(exception.cause)
+        assertTrue {
+            cause.message.orEmpty().contains("membershipId")
+        }
+    }
+
+    @Test
+    fun `listener rejects payloads with a non-UUID membershipId`() {
+        val exception =
+            assertThrows<AmqpRejectAndDontRequeueException> {
+                listener.onMembershipActivated(
+                    invalidMembershipIdPayload().toByteArray(StandardCharsets.UTF_8),
+                )
+            }
+
+        val cause = assertIs<IllegalArgumentException>(exception.cause)
+        assertTrue {
+            cause.message.orEmpty().contains("membershipId")
         }
     }
 
@@ -72,4 +96,10 @@ class MembershipActivatedNotificationListenerTests {
 
     private fun missingMembershipIdPayload(): String =
         validPayload().replace("\"membershipId\":\"1adf7850-5aea-4f7a-b88b-f3d1261ce4b6\",", "")
+
+    private fun invalidMembershipIdPayload(): String =
+        validPayload().replace(
+            "\"membershipId\":\"1adf7850-5aea-4f7a-b88b-f3d1261ce4b6\"",
+            "\"membershipId\":\"not-a-uuid\"",
+        )
 }

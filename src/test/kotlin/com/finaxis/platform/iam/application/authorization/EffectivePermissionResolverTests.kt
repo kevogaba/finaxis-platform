@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.application.authorization
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
 import com.finaxis.platform.iam.domain.MembershipStatus
@@ -11,7 +12,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class EffectivePermissionResolverTests {
-    private val membershipId = UUID.randomUUID()
+    private val membershipId = uuidV7()
 
     @Test
     fun `user with one organisation gets role and direct allow permissions`() {
@@ -43,7 +44,7 @@ class EffectivePermissionResolverTests {
 
     @Test
     fun `same user with two organisations receives different active organisation permissions`() {
-        val secondMembershipId = UUID.randomUUID()
+        val secondMembershipId = uuidV7()
         val resolver =
             resolver(
                 FakePermissionQueries(
@@ -164,7 +165,7 @@ class EffectivePermissionResolverTests {
                 EffectivePermissionResolver(FakePermissionQueries(), NoOpCacheManager()),
             )
 
-        invalidator.evictMembership(UUID.randomUUID())
+        invalidator.evictMembership(uuidV7())
         invalidator.clearAll()
     }
 

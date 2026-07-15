@@ -40,12 +40,12 @@ P=$(mktemp); cat >"$P" <<'EOF'
 <goal, repo + key paths, constraints ("don't touch X"), non-goals, proof expected, output shape>
 EOF
 command codex exec --yolo -C <repo> \
-  -m gpt-5.6-terra \
+  -m gpt-5.5 \
   -c model_reasoning_effort="high" \
   -o /tmp/codex-last.md - <"$P" 2>/dev/null
 ```
 
-- Model default: `gpt-5.6-terra`, effort `high`, fast mode on — pin all three explicitly; don't rely on user config.
+- Model default: `gpt-5.5`, effort `high`, fast mode on — pin all three explicitly; don't rely on user config.
 - `--yolo` is the house default; Codex may run commands/tests freely. Keep prompts scoped to the target repo.
 - `command codex` bypasses the interactive zsh wrapper; if not on PATH: `fnm exec --using default -- codex`
 - stderr suppressed (thinking noise bloats context); drop `2>/dev/null` only to debug a failing run

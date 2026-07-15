@@ -25,7 +25,12 @@ data class CorsProperties(
         private val DEFAULT_ALLOWED_METHODS =
             listOf("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
         private val DEFAULT_ALLOWED_HEADERS =
-            listOf("Authorization", "Content-Type", "X-Request-Id")
+            listOf(
+                "Authorization",
+                "Content-Type",
+                "X-Request-Id",
+                "X-Active-Organisation-Context",
+            )
     }
 }
 

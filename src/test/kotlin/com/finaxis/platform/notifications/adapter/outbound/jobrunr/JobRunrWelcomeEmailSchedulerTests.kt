@@ -1,5 +1,6 @@
 package com.finaxis.platform.notifications.adapter.outbound.jobrunr
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.notifications.application.WelcomeEmailCommand
 import org.jobrunr.scheduling.JobRequestScheduler
 import org.mockito.Mockito.mock
@@ -29,9 +30,9 @@ class JobRunrWelcomeEmailSchedulerTests {
 
     private fun welcomeEmailCommand(): WelcomeEmailCommand =
         WelcomeEmailCommand(
-            membershipId = UUID.randomUUID(),
-            userId = UUID.randomUUID(),
-            organisationId = UUID.randomUUID(),
+            membershipId = uuidV7(),
+            userId = uuidV7(),
+            organisationId = uuidV7(),
             transition = "ACTIVATE",
             occurredAt = Instant.parse("2026-07-13T10:15:30Z"),
         )

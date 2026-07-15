@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.context.RequestContexts
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import org.jooq.DSLContext
 import org.jooq.JSONB
@@ -19,7 +20,12 @@ class JooqAuditEventRepository(
     override fun save(event: AuditEvent) {
         val organisationId = event.tenantId?.let(UUID::fromString) ?: return
         val actorId = event.actorId?.toUuidOrNull()
-        val actorType = event.actorType.ifBlank { SYSTEM }
+        val actorType =
+            if (SystemActor.isSystemActor(actorId)) {
+                SYSTEM
+            } else {
+                event.actorType.ifBlank { SYSTEM }
+            }
         val userActorId = actorId.takeIf { actorType == USER }
         val context = RequestContexts.current()
 
@@ -37,6 +43,7 @@ class JooqAuditEventRepository(
             .set(AUDIT_EVENT.ENTITY_ID, event.resourceId?.toUuidOrNull())
             .set(AUDIT_EVENT.ACTION, event.action)
             .set(AUDIT_EVENT.OUTCOME, event.outcome.name)
+            .set(AUDIT_EVENT.REASON, event.reason)
             .set(AUDIT_EVENT.SEVERITY, INFO)
             .set(AUDIT_EVENT.IP_ADDRESS, event.sourceIp)
             .set(AUDIT_EVENT.CORRELATION_ID, context?.correlation?.correlationId)
@@ -53,6 +60,6 @@ class JooqAuditEventRepository(
         const val INFO = "INFO"
         const val SYSTEM = "SYSTEM"
         const val USER = "USER"
-        val UTC = java.time.ZoneOffset.UTC
+        val UTC: java.time.ZoneOffset = java.time.ZoneOffset.UTC
     }
 }

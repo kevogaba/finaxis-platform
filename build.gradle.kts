@@ -2,20 +2,23 @@ import com.github.spotbugs.snom.Confidence
 import com.github.spotbugs.snom.Effort
 import com.github.spotbugs.snom.SpotBugsTask
 import io.sentry.android.gradle.extensions.InstrumentationFeature
+import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
 import net.ltgt.gradle.errorprone.errorprone
 import org.flywaydb.core.Flyway
-import org.testcontainers.containers.PostgreSQLContainer
-import org.testcontainers.utility.DockerImageName
 import java.util.EnumSet
 
 // Versions pinned here only for jOOQ codegen bootstrapping; keep aligned with the versions
-// resolved for the application's own Flyway/Testcontainers/PostgreSQL dependencies below.
+// resolved for the application's own Flyway/PostgreSQL dependencies below.
 buildscript {
     repositories {
         mavenCentral()
     }
     dependencies {
-        classpath("org.testcontainers:testcontainers-postgresql:2.0.5")
+        classpath("io.zonky.test:embedded-postgres:2.1.0")
+        // Pins the Dockerless embedded Postgres used for jOOQ codegen bootstrapping to the
+        // Postgres 18 binaries (library default is 14.22). See
+        // https://github.com/zonkyio/embedded-postgres#postgres-version.
+        classpath(enforcedPlatform("io.zonky.test.postgres:embedded-postgres-binaries-bom:18.3.0"))
         classpath("org.flywaydb:flyway-database-postgresql:12.4.0")
         classpath("org.postgresql:postgresql:42.7.11")
     }
@@ -76,6 +79,7 @@ dependencies {
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     implementation(libs.jobrunr.spring.boot)
+    implementation(libs.keycloak.admin.client)
     implementation(libs.springdoc.ui)
     implementation(libs.springdoc.api)
     implementation(libs.springdoc.scalar)
@@ -148,41 +152,60 @@ kotlin {
         freeCompilerArgs.addAll(
             "-Xjsr305=strict",
             "-java-parameters", // Retain parameter names for reflection
+            "-opt-in=kotlin.uuid.ExperimentalUuidApi",
         )
     }
 }
 
+// jOOQ generates sources into this directory at task-execution time (see the EmbeddedPostgres
+// block below), but Qodana's own project-model sync runs with an empty task list, and the
+// conditional block never registers this as a source root in that case - leaving every jOOQ
+// consumer with unresolved-reference sanity findings even though qodana.yaml's bootstrap step has
+// already generated the files on disk. Registering the (possibly still-empty) directory
+// unconditionally is harmless for Gradle/IDE tooling and fixes that sync gap.
+sourceSets.named("main") {
+    java.srcDir(layout.buildDirectory.dir("generated-src/jooq/main"))
+}
+
+kotlin {
+    sourceSets.named("main") {
+        kotlin.srcDir(layout.buildDirectory.dir("generated-src/jooq/main"))
+    }
+}
+
 // jOOQ codegen introspects a live PostgreSQL schema; rather than requiring a pre-migrated local
-// database (which breaks clean checkouts and CI), start a disposable, Flyway-migrated Postgres
-// container here and point codegen at it. The container is torn down once codegen finishes.
+// database (which breaks clean checkouts and CI), start a disposable, Flyway-migrated, Dockerless
+// embedded Postgres here and point codegen at it. It is closed once the jOOQ codegen task, its
+// last consumer, finishes executing.
 //
 // Only do this when Gradle is actually about to run tasks. IDE/tool project-model resolution
 // (e.g. IntelliJ Gradle sync, Qodana's static analysis) evaluates this script too, but with an
 // empty task list, and Qodana runs it inside its own container with no Docker access - starting
 // the container unconditionally broke that sync with "Could not find a valid Docker environment."
 if (gradle.startParameter.taskNames.isNotEmpty()) {
-    val jooqCodegenDatabase =
-        PostgreSQLContainer(DockerImageName.parse("postgres:18.4")).apply { start() }
+    val jooqCodegenDatabase = EmbeddedPostgres.builder().start()
+    val jooqCodegenJdbcUrl = jooqCodegenDatabase.getJdbcUrl("postgres", "postgres")
 
-    Flyway
-        .configure()
-        .dataSource(
-            jooqCodegenDatabase.jdbcUrl,
-            jooqCodegenDatabase.username,
-            jooqCodegenDatabase.password,
-        ).locations("filesystem:${layout.projectDirectory.dir("src/main/resources/db/migration")}")
-        .load()
-        .migrate()
-
-    gradle.buildFinished { jooqCodegenDatabase.stop() }
+    try {
+        Flyway
+            .configure()
+            .dataSource(jooqCodegenJdbcUrl, "postgres", "")
+            .locations(
+                "filesystem:${layout.projectDirectory.dir("src/main/resources/db/migration")}",
+            ).load()
+            .migrate()
+    } catch (ex: Exception) {
+        jooqCodegenDatabase.close()
+        throw ex
+    }
 
     jooq {
         configuration {
             jdbc {
                 driver = "org.postgresql.Driver"
-                url = jooqCodegenDatabase.jdbcUrl
-                user = jooqCodegenDatabase.username
-                password = jooqCodegenDatabase.password
+                url = jooqCodegenJdbcUrl
+                user = "postgres"
+                password = ""
             }
             generator {
                 name = "org.jooq.codegen.KotlinGenerator"
@@ -202,16 +225,6 @@ if (gradle.startParameter.taskNames.isNotEmpty()) {
         }
     }
 
-    sourceSets.named("main") {
-        java.srcDir(layout.buildDirectory.dir("generated-src/jooq/main"))
-    }
-
-    kotlin {
-        sourceSets.named("main") {
-            kotlin.srcDir(layout.buildDirectory.dir("generated-src/jooq/main"))
-        }
-    }
-
     tasks.named("compileKotlin") {
         dependsOn(tasks.named("jooqCodegen"))
     }
@@ -223,6 +236,11 @@ if (gradle.startParameter.taskNames.isNotEmpty()) {
 
     tasks.named("jooqCodegen") {
         inputs.files(fileTree("src/main/resources/db/migration"))
+        // jOOQ codegen is the last consumer of the live database: it introspects the schema and
+        // writes generated .kt sources to disk, so the embedded instance can be closed as soon as
+        // this task finishes executing. `gradle.buildFinished` is deprecated, and there is no
+        // earlier safe point since codegen itself runs at task-execution time.
+        doLast { jooqCodegenDatabase.close() }
     }
 }
 

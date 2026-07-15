@@ -105,6 +105,22 @@ jobrunr:
   dashboard:
     enabled: true
 
+resilience4j:
+  circuitbreaker:
+    instances:
+      keycloakAdmin:
+        sliding-window-type: count_based
+        sliding-window-size: ${FINAXIS_KEYCLOAK_ADMIN_CB_SLIDING_WINDOW_SIZE:20}
+        minimum-number-of-calls: ${FINAXIS_KEYCLOAK_ADMIN_CB_MINIMUM_CALLS:5}
+        failure-rate-threshold: ${FINAXIS_KEYCLOAK_ADMIN_CB_FAILURE_RATE_THRESHOLD:50}
+        wait-duration-in-open-state: ${FINAXIS_KEYCLOAK_ADMIN_CB_WAIT_DURATION:30s}
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+  timelimiter:
+    instances:
+      keycloakAdmin:
+        timeout-duration: ${FINAXIS_KEYCLOAK_ADMIN_TIMEOUT:10s}
+
 management:
   endpoints:
     web:
@@ -216,6 +232,15 @@ finaxis:
     active-organisation-context:
       secret: ${FINAXIS_ACTIVE_ORGANISATION_CONTEXT_SECRET:local-development-change-me-active-organisation-context-secret}
       ttl: 8h
+  keycloak:
+    admin:
+      enabled: ${FINAXIS_KEYCLOAK_ADMIN_ENABLED:false}
+      server-url: ${FINAXIS_KEYCLOAK_ADMIN_SERVER_URL:http://localhost:8080}
+      realm: ${FINAXIS_KEYCLOAK_ADMIN_REALM:finaxis}
+      client-id: ${FINAXIS_KEYCLOAK_ADMIN_CLIENT_ID:finaxis-platform-admin}
+      client-secret: ${FINAXIS_KEYCLOAK_ADMIN_CLIENT_SECRET:}
+      connect-timeout-millis: ${FINAXIS_KEYCLOAK_ADMIN_CONNECT_TIMEOUT_MILLIS:5000}
+      read-timeout-millis: ${FINAXIS_KEYCLOAK_ADMIN_READ_TIMEOUT_MILLIS:10000}
   security:
     cors:
       enabled: false

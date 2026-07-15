@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
 import com.fasterxml.jackson.databind.exc.InvalidFormatException
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.adapter.inbound.security.SessionActiveOrganisationContextResolver
 import com.finaxis.platform.iam.application.authorization.AccessDeniedException
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
@@ -63,8 +64,8 @@ private val HEAD_OFFICE_BRANCH_ID: UUID =
 class WebAdapterUnitTests {
     @Test
     fun `auth controller returns selected organisation response`() {
-        val organisationId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
         val service =
             AuthSelectionService(
                 lookup = StaticMembershipLookup(organisationId, membershipId),
@@ -92,9 +93,9 @@ class WebAdapterUnitTests {
 
     @Test
     fun `auth controller stores selected branch in browser session`() {
-        val organisationId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
-        val branchId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val branchId = uuidV7()
         val lookup =
             StaticMembershipLookup(organisationId, membershipId, branchIds = listOf(branchId))
         val service =
@@ -506,7 +507,7 @@ class WebAdapterUnitTests {
         branchId: UUID?,
     ): AppPrincipal =
         AppPrincipal(
-            userId = UUID.randomUUID(),
+            userId = uuidV7(),
             keycloakSubject = "subject",
             organisationId = ORGANISATION_ID,
             membershipId = MEMBERSHIP_ID,
@@ -537,7 +538,7 @@ private class StaticMembershipLookup(
     private val membershipId: UUID,
     private val branchIds: List<UUID> = emptyList(),
 ) : MembershipSelectionLookup {
-    val userId = UUID.randomUUID()
+    val userId = uuidV7()
 
     override fun findUserIdByKeycloakSubject(keycloakSubject: String): UUID = userId
 
@@ -550,6 +551,9 @@ private class StaticMembershipLookup(
         }
         return MembershipSelection(membershipId, userId, organisationId, MembershipStatus.ACTIVE)
     }
+
+    override fun organisationStatus(organisationId: UUID): OrganisationStatus? =
+        OrganisationStatus.ACTIVE.takeIf { this.organisationId == organisationId }
 
     override fun findAssignedBranchIds(membershipId: UUID): List<UUID> = branchIds
 
@@ -589,7 +593,7 @@ private class StaticUserProfileLookup(
     override fun assignedRoles(membershipId: UUID): List<ProfileRole> =
         listOf(
             ProfileRole(
-                id = UUID.randomUUID(),
+                id = uuidV7(),
                 code = "local-admin",
                 name = "Local Administrator",
                 status = RoleStatus.ACTIVE,

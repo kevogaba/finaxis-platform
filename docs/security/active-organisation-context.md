@@ -21,6 +21,10 @@ Content-Type: application/json
 
 The server verifies ACTIVE membership, stores active context in the Spring Session Redis `HttpSession`, and returns a response that also includes a signed context token.
 
+Selection is a convenience step, not the final security boundary. `AuthSelectionService` verifies
+that the requested organisation is ACTIVE, the membership is ACTIVE, and branch selections are
+currently assigned to an ACTIVE branch in the selected organisation.
+
 If the membership has exactly one assigned branch, the branch is auto-selected and the returned context includes `branchId`.
 
 If the membership has more than one assigned branch, the response sets `requiresBranchSelection` to `true` and includes `assignedBranchIds`. The browser then calls:
@@ -49,6 +53,25 @@ X-Active-Organisation-Context: <contextToken>
 ```
 
 The header token is not authentication. It only identifies the selected app membership and optional branch context, and is valid only with the matching authenticated Keycloak subject.
+
+## Runtime Resolution Prechecks
+
+Every request with an active organisation context is rechecked by
+`ActiveOrganisationContextFilter` and `AppPrincipalLoader` before an `AppPrincipal` is installed:
+
+- user context: the Keycloak subject must resolve to the context `userId`, and the app user must
+  be ACTIVE or INVITED. SUSPENDED, LOCKED, DEACTIVATED, and other non-login states are rejected.
+- first login: INVITED users are activated through the lifecycle module's public
+  `UserFirstLoginActivation` API before the principal is built. ACTIVE users use the same API to
+  refresh `user_account.last_login_at`.
+- membership context: the context `membershipId` must belong to the resolved user and selected
+  organisation, and the membership must be ACTIVE.
+- organisation context: `organisation.status` must be ACTIVE. SUSPENDED and DEPROVISIONED
+  organisations cannot resolve principals, which is the runtime deprovisioning login block.
+- branch context: when `branchId` is present, the branch must belong to the selected organisation,
+  be ACTIVE, and have an ACTIVE assignment for the resolved membership's user.
+- permissions: the principal contains effective permission codes only. Role names are never used
+  as authorities, and method security still denies requests missing the concrete permission code.
 
 ## Precedence
 

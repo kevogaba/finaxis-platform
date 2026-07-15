@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.application.profile
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.authorization.AccessDeniedException
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.port.outbound.ProfileBranch
@@ -18,10 +19,10 @@ import kotlin.test.assertEquals
 class UserProfileServiceTests {
     @Test
     fun `profile assembles selected branch roles and sorted permissions`() {
-        val organisationId = UUID.randomUUID()
-        val membershipId = UUID.randomUUID()
-        val selectedBranchId = UUID.randomUUID()
-        val otherBranchId = UUID.randomUUID()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val selectedBranchId = uuidV7()
+        val otherBranchId = uuidV7()
         val principal =
             principal(
                 organisationId = organisationId,
@@ -47,7 +48,7 @@ class UserProfileServiceTests {
                 roles =
                     listOf(
                         ProfileRole(
-                            UUID.randomUUID(),
+                            uuidV7(),
                             "local-admin",
                             "Local Administrator",
                             RoleStatus.ACTIVE,
@@ -90,12 +91,12 @@ class UserProfileServiceTests {
 
     @Test
     fun `profile rejects branch outside assigned branches`() {
-        val principal = principal(branchId = UUID.randomUUID())
+        val principal = principal(branchId = uuidV7())
         val lookup =
             FakeUserProfileLookup(
                 organisation = ProfileOrganisation(principal.organisationId),
                 membership = ProfileMembership(principal.membershipId),
-                branches = listOf(ProfileBranch(UUID.randomUUID(), "OPS", "Operations", "ACTIVE")),
+                branches = listOf(ProfileBranch(uuidV7(), "OPS", "Operations", "ACTIVE")),
             )
 
         assertThrows<AccessDeniedException> {
@@ -104,13 +105,13 @@ class UserProfileServiceTests {
     }
 
     private fun principal(
-        organisationId: UUID = UUID.randomUUID(),
-        membershipId: UUID = UUID.randomUUID(),
+        organisationId: UUID = uuidV7(),
+        membershipId: UUID = uuidV7(),
         branchId: UUID? = null,
         permissions: Set<String> = emptySet(),
     ): AppPrincipal =
         AppPrincipal(
-            userId = UUID.randomUUID(),
+            userId = uuidV7(),
             keycloakSubject = "subject",
             organisationId = organisationId,
             membershipId = membershipId,
