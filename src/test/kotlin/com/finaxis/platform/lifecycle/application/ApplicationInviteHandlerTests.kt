@@ -1,6 +1,11 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.audit.AuditEvent
+import com.finaxis.platform.common.audit.AuditEventRepository
+import com.finaxis.platform.common.audit.AuditOutcome
+import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityDispatchType
 import com.finaxis.platform.lifecycle.application.port.outbound.MembershipProvisioningSnapshot
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
@@ -8,13 +13,21 @@ import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class ApplicationInviteHandlerTests {
     private val store = ApplicationInviteStoreFake()
-    private val handler = ApplicationInviteJobRequestHandler(store)
+    private val audits = ApplicationInviteAuditCapture()
+    private val clock = Clock.fixed(Instant.parse("2026-07-14T12:00:00Z"), ZoneOffset.UTC)
+    private val auditService = AuditService(audits, clock)
+    private val handler =
+        ApplicationInviteJobRequestHandler(store, DispatchOutcomeAuditor(store, auditService))
 
     @Test
     fun `application invite marks dispatch succeeded`() {
@@ -27,6 +40,9 @@ class ApplicationInviteHandlerTests {
         assertEquals("SUCCEEDED", dispatch.status)
         assertEquals(1, dispatch.attempts)
         assertEquals("APPLICATION_INVITE", dispatch.externalRef)
+        val dispatchAudit = audits.items.single { it.action == "user.application_invite" }
+        assertEquals(AuditOutcome.SUCCESS, dispatchAudit.outcome)
+        assertEquals(SystemActor.ID.toString(), dispatchAudit.actorId)
     }
 
     @Test
@@ -37,6 +53,24 @@ class ApplicationInviteHandlerTests {
         handler.run(applicationInviteRequest(dispatchKey))
 
         assertEquals(0, store.succeededCalls)
+    }
+
+    @Test
+    fun `dispatch failure marks the dispatch failed and audits the failure`() {
+        val dispatchKey = "user-1:org-1:APPLICATION_INVITE"
+        store.dispatches[dispatchKey] = InviteDispatchState("PENDING")
+        store.failure = IllegalStateException("provider unavailable")
+
+        assertFailsWith<IllegalStateException> {
+            handler.run(applicationInviteRequest(dispatchKey))
+        }
+
+        val dispatch = store.dispatches.getValue(dispatchKey)
+        assertEquals("FAILED", dispatch.status)
+        val dispatchAudit = audits.items.single { it.action == "user.application_invite" }
+        assertEquals(AuditOutcome.FAILURE, dispatchAudit.outcome)
+        assertEquals("provider unavailable", dispatchAudit.reason)
+        assertEquals(SystemActor.ID.toString(), dispatchAudit.actorId)
     }
 
     private fun applicationInviteRequest(dispatchKey: String): ApplicationInviteJobRequest =
@@ -52,6 +86,7 @@ class ApplicationInviteHandlerTests {
 private class ApplicationInviteStoreFake : UserProvisioningStore {
     val dispatches = mutableMapOf<String, InviteDispatchState>()
     var succeededCalls = 0
+    var failure: RuntimeException? = null
 
     override fun dispatchStatus(dispatchKey: String): String? = dispatches[dispatchKey]?.status
 
@@ -59,6 +94,7 @@ private class ApplicationInviteStoreFake : UserProvisioningStore {
         dispatchKey: String,
         externalRef: String,
     ) {
+        failure?.let { throw it }
         succeededCalls += 1
         val current = dispatches.getValue(dispatchKey)
         dispatches[dispatchKey] =
@@ -183,3 +219,11 @@ private data class InviteDispatchState(
     val lastError: String? = null,
     val externalRef: String? = null,
 )
+
+private class ApplicationInviteAuditCapture : AuditEventRepository {
+    val items = mutableListOf<AuditEvent>()
+
+    override fun save(event: AuditEvent) {
+        items.add(event)
+    }
+}

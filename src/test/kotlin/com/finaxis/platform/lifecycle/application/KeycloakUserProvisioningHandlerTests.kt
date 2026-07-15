@@ -39,15 +39,18 @@ class KeycloakUserProvisioningHandlerTests {
     private val events = WorkerTransitionEventCapture()
     private val audits = WorkerAuditCapture()
     private val logs = WorkerTransitionLogCapture()
+    private val auditService = AuditService(audits, clock)
     private val lifecycle =
         FoundationLifecycleService(
             TransitionExecutor(clock, logs, events),
             store,
             store,
             store,
-            AuditService(audits, clock),
+            auditService,
         )
-    private val handler = KeycloakUserProvisioningJobRequestHandler(gateway, store, lifecycle)
+    private val dispatchOutcomeAuditor = DispatchOutcomeAuditor(store, auditService)
+    private val handler =
+        KeycloakUserProvisioningJobRequestHandler(gateway, store, lifecycle, dispatchOutcomeAuditor)
 
     @Test
     fun `new user provisioning links identity invites user activates membership and succeeds`() {
@@ -72,6 +75,9 @@ class KeycloakUserProvisioningHandlerTests {
         )
         assertEquals("SUCCEEDED", store.dispatches.getValue(context.dispatchKey).status)
         assertEquals(context.subject, store.dispatches.getValue(context.dispatchKey).externalRef)
+        val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
+        assertEquals(com.finaxis.platform.common.audit.AuditOutcome.SUCCESS, dispatchAudit.outcome)
+        assertEquals("KEYCLOAK", dispatchAudit.metadata["externalSystemReference"])
     }
 
     @Test
@@ -109,6 +115,9 @@ class KeycloakUserProvisioningHandlerTests {
         assertEquals("FAILED", dispatch.status)
         assertEquals(1, dispatch.attempts)
         assertTrue(requireNotNull(dispatch.lastError).contains("keycloak unavailable"))
+        val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
+        assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
+        assertEquals("keycloak unavailable", dispatchAudit.reason)
     }
 
     private fun keycloakRequest(
@@ -400,7 +409,11 @@ private class WorkerTransitionEventCapture : TransitionEventPublisher {
 }
 
 private class WorkerAuditCapture : AuditEventRepository {
-    override fun save(event: AuditEvent) = Unit
+    val items = mutableListOf<AuditEvent>()
+
+    override fun save(event: AuditEvent) {
+        items.add(event)
+    }
 }
 
 private class WorkerTransitionLogCapture : TransitionLogRepository {

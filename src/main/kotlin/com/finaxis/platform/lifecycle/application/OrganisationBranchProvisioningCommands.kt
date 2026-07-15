@@ -181,3 +181,32 @@ data class BranchDraftResult(
     val branchId: UUID,
     val status: BranchLifecycleState,
 )
+
+/** Updates organisation settings after provisioning; each key gets a new effective-dated row. */
+data class UpdateOrganisationSettingsCommand(
+    val organisationId: UUID,
+    val updates: Map<String, String>,
+    val actorId: UUID,
+    val reason: String? = null,
+)
+
+/** Result returned after an organisation settings update. */
+data class OrganisationSettingsResult(
+    val organisationId: UUID,
+    val updated: Map<String, String>,
+)
+
+/** Advances the controlled organisation business date by one optimistic-locked step. */
+data class AdvanceBusinessDateCommand(
+    val organisationId: UUID,
+    val newBusinessDate: LocalDate,
+    val actorId: UUID,
+    val reason: String? = null,
+)
+
+/** Result returned after a business date advance. */
+data class BusinessDateAdvanceResult(
+    val organisationId: UUID,
+    val previousBusinessDate: LocalDate,
+    val newBusinessDate: LocalDate,
+)

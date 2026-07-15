@@ -204,7 +204,39 @@ class FoundationLifecycleServiceTests {
             LifecycleAggregate(membershipId, MembershipLifecycleState.PENDING_APPROVAL, MEMBERSHIP)
         persistence.userStates[userId] = UserLifecycleState.ACTIVE
 
-        assertThrows<com.finaxis.platform.common.transitions.TransitionGuardException> {
+        val exception =
+            assertThrows<com.finaxis.platform.common.transitions.TransitionGuardException> {
+                service.transition(
+                    MembershipTransitionCommand(
+                        organisationId,
+                        membershipId,
+                        transition = MembershipLifecycleTransition.ACTIVATE,
+                    ),
+                )
+            }
+
+        assertEquals(
+            MembershipLifecycleState.PENDING_APPROVAL,
+            persistence.memberships.getValue(organisationId to membershipId).state,
+        )
+        val audit = audits.items.single()
+        assertEquals("membership.activate", audit.action)
+        assertEquals(com.finaxis.platform.common.audit.AuditOutcome.DENIED, audit.outcome)
+        assertEquals(exception.message, audit.reason)
+        assertEquals("N/A", audit.metadata["to"])
+        assertEquals("PENDING_APPROVAL", audit.metadata["from"])
+    }
+
+    @Test
+    fun `a transition attempted from the wrong source state is audited as a failure`() {
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val userId = uuidV7()
+        persistence.membershipUsers[organisationId to membershipId] = userId
+        persistence.memberships[organisationId to membershipId] =
+            LifecycleAggregate(membershipId, MembershipLifecycleState.ACTIVE, MEMBERSHIP)
+
+        assertThrows<com.finaxis.platform.common.transitions.TransitionNotAllowedException> {
             service.transition(
                 MembershipTransitionCommand(
                     organisationId,
@@ -214,11 +246,10 @@ class FoundationLifecycleServiceTests {
             )
         }
 
-        assertEquals(
-            MembershipLifecycleState.PENDING_APPROVAL,
-            persistence.memberships.getValue(organisationId to membershipId).state,
-        )
-        assertTrue(audits.items.isEmpty())
+        val audit = audits.items.single()
+        assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, audit.outcome)
+        assertEquals("N/A", audit.metadata["to"])
+        assertEquals("ACTIVE", audit.metadata["from"])
     }
 
     @Test

@@ -35,6 +35,7 @@ data class RequestContext(
     val branch: BranchContext? = null,
     val actor: ActorContext? = null,
     val correlation: CorrelationContext? = null,
+    val userAgent: String? = null,
 )
 
 /** Thread-bound context and matching MDC lifecycle for synchronous Spring MVC execution. */

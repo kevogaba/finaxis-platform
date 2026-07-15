@@ -20,6 +20,7 @@ class KeycloakUserProvisioningJobRequestHandler(
     private val gateway: IdentityProvisioningGateway,
     private val store: UserProvisioningStore,
     private val lifecycleService: FoundationLifecycleService,
+    private val dispatchOutcomeAuditor: DispatchOutcomeAuditor,
     @Value($$"${finaxis.keycloak.admin.realm:finaxis}") private val realm: String = "finaxis",
 ) : JobRequestHandler<KeycloakUserProvisioningJobRequest> {
     /** Runs Keycloak provisioning idempotently and advances the local user and membership FSMs. */
@@ -45,7 +46,16 @@ class KeycloakUserProvisioningJobRequestHandler(
             }
             inviteUserIfNeeded(jobRequest)
             activateMembershipIfNeeded(jobRequest)
-            store.markDispatchSucceeded(jobRequest.dispatchKey, keycloakUser.subject)
+            dispatchOutcomeAuditor.recordSuccess(
+                dispatchKey = jobRequest.dispatchKey,
+                dispatchRef = keycloakUser.subject,
+                externalSystemRef = KEYCLOAK,
+                actorId = jobRequest.actorId,
+                tenantId = jobRequest.organisationId,
+                action = KEYCLOAK_PROVISIONING_ACTION,
+                resourceId = jobRequest.userId.toString(),
+                metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
+            )
         } catch (ex: IdentityProvisioningException) {
             recordFailure(jobRequest, ex)
         } catch (ex: TransitionGuardException) {
@@ -63,7 +73,16 @@ class KeycloakUserProvisioningJobRequestHandler(
         jobRequest: KeycloakUserProvisioningJobRequest,
         ex: RuntimeException,
     ): Nothing {
-        store.markDispatchFailed(jobRequest.dispatchKey, ex.message ?: ex.javaClass.name)
+        dispatchOutcomeAuditor.recordFailure(
+            dispatchKey = jobRequest.dispatchKey,
+            externalSystemRef = KEYCLOAK,
+            actorId = jobRequest.actorId,
+            tenantId = jobRequest.organisationId,
+            action = KEYCLOAK_PROVISIONING_ACTION,
+            resourceId = jobRequest.userId.toString(),
+            reason = ex.message ?: ex.javaClass.name,
+            metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
+        )
         throw ex
     }
 
@@ -113,5 +132,7 @@ class KeycloakUserProvisioningJobRequestHandler(
 
     private companion object {
         const val SUCCEEDED = "SUCCEEDED"
+        const val KEYCLOAK = "KEYCLOAK"
+        const val KEYCLOAK_PROVISIONING_ACTION = "user.keycloak_provisioning"
     }
 }

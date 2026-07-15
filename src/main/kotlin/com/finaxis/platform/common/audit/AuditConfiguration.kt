@@ -18,13 +18,16 @@ class AuditConfiguration {
     fun loggingAuditEventRepository(): AuditEventRepository =
         AuditEventRepository { event ->
             auditLogger.info(
-                "audit_event action={} outcome={} actorType={} actorId={} tenantId={} " +
-                    "resourceType={} resourceId={} requestId={} sourceIp={}",
+                "audit_event action={} outcome={} severity={} actorType={} actorId={} " +
+                    "tenantId={} branchId={} resourceType={} resourceId={} requestId={} " +
+                    "sourceIp={}",
                 event.action,
                 event.outcome,
+                event.severity,
                 event.actorType,
                 event.actorId,
                 event.tenantId,
+                event.branchId,
                 event.resourceType,
                 event.resourceId,
                 event.requestId,

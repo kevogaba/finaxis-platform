@@ -262,6 +262,7 @@ class ActiveOrganisationContextFilter(
                     request.getHeader(CORRELATION_ID_HEADER)
                         ?: request.getHeader(REQUEST_ID_HEADER),
                 ),
+            userAgent = request.getHeader(USER_AGENT_HEADER),
         )
 
     private fun forbidden(
@@ -275,5 +276,6 @@ class ActiveOrganisationContextFilter(
     private companion object {
         const val REQUEST_ID_HEADER = "X-Request-Id"
         const val CORRELATION_ID_HEADER = "X-Correlation-Id"
+        const val USER_AGENT_HEADER = "User-Agent"
     }
 }

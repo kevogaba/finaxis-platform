@@ -97,6 +97,43 @@ data class DeprovisionedAssignment(
     val assignmentType: String,
 )
 
+/** Organisation settings persistence port for post-provisioning configuration changes. */
+interface OrganisationSettingsStore {
+    /** Returns the currently effective values for the requested setting keys. */
+    fun currentSettings(
+        organisationId: UUID,
+        keys: Set<String>,
+    ): Map<String, String>
+
+    /** Closes each currently effective row and inserts a new effective-dated row per key. */
+    fun updateSettings(
+        organisationId: UUID,
+        updates: Map<String, String>,
+        actorId: UUID,
+    )
+}
+
+/** Business date persistence port for the controlled, optimistically-locked business date. */
+interface BusinessDateStore {
+    /** Returns the current business date snapshot used for optimistic-lock validation. */
+    fun current(organisationId: UUID): BusinessDateSnapshot?
+
+    /** Advances the business date; returns `false` when [expectedRowVersion] is stale. */
+    fun advance(
+        organisationId: UUID,
+        newDate: LocalDate,
+        expectedRowVersion: Long,
+        actorId: UUID,
+    ): Boolean
+}
+
+/** Current business date read for optimistic-lock validation before advancing it. */
+data class BusinessDateSnapshot(
+    val currentBusinessDate: LocalDate,
+    val status: String,
+    val rowVersion: Long,
+)
+
 /** Read port for pagination-safe organisation administration queries. */
 interface OrganisationQueryStore {
     /** Retrieves an organisation by the externally stable tenant code. */
