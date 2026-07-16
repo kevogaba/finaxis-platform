@@ -96,8 +96,26 @@ spring:
 
 namastack:
   outbox:
+    enabled: ${FINAXIS_OUTBOX_ENABLED:true}
+    polling:
+      trigger: fixed
+      fixed:
+        interval: ${FINAXIS_OUTBOX_POLL_INTERVAL:2s}
+      batch-size: ${FINAXIS_OUTBOX_POLL_BATCH_SIZE:10}
+    retry:
+      max-retries: ${FINAXIS_OUTBOX_MAX_RETRIES:5}
+      policy: exponential
+      exponential:
+        initial-delay: ${FINAXIS_OUTBOX_RETRY_INITIAL_DELAY:2s}
+        max-delay: ${FINAXIS_OUTBOX_RETRY_MAX_DELAY:5m}
+        multiplier: ${FINAXIS_OUTBOX_RETRY_MULTIPLIER:2.0}
+      jitter: ${FINAXIS_OUTBOX_RETRY_JITTER:500ms}
+    processing:
+      stop-on-first-failure: true
+      delete-completed-records: false
     rabbit:
       fail-on-unroutable: true
+      publisher-confirm-timeout: ${FINAXIS_OUTBOX_RABBIT_CONFIRM_TIMEOUT:10s}
 
 jobrunr:
   background-job-server:

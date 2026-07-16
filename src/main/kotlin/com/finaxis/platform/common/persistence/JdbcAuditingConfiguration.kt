@@ -23,6 +23,12 @@ object SystemActor {
     fun isSystemActor(actorId: UUID?): Boolean = actorId != null && systemIds.contains(actorId)
 }
 
+/** Reserved platform-wide organisation used for global roles and tenant-less audit fallback. */
+object PlatformOrganisation {
+    /** Stable id of the reserved `PLATFORM` organisation seeded by Flyway. */
+    val ID: UUID = UUID.fromString("00000000-0000-0000-0000-000000000000")
+}
+
 /** Resolves the authenticated actor, falling back to the explicit system actor. */
 class ContextAuditorAware : AuditorAware<UUID> {
     override fun getCurrentAuditor(): Optional<UUID> =

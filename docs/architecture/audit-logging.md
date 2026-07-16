@@ -22,26 +22,35 @@ Do not persist every normal successful `GET` request as an audit event.
 The common audit foundation records:
 
 - actor type and actor ID;
-- tenant or organisation ID when available;
+- tenant/organisation ID and branch ID;
 - action;
 - resource type and resource ID;
-- outcome;
+- outcome and severity;
 - reason/comment;
-- metadata;
+- before/after state summaries;
+- metadata (including source module, command name, and external system reference);
 - request/correlation ID;
-- source IP;
+- source IP and user agent;
 - timestamp.
 
-Do not store passwords, bearer tokens, session cookies, API keys, raw authorization headers, or
-sensitive PII in audit metadata.
+Redaction is enforced structurally, not by convention: `AuditService.record(...)` redacts
+metadata, before, and after before an event reaches its repository. Do not store passwords,
+bearer tokens, session cookies, API keys, raw authorization headers, or sensitive PII in audit
+metadata regardless — see [audit logging](../security/audit-logging.md) for the full redaction
+policy, the seven `AuditService` methods, the query service, and the narrowly-scoped
+`@AuditedAction` annotation.
 
 ## Current Adapter
 
-`AuditService` writes to an `AuditEventRepository` port. The default repository logs structured
-audit events until a durable persistence adapter is introduced. Domain modules should call the
-application-level audit service or publish explicit events that audit listeners consume.
+`AuditService` writes to an `AuditEventRepository` port. `JooqAuditEventRepository` is the durable
+adapter, backed by the append-only `audit_event` table; the logging-only repository in
+`AuditConfiguration` is a `@ConditionalOnMissingBean` fallback used only if no durable adapter is
+registered. Domain modules call the application-level audit service directly, or (for the two
+simple non-FSM mutations that use it) rely on `@AuditedAction`.
 
 ## Request Correlation
 
 `HttpAccessLogFilter` preserves inbound `X-Request-Id` or generates one. It returns the header to
-clients and stores `requestId` in MDC for request logs.
+clients and stores `requestId` in MDC for request logs. `ActiveOrganisationContextFilter`
+separately installs `RequestContexts`, which carries tenant/branch/actor/correlation/user-agent
+for the audit adapter to fall back on when a caller does not supply them explicitly.

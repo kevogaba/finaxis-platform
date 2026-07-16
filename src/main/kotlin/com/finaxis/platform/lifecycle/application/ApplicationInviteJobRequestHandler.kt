@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
 import org.jobrunr.jobs.lambdas.JobRequestHandler
 import org.slf4j.LoggerFactory
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Component
 @Component
 class ApplicationInviteJobRequestHandler(
     private val store: UserProvisioningStore,
+    private val dispatchOutcomeAuditor: DispatchOutcomeAuditor,
 ) : JobRequestHandler<ApplicationInviteJobRequest> {
     /** Logs the invite-provider follow-up and marks the dispatch as delivered. */
     override fun run(jobRequest: ApplicationInviteJobRequest) {
@@ -21,7 +23,16 @@ class ApplicationInviteJobRequestHandler(
                 jobRequest.userId,
                 jobRequest.dispatchKey,
             )
-            store.markDispatchSucceeded(jobRequest.dispatchKey, APPLICATION_INVITE)
+            dispatchOutcomeAuditor.recordSuccess(
+                dispatchKey = jobRequest.dispatchKey,
+                dispatchRef = APPLICATION_INVITE,
+                externalSystemRef = APPLICATION_INVITE,
+                actorId = SystemActor.ID,
+                tenantId = jobRequest.organisationId,
+                action = APPLICATION_INVITE_ACTION,
+                resourceId = jobRequest.userId.toString(),
+                metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
+            )
         } catch (ex: IllegalStateException) {
             recordFailure(jobRequest, ex)
         } catch (ex: DataAccessException) {
@@ -33,13 +44,23 @@ class ApplicationInviteJobRequestHandler(
         jobRequest: ApplicationInviteJobRequest,
         ex: RuntimeException,
     ): Nothing {
-        store.markDispatchFailed(jobRequest.dispatchKey, ex.message ?: ex.javaClass.name)
+        dispatchOutcomeAuditor.recordFailure(
+            dispatchKey = jobRequest.dispatchKey,
+            externalSystemRef = APPLICATION_INVITE,
+            actorId = SystemActor.ID,
+            tenantId = jobRequest.organisationId,
+            action = APPLICATION_INVITE_ACTION,
+            resourceId = jobRequest.userId.toString(),
+            reason = ex.message ?: ex.javaClass.name,
+            metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
+        )
         throw ex
     }
 
     private companion object {
         const val SUCCEEDED = "SUCCEEDED"
         const val APPLICATION_INVITE = "APPLICATION_INVITE"
+        const val APPLICATION_INVITE_ACTION = "user.application_invite"
         private val logger =
             LoggerFactory.getLogger(ApplicationInviteJobRequestHandler::class.java)
     }

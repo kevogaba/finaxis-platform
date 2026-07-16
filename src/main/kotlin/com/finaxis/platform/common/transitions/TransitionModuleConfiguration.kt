@@ -48,13 +48,22 @@ class TransitionModuleConfiguration {
                 RoutingTarget.forTarget(event.target).withoutKey()
             }.build()
 
-    /** Routes typed externalized transition events to their declared RabbitMQ exchange. */
+    /**
+     * Routes typed externalized transition events to their declared RabbitMQ exchange. Each
+     * message also carries the outbox record key as a header so consumers can deduplicate under
+     * Namastack's at-least-once delivery semantics.
+     */
     @Bean
     fun rabbitOutboxRouting(): RabbitOutboxRouting =
         rabbitOutboxRouting {
             route(OutboxPayloadSelector.type(ExternalizedTransitionEvent::class.java)) {
                 target { payload, _ -> (payload as ExternalizedTransitionEvent).target }
                 key { _, _ -> "" }
+                header(OUTBOX_RECORD_KEY_HEADER) { _, metadata -> metadata.key }
             }
         }
+
+    private companion object {
+        const val OUTBOX_RECORD_KEY_HEADER = "X-Outbox-Record-Key"
+    }
 }
