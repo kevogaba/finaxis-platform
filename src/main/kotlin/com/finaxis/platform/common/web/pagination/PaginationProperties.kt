@@ -1,5 +1,6 @@
 package com.finaxis.platform.common.web.pagination
 
+import com.finaxis.platform.common.web.api.MAXIMUM_PAGE_SIZE
 import org.springframework.boot.context.properties.ConfigurationProperties
 
 /**
@@ -13,5 +14,8 @@ data class PaginationProperties(
     init {
         require(defaultPageSize > 0) { "Default page size must be positive" }
         require(maxPageSize >= defaultPageSize) { "Maximum page size must be at least the default" }
+        require(maxPageSize <= MAXIMUM_PAGE_SIZE) {
+            "Maximum page size must not exceed $MAXIMUM_PAGE_SIZE"
+        }
     }
 }

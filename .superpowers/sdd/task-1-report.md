@@ -146,3 +146,32 @@ Results: `MethodSecurityTests` passed 5/5 and `AuthFlowIntegrationTests` passed 
 not complete within one minute). No membership production code was changed.
 
 `./gradlew spotlessApply` passed before this focused run.
+
+## Absolute pagination maximum review fix (2026-07-18)
+
+### TDD evidence
+
+Added direct construction and `ApplicationContextRunner` binding regression tests, then ran:
+
+```text
+./gradlew test --tests '*PaginationConfigurationTests'
+```
+
+Result: `BUILD FAILED` as expected: `PaginationProperties(maxPageSize = 101)` was accepted and
+the `finaxis.pagination.max-page-size=101` binding context started successfully.
+
+The implementation now shares the page mapper's `MAXIMUM_PAGE_SIZE` constant (100) with
+`PaginationProperties`. Constructor and configuration binding therefore reject maxima above 100,
+while valid overrides such as default size 50 and max size 100 continue to bind. This retains the
+interceptor's safe 400 behavior for invalid request `page` and `size` values without allowing its
+bound to diverge from the page mapper.
+
+### Verification
+
+```text
+./gradlew spotlessApply
+./gradlew test --tests '*PaginationConfigurationTests' --tests '*WebJsonContractTests' --tests '*ApiExceptionHandlerTests'
+```
+
+Both commands completed `BUILD SUCCESSFUL`; the focused test command passed 19 tests with zero
+failures and zero errors. No full suite was run for this review fix.

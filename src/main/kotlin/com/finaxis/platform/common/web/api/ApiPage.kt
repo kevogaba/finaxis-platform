@@ -47,5 +47,5 @@ fun <T> apiPageOf(
     )
 }
 
-private const val MINIMUM_PAGE_SIZE = 1
-private const val MAXIMUM_PAGE_SIZE = 100
+internal const val MINIMUM_PAGE_SIZE = 1
+internal const val MAXIMUM_PAGE_SIZE = 100
