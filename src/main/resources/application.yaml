@@ -269,6 +269,9 @@ finaxis:
         - method: GET
           path: /api/v1/auth/**
           policy: platform-read
+        - method: POST
+          path: /api/v1/auth/**
+          policy: platform-command
         - method: GET
           path: /api/v1/**
           policy: tenant-read

@@ -52,6 +52,7 @@ class ApiProblemFactory {
             is InvalidOperationException -> HttpStatus.UNPROCESSABLE_CONTENT
         }
 
+    /** Shared request-correlation contract and public problem limits. */
     companion object {
         const val REQUEST_ID_HEADER = "X-Request-Id"
         const val REQUEST_ID_ATTRIBUTE = "com.finaxis.platform.common.web.api.request-id"

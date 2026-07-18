@@ -6,6 +6,7 @@ import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpHeaders
+import org.springframework.http.HttpMethod
 import org.springframework.http.HttpStatus
 import org.springframework.util.AntPathMatcher
 import org.springframework.web.filter.OncePerRequestFilter
@@ -29,17 +30,31 @@ open class RateLimitFilter(
         response: HttpServletResponse,
         filterChain: FilterChain,
     ) {
-        if (!properties.enabled || isExcluded(request.servletPath.ifBlank { request.requestURI })) {
+        if (
+            !properties.enabled ||
+            HttpMethod.OPTIONS.matches(request.method) ||
+            isExcluded(request.servletPath.ifBlank { request.requestURI })
+        ) {
             filterChain.doFilter(request, response)
             return
         }
 
-        val identity = keyResolver.resolve(request, properties)
+        val identity =
+            when (val resolution = keyResolver.resolve(request, properties)) {
+                is RateLimitIdentity -> {
+                    resolution
+                }
+
+                is NoRateLimitPolicy -> {
+                    handleMissingPolicy(request, response)
+                    return
+                }
+            }
         val decision =
             try {
                 rateLimiter.tryConsume(identity.key, identity.policy)
-            } catch (ex: RateLimitUnavailableException) {
-                handleLimiterFailure(request, response, filterChain, ex)
+            } catch (_: RateLimitUnavailableException) {
+                handleLimiterFailure(request, response, filterChain)
                 return
             }
 
@@ -49,15 +64,23 @@ open class RateLimitFilter(
 
         if (decision.allowed) {
             filterChain.doFilter(request, response)
-            return
+        } else {
+            rejectRequest(request, response, identity, decision)
         }
+    }
 
+    private fun rejectRequest(
+        request: HttpServletRequest,
+        response: HttpServletResponse,
+        identity: RateLimitIdentity,
+        decision: RateLimitDecision,
+    ) {
         rateLimitLogger.warn(
-            "rate_limit_rejected method={} path={} authenticated={} key={} retryAfterSeconds={}",
+            "rate_limit_rejected method={} path={} authenticated={} policy={} retryAfterSeconds={}",
             request.method,
             request.requestURI,
             identity.authenticated,
-            identity.key,
+            identity.policyId.externalId,
             secondsHeader(decision.retryAfter),
         )
         problemWriter.write(
@@ -77,14 +100,13 @@ open class RateLimitFilter(
         request: HttpServletRequest,
         response: HttpServletResponse,
         filterChain: FilterChain,
-        ex: RuntimeException,
     ) {
         rateLimitLogger.warn(
-            "rate_limit_unavailable method={} path={} failOpen={}",
+            "rate_limit_unavailable category={} method={} path={} failOpen={}",
+            LIMITER_FAILURE_CATEGORY,
             request.method,
             request.requestURI,
             properties.failOpen,
-            ex,
         )
         if (properties.failOpen) {
             filterChain.doFilter(request, response)
@@ -97,6 +119,24 @@ open class RateLimitFilter(
                 "Rate limiter is temporarily unavailable.",
             )
         }
+    }
+
+    private fun handleMissingPolicy(
+        request: HttpServletRequest,
+        response: HttpServletResponse,
+    ) {
+        rateLimitLogger.warn(
+            "rate_limit_policy_missing method={} path={}",
+            request.method,
+            request.requestURI,
+        )
+        problemWriter.write(
+            request,
+            response,
+            HttpStatus.TOO_MANY_REQUESTS,
+            "rate_limit_policy_unavailable",
+            "Rate limit policy is unavailable.",
+        )
     }
 
     private fun addRateLimitHeaders(
@@ -123,6 +163,7 @@ open class RateLimitFilter(
 
     private companion object {
         private const val MINIMUM_RETRY_AFTER_SECONDS = 1L
+        private const val LIMITER_FAILURE_CATEGORY = "backend_unavailable"
         private val rateLimitLogger = LoggerFactory.getLogger(RateLimitFilter::class.java)
     }
 }

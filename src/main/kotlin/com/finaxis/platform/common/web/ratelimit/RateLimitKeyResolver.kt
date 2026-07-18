@@ -19,24 +19,24 @@ open class RateLimitKeyResolver {
     open fun resolve(
         request: HttpServletRequest,
         properties: RateLimitProperties,
-    ): RateLimitIdentity {
-        val policyId = resolvePolicyId(request, properties)
-        val policy =
-            requireNotNull(properties.policies[policyId]) {
-                "Rate-limit policy '$policyId' is not configured"
-            }
+    ): RateLimitResolution {
+        val path = request.servletPath.ifBlank { request.requestURI }
+        val policyId =
+            resolvePolicyId(request, properties)
+                ?: return NoRateLimitPolicy(request.method, path)
+        val policy = properties.policies.getValue(policyId)
         val authentication = SecurityContextHolder.getContext().authentication
         val authenticatedKey = authentication?.authenticatedRateLimitKey()
         return if (authenticatedKey == null) {
             RateLimitIdentity(
-                key = "rate-limit:$policyId:anon:${request.remoteAddr}",
+                key = "rate-limit:${policyId.externalId}:anon:${request.remoteAddr}",
                 policyId = policyId,
                 policy = policy,
                 authenticated = false,
             )
         } else {
             RateLimitIdentity(
-                key = "rate-limit:$policyId:$authenticatedKey",
+                key = "rate-limit:${policyId.externalId}:$authenticatedKey",
                 policyId = policyId,
                 policy = policy,
                 authenticated = true,
@@ -47,18 +47,13 @@ open class RateLimitKeyResolver {
     private fun resolvePolicyId(
         request: HttpServletRequest,
         properties: RateLimitProperties,
-    ): String {
+    ): RateLimitPolicyId? {
         val path = request.servletPath.ifBlank { request.requestURI }
         return properties.paths.rules
             .firstOrNull { rule ->
                 rule.method.equals(request.method, ignoreCase = true) &&
                     pathMatcher.match(rule.path, path)
             }?.policy
-            ?: if (request.method.equals("GET", ignoreCase = true)) {
-                "platform-read"
-            } else {
-                "platform-command"
-            }
     }
 
     private fun Authentication.authenticatedRateLimitKey(): String? {
