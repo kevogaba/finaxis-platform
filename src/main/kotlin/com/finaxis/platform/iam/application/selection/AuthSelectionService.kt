@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.application.selection
 
+import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContextService
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
@@ -36,8 +37,8 @@ data class SelectBranchResult(
  * Raised when the authenticated user cannot select the requested organisation or branch.
  */
 class OrganisationSelectionDeniedException(
-    message: String,
-) : RuntimeException(message)
+    @Suppress("UNUSED_PARAMETER") message: String,
+) : ForbiddenOperationException()
 
 /**
  * Coordinates organisation and branch selection for the authenticated user.

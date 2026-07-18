@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
+import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.adapter.inbound.security.SessionActiveOrganisationContextResolver
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
@@ -89,7 +90,7 @@ class AuthController(
         ApiResponse(
             responseCode = "403",
             description = "Authenticated user is not an active member of the organisation",
-            content = [Content(schema = Schema(implementation = ApiErrorResponse::class))],
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
         ),
     )
     @PostMapping("/select-organisation")
@@ -131,7 +132,7 @@ class AuthController(
         ApiResponse(
             responseCode = "403",
             description = "Authenticated user is not assigned to the selected branch",
-            content = [Content(schema = Schema(implementation = ApiErrorResponse::class))],
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
         ),
     )
     @PostMapping("/select-branch")
