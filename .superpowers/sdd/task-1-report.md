@@ -175,3 +175,55 @@ bound to diverge from the page mapper.
 
 Both commands completed `BUILD SUCCESSFUL`; the focused test command passed 19 tests with zero
 failures and zero errors. No full suite was run for this review fix.
+
+## MVC JSON isolation and membership JobRunr regression (2026-07-18)
+
+### Root cause
+
+The global `spring.jackson.property-naming-strategy: SNAKE_CASE` setting changed the Jackson 2
+mapper used by Namastack's outbox from its established camel-case event contract. The producer
+therefore emitted `aggregate_type` and `occurred_at`, while the Rabbit listener deserializes the
+event as camel-case `aggregateType` and `occurredAt`. The listener rejected the message before it
+could delegate to the JobRunr notification handler, leaving the expected JobRunr job absent and
+causing `MembershipActivationPipelineIntegrationTests` to time out.
+
+### RED
+
+Added the MVC boundary regression that performs a real MVC request and verifies that its JSON is
+snake case while an internal `ExternalizedTransitionEvent` remains camel case. The initial focused
+run, before the dedicated converter existed, could not resolve the named API converter required by
+that test. The existing real producer-to-outbox-to-listener-to-JobRunr regression also remained
+red with `ConditionTimeoutException`; the listener diagnostic was the missing required
+`aggregateType` creator property from a snake-case outbox payload.
+
+### GREEN
+
+- Removed the global YAML naming strategy and the global Jackson 3 builder customizer.
+- Added `ApiJsonCodec`, a wrapper (not an application `JsonMapper` bean) containing the strict
+  snake-case public contract and date/time formats. Both MVC and `ApiProblemWriter` use it.
+- Registered the codec's `JacksonJsonHttpMessageConverter` through Spring Framework 7's current
+  `WebMvcConfigurer.configureMessageConverters(HttpMessageConverters.ServerBuilder)` hook with
+  `withJsonConverter`. This replaces the deprecated list-mutation hook without changing the
+  Jackson 2 persistence/Namastack mapper.
+
+Final focused verification:
+
+```text
+./gradlew spotlessApply test --tests '*WebJsonContractTests'
+BUILD SUCCESSFUL (5 tests, zero failures/errors)
+
+./gradlew test --tests '*MembershipActivationPipelineIntegrationTests' --tests '*OrganisationActivationOutboxIntegrationTests' --tests '*BusinessDateAdvancedOutboxIntegrationTests'
+BUILD SUCCESSFUL (3 tests, zero failures/errors)
+```
+
+The real membership pipeline passed in 28.815 seconds after the final converter wiring.
+Organisation activation and BusinessDate advanced outbox regressions also passed (1.806 seconds
+and 54.069 seconds
+respectively). No full suite was run for this change.
+
+The final MVC JSON/problem/security pass also completed successfully:
+
+```text
+./gradlew test --tests '*WebJsonContractTests' --tests '*ApiProblemWriterTests' --tests '*ApiExceptionHandlerTests' --tests '*SecurityAdapterTests' --tests '*AuthFlowIntegrationTests'
+BUILD SUCCESSFUL (48 tests, zero failures/errors)
+```

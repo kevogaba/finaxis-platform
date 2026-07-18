@@ -19,8 +19,9 @@ import java.time.Clock
 @EnableCaching
 class ApplicationConfiguration {
     /**
-     * JSONB persistence uses the Jackson 2 API required by Namastack and existing Springdoc
-     * integrations. Spring Boot 4 otherwise auto-configures only Jackson 3's JsonMapper.
+     * JSONB persistence and Namastack outbox events use the camel-case Jackson 2 contract
+     * required by existing Springdoc integrations. Spring Boot 4 otherwise auto-configures only
+     * Jackson 3's JsonMapper.
      */
     @Bean
     fun jackson2ObjectMapper(): ObjectMapper = ObjectMapper().findAndRegisterModules()

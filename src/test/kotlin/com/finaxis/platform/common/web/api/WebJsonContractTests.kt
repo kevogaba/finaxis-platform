@@ -1,11 +1,19 @@
 package com.finaxis.platform.common.web.api
 
+import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
+import com.finaxis.platform.common.transitions.TransitionActor
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.test.context.TestConfiguration
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
+import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
+import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.get
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.RestController
 import tools.jackson.core.JacksonException
-import tools.jackson.databind.ObjectMapper
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.OffsetDateTime
@@ -13,23 +21,49 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 /** Verifies the shared MVC JSON contract used by every REST adapter. */
-@WebMvcTest(useDefaultFilters = false)
-@Import(WebJsonConfiguration::class, ApiProblemFactory::class)
+@WebMvcTest(
+    controllers = [WebJsonContractTests.ContractController::class],
+    useDefaultFilters = false,
+)
+@AutoConfigureMockMvc(addFilters = false)
+@Import(
+    WebJsonConfiguration::class,
+    ApiJsonCodec::class,
+    ApiProblemFactory::class,
+    WebJsonContractTests.ContractController::class,
+    WebJsonContractTests.InternalMapperConfiguration::class,
+)
 class WebJsonContractTests
     @Autowired
     constructor(
-        private val jsonMapper: ObjectMapper,
+        private val apiJsonCodec: ApiJsonCodec,
+        private val internalObjectMapper: com.fasterxml.jackson.databind.ObjectMapper,
+        private val mockMvc: MockMvc,
     ) {
+        @Test
+        fun `MVC uses the snake case API mapper while internal events retain camel case`() {
+            mockMvc
+                .get("/contract")
+                .andExpect {
+                    jsonPath("$.tenant_code") { value("ACME") }
+                    jsonPath("$.occurred_at") { value("2026-07-18T23:59:58+03:00") }
+                }
+
+            val apiJson = apiJsonCodec.mapper.writeValueAsString(contractPayload())
+            val internalJson = internalObjectMapper.writeValueAsString(externalizedEvent())
+
+            assertEquals(true, apiJson.contains("\"tenant_code\""))
+            assertEquals(true, internalJson.contains("\"aggregateType\""))
+            assertEquals(true, internalJson.contains("\"occurredAt\""))
+            assertEquals(false, internalJson.contains("\"aggregate_type\""))
+            assertEquals(false, internalJson.contains("\"occurred_at\""))
+        }
+
         @Test
         fun `serializes web values with snake case and approved time formats`() {
             val json =
-                jsonMapper.writeValueAsString(
-                    ContractPayload(
-                        tenantCode = "ACME",
-                        businessDate = LocalDate.of(2026, 7, 18),
-                        cutoffTime = LocalTime.of(23, 59, 58),
-                        occurredAt = OffsetDateTime.parse("2026-07-18T23:59:58+03:00"),
-                    ),
+                apiJsonCodec.mapper.writeValueAsString(
+                    contractPayload(),
                 )
 
             assertEquals(
@@ -46,7 +80,7 @@ class WebJsonContractTests
         @Test
         fun `deserializes only snake case and approved date format`() {
             val payload =
-                jsonMapper.readValue(
+                apiJsonCodec.mapper.readValue(
                     validPayloadJson(),
                     ContractPayload::class.java,
                 )
@@ -60,10 +94,13 @@ class WebJsonContractTests
         @Test
         fun `rejects camel case and ISO local date input`() {
             assertFailsWith<JacksonException> {
-                jsonMapper.readValue("""{"tenantCode":"ACME"}""", ContractPayload::class.java)
+                apiJsonCodec.mapper.readValue(
+                    """{"tenantCode":"ACME"}""",
+                    ContractPayload::class.java,
+                )
             }
             assertFailsWith<JacksonException> {
-                jsonMapper.readValue(
+                apiJsonCodec.mapper.readValue(
                     """
                     {
                       "tenant_code": "ACME",
@@ -106,12 +143,44 @@ class WebJsonContractTests
             }
         }
 
-        private data class ContractPayload(
+        data class ContractPayload(
             val tenantCode: String,
             val businessDate: LocalDate,
             val cutoffTime: LocalTime,
             val occurredAt: OffsetDateTime,
         )
+
+        @RestController
+        class ContractController {
+            @GetMapping("/contract")
+            fun contract(): ContractPayload =
+                ContractPayload(
+                    tenantCode = "ACME",
+                    businessDate = LocalDate.of(2026, 7, 18),
+                    cutoffTime = LocalTime.of(23, 59, 58),
+                    occurredAt = OffsetDateTime.parse("2026-07-18T23:59:58+03:00"),
+                )
+        }
+
+        private fun externalizedEvent(): ExternalizedTransitionEvent =
+            ExternalizedTransitionEvent(
+                target = "finaxis.lifecycle.membership.activated",
+                aggregateType = "MEMBERSHIP",
+                aggregateId = "membership-1",
+                transition = "ACTIVATE",
+                fromState = "PENDING_APPROVAL",
+                toState = "ACTIVE",
+                actor = TransitionActor("USER", "user-1", "Example User"),
+                occurredAt = OffsetDateTime.parse("2026-07-18T23:59:58+03:00").toInstant(),
+            )
+
+        private fun contractPayload(): ContractPayload =
+            ContractPayload(
+                tenantCode = "ACME",
+                businessDate = LocalDate.of(2026, 7, 18),
+                cutoffTime = LocalTime.of(23, 59, 58),
+                occurredAt = OffsetDateTime.parse("2026-07-18T23:59:58+03:00"),
+            )
 
         private fun validPayloadJson(): String =
             """
@@ -122,4 +191,13 @@ class WebJsonContractTests
               "occurred_at": "2026-07-18T23:59:58+03:00"
             }
             """.trimIndent()
+
+        @TestConfiguration(proxyBeanMethods = false)
+        class InternalMapperConfiguration {
+            @Bean
+            fun internalObjectMapper(): com.fasterxml.jackson.databind.ObjectMapper =
+                com.fasterxml.jackson.databind
+                    .ObjectMapper()
+                    .findAndRegisterModules()
+        }
     }

@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.adapter.inbound.security
 
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.web.api.ApiJsonCodec
 import com.finaxis.platform.common.web.api.ApiProblemFactory
 import com.finaxis.platform.common.web.api.ApiProblemWriter
 import com.finaxis.platform.iam.application.authorization.AccessDeniedException
@@ -30,7 +31,6 @@ import org.springframework.mock.web.MockHttpServletResponse
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken
-import tools.jackson.databind.json.JsonMapper
 import java.util.UUID
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -434,7 +434,7 @@ class SecurityAdapterTests {
         )
 
     private fun problemWriter(): ApiProblemWriter =
-        ApiProblemWriter(ApiProblemFactory(), JsonMapper.builder().build())
+        ApiProblemWriter(ApiProblemFactory(), ApiJsonCodec())
 
     private fun principal(permissions: Set<String> = emptySet()): AppPrincipal =
         AppPrincipal(

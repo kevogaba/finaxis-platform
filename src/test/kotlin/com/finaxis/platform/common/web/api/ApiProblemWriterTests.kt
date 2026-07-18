@@ -4,7 +4,6 @@ import org.junit.jupiter.api.Test
 import org.springframework.http.MediaType
 import org.springframework.mock.web.MockHttpServletRequest
 import org.springframework.mock.web.MockHttpServletResponse
-import tools.jackson.databind.json.JsonMapper
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -16,7 +15,7 @@ class ApiProblemWriterTests {
 
         ApiProblemWriter(
             ApiProblemFactory(),
-            JsonMapper.builder().build(),
+            ApiJsonCodec(),
         ).writeForbiddenTenantContext(
             request,
             response,

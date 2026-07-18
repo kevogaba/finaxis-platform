@@ -34,8 +34,6 @@ server:
 spring:
   application:
     name: platform
-  jackson:
-    property-naming-strategy: SNAKE_CASE
   mvc:
     problemdetails:
       enabled: true
