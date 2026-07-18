@@ -70,7 +70,6 @@ class IdempotencyCleanupJobTests(
             .set(API_IDEMPOTENCY_RECORD.STATUS, IdempotencyStatus.COMPLETED.name)
             .set(API_IDEMPOTENCY_RECORD.RESPONSE_STATUS, 204)
             .set(API_IDEMPOTENCY_RECORD.RESPONSE_HEADERS, JSONB.jsonb("{}"))
-            .set(API_IDEMPOTENCY_RECORD.RESPONSE_BODY, "")
             .set(API_IDEMPOTENCY_RECORD.CREATED_AT, now.minusDays(2))
             .set(API_IDEMPOTENCY_RECORD.EXPIRES_AT, now.minusDays(1))
             .execute()

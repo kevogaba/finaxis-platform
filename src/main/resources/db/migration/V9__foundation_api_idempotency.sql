@@ -28,7 +28,11 @@ CREATE TABLE api_idempotency_record (
                 status = 'COMPLETED'
                 AND response_status BETWEEN 200 AND 299
                 AND response_headers IS NOT NULL
-                AND response_body IS NOT NULL
+                AND (
+                    (response_status = 204 AND response_body IS NULL)
+                    OR
+                    (response_status <> 204 AND response_body IS NOT NULL)
+                )
             )
         )
 );

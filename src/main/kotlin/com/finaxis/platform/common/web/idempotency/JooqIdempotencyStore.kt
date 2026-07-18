@@ -188,7 +188,7 @@ class JooqIdempotencyStore(
                     requireNotNull(record.responseHeaders).data(),
                     object : TypeReference<Map<String, String>>() {},
                 ),
-            storedBody = requireNotNull(record.responseBody),
+            storedBody = record.responseBody,
         )
 
     private fun requireActiveTransaction() {

@@ -36,10 +36,17 @@ class SafeReplayResponseTests {
         val noBody = factory.fromLive(IdempotencyResponse(204, emptyMap(), null))
         val emptyBody = factory.fromLive(IdempotencyResponse(204, emptyMap(), ""))
 
-        assertEquals("", noBody.storedBody)
+        assertNull(noBody.storedBody)
         assertNull(noBody.toLive().body)
-        assertEquals("", emptyBody.storedBody)
+        assertNull(emptyBody.storedBody)
         assertNull(emptyBody.toLive().body)
+    }
+
+    @Test
+    fun `204 response rejects a nonempty JSON body`() {
+        assertFailsWith<IllegalArgumentException> {
+            factory.fromLive(IdempotencyResponse(204, emptyMap(), "{}"))
+        }
     }
 
     @ParameterizedTest
@@ -62,6 +69,22 @@ class SafeReplayResponseTests {
             "sessionId",
             "active_organisation_context",
             "activeOrganisationContext",
+            "cookies",
+            "COOKIES",
+            "client_secret",
+            "Client-Secret",
+            "password_hash",
+            "passwordHash",
+            "access_token_value",
+            "AccessTokenValue",
+            "refresh_token_value",
+            "REFRESH-TOKEN-VALUE",
+            "id_token_value",
+            "idTokenValue",
+            "session_identifier",
+            "Session-Identifier",
+            "active_org_context",
+            "activeOrgContext",
         ],
     )
     fun `nested prohibited secret and session fields are rejected recursively`(field: String) {
@@ -69,6 +92,36 @@ class SafeReplayResponseTests {
 
         assertFailsWith<IllegalArgumentException> {
             factory.fromLive(IdempotencyResponse(200, emptyMap(), body))
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+        strings = [
+            "secretary",
+            "password_policy",
+            "cookie_consent",
+            "session_timeout",
+            "access_token_expiry",
+        ],
+    )
+    fun `benign near-match fields are allowed by exact normalized matching`(field: String) {
+        val body = """{"$field":"safe metadata"}"""
+
+        assertEquals(
+            body,
+            factory.fromLive(IdempotencyResponse(200, emptyMap(), body)).storedBody,
+        )
+    }
+
+    @Test
+    fun `stored response is revalidated with the same sensitive alias rule`() {
+        assertFailsWith<IllegalArgumentException> {
+            factory.fromStored(
+                status = 200,
+                headers = emptyMap(),
+                storedBody = """{"outer":{"client_secret":"must-not-replay"}}""",
+            )
         }
     }
 

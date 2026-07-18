@@ -135,8 +135,7 @@ class IdempotencyExecutorTests(
         assertEquals(204, first.status)
         assertNull(first.body)
         assertEquals(first, replay)
-        assertEquals(
-            "",
+        assertNull(
             dsl
                 .select(API_IDEMPOTENCY_RECORD.RESPONSE_BODY)
                 .from(API_IDEMPOTENCY_RECORD)

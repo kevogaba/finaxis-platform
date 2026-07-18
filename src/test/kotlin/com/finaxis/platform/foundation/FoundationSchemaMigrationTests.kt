@@ -154,7 +154,7 @@ class FoundationSchemaMigrationTests(
     }
 
     @Test
-    fun `idempotency state rejects partial responses and allows empty 204 replay`() {
+    fun `idempotency state rejects partial responses`() {
         assertFailsWith<DataIntegrityViolationException> {
             insertIdempotencyRecord(
                 status = "IN_PROGRESS",
@@ -179,14 +179,50 @@ class FoundationSchemaMigrationTests(
                 responseBody = null,
             )
         }
+    }
 
-        val validKey =
+    @Test
+    fun `idempotency state requires 204 to have no stored body`() {
+        assertFailsWith<DataIntegrityViolationException> {
             insertIdempotencyRecord(
                 status = "COMPLETED",
                 responseStatus = 204,
                 responseHeaders = "{}",
-                responseBody = "",
+                responseBody = "{}",
             )
+        }
+
+        val noBodyKey =
+            insertIdempotencyRecord(
+                status = "COMPLETED",
+                responseStatus = 204,
+                responseHeaders = "{}",
+                responseBody = null,
+            )
+        assertEquals(
+            1,
+            jdbcTemplate.update(
+                """
+                DELETE FROM api_idempotency_record
+                WHERE scope_organisation_id = ?
+                  AND idempotency_key = ?
+                """.trimIndent(),
+                noBodyKey.first,
+                noBodyKey.second,
+            ),
+        )
+    }
+
+    @Test
+    fun `idempotency state preserves valid 200 JSON responses`() {
+        val validKey =
+            insertIdempotencyRecord(
+                status = "COMPLETED",
+                responseStatus = 200,
+                responseHeaders = "{}",
+                responseBody = """{"state":"CREATED"}""",
+            )
+
         assertEquals(
             1,
             jdbcTemplate.update(
