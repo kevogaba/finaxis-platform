@@ -2,7 +2,6 @@ package com.finaxis.platform.iam.application.selection
 
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
-import com.finaxis.platform.iam.application.context.ActiveOrganisationContextService
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
@@ -15,7 +14,6 @@ import java.util.UUID
 data class SelectOrganisationResult(
     val organisationId: UUID,
     val membershipId: UUID,
-    val contextToken: String,
     val context: ActiveOrganisationContext,
     val branchId: UUID?,
     val requiresBranchSelection: Boolean,
@@ -29,7 +27,6 @@ data class SelectBranchResult(
     val organisationId: UUID,
     val membershipId: UUID,
     val branchId: UUID,
-    val contextToken: String,
     val context: ActiveOrganisationContext,
 )
 
@@ -46,7 +43,6 @@ class OrganisationSelectionDeniedException(
 @Service
 class AuthSelectionService(
     private val lookup: MembershipSelectionLookup,
-    private val contextService: ActiveOrganisationContextService,
 ) {
     /**
      * Selects an active organisation and returns the resulting tenant context.
@@ -77,7 +73,6 @@ class AuthSelectionService(
         return SelectOrganisationResult(
             organisationId = organisationId,
             membershipId = membership.membershipId,
-            contextToken = contextService.issue(context),
             context = context,
             branchId = branchId,
             requiresBranchSelection = assignedBranchIds.size > 1,
@@ -127,7 +122,6 @@ class AuthSelectionService(
             organisationId = selectedContext.organisationId,
             membershipId = selectedContext.membershipId,
             branchId = branchId,
-            contextToken = contextService.issue(selectedContext),
             context = selectedContext,
         )
     }

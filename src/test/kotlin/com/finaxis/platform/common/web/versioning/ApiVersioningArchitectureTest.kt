@@ -1,7 +1,11 @@
 package com.finaxis.platform.common.web.versioning
 
 import org.junit.jupiter.api.Test
+import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider
+import org.springframework.core.annotation.AnnotatedElementUtils
+import org.springframework.core.type.filter.AnnotationTypeFilter
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestMethod
 import org.springframework.web.bind.annotation.RestController
 import java.nio.file.Files
 import java.nio.file.Path
@@ -16,14 +20,38 @@ class ApiVersioningArchitectureTest {
     @Test
     fun `all public rest controllers are mapped under an explicit api version`() {
         val violations =
-            listOf(
-                "com.finaxis.platform.iam.adapter.inbound.web.AuthController",
-                "com.finaxis.platform.iam.adapter.inbound.web.UserProfileController",
-            ).mapNotNull(::unversionedControllerMapping)
+            restControllerTypes().mapNotNull(::unversionedControllerMapping)
 
         assertTrue(
             violations.isEmpty(),
             "Public controllers must use /api/vN paths: ${violations.joinToString()}",
+        )
+    }
+
+    @Test
+    fun `all mutation endpoints declare durable idempotency`() {
+        val violations =
+            restControllerTypes().flatMap { type ->
+                type.declaredMethods.mapNotNull { method ->
+                    val mapping =
+                        AnnotatedElementUtils.findMergedAnnotation(
+                            method,
+                            RequestMapping::class.java,
+                        )
+                    val mutates = mapping?.method?.any(MUTATION_METHODS::contains) == true
+                    method
+                        .takeIf {
+                            mutates &&
+                                it.annotations.none { annotation ->
+                                    annotation.annotationClass.simpleName == "IdempotentMutation"
+                                }
+                        }?.let { "${type.name}#${it.name}" }
+                }
+            }
+
+        assertTrue(
+            violations.isEmpty(),
+            "Mutation endpoints must use @IdempotentMutation: ${violations.joinToString()}",
         )
     }
 
@@ -65,22 +93,40 @@ class ApiVersioningArchitectureTest {
         assertFalse(isUnversionedApiExample("Call /api/v1/auth/me after login."))
     }
 
-    private fun unversionedControllerMapping(className: String): String? {
-        val type = Class.forName(className).kotlin
+    private fun unversionedControllerMapping(javaType: Class<*>): String? {
+        val type = javaType.kotlin
         if (type.findAnnotation<RestController>() == null) {
             return null
         }
-        val mapping = type.findAnnotation<RequestMapping>() ?: return "$className has no mapping"
+        val mapping =
+            type.findAnnotation<RequestMapping>() ?: return "${javaType.name} has no mapping"
         val paths = mapping.value.toList() + mapping.path.toList()
         return paths
             .takeIf { it.isEmpty() || it.any { path -> !path.startsWith(API_PREFIX) } }
-            ?.let { "$className -> ${it.ifEmpty { listOf("<empty>") }}" }
+            ?.let { "${javaType.name} -> ${it.ifEmpty { listOf("<empty>") }}" }
     }
+
+    private fun restControllerTypes(): List<Class<*>> =
+        ClassPathScanningCandidateComponentProvider(false)
+            .apply { addIncludeFilter(AnnotationTypeFilter(RestController::class.java)) }
+            .findCandidateComponents("com.finaxis.platform")
+            .map { candidate -> Class.forName(requireNotNull(candidate.beanClassName)) }
+            .filterNot { type ->
+                type.protectionDomain.codeSource.location.path
+                    .contains("/test/")
+            }
 
     private fun isUnversionedApiExample(line: String): Boolean =
         ENDPOINT_EXAMPLE.findAll(line).any { match -> !match.value.startsWith(API_PREFIX) }
 
     private companion object {
+        val MUTATION_METHODS =
+            setOf(
+                RequestMethod.POST,
+                RequestMethod.PUT,
+                RequestMethod.PATCH,
+                RequestMethod.DELETE,
+            )
         val ENDPOINT_EXAMPLE = Regex("""(?<![A-Za-z0-9_.-])/api/(?:[A-Za-z0-9._~-]+/?)*""")
     }
 }

@@ -85,7 +85,7 @@ class IdempotencyExecutorTests(
             )
         assertEquals(1, executionCount.get())
         assertEquals(safeResponse, first)
-        assertEquals(first, replay)
+        assertEquals(first.copy(replayed = true), replay)
         val storedHeaders =
             requireNotNull(
                 dsl
@@ -134,7 +134,7 @@ class IdempotencyExecutorTests(
         assertEquals(1, executionCount.get())
         assertEquals(204, first.status)
         assertNull(first.body)
-        assertEquals(first, replay)
+        assertEquals(first.copy(replayed = true), replay)
         assertNull(
             dsl
                 .select(API_IDEMPOTENCY_RECORD.RESPONSE_BODY)

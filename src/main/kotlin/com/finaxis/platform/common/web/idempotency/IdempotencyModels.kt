@@ -29,6 +29,7 @@ data class IdempotencyResponse(
     val status: Int,
     val headers: Map<String, String>,
     val body: String?,
+    val replayed: Boolean = false,
 )
 
 /** Complete input needed for one atomic store acquisition attempt. */

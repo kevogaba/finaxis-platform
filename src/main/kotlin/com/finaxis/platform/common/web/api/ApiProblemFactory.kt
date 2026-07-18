@@ -4,6 +4,7 @@ import com.finaxis.platform.common.application.ApplicationException
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.RequestTooLargeException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.id.uuidV7
 import jakarta.servlet.http.HttpServletRequest
@@ -50,6 +51,7 @@ class ApiProblemFactory {
             is ConflictException -> HttpStatus.CONFLICT
             is ForbiddenOperationException -> HttpStatus.FORBIDDEN
             is InvalidOperationException -> HttpStatus.UNPROCESSABLE_CONTENT
+            is RequestTooLargeException -> HttpStatus.CONTENT_TOO_LARGE
         }
 
     /** Shared request-correlation contract and public problem limits. */

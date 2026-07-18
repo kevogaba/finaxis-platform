@@ -2,31 +2,19 @@ package com.finaxis.platform.iam.application.selection
 
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
-import com.finaxis.platform.iam.application.context.ActiveOrganisationContextProperties
-import com.finaxis.platform.iam.application.context.ActiveOrganisationContextService
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
 import org.junit.jupiter.api.assertThrows
-import java.time.Clock
-import java.time.Instant
-import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class AuthSelectionServiceTests {
-    private val clock = Clock.fixed(Instant.parse("2026-07-04T08:00:00Z"), ZoneOffset.UTC)
-    private val contextService =
-        ActiveOrganisationContextService(
-            ActiveOrganisationContextProperties(secret = "test-secret-with-enough-length-32bytes"),
-            clock,
-        )
-
     @Test
-    fun `select organisation returns signed context for active membership`() {
+    fun `select organisation returns active context for active membership`() {
         val userId = uuidV7()
         val organisationId = uuidV7()
         val membershipId = uuidV7()
@@ -41,7 +29,7 @@ class AuthSelectionServiceTests {
                         MembershipStatus.ACTIVE,
                     ),
             )
-        val service = AuthSelectionService(lookup, contextService)
+        val service = AuthSelectionService(lookup)
 
         val response = service.selectOrganisation("keycloak-subject", organisationId)
 
@@ -49,7 +37,7 @@ class AuthSelectionServiceTests {
         assertEquals(membershipId, response.membershipId)
         assertEquals(
             ActiveOrganisationContext(userId, organisationId, membershipId, branchId = null),
-            contextService.verify(response.contextToken),
+            response.context,
         )
         assertEquals(false, response.requiresBranchSelection)
         assertEquals(emptyList(), response.assignedBranchIds)
@@ -72,7 +60,6 @@ class AuthSelectionServiceTests {
                             MembershipStatus.ACTIVE,
                         ),
                 ),
-                contextService,
             )
 
         val response = service.selectOrganisation("keycloak-subject", organisationId)
@@ -102,7 +89,6 @@ class AuthSelectionServiceTests {
                         ),
                     branchIds = listOf(branchId),
                 ),
-                contextService,
             )
 
         val response = service.selectOrganisation("keycloak-subject", organisationId)
@@ -111,7 +97,7 @@ class AuthSelectionServiceTests {
         assertEquals(false, response.requiresBranchSelection)
         assertEquals(
             ActiveOrganisationContext(userId, organisationId, membershipId, branchId),
-            contextService.verify(response.contextToken),
+            response.context,
         )
         assertEquals(
             ActiveOrganisationContext(userId, organisationId, membershipId, branchId),
@@ -137,7 +123,6 @@ class AuthSelectionServiceTests {
                         ),
                     organisationStatus = OrganisationStatus.SUSPENDED,
                 ),
-                contextService,
             )
 
         assertThrows<OrganisationSelectionDeniedException> {
@@ -165,7 +150,6 @@ class AuthSelectionServiceTests {
                         ),
                     branchIds = listOf(firstBranchId, secondBranchId),
                 ),
-                contextService,
             )
 
         val response = service.selectOrganisation("keycloak-subject", organisationId)
@@ -175,7 +159,7 @@ class AuthSelectionServiceTests {
         assertEquals(listOf(firstBranchId, secondBranchId), response.assignedBranchIds)
         assertEquals(
             ActiveOrganisationContext(userId, organisationId, membershipId, branchId = null),
-            contextService.verify(response.contextToken),
+            response.context,
         )
     }
 
@@ -199,7 +183,6 @@ class AuthSelectionServiceTests {
                         ),
                     branchIds = listOf(branchId),
                 ),
-                contextService,
             )
 
         val response = service.selectBranch("keycloak-subject", branchId, currentContext)
@@ -207,7 +190,7 @@ class AuthSelectionServiceTests {
         assertEquals(branchId, response.branchId)
         assertEquals(
             ActiveOrganisationContext(userId, organisationId, membershipId, branchId),
-            contextService.verify(response.contextToken),
+            response.context,
         )
         assertEquals(
             ActiveOrganisationContext(userId, organisationId, membershipId, branchId),
@@ -234,7 +217,6 @@ class AuthSelectionServiceTests {
                         ),
                     branchIds = listOf(uuidV7()),
                 ),
-                contextService,
             )
 
         assertThrows<OrganisationSelectionDeniedException> {
@@ -245,7 +227,7 @@ class AuthSelectionServiceTests {
     @Test
     fun `select branch rejects missing organisation context`() {
         val service =
-            AuthSelectionService(FakeMembershipLookup(userId = uuidV7()), contextService)
+            AuthSelectionService(FakeMembershipLookup(userId = uuidV7()))
 
         assertThrows<OrganisationSelectionDeniedException> {
             service.selectBranch("keycloak-subject", uuidV7(), currentContext = null)
@@ -255,7 +237,7 @@ class AuthSelectionServiceTests {
     @Test
     fun `select branch rejects context for another authenticated user`() {
         val userId = uuidV7()
-        val service = AuthSelectionService(FakeMembershipLookup(userId = userId), contextService)
+        val service = AuthSelectionService(FakeMembershipLookup(userId = userId))
         val context =
             ActiveOrganisationContext(uuidV7(), uuidV7(), uuidV7())
 
@@ -283,7 +265,6 @@ class AuthSelectionServiceTests {
                         ),
                     branchIds = listOf(branchId),
                 ),
-                contextService,
             )
 
         assertThrows<OrganisationSelectionDeniedException> {
@@ -315,7 +296,6 @@ class AuthSelectionServiceTests {
                         ),
                     branchIds = listOf(branchId),
                 ),
-                contextService,
             )
 
         assertThrows<OrganisationSelectionDeniedException> {
@@ -347,7 +327,6 @@ class AuthSelectionServiceTests {
                     branchIds = listOf(branchId),
                     organisationStatus = OrganisationStatus.SUSPENDED,
                 ),
-                contextService,
             )
 
         assertThrows<OrganisationSelectionDeniedException> {
@@ -364,7 +343,7 @@ class AuthSelectionServiceTests {
         val userId = uuidV7()
         val organisationId = uuidV7()
         val membershipId = uuidV7()
-        val service = AuthSelectionService(FakeMembershipLookup(userId = userId), contextService)
+        val service = AuthSelectionService(FakeMembershipLookup(userId = userId))
 
         assertThrows<OrganisationSelectionDeniedException> {
             service.selectBranch(
@@ -379,7 +358,7 @@ class AuthSelectionServiceTests {
     fun `select branch rejects missing registered user`() {
         val context =
             ActiveOrganisationContext(uuidV7(), uuidV7(), uuidV7())
-        val service = AuthSelectionService(FakeMembershipLookup(), contextService)
+        val service = AuthSelectionService(FakeMembershipLookup())
 
         assertThrows<OrganisationSelectionDeniedException> {
             service.selectBranch("keycloak-subject", uuidV7(), context)
@@ -388,7 +367,7 @@ class AuthSelectionServiceTests {
 
     @Test
     fun `select organisation rejects non member`() {
-        val service = AuthSelectionService(FakeMembershipLookup(), contextService)
+        val service = AuthSelectionService(FakeMembershipLookup())
 
         assertThrows<OrganisationSelectionDeniedException> {
             service.selectOrganisation("keycloak-subject", uuidV7())
@@ -398,7 +377,7 @@ class AuthSelectionServiceTests {
     @Test
     fun `select organisation rejects registered user without membership`() {
         val service =
-            AuthSelectionService(FakeMembershipLookup(userId = uuidV7()), contextService)
+            AuthSelectionService(FakeMembershipLookup(userId = uuidV7()))
 
         assertThrows<OrganisationSelectionDeniedException> {
             service.selectOrganisation("keycloak-subject", uuidV7())
@@ -421,7 +400,6 @@ class AuthSelectionServiceTests {
                             MembershipStatus.SUSPENDED,
                         ),
                 ),
-                contextService,
             )
 
         assertThrows<OrganisationSelectionDeniedException> {

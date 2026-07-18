@@ -3,8 +3,6 @@ package com.finaxis.platform.iam.adapter.inbound.web
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.adapter.inbound.security.SessionActiveOrganisationContextResolver
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
-import com.finaxis.platform.iam.application.context.ActiveOrganisationContextProperties
-import com.finaxis.platform.iam.application.context.ActiveOrganisationContextService
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
@@ -21,17 +19,12 @@ import com.finaxis.platform.iam.domain.RoleStatus
 import org.springframework.mock.web.MockHttpSession
 import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken
-import java.time.Clock
-import java.time.Instant
-import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 private val ORGANISATION_ID: UUID = UUID.fromString("22222222-2222-2222-2222-222222222222")
 private val MEMBERSHIP_ID: UUID = UUID.fromString("55555555-5555-5555-5555-555555555555")
-private const val TEST_CONTEXT_SECRET = "test-secret-with-enough-length-32bytes"
 private val HEAD_OFFICE_BRANCH_ID: UUID = UUID.fromString("33333333-3333-3333-3333-333333333333")
 
 class WebAdapterUnitTests {
@@ -47,18 +40,18 @@ class WebAdapterUnitTests {
             ).selectOrganisation(
                 jwtAuthentication(),
                 SelectOrganisationRequest(selectedOrganisationId),
-                MockHttpSession(),
             )
 
-        assertEquals(selectedOrganisationId, response.organisationId)
-        assertEquals(selectedMembershipId, response.membershipId)
-        assertTrue(response.contextToken.isNotBlank())
-        assertEquals("X-Active-Organisation-Context", response.contextHeader)
-        assertEquals(false, response.requiresBranchSelection)
+        val replay =
+            (response as com.finaxis.platform.common.web.idempotency.IdempotencyReplayResponse)
+                .durableBody as SelectOrganisationReplayValue
+        assertEquals(selectedOrganisationId, replay.context.organisationId)
+        assertEquals(selectedMembershipId, replay.context.membershipId)
+        assertEquals(false, replay.requiresBranchSelection)
     }
 
     @Test
-    fun `auth controller stores selected branch in browser session`() {
+    fun `auth controller returns safe selected branch replay state`() {
         val selectedOrganisationId = uuidV7()
         val selectedMembershipId = uuidV7()
         val branchId = uuidV7()
@@ -83,7 +76,6 @@ class WebAdapterUnitTests {
                 session,
             )
 
-        assertEquals(branchId, response.branchId)
         assertEquals(
             ActiveOrganisationContext(
                 lookup.userId,
@@ -91,7 +83,10 @@ class WebAdapterUnitTests {
                 selectedMembershipId,
                 branchId,
             ),
-            session.getAttribute(SessionActiveOrganisationContextResolver.ATTRIBUTE),
+            (
+                (response as com.finaxis.platform.common.web.idempotency.IdempotencyReplayResponse)
+                    .durableBody as SelectBranchReplayValue
+            ).context,
         )
     }
 
@@ -112,13 +107,7 @@ class WebAdapterUnitTests {
     }
 
     private fun selectionService(lookup: MembershipSelectionLookup): AuthSelectionService =
-        AuthSelectionService(
-            lookup,
-            ActiveOrganisationContextService(
-                ActiveOrganisationContextProperties(TEST_CONTEXT_SECRET),
-                Clock.fixed(Instant.parse("2026-07-04T08:00:00Z"), ZoneOffset.UTC),
-            ),
-        )
+        AuthSelectionService(lookup)
 
     private fun jwtAuthentication(): JwtAuthenticationToken =
         JwtAuthenticationToken(

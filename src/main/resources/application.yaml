@@ -228,6 +228,7 @@ finaxis:
       in-progress-timeout: ${FINAXIS_API_IDEMPOTENCY_IN_PROGRESS_TIMEOUT:5m}
       cleanup-schedule: ${FINAXIS_API_IDEMPOTENCY_CLEANUP_SCHEDULE:0 */15 * * * *}
       cleanup-batch-size: ${FINAXIS_API_IDEMPOTENCY_CLEANUP_BATCH_SIZE:500}
+      max-request-body-bytes: ${FINAXIS_API_IDEMPOTENCY_MAX_REQUEST_BODY_BYTES:1048576}
       max-response-body-bytes: ${FINAXIS_API_IDEMPOTENCY_MAX_RESPONSE_BODY_BYTES:1048576}
       safe-domain-headers:
         - X-Domain-Reference

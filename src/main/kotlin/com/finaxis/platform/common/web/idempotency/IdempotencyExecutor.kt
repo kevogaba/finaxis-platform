@@ -42,7 +42,7 @@ class IdempotencyExecutor(
             }
 
             is IdempotencyAcquisition.Replay -> {
-                acquisition.response.toLive()
+                acquisition.response.toLive().copy(replayed = true)
             }
 
             IdempotencyAcquisition.InProgress -> {

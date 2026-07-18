@@ -29,3 +29,9 @@ class InvalidOperationException(
     code: String = "invalid_operation",
     safeDetail: String = "The request cannot be processed in its current state.",
 ) : ApplicationException(code, safeDetail)
+
+/** Raised when a bounded request payload exceeds the configured public limit. */
+class RequestTooLargeException(
+    code: String = "request_body_too_large",
+    safeDetail: String = "The request body exceeds the allowed size.",
+) : ApplicationException(code, safeDetail)
