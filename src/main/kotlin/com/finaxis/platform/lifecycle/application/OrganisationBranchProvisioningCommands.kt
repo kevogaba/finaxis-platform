@@ -182,20 +182,6 @@ data class BranchDraftResult(
     val status: BranchLifecycleState,
 )
 
-/** Updates organisation settings after provisioning; each key gets a new effective-dated row. */
-data class UpdateOrganisationSettingsCommand(
-    val organisationId: UUID,
-    val updates: Map<String, String>,
-    val actorId: UUID,
-    val reason: String? = null,
-)
-
-/** Result returned after an organisation settings update. */
-data class OrganisationSettingsResult(
-    val organisationId: UUID,
-    val updated: Map<String, String>,
-)
-
 /** Advances the controlled organisation business date by one optimistic-locked step. */
 data class AdvanceBusinessDateCommand(
     val organisationId: UUID,
@@ -209,4 +195,54 @@ data class BusinessDateAdvanceResult(
     val organisationId: UUID,
     val previousBusinessDate: LocalDate,
     val newBusinessDate: LocalDate,
+)
+
+/** Initializes the controlled business date for an active organisation. */
+data class InitializeBusinessDateCommand(
+    val organisationId: UUID,
+    val initialBusinessDate: LocalDate,
+    val actorId: UUID,
+    val reason: String? = null,
+)
+
+/** Starts close-of-business processing for the current organisation business date. */
+data class StartCobCommand(
+    val organisationId: UUID,
+    val actorId: UUID,
+    val reason: String? = null,
+)
+
+/** Completes close-of-business status processing for the current organisation business date. */
+data class CompleteCobCommand(
+    val organisationId: UUID,
+    val actorId: UUID,
+    val reason: String? = null,
+)
+
+/** Reopens a closed organisation business date. */
+data class ReopenBusinessDateCommand(
+    val organisationId: UUID,
+    val actorId: UUID,
+    val reason: String? = null,
+)
+
+/** Requests the current organisation business date. */
+data class GetBusinessDateQuery(
+    val organisationId: UUID,
+    val actorId: UUID,
+)
+
+/** Requests a bounded page of organisation business-date history. */
+data class ListBusinessDateHistoryQuery(
+    val organisationId: UUID,
+    val actorId: UUID,
+    val page: Int = 0,
+    val size: Int = 25,
+)
+
+/** Read model for the current organisation business date. */
+data class BusinessDateView(
+    val organisationId: UUID,
+    val currentBusinessDate: LocalDate,
+    val status: String,
 )

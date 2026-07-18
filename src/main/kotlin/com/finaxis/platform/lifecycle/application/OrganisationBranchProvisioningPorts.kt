@@ -3,6 +3,7 @@ package com.finaxis.platform.lifecycle.application
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
+import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
 
@@ -111,7 +112,44 @@ interface OrganisationSettingsStore {
         updates: Map<String, String>,
         actorId: UUID,
     )
+
+    /** Returns the currently effective stored setting for [key], or null when unset. */
+    fun currentSetting(
+        organisationId: UUID,
+        key: String,
+    ): StoredSetting?
+
+    /** Returns every currently effective stored setting for the organisation. */
+    fun currentSettingsList(organisationId: UUID): List<StoredSetting>
+
+    /**
+     * Closes the open row for [key], inserts a typed replacement, and returns the row closed while
+     * holding the per-key lock; null means no row was currently effective.
+     */
+    fun upsertSetting(
+        organisationId: UUID,
+        key: String,
+        value: String,
+        valueType: String,
+        sensitive: Boolean,
+        actorId: UUID,
+    ): StoredSetting?
+
+    /** Closes the open row for [key] with no replacement; false when no open row existed. */
+    fun deactivateSetting(
+        organisationId: UUID,
+        key: String,
+        actorId: UUID,
+    ): Boolean
 }
+
+/** A currently effective organisation setting row with its type and sensitivity metadata. */
+data class StoredSetting(
+    val key: String,
+    val value: String,
+    val valueType: String,
+    val sensitive: Boolean,
+)
 
 /** Business date persistence port for the controlled, optimistically-locked business date. */
 interface BusinessDateStore {
@@ -125,6 +163,29 @@ interface BusinessDateStore {
         expectedRowVersion: Long,
         actorId: UUID,
     ): Boolean
+
+    /** Inserts the singleton business-date row as OPEN; false when one already exists. */
+    fun initialize(
+        organisationId: UUID,
+        initialDate: LocalDate,
+        actorId: UUID,
+    ): Boolean
+
+    /** Sets status under optimistic lock without touching the COB date; false when stale. */
+    fun changeStatus(
+        organisationId: UUID,
+        newStatus: String,
+        expectedRowVersion: Long,
+        actorId: UUID,
+    ): Boolean
+
+    /** Starts COB: sets status CLOSING and the COB date under optimistic lock; false when stale. */
+    fun startCob(
+        organisationId: UUID,
+        cobDate: LocalDate,
+        expectedRowVersion: Long,
+        actorId: UUID,
+    ): Boolean
 }
 
 /** Current business date read for optimistic-lock validation before advancing it. */
@@ -132,6 +193,50 @@ data class BusinessDateSnapshot(
     val currentBusinessDate: LocalDate,
     val status: String,
     val rowVersion: Long,
+)
+
+/** Append-only persistence port for business-date / COB status change history. */
+interface BusinessDateHistoryStore {
+    /** Appends one history entry. */
+    fun append(entry: BusinessDateHistoryEntry)
+
+    /** Returns a page of history entries newest-first for the organisation. */
+    fun list(
+        organisationId: UUID,
+        page: Int,
+        size: Int,
+    ): BusinessDateHistoryPage
+}
+
+/** A business-date / COB status change to append to history. */
+data class BusinessDateHistoryEntry(
+    val organisationId: UUID,
+    val eventType: String,
+    val fromStatus: String?,
+    val toStatus: String,
+    val fromBusinessDate: LocalDate?,
+    val toBusinessDate: LocalDate,
+    val actorId: UUID?,
+    val reason: String?,
+    val occurredAt: Instant,
+)
+
+/** A history entry read back for the history query. */
+data class BusinessDateHistoryRecord(
+    val eventType: String,
+    val fromStatus: String?,
+    val toStatus: String,
+    val fromBusinessDate: LocalDate?,
+    val toBusinessDate: LocalDate,
+    val actorId: UUID?,
+    val reason: String?,
+    val occurredAt: Instant,
+)
+
+/** A page of business-date history entries. */
+data class BusinessDateHistoryPage(
+    val items: List<BusinessDateHistoryRecord>,
+    val totalItems: Long,
 )
 
 /** Read port for pagination-safe organisation administration queries. */

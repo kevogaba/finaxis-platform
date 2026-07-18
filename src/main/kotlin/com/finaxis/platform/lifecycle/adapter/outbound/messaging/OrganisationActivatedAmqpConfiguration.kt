@@ -39,7 +39,11 @@ class OrganisationActivatedAmqpConfiguration {
                 "finaxis.lifecycle.branch.user-assigned",
                 "finaxis.lifecycle.branch.user-revoked",
                 "finaxis.lifecycle.organisation.settings-updated",
+                "finaxis.lifecycle.organisation.business-date-initialized",
                 "finaxis.lifecycle.organisation.business-date-advanced",
+                "finaxis.lifecycle.organisation.cob-started",
+                "finaxis.lifecycle.organisation.cob-completed",
+                "finaxis.lifecycle.organisation.business-date-reopened",
             )
         const val ORGANISATION_LIFECYCLE_QUEUE = "finaxis.lifecycle.organisation-events"
     }
