@@ -108,8 +108,41 @@ After implementation, the expanded focused suite including `SecurityAdapterTests
 - The documentation versioning scanner only examines endpoint-like `/api/...` examples and ignores
   internal source/documentation paths containing an `/api/` segment.
 
-### Verification pending final tree
+### Final review-fix verification
+
+The final expanded focused command was:
+
+```text
+./gradlew test --tests '*PaginationConfigurationTests' --tests '*ApiExceptionHandlerTests' --tests '*ApiProblemWriterTests' --tests '*HttpAccessLogFilterTests' --tests '*WebJsonContractTests' --tests '*ApiVersioningArchitectureTest' --tests '*SecurityAdapterTests'
+```
+
+Result: `BUILD SUCCESSFUL`; 42 tests passed (zero failures and zero errors).
 
 - `./gradlew spotlessApply` — passed after review fixes.
-- The required broader focused and full-suite commands are being rerun on this final review-fix
-  tree; their exact outcomes should supersede the earlier concern above.
+- A final `./gradlew test` was attempted, but its detached Gradle worker disappeared before an
+  exit status or updated report was available. A final-tree full-suite green result is therefore
+  not claimed.
+- `MembershipActivationPipelineIntegrationTests` remained unverified in that full-suite attempt.
+
+## Controller-run follow-up (2026-07-18)
+
+The authoritative controller run used `./gradlew --no-daemon test` and completed with 338 tests
+and 7 failures. Six failures were Task 1 test regressions: all five `MethodSecurityTests` cases
+could not load the Web MVC slice after `ActiveOrganisationContextFilter` gained its required
+`ApiProblemWriter` dependency, and `AuthFlowIntegrationTests` still expected the obsolete public
+violation field `organisationId`. The remaining failure was the independent
+`MembershipActivationPipelineIntegrationTests` timeout after one minute, caused by JobRunr
+`JobNotFound` behavior.
+
+The two Task 1 test corrections were verified with:
+
+```text
+./gradlew test --tests '*MethodSecurityTests' --tests '*AuthFlowIntegrationTests' --tests '*MembershipActivationPipelineIntegrationTests'
+```
+
+Results: `MethodSecurityTests` passed 5/5 and `AuthFlowIntegrationTests` passed 15/15.
+`MembershipActivationPipelineIntegrationTests` was rerun unchanged and failed again after
+85.564 seconds with `org.awaitility.core.ConditionTimeoutException` (the awaited condition did
+not complete within one minute). No membership production code was changed.
+
+`./gradlew spotlessApply` passed before this focused run.

@@ -246,7 +246,7 @@ class AuthFlowIntegrationTests {
             }.andExpect {
                 status { isBadRequest() }
                 jsonPath("$.code") { value("validation_failed") }
-                jsonPath("$.violations[0].field") { value("organisationId") }
+                jsonPath("$.violations[0].field") { value("organisation_id") }
             }
     }
 
