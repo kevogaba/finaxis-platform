@@ -460,6 +460,9 @@ private object OrganisationBootstrapDefaults {
             "settings.update",
             "business_date.view",
             "business_date.advance",
+            "business_date.reopen",
+            "cob.start",
+            "cob.complete",
             "iam.profile.read",
         )
     val ROLE_PERMISSIONS =

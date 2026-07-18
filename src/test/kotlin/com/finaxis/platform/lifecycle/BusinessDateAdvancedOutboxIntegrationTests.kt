@@ -1,16 +1,12 @@
 package com.finaxis.platform.lifecycle
 
 import com.finaxis.platform.TestcontainersConfiguration
-import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import com.finaxis.platform.lifecycle.application.AdvanceBusinessDateCommand
-import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
 import com.finaxis.platform.lifecycle.application.BusinessDateService
 import com.finaxis.platform.lifecycle.application.BusinessDateStore
-import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
-import com.finaxis.platform.lifecycle.application.SubmitOrganisationForApprovalCommand
 import io.namastack.outbox.OutboxRecordRepository
 import org.awaitility.Awaitility.await
 import org.jooq.DSLContext
@@ -33,18 +29,22 @@ class BusinessDateAdvancedOutboxIntegrationTests(
     private val outboxRecords: OutboxRecordRepository,
     private val dsl: DSLContext,
 ) {
+    private val fixture = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
+
     @Test
     fun `business date advance is durably externalized through Namastack outbox`() {
-        val organisationId = activeOrganisation()
+        val organisationId = fixture.createActiveOrganisation("bizdate", LOCAL_USER_ID)
         val current = requireNotNull(businessDateStore.current(organisationId))
 
-        businessDateService.advance(
-            AdvanceBusinessDateCommand(
-                organisationId = organisationId,
-                newBusinessDate = current.currentBusinessDate.plusDays(1),
-                actorId = LOCAL_USER_ID,
-            ),
-        )
+        withRequestContext {
+            businessDateService.advance(
+                AdvanceBusinessDateCommand(
+                    organisationId = organisationId,
+                    newBusinessDate = current.currentBusinessDate.plusDays(1),
+                    actorId = LOCAL_USER_ID,
+                ),
+            )
+        }
 
         await()
             .atMost(60, TimeUnit.SECONDS)
@@ -71,7 +71,7 @@ class BusinessDateAdvancedOutboxIntegrationTests(
                 }
         assertEquals(1, matchingRecords)
 
-        // @AuditedAction actually fired against the real Spring AOP proxy, not just in a unit test.
+        // AuditService persists the explicit service audit through the real Spring wiring.
         val auditedActions =
             dsl
                 .selectCount()
@@ -80,30 +80,6 @@ class BusinessDateAdvancedOutboxIntegrationTests(
                 .and(AUDIT_EVENT.ACTION.eq("business_date.advance"))
                 .fetchOne(0, Int::class.java)
         assertEquals(1, auditedActions)
-    }
-
-    private fun activeOrganisation(): UUID {
-        val organisationId =
-            organisationProvisioningService
-                .createDraft(
-                    CreateOrganisationDraftCommand(
-                        tenantCode = "bizdate-${uuidV7()}",
-                        displayName = "Business Date Outbox Organisation",
-                        legalName = "Business Date Outbox Organisation Limited",
-                        registrationNumber = "BIZDATE-${uuidV7()}",
-                        countryCode = "KE",
-                        baseCurrencyCode = "KES",
-                        timezone = "Africa/Nairobi",
-                        requestedBy = LOCAL_USER_ID,
-                    ),
-                ).organisationId
-        organisationProvisioningService.submitForApproval(
-            SubmitOrganisationForApprovalCommand(organisationId),
-        )
-        organisationProvisioningService.approveProvisioning(
-            ApproveOrganisationProvisioningCommand(organisationId),
-        )
-        return organisationId
     }
 
     private companion object {

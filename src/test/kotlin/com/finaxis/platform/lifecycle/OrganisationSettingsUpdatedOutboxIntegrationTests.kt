@@ -1,15 +1,11 @@
 package com.finaxis.platform.lifecycle
 
 import com.finaxis.platform.TestcontainersConfiguration
-import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
-import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
-import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
+import com.finaxis.platform.lifecycle.application.CreateOrUpdateTenantSettingCommand
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
-import com.finaxis.platform.lifecycle.application.OrganisationSettingsService
-import com.finaxis.platform.lifecycle.application.SubmitOrganisationForApprovalCommand
-import com.finaxis.platform.lifecycle.application.UpdateOrganisationSettingsCommand
+import com.finaxis.platform.lifecycle.application.TenantSettingsService
 import io.namastack.outbox.OutboxRecordRepository
 import org.awaitility.Awaitility.await
 import org.jooq.DSLContext
@@ -27,21 +23,26 @@ import kotlin.test.assertTrue
 @TestConstructor(autowireMode = TestConstructor.AutowireMode.ALL)
 class OrganisationSettingsUpdatedOutboxIntegrationTests(
     private val organisationProvisioningService: OrganisationProvisioningService,
-    private val organisationSettingsService: OrganisationSettingsService,
+    private val tenantSettingsService: TenantSettingsService,
     private val outboxRecords: OutboxRecordRepository,
     private val dsl: DSLContext,
 ) {
+    private val fixture = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
+
     @Test
     fun `settings update is durably externalized through Namastack outbox`() {
-        val organisationId = activeOrganisation()
+        val organisationId = fixture.createActiveOrganisation("settings", LOCAL_USER_ID)
 
-        organisationSettingsService.updateSettings(
-            UpdateOrganisationSettingsCommand(
-                organisationId = organisationId,
-                updates = mapOf("settings.operational" to "false"),
-                actorId = LOCAL_USER_ID,
-            ),
-        )
+        withRequestContext {
+            tenantSettingsService.createOrUpdate(
+                CreateOrUpdateTenantSettingCommand(
+                    organisationId = organisationId,
+                    key = "base_currency",
+                    value = "KES",
+                    actorId = LOCAL_USER_ID,
+                ),
+            )
+        }
 
         await()
             .atMost(60, TimeUnit.SECONDS)
@@ -70,7 +71,7 @@ class OrganisationSettingsUpdatedOutboxIntegrationTests(
                 }
         assertEquals(1, matchingRecords)
 
-        // @AuditedAction actually fired against the real Spring AOP proxy, not just in a unit test.
+        // AuditService persists the explicit service audit through the real Spring wiring.
         val auditedActions =
             dsl
                 .selectCount()
@@ -79,30 +80,6 @@ class OrganisationSettingsUpdatedOutboxIntegrationTests(
                 .and(AUDIT_EVENT.ACTION.eq("settings.update"))
                 .fetchOne(0, Int::class.java)
         assertEquals(1, auditedActions)
-    }
-
-    private fun activeOrganisation(): UUID {
-        val organisationId =
-            organisationProvisioningService
-                .createDraft(
-                    CreateOrganisationDraftCommand(
-                        tenantCode = "settings-${uuidV7()}",
-                        displayName = "Settings Outbox Organisation",
-                        legalName = "Settings Outbox Organisation Limited",
-                        registrationNumber = "SETTINGS-${uuidV7()}",
-                        countryCode = "KE",
-                        baseCurrencyCode = "KES",
-                        timezone = "Africa/Nairobi",
-                        requestedBy = LOCAL_USER_ID,
-                    ),
-                ).organisationId
-        organisationProvisioningService.submitForApproval(
-            SubmitOrganisationForApprovalCommand(organisationId),
-        )
-        organisationProvisioningService.approveProvisioning(
-            ApproveOrganisationProvisioningCommand(organisationId),
-        )
-        return organisationId
     }
 
     private companion object {

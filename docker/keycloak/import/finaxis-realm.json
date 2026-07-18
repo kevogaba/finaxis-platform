@@ -40,6 +40,26 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "finaxis-web",
+      "name": "Finaxis Web",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "XmjiW1o4ezwqMxmWY1KoiaDThBbVOZIk",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:3000/api/auth/oauth2/callback/keycloak",
+        "http://localhost:3100/api/auth/oauth2/callback/keycloak"
+      ],
+      "webOrigins": ["http://localhost:3000", "http://localhost:3100"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3000/login##http://localhost:3100/login"
+      }
     }
   ],
   "users": [
