@@ -1,6 +1,7 @@
 package com.finaxis.platform.common.web.api
 
 import org.junit.jupiter.api.Test
+import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.mock.web.MockHttpServletRequest
 import org.springframework.mock.web.MockHttpServletResponse
@@ -35,5 +36,26 @@ class ApiProblemWriterTests {
         assertTrue(
             response.contentAsString.contains("Active tenant context is invalid or unavailable."),
         )
+    }
+
+    @Test
+    fun `writer supports every safe pre mvc problem`() {
+        val request = MockHttpServletRequest("GET", "/api/v1/auth/me")
+        request.addHeader("X-Request-Id", "request-123")
+        val response = MockHttpServletResponse()
+
+        ApiProblemWriter(ApiProblemFactory(), ApiJsonCodec()).write(
+            request,
+            response,
+            HttpStatus.UNAUTHORIZED,
+            "authentication_required",
+            "Authentication is required.",
+        )
+
+        assertEquals(401, response.status)
+        assertEquals("request-123", response.getHeader("X-Request-Id"))
+        assertTrue(response.contentAsString.contains("\"request_id\":\"request-123\""))
+        assertTrue(response.contentAsString.contains("\"instance\":\"/api/v1/auth/me\""))
+        assertTrue(response.contentAsString.contains("\"code\":\"authentication_required\""))
     }
 }

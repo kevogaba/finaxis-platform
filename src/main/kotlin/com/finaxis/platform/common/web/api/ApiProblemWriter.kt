@@ -12,22 +12,33 @@ class ApiProblemWriter(
     private val problemFactory: ApiProblemFactory,
     private val apiJsonCodec: ApiJsonCodec,
 ) {
-    /** Writes the stable response used when tenant context cannot be trusted or resolved. */
-    fun writeForbiddenTenantContext(
+    /** Writes a safe RFC 9457 response for a failure outside MVC exception handling. */
+    fun write(
         request: HttpServletRequest,
         response: HttpServletResponse,
+        status: HttpStatus,
+        code: String,
+        detail: String,
     ) {
-        val problem =
-            problemFactory.problem(
-                HttpStatus.FORBIDDEN,
-                "invalid_active_tenant_context",
-                "Active tenant context is invalid or unavailable.",
-                request,
-            )
+        val problem = problemFactory.problem(status, code, detail, request)
         response.status = problem.status
         response.contentType = MediaType.APPLICATION_PROBLEM_JSON_VALUE
         response.characterEncoding = Charsets.UTF_8.name()
         response.setHeader(ApiProblemFactory.REQUEST_ID_HEADER, problem.requestId)
         apiJsonCodec.mapper.writeValue(response.outputStream, problem)
+    }
+
+    /** Writes the stable response used when tenant context cannot be trusted or resolved. */
+    fun writeForbiddenTenantContext(
+        request: HttpServletRequest,
+        response: HttpServletResponse,
+    ) {
+        write(
+            request,
+            response,
+            HttpStatus.FORBIDDEN,
+            "invalid_active_tenant_context",
+            "Active tenant context is invalid or unavailable.",
+        )
     }
 }

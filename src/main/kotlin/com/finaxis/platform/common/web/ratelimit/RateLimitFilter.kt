@@ -1,11 +1,12 @@
 package com.finaxis.platform.common.web.ratelimit
 
+import com.finaxis.platform.common.web.api.ApiProblemWriter
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpHeaders
-import org.springframework.http.MediaType
+import org.springframework.http.HttpStatus
 import org.springframework.util.AntPathMatcher
 import org.springframework.web.filter.OncePerRequestFilter
 import java.time.Clock
@@ -19,6 +20,7 @@ open class RateLimitFilter(
     private val keyResolver: RateLimitKeyResolver,
     private val rateLimiter: RateLimiterService,
     private val clock: Clock,
+    private val problemWriter: ApiProblemWriter,
 ) : OncePerRequestFilter() {
     private val pathMatcher = AntPathMatcher()
 
@@ -58,12 +60,12 @@ open class RateLimitFilter(
             identity.key,
             secondsHeader(decision.retryAfter),
         )
-        response.status = TOO_MANY_REQUESTS
-        response.contentType = MediaType.APPLICATION_PROBLEM_JSON_VALUE
-        response.writer.write(
-            """
-            {"type":"about:blank","title":"Too Many Requests","status":429,"detail":"Rate limit exceeded"}
-            """.trimIndent(),
+        problemWriter.write(
+            request,
+            response,
+            HttpStatus.TOO_MANY_REQUESTS,
+            "rate_limit_exceeded",
+            "Rate limit exceeded.",
         )
     }
 
@@ -87,7 +89,13 @@ open class RateLimitFilter(
         if (properties.failOpen) {
             filterChain.doFilter(request, response)
         } else {
-            response.sendError(TOO_MANY_REQUESTS, "Rate limiter unavailable")
+            problemWriter.write(
+                request,
+                response,
+                HttpStatus.TOO_MANY_REQUESTS,
+                "rate_limiter_unavailable",
+                "Rate limiter is temporarily unavailable.",
+            )
         }
     }
 
@@ -114,7 +122,6 @@ open class RateLimitFilter(
         duration.seconds.coerceAtLeast(MINIMUM_RETRY_AFTER_SECONDS).toString()
 
     private companion object {
-        private const val TOO_MANY_REQUESTS = 429
         private const val MINIMUM_RETRY_AFTER_SECONDS = 1L
         private val rateLimitLogger = LoggerFactory.getLogger(RateLimitFilter::class.java)
     }

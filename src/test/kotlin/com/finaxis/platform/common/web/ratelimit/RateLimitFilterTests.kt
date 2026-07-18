@@ -1,6 +1,9 @@
 package com.finaxis.platform.common.web.ratelimit
 
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.web.api.ApiJsonCodec
+import com.finaxis.platform.common.web.api.ApiProblemFactory
+import com.finaxis.platform.common.web.api.ApiProblemWriter
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import org.junit.jupiter.api.Test
 import org.springframework.mock.web.MockFilterChain
@@ -19,17 +22,18 @@ import kotlin.test.assertTrue
 class RateLimitFilterTests {
     private val properties =
         RateLimitProperties(
-            anonymous =
-                RateLimitPolicy(
-                    capacity = 1,
-                    refillTokens = 1,
-                    refillPeriod = Duration.ofMinutes(1),
+            policies =
+                mapOf(
+                    "platform-read" to RateLimitPolicy(1, 1, Duration.ofMinutes(1)),
+                    "tenant-read" to RateLimitPolicy(2, 2, Duration.ofMinutes(1)),
                 ),
-            authenticated =
-                RateLimitPolicy(
-                    capacity = 2,
-                    refillTokens = 2,
-                    refillPeriod = Duration.ofMinutes(1),
+            paths =
+                RateLimitPathProperties(
+                    rules =
+                        listOf(
+                            RateLimitPathRule("GET", "/api/v1/auth/me", "platform-read"),
+                            RateLimitPathRule("GET", "/api/v1/**", "tenant-read"),
+                        ),
                 ),
         )
     private val limiter = InMemoryRateLimiterService(properties)
@@ -39,6 +43,7 @@ class RateLimitFilterTests {
             keyResolver = RateLimitKeyResolver(),
             rateLimiter = limiter,
             clock = Clock.fixed(Instant.parse("2026-07-06T08:00:00Z"), ZoneOffset.UTC),
+            problemWriter = ApiProblemWriter(ApiProblemFactory(), ApiJsonCodec()),
         )
 
     @AfterTest
@@ -56,6 +61,7 @@ class RateLimitFilterTests {
         assertEquals("1", second.getHeader("RateLimit-Limit"))
         assertEquals("0", second.getHeader("RateLimit-Remaining"))
         assertTrue(!second.getHeader("Retry-After").isNullOrBlank())
+        assertProblem(second, "rate_limit_exceeded", "request-123")
     }
 
     @Test
@@ -74,9 +80,9 @@ class RateLimitFilterTests {
                 ),
             )
 
-        assertEquals(200, performRequest("/api/v1/auth/me").status)
-        assertEquals(200, performRequest("/api/v1/auth/me").status)
-        assertEquals(429, performRequest("/api/v1/auth/me").status)
+        assertEquals(200, performRequest("/api/v1/records").status)
+        assertEquals(200, performRequest("/api/v1/records").status)
+        assertEquals(429, performRequest("/api/v1/records").status)
     }
 
     @Test
@@ -85,11 +91,76 @@ class RateLimitFilterTests {
         assertEquals(200, performRequest("/actuator/health").status)
     }
 
+    @Test
+    fun `unavailable limiter returns shared problem when fail closed`() {
+        val unavailable =
+            RateLimitFilter(
+                properties = properties.copy(failOpen = false),
+                keyResolver = RateLimitKeyResolver(),
+                rateLimiter =
+                    RateLimiterService { _, _ ->
+                        throw RateLimitUnavailableException(IllegalStateException("redis"))
+                    },
+                clock = Clock.systemUTC(),
+                problemWriter = ApiProblemWriter(ApiProblemFactory(), ApiJsonCodec()),
+            )
+        val request = MockHttpServletRequest("GET", "/api/v1/auth/me")
+        request.addHeader("X-Request-Id", "request-123")
+        val response = MockHttpServletResponse()
+
+        unavailable.doFilter(request, response, MockFilterChain())
+
+        assertProblem(response, "rate_limiter_unavailable", "request-123")
+    }
+
+    @Test
+    fun `distributed key includes named policy tenant and authenticated identity`() {
+        val principal =
+            AppPrincipal(
+                userId = UUID.fromString("11111111-1111-1111-1111-111111111111"),
+                keycloakSubject = "subject",
+                organisationId = UUID.fromString("22222222-2222-2222-2222-222222222222"),
+                membershipId = uuidV7(),
+                branchId = null,
+                email = "user@example.com",
+                fullName = "User",
+                permissions = emptySet(),
+            )
+        SecurityContextHolder.getContext().authentication =
+            com.finaxis.platform.iam.application.context
+                .AppPrincipalAuthenticationToken(principal)
+
+        val identity =
+            RateLimitKeyResolver().resolve(
+                MockHttpServletRequest("GET", "/api/v1/records"),
+                properties,
+            )
+
+        assertEquals("tenant-read", identity.policyId)
+        assertEquals(
+            "rate-limit:tenant-read:auth:${principal.organisationId}:${principal.userId}",
+            identity.key,
+        )
+    }
+
     private fun performRequest(path: String): MockHttpServletResponse {
         val request = MockHttpServletRequest("GET", path)
+        request.addHeader("X-Request-Id", "request-123")
         request.remoteAddr = "203.0.113.10"
         val response = MockHttpServletResponse()
         filter.doFilter(request, response, MockFilterChain())
         return response
+    }
+
+    private fun assertProblem(
+        response: MockHttpServletResponse,
+        code: String,
+        requestId: String,
+    ) {
+        assertEquals(429, response.status)
+        assertTrue(requireNotNull(response.contentType).startsWith("application/problem+json"))
+        assertEquals(requestId, response.getHeader("X-Request-Id"))
+        assertTrue(response.contentAsString.contains("\"code\":\"$code\""))
+        assertTrue(response.contentAsString.contains("\"request_id\":\"$requestId\""))
     }
 }

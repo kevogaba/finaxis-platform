@@ -10,15 +10,15 @@ data class RateLimitProperties(
     val enabled: Boolean = true,
     val includeHeaders: Boolean = true,
     val failOpen: Boolean = true,
-    val anonymous: RateLimitPolicy = RateLimitPolicy(),
-    val authenticated: RateLimitPolicy =
-        RateLimitPolicy(
-            capacity = DEFAULT_AUTHENTICATED_CAPACITY,
-            refillTokens = DEFAULT_AUTHENTICATED_CAPACITY,
-        ),
+    val policies: Map<String, RateLimitPolicy> = defaultPolicies(),
     val paths: RateLimitPathProperties = RateLimitPathProperties(),
-) {
-    private companion object {
-        private const val DEFAULT_AUTHENTICATED_CAPACITY = 1_000L
-    }
-}
+)
+
+private fun defaultPolicies(): Map<String, RateLimitPolicy> =
+    mapOf(
+        "auth-selection" to RateLimitPolicy(capacity = 20, refillTokens = 20),
+        "platform-read" to RateLimitPolicy(capacity = 600, refillTokens = 600),
+        "platform-command" to RateLimitPolicy(capacity = 120, refillTokens = 120),
+        "tenant-read" to RateLimitPolicy(capacity = 600, refillTokens = 600),
+        "tenant-command" to RateLimitPolicy(capacity = 120, refillTokens = 120),
+    )

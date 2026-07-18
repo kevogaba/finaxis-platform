@@ -24,8 +24,10 @@ class RateLimitPropertiesTests {
                 .get()
 
         assertTrue(properties.enabled)
-        assertEquals(100, properties.anonymous.capacity)
-        assertEquals(1000, properties.authenticated.capacity)
+        assertEquals(20, properties.policies.getValue("auth-selection").capacity)
+        assertEquals(600, properties.policies.getValue("platform-read").capacity)
+        assertEquals(120, properties.policies.getValue("tenant-command").capacity)
+        assertTrue(properties.paths.rules.any { it.policy == "auth-selection" })
         assertTrue(properties.paths.excluded.contains("/actuator/health/**"))
     }
 }

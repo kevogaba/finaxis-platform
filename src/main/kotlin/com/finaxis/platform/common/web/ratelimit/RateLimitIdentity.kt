@@ -5,6 +5,7 @@ package com.finaxis.platform.common.web.ratelimit
  */
 data class RateLimitIdentity(
     val key: String,
+    val policyId: String,
     val policy: RateLimitPolicy,
     val authenticated: Boolean,
 )

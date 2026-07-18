@@ -28,6 +28,7 @@ import org.mockito.Mockito.`when`
 import org.springframework.mock.web.MockFilterChain
 import org.springframework.mock.web.MockHttpServletRequest
 import org.springframework.mock.web.MockHttpServletResponse
+import org.springframework.security.authentication.InsufficientAuthenticationException
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken
@@ -38,6 +39,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.springframework.security.access.AccessDeniedException as SpringAccessDeniedException
 
 class SecurityAdapterTests {
     @AfterTest
@@ -357,6 +359,36 @@ class SecurityAdapterTests {
     }
 
     @Test
+    fun `authentication entry point returns shared correlated problem`() {
+        val request = MockHttpServletRequest("GET", "/api/v1/auth/me")
+        request.addHeader("X-Request-Id", "security-request")
+        val response = MockHttpServletResponse()
+
+        ApiAuthenticationEntryPoint(problemWriter()).commence(
+            request,
+            response,
+            InsufficientAuthenticationException("unsafe internal detail"),
+        )
+
+        assertSecurityProblem(response, 401, "authentication_required")
+    }
+
+    @Test
+    fun `access denied handler returns shared correlated problem`() {
+        val request = MockHttpServletRequest("GET", "/api/v1/auth/me")
+        request.addHeader("X-Request-Id", "security-request")
+        val response = MockHttpServletResponse()
+
+        ApiAccessDeniedHandler(problemWriter()).handle(
+            request,
+            response,
+            SpringAccessDeniedException("unsafe internal detail"),
+        )
+
+        assertSecurityProblem(response, 403, "access_denied")
+    }
+
+    @Test
     fun `active organisation filter rejects context that cannot load principal`() {
         val contextResolver = mock(ActiveOrganisationContextResolver::class.java)
         val loader = mock(AppPrincipalLoader::class.java)
@@ -435,6 +467,19 @@ class SecurityAdapterTests {
 
     private fun problemWriter(): ApiProblemWriter =
         ApiProblemWriter(ApiProblemFactory(), ApiJsonCodec())
+
+    private fun assertSecurityProblem(
+        response: MockHttpServletResponse,
+        status: Int,
+        code: String,
+    ) {
+        assertEquals(status, response.status)
+        assertTrue(requireNotNull(response.contentType).startsWith("application/problem+json"))
+        assertEquals("security-request", response.getHeader("X-Request-Id"))
+        assertTrue(response.contentAsString.contains("\"code\":\"$code\""))
+        assertTrue(response.contentAsString.contains("\"request_id\":\"security-request\""))
+        assertTrue(!response.contentAsString.contains("unsafe internal detail"))
+    }
 
     private fun principal(permissions: Set<String> = emptySet()): AppPrincipal =
         AppPrincipal(

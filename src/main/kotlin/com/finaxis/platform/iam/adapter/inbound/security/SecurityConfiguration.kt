@@ -22,14 +22,19 @@ import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.http.HttpStatus
+import org.springframework.security.access.AccessDeniedException
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
+import org.springframework.security.core.AuthenticationException
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter
+import org.springframework.security.web.AuthenticationEntryPoint
 import org.springframework.security.web.SecurityFilterChain
+import org.springframework.security.web.access.AccessDeniedHandler
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy
 import org.springframework.stereotype.Service
 import org.springframework.web.cors.CorsConfiguration
@@ -48,6 +53,7 @@ class SecurityConfiguration(
     private val rateLimitFilter: RateLimitFilter,
     private val corsProperties: CorsProperties,
     private val securityHeadersProperties: SecurityHeadersProperties,
+    private val problemWriter: ApiProblemWriter,
 ) {
     /**
      * Builds the servlet security filter chain for JWT authentication and method security.
@@ -90,7 +96,11 @@ class SecurityConfiguration(
                     .anyRequest()
                     .authenticated()
             }.oauth2ResourceServer { resourceServer -> resourceServer.jwt { } }
-            .addFilterAfter(activeOrganisationFilter, BearerTokenAuthenticationFilter::class.java)
+            .exceptionHandling { exceptions ->
+                exceptions
+                    .authenticationEntryPoint(ApiAuthenticationEntryPoint(problemWriter))
+                    .accessDeniedHandler(ApiAccessDeniedHandler(problemWriter))
+            }.addFilterAfter(activeOrganisationFilter, BearerTokenAuthenticationFilter::class.java)
             .addFilterAfter(rateLimitFilter, ActiveOrganisationContextFilter::class.java)
         return http.build()
     }
@@ -113,6 +123,44 @@ class SecurityConfiguration(
                 )
             }
         }
+}
+
+/** Writes unauthenticated Spring Security failures through the public API problem contract. */
+class ApiAuthenticationEntryPoint(
+    private val problemWriter: ApiProblemWriter,
+) : AuthenticationEntryPoint {
+    override fun commence(
+        request: HttpServletRequest,
+        response: HttpServletResponse,
+        authException: AuthenticationException,
+    ) {
+        problemWriter.write(
+            request,
+            response,
+            HttpStatus.UNAUTHORIZED,
+            "authentication_required",
+            "Authentication is required.",
+        )
+    }
+}
+
+/** Writes unauthorized Spring Security failures through the public API problem contract. */
+class ApiAccessDeniedHandler(
+    private val problemWriter: ApiProblemWriter,
+) : AccessDeniedHandler {
+    override fun handle(
+        request: HttpServletRequest,
+        response: HttpServletResponse,
+        accessDeniedException: AccessDeniedException,
+    ) {
+        problemWriter.write(
+            request,
+            response,
+            HttpStatus.FORBIDDEN,
+            "access_denied",
+            "Access is denied.",
+        )
+    }
 }
 
 /**
