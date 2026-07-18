@@ -11,13 +11,16 @@ import org.mockito.Mockito.`when`
 import org.springframework.core.MethodParameter
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpInputMessage
+import org.springframework.http.HttpMethod
 import org.springframework.http.HttpStatus
 import org.springframework.http.HttpStatusCode
 import org.springframework.http.MediaType
 import org.springframework.http.converter.HttpMessageNotReadableException
 import org.springframework.mock.web.MockHttpServletRequest
 import org.springframework.web.HttpMediaTypeNotSupportedException
+import org.springframework.web.bind.MissingServletRequestParameterException
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException
+import org.springframework.web.servlet.resource.NoResourceFoundException
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -72,7 +75,7 @@ class ApiExceptionHandlerTests {
         )
         assertEquals(2, response.body!!.violations?.size)
         assertEquals(
-            setOf("tenantCode", "name"),
+            setOf("tenant_code", "name"),
             response.body!!
                 .violations
                 ?.map { it.field }
@@ -108,6 +111,52 @@ class ApiExceptionHandlerTests {
             violationCount = 1,
         )
         assertFalse(response.body!!.detail.contains("secret-value"))
+    }
+
+    @Test
+    fun `maps missing request parameters and missing routes to safe problem responses`() {
+        val missingParameter =
+            handler.missingParameter(
+                MissingServletRequestParameterException("org_id", "UUID"),
+                request(),
+            )
+        val missingRoute =
+            handler.noResourceFound(
+                NoResourceFoundException(HttpMethod.GET, "/api/v1/missing", "No resource"),
+                request(),
+            )
+
+        assertProblem(
+            missingParameter.body!!,
+            400,
+            "missing_parameter",
+            "A required request parameter is missing.",
+            violationCount = 1,
+        )
+        assertEquals(
+            "org_id",
+            missingParameter.body!!
+                .violations!!
+                .single()
+                .field,
+        )
+        assertProblem(
+            missingRoute.body!!,
+            404,
+            "resource_not_found",
+            "The requested resource was not found.",
+        )
+    }
+
+    @Test
+    fun `problem responses declare RFC problem json media type`() {
+        val response =
+            handler.invalidJson(
+                HttpMessageNotReadableException("bad", mock(HttpInputMessage::class.java)),
+                request(),
+            )
+
+        assertEquals(MediaType.APPLICATION_PROBLEM_JSON, response.headers.contentType)
     }
 
     @Test

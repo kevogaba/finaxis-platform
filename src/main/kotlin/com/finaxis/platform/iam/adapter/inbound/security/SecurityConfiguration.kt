@@ -6,6 +6,7 @@ import com.finaxis.platform.common.context.CorrelationContext
 import com.finaxis.platform.common.context.RequestContext
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.context.TenantContext
+import com.finaxis.platform.common.web.api.ApiProblemWriter
 import com.finaxis.platform.common.web.ratelimit.RateLimitFilter
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
@@ -184,6 +185,7 @@ class AppPrincipalLoader(
 class ActiveOrganisationContextFilter(
     private val contextResolver: ActiveOrganisationContextResolver,
     private val principalLoader: AppPrincipalLoader,
+    private val problemWriter: ApiProblemWriter,
 ) : OncePerRequestFilter() {
     override fun doFilterInternal(
         request: HttpServletRequest,
@@ -210,15 +212,15 @@ class ActiveOrganisationContextFilter(
         response: HttpServletResponse,
     ): Boolean {
         val resolution = contextResolver.resolve(request)
-        return resolution.failureMessage?.let { forbidden(response, it) }
+        return resolution.failureMessage?.let { forbidden(request, response) }
             ?: resolution.context?.let { context ->
                 authentication.token.subject?.let { subject ->
                     principalLoader.load(subject, context)?.let { principal ->
                         SecurityContextHolder.getContext().authentication =
                             AppPrincipalAuthenticationToken(principal)
                         true
-                    } ?: forbidden(response, "Invalid active organisation context")
-                } ?: forbidden(response, "JWT subject is required")
+                    } ?: forbidden(request, response)
+                } ?: forbidden(request, response)
             }
             ?: true
     }
@@ -266,10 +268,10 @@ class ActiveOrganisationContextFilter(
         )
 
     private fun forbidden(
+        request: HttpServletRequest,
         response: HttpServletResponse,
-        message: String,
     ): Boolean {
-        response.sendError(HttpServletResponse.SC_FORBIDDEN, message)
+        problemWriter.writeForbiddenTenantContext(request, response)
         return false
     }
 

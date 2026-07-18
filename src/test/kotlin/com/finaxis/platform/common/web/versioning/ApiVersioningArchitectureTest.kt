@@ -7,6 +7,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.readText
 import kotlin.reflect.full.findAnnotation
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 private const val API_PREFIX = "/api/v"
@@ -48,13 +49,20 @@ class ApiVersioningArchitectureTest {
                         .mapIndexed { index, line -> path to (index + 1 to line) }
                         .stream()
                 }.filter { (_, line) ->
-                    line.second.contains("/api/") && !line.second.contains(API_PREFIX)
+                    isUnversionedApiExample(line.second)
                 }.toList()
 
         assertTrue(
             offenders.isEmpty(),
             "Docs must use versioned API examples: ${offenders.joinToString()}",
         )
+    }
+
+    @Test
+    fun `only endpoint examples are considered by the documentation scanner`() {
+        assertFalse(isUnversionedApiExample("Source: src/main/kotlin/web/api/ApiProblem.kt"))
+        assertTrue(isUnversionedApiExample("Call /api/auth/me after login."))
+        assertFalse(isUnversionedApiExample("Call /api/v1/auth/me after login."))
     }
 
     private fun unversionedControllerMapping(className: String): String? {
@@ -67,5 +75,12 @@ class ApiVersioningArchitectureTest {
         return paths
             .takeIf { it.isEmpty() || it.any { path -> !path.startsWith(API_PREFIX) } }
             ?.let { "$className -> ${it.ifEmpty { listOf("<empty>") }}" }
+    }
+
+    private fun isUnversionedApiExample(line: String): Boolean =
+        ENDPOINT_EXAMPLE.findAll(line).any { match -> !match.value.startsWith(API_PREFIX) }
+
+    private companion object {
+        val ENDPOINT_EXAMPLE = Regex("""(?<![A-Za-z0-9_.-])/api/(?:[A-Za-z0-9._~-]+/?)*""")
     }
 }

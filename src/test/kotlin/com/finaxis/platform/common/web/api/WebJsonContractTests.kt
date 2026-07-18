@@ -88,7 +88,7 @@ class WebJsonContractTests
                 ),
                 page,
             )
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<InvalidPageRequestException> {
                 apiPageOf(
                     items = emptyList<String>(),
                     number = -1,
@@ -96,7 +96,7 @@ class WebJsonContractTests
                     totalItems = 0,
                 )
             }
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<InvalidPageRequestException> {
                 apiPageOf(
                     items = emptyList<String>(),
                     number = 0,

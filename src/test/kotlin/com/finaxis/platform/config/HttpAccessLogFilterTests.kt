@@ -90,4 +90,18 @@ class HttpAccessLogFilterTests {
         assertTrue(event.formattedMessage.contains("status=500"))
         assertEquals("500", event.mdcPropertyMap["http.status_code"])
     }
+
+    @Test
+    fun `filter reuses a request id established before access logging`() {
+        val request =
+            MockHttpServletRequest("GET", "/api/v1/auth/me").apply {
+                setAttribute("com.finaxis.platform.common.web.api.request-id", "problem-request-1")
+            }
+        val response = MockHttpServletResponse()
+
+        HttpAccessLogFilter().doFilter(request, response, FilterChain { _, _ -> })
+
+        assertEquals("problem-request-1", response.getHeader("X-Request-Id"))
+        assertEquals("problem-request-1", appender.list.single().mdcPropertyMap["requestId"])
+    }
 }

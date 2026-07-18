@@ -225,8 +225,8 @@ sentry:
 
 finaxis:
   pagination:
-    default-page-size: ${FINAXIS_PAGINATION_DEFAULT_PAGE_SIZE:50}
-    max-page-size: ${FINAXIS_PAGINATION_MAX_PAGE_SIZE:200}
+    default-page-size: ${FINAXIS_PAGINATION_DEFAULT_PAGE_SIZE:25}
+    max-page-size: ${FINAXIS_PAGINATION_MAX_PAGE_SIZE:100}
   rate-limit:
     enabled: ${FINAXIS_RATE_LIMIT_ENABLED:true}
     include-headers: ${FINAXIS_RATE_LIMIT_INCLUDE_HEADERS:true}

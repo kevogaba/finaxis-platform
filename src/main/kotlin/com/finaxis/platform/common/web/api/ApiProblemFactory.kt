@@ -5,6 +5,7 @@ import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
+import com.finaxis.platform.common.id.uuidV7
 import jakarta.servlet.http.HttpServletRequest
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
@@ -39,8 +40,7 @@ class ApiProblemFactory {
             detail = detail,
             instance = request.requestURI,
             code = code,
-            requestId =
-                request.getHeader(REQUEST_ID_HEADER)?.takeIf { it.isNotBlank() } ?: "unknown",
+            requestId = requestId(request),
             violations = violations?.take(MAXIMUM_VIOLATIONS),
         )
 
@@ -52,8 +52,16 @@ class ApiProblemFactory {
             is InvalidOperationException -> HttpStatus.UNPROCESSABLE_CONTENT
         }
 
-    private companion object {
+    companion object {
         const val REQUEST_ID_HEADER = "X-Request-Id"
+        const val REQUEST_ID_ATTRIBUTE = "com.finaxis.platform.common.web.api.request-id"
         const val MAXIMUM_VIOLATIONS = 100
+
+        /** Resolves one request id for filters, problem bodies, and response headers. */
+        fun requestId(request: HttpServletRequest): String =
+            (request.getAttribute(REQUEST_ID_ATTRIBUTE) as? String)
+                ?.takeIf { it.isNotBlank() }
+                ?: request.getHeader(REQUEST_ID_HEADER)?.takeIf { it.isNotBlank() }
+                ?: uuidV7().toString().also { request.setAttribute(REQUEST_ID_ATTRIBUTE, it) }
     }
 }

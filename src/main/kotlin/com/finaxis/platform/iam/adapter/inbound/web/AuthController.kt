@@ -90,7 +90,12 @@ class AuthController(
         ApiResponse(
             responseCode = "403",
             description = "Authenticated user is not an active member of the organisation",
-            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
         ),
     )
     @PostMapping("/select-organisation")
@@ -132,7 +137,12 @@ class AuthController(
         ApiResponse(
             responseCode = "403",
             description = "Authenticated user is not assigned to the selected branch",
-            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
         ),
     )
     @PostMapping("/select-branch")

@@ -1,6 +1,8 @@
 package com.finaxis.platform.iam.adapter.inbound.security
 
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.web.api.ApiProblemFactory
+import com.finaxis.platform.common.web.api.ApiProblemWriter
 import com.finaxis.platform.iam.application.authorization.AccessDeniedException
 import com.finaxis.platform.iam.application.authorization.AuthorizationService
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
@@ -28,12 +30,14 @@ import org.springframework.mock.web.MockHttpServletResponse
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken
+import tools.jackson.databind.json.JsonMapper
 import java.util.UUID
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class SecurityAdapterTests {
     @AfterTest
@@ -301,7 +305,7 @@ class SecurityAdapterTests {
     fun `active organisation filter upgrades jwt authentication`() {
         val contextResolver = mock(ActiveOrganisationContextResolver::class.java)
         val loader = mock(AppPrincipalLoader::class.java)
-        val filter = ActiveOrganisationContextFilter(contextResolver, loader)
+        val filter = ActiveOrganisationContextFilter(contextResolver, loader, problemWriter())
         val context =
             ActiveOrganisationContext(uuidV7(), uuidV7(), uuidV7())
         val principal = principal()
@@ -328,6 +332,7 @@ class SecurityAdapterTests {
             ActiveOrganisationContextFilter(
                 contextResolver,
                 mock(AppPrincipalLoader::class.java),
+                problemWriter(),
             )
         val response = MockHttpServletResponse()
         SecurityContextHolder.getContext().authentication = jwtAuthentication("subject")
@@ -340,13 +345,22 @@ class SecurityAdapterTests {
         filter.doFilter(request, response, MockFilterChain())
 
         assertEquals(403, response.status)
+        assertTrue(requireNotNull(response.contentType).startsWith("application/problem+json"))
+        assertEquals(
+            "invalid_active_tenant_context",
+            response.contentAsString.substringAfter("\"code\":\"").substringBefore('"'),
+        )
+        assertEquals(
+            response.getHeader("X-Request-Id"),
+            request.getAttribute(ApiProblemFactory.REQUEST_ID_ATTRIBUTE),
+        )
     }
 
     @Test
     fun `active organisation filter rejects context that cannot load principal`() {
         val contextResolver = mock(ActiveOrganisationContextResolver::class.java)
         val loader = mock(AppPrincipalLoader::class.java)
-        val filter = ActiveOrganisationContextFilter(contextResolver, loader)
+        val filter = ActiveOrganisationContextFilter(contextResolver, loader, problemWriter())
         val context =
             ActiveOrganisationContext(uuidV7(), uuidV7(), uuidV7())
         val request = MockHttpServletRequest()
@@ -371,7 +385,11 @@ class SecurityAdapterTests {
         val context =
             ActiveOrganisationContext(uuidV7(), uuidV7(), uuidV7())
         val filter =
-            ActiveOrganisationContextFilter(contextResolver, mock(AppPrincipalLoader::class.java))
+            ActiveOrganisationContextFilter(
+                contextResolver,
+                mock(AppPrincipalLoader::class.java),
+                problemWriter(),
+            )
         val request = MockHttpServletRequest()
         val response = MockHttpServletResponse()
 
@@ -395,6 +413,7 @@ class SecurityAdapterTests {
             ActiveOrganisationContextFilter(
                 contextResolver,
                 mock(AppPrincipalLoader::class.java),
+                problemWriter(),
             )
         val response = MockHttpServletResponse()
         SecurityContextHolder.getContext().authentication = jwtAuthentication("subject")
@@ -413,6 +432,9 @@ class SecurityAdapterTests {
                 .subject(subject)
                 .build(),
         )
+
+    private fun problemWriter(): ApiProblemWriter =
+        ApiProblemWriter(ApiProblemFactory(), JsonMapper.builder().build())
 
     private fun principal(permissions: Set<String> = emptySet()): AppPrincipal =
         AppPrincipal(

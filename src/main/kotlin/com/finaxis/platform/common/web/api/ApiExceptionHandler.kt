@@ -13,9 +13,12 @@ import org.springframework.http.converter.HttpMessageNotReadableException
 import org.springframework.validation.FieldError
 import org.springframework.web.HttpMediaTypeNotSupportedException
 import org.springframework.web.bind.MethodArgumentNotValidException
+import org.springframework.web.bind.MissingServletRequestParameterException
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
+import org.springframework.web.method.annotation.HandlerMethodValidationException
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException
+import org.springframework.web.servlet.resource.NoResourceFoundException
 
 /** Central MVC mapping from framework and application errors to safe RFC 9457 problems. */
 @RestControllerAdvice
@@ -74,7 +77,7 @@ class ApiExceptionHandler(
                 request,
                 exception.bindingResult.allErrors.map { error ->
                     ApiViolation(
-                        field = (error as? FieldError)?.field ?: error.objectName,
+                        field = publicFieldName((error as? FieldError)?.field ?: error.objectName),
                         code = error.code ?: "invalid",
                         message = error.defaultMessage ?: "Invalid value.",
                     )
@@ -97,11 +100,30 @@ class ApiExceptionHandler(
                 request,
                 exception.constraintViolations.map { violation ->
                     ApiViolation(
-                        field = violation.propertyPath.toString().substringAfterLast('.'),
+                        field =
+                            publicFieldName(
+                                violation.propertyPath.toString().substringAfterLast('.'),
+                            ),
                         code = "invalid",
                         message = violation.message,
                     )
                 },
+            ),
+            exception,
+        )
+
+    /** Maps method-level validation errors that Spring MVC raises before controller invocation. */
+    @ExceptionHandler(HandlerMethodValidationException::class)
+    fun methodValidation(
+        exception: HandlerMethodValidationException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiProblem> =
+        response(
+            problem(
+                HttpStatus.BAD_REQUEST,
+                "validation_failed",
+                "One or more request fields are invalid.",
+                request,
             ),
             exception,
         )
@@ -119,8 +141,67 @@ class ApiExceptionHandler(
                 "One or more request parameters are invalid.",
                 request,
                 listOf(
-                    ApiViolation(exception.name, "invalid_parameter", "Invalid parameter value."),
+                    ApiViolation(
+                        publicFieldName(exception.name),
+                        "invalid_parameter",
+                        "Invalid parameter value.",
+                    ),
                 ),
+            ),
+            exception,
+        )
+
+    /** Maps omitted required parameters without disclosing framework exception details. */
+    @ExceptionHandler(MissingServletRequestParameterException::class)
+    fun missingParameter(
+        exception: MissingServletRequestParameterException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiProblem> =
+        response(
+            problem(
+                HttpStatus.BAD_REQUEST,
+                "missing_parameter",
+                "A required request parameter is missing.",
+                request,
+                listOf(
+                    ApiViolation(
+                        publicFieldName(exception.parameterName),
+                        "missing_parameter",
+                        "Required parameter is missing.",
+                    ),
+                ),
+            ),
+            exception,
+        )
+
+    /** Maps invalid public pagination bounds to a safe client error. */
+    @ExceptionHandler(InvalidPageRequestException::class)
+    fun invalidPageRequest(
+        exception: InvalidPageRequestException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiProblem> =
+        response(
+            problem(
+                HttpStatus.BAD_REQUEST,
+                "invalid_parameter",
+                "One or more request parameters are invalid.",
+                request,
+            ),
+            exception,
+        )
+
+    /** Maps missing static resources and unmapped API routes to the public not-found response. */
+    @ExceptionHandler(NoResourceFoundException::class)
+    fun noResourceFound(
+        exception: NoResourceFoundException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiProblem> =
+        response(
+            problem(
+                HttpStatus.NOT_FOUND,
+                "resource_not_found",
+                "The requested resource was not found.",
+                request,
             ),
             exception,
         )
@@ -178,4 +259,7 @@ class ApiExceptionHandler(
             ).contentType(MediaType.APPLICATION_PROBLEM_JSON)
             .body(problem)
     }
+
+    private fun publicFieldName(field: String): String =
+        field.replace(Regex("([a-z0-9])([A-Z])"), "$1_$2").lowercase()
 }

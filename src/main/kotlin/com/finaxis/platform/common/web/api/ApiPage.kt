@@ -29,9 +29,9 @@ fun <T> apiPageOf(
     size: Int,
     totalItems: Long,
 ): ApiPage<T> {
-    require(number >= 0) { "Page number must not be negative" }
-    require(size in MINIMUM_PAGE_SIZE..MAXIMUM_PAGE_SIZE) { "Page size must be between 1 and 100" }
-    require(totalItems >= 0) { "Total item count must not be negative" }
+    if (number < 0 || size !in MINIMUM_PAGE_SIZE..MAXIMUM_PAGE_SIZE || totalItems < 0) {
+        throw InvalidPageRequestException()
+    }
     val totalPages = ceil(totalItems.toDouble() / size).toInt()
     return ApiPage(
         items = items,

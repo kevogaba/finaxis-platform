@@ -42,7 +42,12 @@ class UserProfileController(
         ApiResponse(
             responseCode = "403",
             description = "Active organisation context or iam.profile.read permission is missing",
-            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
         ),
     )
     @PreAuthorize("hasAuthority('iam.profile.read')")
