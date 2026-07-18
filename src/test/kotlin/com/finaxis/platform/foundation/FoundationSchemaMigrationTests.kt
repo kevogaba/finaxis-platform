@@ -4,9 +4,14 @@ import com.finaxis.platform.PostgresTestConfiguration
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestConstructor
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
+import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -106,6 +111,10 @@ class FoundationSchemaMigrationTests(
                 FROM pg_constraint
                 WHERE conrelid = 'api_idempotency_record'::regclass
                   AND contype IN ('c', 'p')
+                  AND conname IN (
+                      'chk_api_idempotency_record_status',
+                      'pk_api_idempotency_record'
+                  )
                 ORDER BY contype, conname
                 """.trimIndent(),
                 String::class.java,
@@ -120,6 +129,118 @@ class FoundationSchemaMigrationTests(
             ),
             constraints,
         )
+    }
+
+    @Test
+    fun `idempotency schema declares the response state constraint`() {
+        val constraintNames =
+            jdbcTemplate.queryForList(
+                """
+                SELECT conname
+                FROM pg_constraint
+                WHERE conrelid = 'api_idempotency_record'::regclass
+                  AND contype = 'c'
+                ORDER BY conname
+                """.trimIndent(),
+                String::class.java,
+            )
+        assertEquals(
+            listOf(
+                "chk_api_idempotency_record_response",
+                "chk_api_idempotency_record_status",
+            ),
+            constraintNames,
+        )
+    }
+
+    @Test
+    fun `idempotency state rejects partial responses and allows empty 204 replay`() {
+        assertFailsWith<DataIntegrityViolationException> {
+            insertIdempotencyRecord(
+                status = "IN_PROGRESS",
+                responseStatus = 200,
+                responseHeaders = "{}",
+                responseBody = "{}",
+            )
+        }
+        assertFailsWith<DataIntegrityViolationException> {
+            insertIdempotencyRecord(
+                status = "COMPLETED",
+                responseStatus = 400,
+                responseHeaders = "{}",
+                responseBody = "{}",
+            )
+        }
+        assertFailsWith<DataIntegrityViolationException> {
+            insertIdempotencyRecord(
+                status = "COMPLETED",
+                responseStatus = 200,
+                responseHeaders = null,
+                responseBody = null,
+            )
+        }
+
+        val validKey =
+            insertIdempotencyRecord(
+                status = "COMPLETED",
+                responseStatus = 204,
+                responseHeaders = "{}",
+                responseBody = "",
+            )
+        assertEquals(
+            1,
+            jdbcTemplate.update(
+                """
+                DELETE FROM api_idempotency_record
+                WHERE scope_organisation_id = ?
+                  AND idempotency_key = ?
+                """.trimIndent(),
+                validKey.first,
+                validKey.second,
+            ),
+        )
+    }
+
+    private fun insertIdempotencyRecord(
+        status: String,
+        responseStatus: Int?,
+        responseHeaders: String?,
+        responseBody: String?,
+    ): Pair<UUID, UUID> {
+        val scopeId = UUID.randomUUID()
+        val key = UUID.randomUUID()
+        val now = OffsetDateTime.now(ZoneOffset.UTC)
+        jdbcTemplate.update(
+            """
+            INSERT INTO api_idempotency_record (
+                scope_organisation_id,
+                idempotency_key,
+                actor_fingerprint,
+                request_method,
+                normalized_path,
+                request_hash,
+                status,
+                response_status,
+                response_headers,
+                response_body,
+                created_at,
+                expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?, ?)
+            """.trimIndent(),
+            scopeId,
+            key,
+            "actor-fingerprint",
+            "POST",
+            "/api/v1/widgets",
+            "request-hash",
+            status,
+            responseStatus,
+            responseHeaders,
+            responseBody,
+            now,
+            now.plusDays(1),
+        )
+        return scopeId to key
     }
 
     private fun column(

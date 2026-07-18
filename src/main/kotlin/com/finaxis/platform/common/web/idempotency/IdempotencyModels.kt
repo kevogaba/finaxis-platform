@@ -1,9 +1,7 @@
 package com.finaxis.platform.common.web.idempotency
 
-import org.springframework.stereotype.Component
 import java.time.Duration
 import java.time.Instant
-import java.util.Locale
 import java.util.UUID
 
 /** Organisation boundary used to isolate idempotency keys. */
@@ -30,39 +28,8 @@ data class IdempotencyRequestFingerprint(
 data class IdempotencyResponse(
     val status: Int,
     val headers: Map<String, String>,
-    val body: String,
+    val body: String?,
 )
-
-/** Enforces the successful-status and response-header persistence allowlist. */
-@Component
-class IdempotencyResponsePolicy(
-    properties: IdempotencyProperties,
-) {
-    private val allowedHeaders =
-        (STANDARD_SAFE_HEADERS + properties.safeDomainHeaders)
-            .associateBy { it.lowercase(Locale.ROOT) }
-
-    /** Returns the response shape safe for both the first response and durable replay. */
-    fun sanitize(response: IdempotencyResponse): IdempotencyResponse {
-        require(response.status in SUCCESS_STATUS_MINIMUM..SUCCESS_STATUS_MAXIMUM) {
-            "Only successful responses can be replayed"
-        }
-        val safeHeaders =
-            response.headers
-                .mapNotNull { (name, value) ->
-                    allowedHeaders[name.lowercase(Locale.ROOT)]?.let { canonicalName ->
-                        canonicalName to value
-                    }
-                }.toMap()
-        return response.copy(headers = safeHeaders)
-    }
-
-    private companion object {
-        const val SUCCESS_STATUS_MINIMUM: Int = 200
-        const val SUCCESS_STATUS_MAXIMUM: Int = 299
-        val STANDARD_SAFE_HEADERS: Set<String> = setOf("Location", "ETag")
-    }
-}
 
 /** Complete input needed for one atomic store acquisition attempt. */
 data class IdempotencyAcquireCommand(
@@ -87,7 +54,7 @@ sealed interface IdempotencyAcquisition {
 
     /** A successful prior response is available for exact replay. */
     data class Replay(
-        val response: IdempotencyResponse,
+        val response: SafeReplayResponse,
     ) : IdempotencyAcquisition
 
     /** A non-stale mutation attempt still owns this key. */

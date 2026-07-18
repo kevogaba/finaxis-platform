@@ -22,6 +22,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -94,6 +95,53 @@ class IdempotencyExecutorTests(
             ).data()
         assertEquals(false, storedHeaders.contains("secret", ignoreCase = true))
         assertEquals(false, storedHeaders.contains("X-Arbitrary"))
+    }
+
+    @Test
+    fun `unsafe replay body rejects and rolls back the idempotency record`() {
+        val scope = IdempotencyScope(uuidV7())
+
+        assertFailsWith<IllegalArgumentException> {
+            executor.execute(scope, uuidV7(), fingerprint()) {
+                IdempotencyResponse(
+                    200,
+                    emptyMap(),
+                    """{"result":{"access_token":"must-not-persist"}}""",
+                )
+            }
+        }
+
+        assertEquals(0, dsl.fetchCount(API_IDEMPOTENCY_RECORD))
+    }
+
+    @Test
+    fun `empty 204 response executes once and replays without a body`() {
+        val scope = IdempotencyScope(uuidV7())
+        val key = uuidV7()
+        val executionCount = AtomicInteger()
+
+        val first =
+            executor.execute(scope, key, fingerprint()) {
+                executionCount.incrementAndGet()
+                IdempotencyResponse(204, emptyMap(), null)
+            }
+        val replay =
+            executor.execute(scope, key, fingerprint()) {
+                executionCount.incrementAndGet()
+                IdempotencyResponse(204, emptyMap(), null)
+            }
+
+        assertEquals(1, executionCount.get())
+        assertEquals(204, first.status)
+        assertNull(first.body)
+        assertEquals(first, replay)
+        assertEquals(
+            "",
+            dsl
+                .select(API_IDEMPOTENCY_RECORD.RESPONSE_BODY)
+                .from(API_IDEMPOTENCY_RECORD)
+                .fetchOne(API_IDEMPOTENCY_RECORD.RESPONSE_BODY),
+        )
     }
 
     @Test
@@ -197,7 +245,7 @@ class IdempotencyExecutorTests(
                 override fun complete(
                     scope: IdempotencyScope,
                     key: UUID,
-                    response: IdempotencyResponse,
+                    response: SafeReplayResponse,
                 ) = error("Not used by cleanup")
 
                 override fun deleteExpiredCompleted(

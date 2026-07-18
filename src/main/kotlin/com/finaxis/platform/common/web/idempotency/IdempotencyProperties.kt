@@ -10,6 +10,7 @@ data class IdempotencyProperties(
     val inProgressTimeout: Duration = Duration.ofMinutes(DEFAULT_IN_PROGRESS_TIMEOUT_MINUTES),
     val cleanupSchedule: String = "0 */15 * * * *",
     val cleanupBatchSize: Int = 500,
+    val maxResponseBodyBytes: Int = DEFAULT_MAX_RESPONSE_BODY_BYTES,
     val safeDomainHeaders: Set<String> = setOf("X-Domain-Reference"),
 ) {
     init {
@@ -22,6 +23,7 @@ data class IdempotencyProperties(
         }
         require(cleanupSchedule.isNotBlank()) { "Cleanup schedule must not be blank" }
         require(cleanupBatchSize > 0) { "Cleanup batch size must be positive" }
+        require(maxResponseBodyBytes > 0) { "Maximum replay response body size must be positive" }
         require(safeDomainHeaders.all { it.startsWith("X-Domain-") }) {
             "Safe domain response headers must use the X-Domain- prefix"
         }
@@ -30,5 +32,6 @@ data class IdempotencyProperties(
     private companion object {
         const val DEFAULT_RETENTION_HOURS: Long = 24
         const val DEFAULT_IN_PROGRESS_TIMEOUT_MINUTES: Long = 5
+        const val DEFAULT_MAX_RESPONSE_BODY_BYTES: Int = 1_048_576
     }
 }

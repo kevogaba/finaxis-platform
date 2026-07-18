@@ -12,7 +12,7 @@ interface IdempotencyStore {
     fun complete(
         scope: IdempotencyScope,
         key: UUID,
-        response: IdempotencyResponse,
+        response: SafeReplayResponse,
     )
 
     /** Deletes at most [batchSize] expired completed records. */

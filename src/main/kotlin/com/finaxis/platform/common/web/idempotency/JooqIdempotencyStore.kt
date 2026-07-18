@@ -20,7 +20,7 @@ import java.util.UUID
 class JooqIdempotencyStore(
     private val dsl: DSLContext,
     private val objectMapper: ObjectMapper,
-    private val responsePolicy: IdempotencyResponsePolicy,
+    private val replayResponseFactory: SafeReplayResponseFactory,
 ) : IdempotencyStore {
     override fun acquire(command: IdempotencyAcquireCommand): IdempotencyAcquisition {
         requireActiveTransaction()
@@ -46,19 +46,18 @@ class JooqIdempotencyStore(
     override fun complete(
         scope: IdempotencyScope,
         key: UUID,
-        response: IdempotencyResponse,
+        response: SafeReplayResponse,
     ) {
         requireActiveTransaction()
-        val safeResponse = responsePolicy.sanitize(response)
         check(
             dsl
                 .update(API_IDEMPOTENCY_RECORD)
                 .set(API_IDEMPOTENCY_RECORD.STATUS, IdempotencyStatus.COMPLETED.name)
-                .set(API_IDEMPOTENCY_RECORD.RESPONSE_STATUS, safeResponse.status)
+                .set(API_IDEMPOTENCY_RECORD.RESPONSE_STATUS, response.status)
                 .set(
                     API_IDEMPOTENCY_RECORD.RESPONSE_HEADERS,
-                    JSONB.jsonb(objectMapper.writeValueAsString(safeResponse.headers)),
-                ).set(API_IDEMPOTENCY_RECORD.RESPONSE_BODY, safeResponse.body)
+                    JSONB.jsonb(objectMapper.writeValueAsString(response.headers)),
+                ).set(API_IDEMPOTENCY_RECORD.RESPONSE_BODY, response.storedBody)
                 .where(API_IDEMPOTENCY_RECORD.SCOPE_ORGANISATION_ID.eq(scope.organisationId))
                 .and(API_IDEMPOTENCY_RECORD.IDEMPOTENCY_KEY.eq(key))
                 .and(API_IDEMPOTENCY_RECORD.STATUS.eq(IdempotencyStatus.IN_PROGRESS.name))
@@ -181,15 +180,15 @@ class JooqIdempotencyStore(
         return IdempotencyAcquisition.Acquired
     }
 
-    private fun toResponse(record: ApiIdempotencyRecordRecord): IdempotencyResponse =
-        IdempotencyResponse(
+    private fun toResponse(record: ApiIdempotencyRecordRecord): SafeReplayResponse =
+        replayResponseFactory.fromStored(
             status = requireNotNull(record.responseStatus),
             headers =
                 objectMapper.readValue(
                     requireNotNull(record.responseHeaders).data(),
                     object : TypeReference<Map<String, String>>() {},
                 ),
-            body = requireNotNull(record.responseBody),
+            storedBody = requireNotNull(record.responseBody),
         )
 
     private fun requireActiveTransaction() {

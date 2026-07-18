@@ -10,7 +10,7 @@ import java.util.UUID
 @Service
 class IdempotencyExecutor(
     private val store: IdempotencyStore,
-    private val responsePolicy: IdempotencyResponsePolicy,
+    private val replayResponseFactory: SafeReplayResponseFactory,
     private val properties: IdempotencyProperties,
     private val clock: Clock,
 ) {
@@ -36,13 +36,13 @@ class IdempotencyExecutor(
             )
         return when (acquisition) {
             IdempotencyAcquisition.Acquired -> {
-                val response = responsePolicy.sanitize(operation())
+                val response = replayResponseFactory.fromLive(operation())
                 store.complete(scope, key, response)
-                response
+                response.toLive()
             }
 
             is IdempotencyAcquisition.Replay -> {
-                acquisition.response
+                acquisition.response.toLive()
             }
 
             IdempotencyAcquisition.InProgress -> {

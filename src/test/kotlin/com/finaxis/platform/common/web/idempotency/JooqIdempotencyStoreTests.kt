@@ -30,6 +30,7 @@ import kotlin.test.fail
 class JooqIdempotencyStoreTests(
     private val dsl: DSLContext,
     private val store: IdempotencyStore,
+    private val replayResponseFactory: SafeReplayResponseFactory,
     transactionManager: PlatformTransactionManager,
 ) {
     private val transaction = TransactionTemplate(transactionManager)
@@ -89,12 +90,13 @@ class JooqIdempotencyStoreTests(
     @Test
     fun `completed acquisition replays the exact stored response`() {
         val command = acquireCommand()
-        val response =
+        val liveResponse =
             IdempotencyResponse(
                 status = 201,
                 headers = mapOf("Location" to "/api/v1/widgets/42", "ETag" to "\"v1\""),
                 body = """{"id":42,"state":"CREATED"}""",
             )
+        val response = replayResponseFactory.fromLive(liveResponse)
         inTransaction {
             assertIs<IdempotencyAcquisition.Acquired>(store.acquire(command))
             store.complete(command.scope, command.key, response)
@@ -102,7 +104,10 @@ class JooqIdempotencyStoreTests(
 
         val replay = inTransaction { store.acquire(command.copy(now = command.now.plusSeconds(1))) }
 
-        assertEquals(response, assertIs<IdempotencyAcquisition.Replay>(replay).response)
+        assertEquals(
+            liveResponse,
+            assertIs<IdempotencyAcquisition.Replay>(replay).response.toLive(),
+        )
     }
 
     @Test
@@ -201,7 +206,9 @@ class JooqIdempotencyStoreTests(
             store.complete(
                 command.scope,
                 command.key,
-                IdempotencyResponse(200, emptyMap(), """{"ok":true}"""),
+                replayResponseFactory.fromLive(
+                    IdempotencyResponse(200, emptyMap(), """{"ok":true}"""),
+                ),
             )
         }
     }
