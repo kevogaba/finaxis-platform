@@ -222,6 +222,14 @@ sentry:
   dsn: ""
 
 finaxis:
+  api:
+    idempotency:
+      retention: ${FINAXIS_API_IDEMPOTENCY_RETENTION:24h}
+      in-progress-timeout: ${FINAXIS_API_IDEMPOTENCY_IN_PROGRESS_TIMEOUT:5m}
+      cleanup-schedule: ${FINAXIS_API_IDEMPOTENCY_CLEANUP_SCHEDULE:0 */15 * * * *}
+      cleanup-batch-size: ${FINAXIS_API_IDEMPOTENCY_CLEANUP_BATCH_SIZE:500}
+      safe-domain-headers:
+        - X-Domain-Reference
   pagination:
     default-page-size: ${FINAXIS_PAGINATION_DEFAULT_PAGE_SIZE:25}
     max-page-size: ${FINAXIS_PAGINATION_MAX_PAGE_SIZE:100}

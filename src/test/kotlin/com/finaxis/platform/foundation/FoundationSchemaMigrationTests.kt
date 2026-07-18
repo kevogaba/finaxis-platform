@@ -37,7 +37,8 @@ class FoundationSchemaMigrationTests(
                       'permission',
                       'role',
                       'role_permission',
-                      'membership_permission'
+                      'membership_permission',
+                      'api_idempotency_record'
                   )
                 ORDER BY tablename
                 """.trimIndent(),
@@ -46,6 +47,7 @@ class FoundationSchemaMigrationTests(
 
         assertEquals(
             listOf(
+                "api_idempotency_record",
                 "audit_event",
                 "branch",
                 "business_date",
@@ -65,4 +67,67 @@ class FoundationSchemaMigrationTests(
             tables,
         )
     }
+
+    @Test
+    fun `Flyway creates durable API idempotency records with tenant scoped uniqueness`() {
+        val columns =
+            jdbcTemplate.queryForList(
+                """
+                SELECT column_name, data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'api_idempotency_record'
+                ORDER BY ordinal_position
+                """.trimIndent(),
+            )
+
+        assertEquals(
+            listOf(
+                column("scope_organisation_id", "uuid"),
+                column("idempotency_key", "uuid"),
+                column("actor_fingerprint", "character varying"),
+                column("request_method", "character varying"),
+                column("normalized_path", "character varying"),
+                column("request_hash", "character varying"),
+                column("status", "character varying"),
+                column("response_status", "integer"),
+                column("response_headers", "jsonb"),
+                column("response_body", "text"),
+                column("created_at", "timestamp with time zone"),
+                column("expires_at", "timestamp with time zone"),
+            ),
+            columns,
+        )
+
+        val constraints =
+            jdbcTemplate.queryForList(
+                """
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conrelid = 'api_idempotency_record'::regclass
+                  AND contype IN ('c', 'p')
+                ORDER BY contype, conname
+                """.trimIndent(),
+                String::class.java,
+            )
+
+        assertEquals(
+            listOf(
+                "CHECK (((status)::text = ANY " +
+                    "((ARRAY['IN_PROGRESS'::character varying, " +
+                    "'COMPLETED'::character varying])::text[])))",
+                "PRIMARY KEY (scope_organisation_id, idempotency_key)",
+            ),
+            constraints,
+        )
+    }
+
+    private fun column(
+        name: String,
+        type: String,
+    ): Map<String, Any> =
+        mapOf(
+            "column_name" to name,
+            "data_type" to type,
+        )
 }
