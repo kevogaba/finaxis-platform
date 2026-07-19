@@ -35,3 +35,9 @@ class RequestTooLargeException(
     code: String = "request_body_too_large",
     safeDetail: String = "The request body exceeds the allowed size.",
 ) : ApplicationException(code, safeDetail)
+
+/** Raised when URL query encoding is malformed and cannot be canonicalized safely. */
+class InvalidRequestException(
+    code: String = "invalid_request",
+    safeDetail: String = "The request is malformed.",
+) : ApplicationException(code, safeDetail)

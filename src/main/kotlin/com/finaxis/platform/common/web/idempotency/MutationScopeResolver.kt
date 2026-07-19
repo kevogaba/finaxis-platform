@@ -6,7 +6,6 @@ import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.web.api.ApiJsonCodec
 import jakarta.servlet.http.HttpServletRequest
 import org.springframework.stereotype.Component
-import org.springframework.web.util.ContentCachingRequestWrapper
 import java.util.UUID
 
 /** Resolves durable idempotency scope only from validated server-side request context. */
@@ -15,27 +14,21 @@ class MutationScopeResolver(
     private val apiJsonCodec: ApiJsonCodec,
 ) {
     /** Resolves selection, platform, or active-tenant scope for one mutation. */
-    fun resolve(request: HttpServletRequest): IdempotencyScope {
-        val path = request.requestURI
+    fun resolve(
+        request: HttpServletRequest,
+        kind: IdempotencyScopeKind,
+    ): IdempotencyScope {
         val organisationId =
-            when {
-                path == SELECT_ORGANISATION_PATH -> {
-                    requestedOrganisation(request)
-                }
-
-                path == PLATFORM_ROOT || path.startsWith(PLATFORM_PATH_PREFIX) -> {
-                    reservedPlatformContext()
-                }
-
-                else -> {
-                    activeTenant()
-                }
+            when (kind) {
+                IdempotencyScopeKind.ORGANISATION_SELECTION -> requestedOrganisation(request)
+                IdempotencyScopeKind.PLATFORM -> reservedPlatformContext()
+                IdempotencyScopeKind.TENANT -> activeTenant()
             }
         return IdempotencyScope(organisationId)
     }
 
     private fun requestedOrganisation(request: HttpServletRequest): UUID {
-        val wrapper = request as? ContentCachingRequestWrapper ?: denied()
+        val wrapper = request as? BoundedContentCachingRequestWrapper ?: denied()
         val node =
             runCatching {
                 apiJsonCodec.mapper.readTree(
@@ -61,10 +54,4 @@ class MutationScopeResolver(
         throw ForbiddenOperationException(
             safeDetail = "Active tenant context is required for this mutation.",
         )
-
-    private companion object {
-        const val SELECT_ORGANISATION_PATH = "/api/v1/auth/select-organisation"
-        const val PLATFORM_ROOT = "/api/v1/platform"
-        const val PLATFORM_PATH_PREFIX = "/api/v1/platform/"
-    }
 }

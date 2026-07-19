@@ -1,13 +1,24 @@
 package com.finaxis.platform.common.web.idempotency
 
+import com.fasterxml.jackson.annotation.JsonIgnore
 import jakarta.servlet.http.HttpServletRequest
 
 /** Safe controller result whose body is persisted instead of a sensitive live response. */
-data class IdempotencyReplayResponse(
-    val durableBody: Any?,
-    val status: Int = 200,
-    val headers: Map<String, String> = emptyMap(),
-)
+interface IdempotencyReplayResponse<out T : Any> {
+    /** Safe state persisted in place of the public live response. */
+    @get:JsonIgnore
+    val durableBody: T?
+
+    /** HTTP status persisted with the safe state. */
+    @get:JsonIgnore
+    val durableStatus: Int
+        get() = 200
+
+    /** Safe response headers persisted with the safe state. */
+    @get:JsonIgnore
+    val durableHeaders: Map<String, String>
+        get() = emptyMap()
+}
 
 /** Rebuilds a sensitive live response from safe durable replay JSON. */
 interface IdempotencyReplayHandler {
@@ -18,5 +29,11 @@ interface IdempotencyReplayHandler {
     fun restore(
         durableJson: String,
         request: HttpServletRequest,
-    ): Any
+    ): IdempotencyReplayResponse<*>
+}
+
+/** Principal contract whose stable external subject participates in request fingerprints. */
+interface IdempotencyActorPrincipal {
+    /** Stable identity from the authenticating identity provider. */
+    val idempotencySubject: String
 }

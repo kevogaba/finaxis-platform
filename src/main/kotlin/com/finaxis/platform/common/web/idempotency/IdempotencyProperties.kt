@@ -25,6 +25,9 @@ data class IdempotencyProperties(
         require(cleanupSchedule.isNotBlank()) { "Cleanup schedule must not be blank" }
         require(cleanupBatchSize > 0) { "Cleanup batch size must be positive" }
         require(maxRequestBodyBytes > 0) { "Maximum request body size must be positive" }
+        require(maxRequestBodyBytes <= MAXIMUM_REQUEST_BODY_BYTES) {
+            "Maximum request body size must not exceed $MAXIMUM_REQUEST_BODY_BYTES bytes"
+        }
         require(maxResponseBodyBytes > 0) { "Maximum replay response body size must be positive" }
         require(safeDomainHeaders.all { it.startsWith("X-Domain-") }) {
             "Safe domain response headers must use the X-Domain- prefix"
@@ -36,5 +39,6 @@ data class IdempotencyProperties(
         const val DEFAULT_IN_PROGRESS_TIMEOUT_MINUTES: Long = 5
         const val DEFAULT_MAX_REQUEST_BODY_BYTES: Int = 1_048_576
         const val DEFAULT_MAX_RESPONSE_BODY_BYTES: Int = 1_048_576
+        const val MAXIMUM_REQUEST_BODY_BYTES: Int = 10_485_760
     }
 }

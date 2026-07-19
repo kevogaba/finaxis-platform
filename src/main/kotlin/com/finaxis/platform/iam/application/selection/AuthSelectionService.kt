@@ -2,6 +2,7 @@ package com.finaxis.platform.iam.application.selection
 
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
+import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
@@ -124,6 +125,59 @@ class AuthSelectionService(
             branchId = branchId,
             context = selectedContext,
         )
+    }
+
+    /** Revalidates durable organisation-selection state before a replay restores it. */
+    fun revalidateOrganisationReplay(
+        keycloakSubject: String,
+        context: ActiveOrganisationContext,
+        expectedAssignedBranchIds: List<UUID>,
+    ) {
+        val membership = activeReplayMembership(keycloakSubject, context)
+        if (lookup.findAssignedBranchIds(membership.membershipId).toSet() !=
+            expectedAssignedBranchIds.toSet()
+        ) {
+            denied("Organisation branch assignments changed after the original request")
+        }
+        context.branchId?.let { branchId ->
+            if (!lookup.hasAssignedBranch(membership.membershipId, branchId)) {
+                denied("Selected branch is no longer assigned")
+            }
+        }
+    }
+
+    /** Revalidates durable branch-selection state before a replay restores it. */
+    fun revalidateBranchReplay(
+        keycloakSubject: String,
+        context: ActiveOrganisationContext,
+    ) {
+        val membership = activeReplayMembership(keycloakSubject, context)
+        val branchId = context.branchId ?: denied("Durable branch selection is incomplete")
+        if (!lookup.hasAssignedBranch(membership.membershipId, branchId)) {
+            denied("Selected branch is no longer assigned")
+        }
+    }
+
+    private fun activeReplayMembership(
+        keycloakSubject: String,
+        context: ActiveOrganisationContext,
+    ): MembershipSelection {
+        val userId =
+            lookup.findUserIdByKeycloakSubject(keycloakSubject)
+                ?: denied("Authenticated user is not registered")
+        if (userId != context.userId) {
+            denied("Durable context does not belong to the authenticated user")
+        }
+        val membership =
+            lookup.findMembership(userId, context.organisationId)
+                ?: denied("User is not an active member of the organisation")
+        if (membership.membershipId != context.membershipId ||
+            membership.status != MembershipStatus.ACTIVE ||
+            lookup.organisationStatus(context.organisationId) != OrganisationStatus.ACTIVE
+        ) {
+            denied("User is not an active member of the organisation")
+        }
+        return membership
     }
 
     private fun denied(message: String): Nothing =

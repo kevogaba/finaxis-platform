@@ -9,6 +9,7 @@ import org.springframework.context.annotation.Import
 import org.springframework.http.HttpHeaders
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.options
+import org.springframework.test.web.servlet.post
 
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest(
@@ -16,7 +17,6 @@ import org.springframework.test.web.servlet.options
         "finaxis.security.cors.enabled=true",
         "finaxis.security.cors.allowed-origins=https://app.finaxis.example",
         "finaxis.security.cors.allowed-methods=GET,POST,OPTIONS",
-        "finaxis.security.cors.allowed-headers=Authorization,Content-Type",
         "finaxis.security.cors.allow-credentials=true",
     ],
 )
@@ -40,6 +40,55 @@ class CorsEnabledSecurityIntegrationTests {
                     )
                 }
                 header { string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true") }
+            }
+    }
+
+    @Test
+    fun `mutation preflight allows idempotency key and exposes replay headers`() {
+        mockMvc
+            .options("/api/v1/auth/select-organisation") {
+                header(HttpHeaders.ORIGIN, "https://app.finaxis.example")
+                header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, "Idempotency-Key,Content-Type")
+            }.andExpect {
+                status { isOk() }
+                header {
+                    string(
+                        HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN,
+                        "https://app.finaxis.example",
+                    )
+                }
+                header {
+                    string(
+                        HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS,
+                        "Idempotency-Key, Content-Type",
+                    )
+                }
+            }
+    }
+
+    @Test
+    fun `idempotency filter errors retain browser cors response headers`() {
+        mockMvc
+            .post("/api/v1/auth/select-organisation") {
+                header(HttpHeaders.ORIGIN, "https://app.finaxis.example")
+                header("Idempotency-Key", "invalid")
+                contentType = org.springframework.http.MediaType.APPLICATION_JSON
+                content = "{}"
+            }.andExpect {
+                status { isBadRequest() }
+                header {
+                    string(
+                        HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN,
+                        "https://app.finaxis.example",
+                    )
+                }
+                header {
+                    string(
+                        HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS,
+                        "Idempotency-Key, Idempotency-Replayed",
+                    )
+                }
             }
     }
 }

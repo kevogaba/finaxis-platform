@@ -1,12 +1,10 @@
 package com.finaxis.platform.common.web.idempotency
 
-import com.finaxis.platform.common.application.RequestTooLargeException
+import com.finaxis.platform.common.application.InvalidRequestException
 import com.finaxis.platform.common.web.api.ApiJsonCodec
-import com.finaxis.platform.common.web.ratelimit.RateLimitPrincipal
 import jakarta.servlet.http.HttpServletRequest
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Component
-import org.springframework.web.util.ContentCachingRequestWrapper
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -24,7 +22,7 @@ class CanonicalRequestHasher(
                 ?: error("Authenticated actor is required for idempotent mutations")
         val actorIdentity =
             (
-                (authentication.principal as? RateLimitPrincipal)?.rateLimitUserId
+                (authentication.principal as? IdempotencyActorPrincipal)?.idempotencySubject
                     ?: authentication.name
             ).takeIf(String::isNotBlank)
                 ?: error("Authenticated actor is required for idempotent mutations")
@@ -48,12 +46,10 @@ class CanonicalRequestHasher(
 
     private fun canonicalBody(request: HttpServletRequest): String {
         val wrapper =
-            request as? ContentCachingRequestWrapper
+            request as? BoundedContentCachingRequestWrapper
                 ?: error("Mutation request was not prepared for idempotency")
         val content = wrapper.contentAsByteArray
-        if (content.size > properties.maxRequestBodyBytes) {
-            throw RequestTooLargeException(code = "REQUEST_BODY_TOO_LARGE")
-        }
+        check(content.size <= properties.maxRequestBodyBytes)
         if (content.isEmpty()) return ""
         val node = requireNotNull(apiJsonCodec.mapper.readTree(content))
         return canonicalJson(node)
@@ -80,16 +76,28 @@ class CanonicalRequestHasher(
             }
         }
 
-    private fun canonicalQuery(query: String?): String =
-        query
-            ?.split('&')
-            ?.filter(String::isNotBlank)
-            ?.map { pair ->
-                val parts = pair.split('=', limit = 2)
-                decode(parts[0]) to decode(parts.getOrElse(1) { "" })
-            }?.sortedWith(compareBy<Pair<String, String>> { it.first }.thenBy { it.second })
-            ?.joinToString("&") { (name, value) -> "$name=$value" }
-            .orEmpty()
+    private fun canonicalQuery(query: String?): String {
+        if (query == null) return ""
+        val pairs =
+            try {
+                query
+                    .split('&')
+                    .map { pair ->
+                        val parts = pair.split('=', limit = 2)
+                        decode(parts[0]) to decode(parts.getOrElse(1) { "" })
+                    }.sortedWith(compareBy<Pair<String, String>> { it.first }.thenBy { it.second })
+            } catch (_: IllegalArgumentException) {
+                throw InvalidRequestException(
+                    code = "INVALID_QUERY_ENCODING",
+                    safeDetail = "The query string contains invalid percent encoding.",
+                )
+            }
+        return pairs.joinToString(prefix = "[", postfix = "]") { (name, value) ->
+            val encodedName = apiJsonCodec.mapper.writeValueAsString(name)
+            val encodedValue = apiJsonCodec.mapper.writeValueAsString(value)
+            "[$encodedName,$encodedValue]"
+        }
+    }
 
     private fun normalizePath(path: String): String {
         val normalized = path.replace(REPEATED_SLASHES, "/")

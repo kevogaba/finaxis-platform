@@ -4,6 +4,7 @@ import com.finaxis.platform.common.application.ApplicationException
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.InvalidRequestException
 import com.finaxis.platform.common.application.RequestTooLargeException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.id.uuidV7
@@ -51,6 +52,7 @@ class ApiProblemFactory {
             is ConflictException -> HttpStatus.CONFLICT
             is ForbiddenOperationException -> HttpStatus.FORBIDDEN
             is InvalidOperationException -> HttpStatus.UNPROCESSABLE_CONTENT
+            is InvalidRequestException -> HttpStatus.BAD_REQUEST
             is RequestTooLargeException -> HttpStatus.CONTENT_TOO_LARGE
         }
 

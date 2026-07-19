@@ -406,6 +406,63 @@ class AuthSelectionServiceTests {
             service.selectOrganisation("keycloak-subject", organisationId)
         }
     }
+
+    @Test
+    fun `organisation replay rejects a changed assignment set`() {
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val currentBranch = uuidV7()
+        val context = ActiveOrganisationContext(userId, organisationId, membershipId)
+        val service =
+            AuthSelectionService(
+                FakeMembershipLookup(
+                    userId = userId,
+                    membership =
+                        MembershipSelection(
+                            membershipId,
+                            userId,
+                            organisationId,
+                            MembershipStatus.ACTIVE,
+                        ),
+                    branchIds = listOf(currentBranch),
+                ),
+            )
+
+        assertThrows<OrganisationSelectionDeniedException> {
+            service.revalidateOrganisationReplay(
+                "keycloak-subject",
+                context,
+                expectedAssignedBranchIds = listOf(uuidV7()),
+            )
+        }
+    }
+
+    @Test
+    fun `branch replay remains valid when membership has multiple assignments`() {
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val selectedBranch = uuidV7()
+        val context =
+            ActiveOrganisationContext(userId, organisationId, membershipId, selectedBranch)
+        val service =
+            AuthSelectionService(
+                FakeMembershipLookup(
+                    userId = userId,
+                    membership =
+                        MembershipSelection(
+                            membershipId,
+                            userId,
+                            organisationId,
+                            MembershipStatus.ACTIVE,
+                        ),
+                    branchIds = listOf(selectedBranch, uuidV7()),
+                ),
+            )
+
+        service.revalidateBranchReplay("keycloak-subject", context)
+    }
 }
 
 private class FakeMembershipLookup(

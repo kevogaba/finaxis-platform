@@ -5,6 +5,7 @@ import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyReplayHandler
 import com.finaxis.platform.common.web.idempotency.IdempotencyReplayMode
 import com.finaxis.platform.common.web.idempotency.IdempotencyReplayResponse
+import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.adapter.inbound.security.SessionActiveOrganisationContextResolver
@@ -26,6 +27,7 @@ import jakarta.validation.Valid
 import jakarta.validation.constraints.NotNull
 import org.springframework.http.HttpStatus
 import org.springframework.security.core.Authentication
+import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.stereotype.Component
 import org.springframework.web.bind.annotation.PostMapping
@@ -40,6 +42,7 @@ import java.util.UUID
  */
 data class SelectOrganisationRequest(
     @field:NotNull
+    @field:Schema(name = "organisation_id")
     val organisationId: UUID?,
 )
 
@@ -47,20 +50,31 @@ data class SelectOrganisationRequest(
  * Response returned after selecting an active organisation context.
  */
 data class SelectOrganisationResponse(
+    @field:Schema(name = "organisation_id")
     val organisationId: UUID,
+    @field:Schema(name = "membership_id")
     val membershipId: UUID,
+    @field:Schema(name = "context_token")
     val contextToken: String,
+    @field:Schema(name = "context_header")
     val contextHeader: String,
+    @field:Schema(name = "branch_id")
     val branchId: UUID?,
+    @field:Schema(name = "requires_branch_selection")
     val requiresBranchSelection: Boolean,
+    @field:Schema(name = "assigned_branch_ids")
     val assignedBranchIds: List<UUID>,
-)
+    @get:com.fasterxml.jackson.annotation.JsonIgnore
+    @get:Schema(hidden = true)
+    override val durableBody: SelectOrganisationReplayValue? = null,
+) : IdempotencyReplayResponse<SelectOrganisationReplayValue>
 
 /**
  * Request body for selecting the active branch within the active organisation.
  */
 data class SelectBranchRequest(
     @field:NotNull
+    @field:Schema(name = "branch_id")
     val branchId: UUID?,
 )
 
@@ -68,12 +82,20 @@ data class SelectBranchRequest(
  * Response returned after selecting an active branch context.
  */
 data class SelectBranchResponse(
+    @field:Schema(name = "organisation_id")
     val organisationId: UUID,
+    @field:Schema(name = "membership_id")
     val membershipId: UUID,
+    @field:Schema(name = "branch_id")
     val branchId: UUID,
+    @field:Schema(name = "context_token")
     val contextToken: String,
+    @field:Schema(name = "context_header")
     val contextHeader: String,
-)
+    @get:com.fasterxml.jackson.annotation.JsonIgnore
+    @get:Schema(hidden = true)
+    override val durableBody: SelectBranchReplayValue? = null,
+) : IdempotencyReplayResponse<SelectBranchReplayValue>
 
 /** Safe durable organisation-selection replay state. */
 data class SelectOrganisationReplayValue(
@@ -93,13 +115,14 @@ class AuthSelectionReplayHandler(
     private val apiJsonCodec: ApiJsonCodec,
     private val contextService:
         com.finaxis.platform.iam.application.context.ActiveOrganisationContextService,
+    private val selectionService: AuthSelectionService,
 ) : IdempotencyReplayHandler {
     override val mode: IdempotencyReplayMode = IdempotencyReplayMode.REISSUE_CONTEXT_TOKEN
 
     override fun restore(
         durableJson: String,
         request: jakarta.servlet.http.HttpServletRequest,
-    ): Any {
+    ): IdempotencyReplayResponse<*> {
         val node = requireNotNull(apiJsonCodec.mapper.readTree(durableJson))
         return if (node.has("assigned_branch_ids")) {
             val value =
@@ -107,6 +130,11 @@ class AuthSelectionReplayHandler(
                     durableJson,
                     SelectOrganisationReplayValue::class.java,
                 )
+            selectionService.revalidateOrganisationReplay(
+                currentKeycloakSubject(),
+                value.context,
+                value.assignedBranchIds,
+            )
             store(request, value.context)
             SelectOrganisationResponse(
                 organisationId = value.context.organisationId,
@@ -123,6 +151,7 @@ class AuthSelectionReplayHandler(
             val value =
                 apiJsonCodec.mapper.readValue(durableJson, SelectBranchReplayValue::class.java)
             val branchId = requireNotNull(value.context.branchId)
+            selectionService.revalidateBranchReplay(currentKeycloakSubject(), value.context)
             store(request, value.context)
             SelectBranchResponse(
                 organisationId = value.context.organisationId,
@@ -134,6 +163,13 @@ class AuthSelectionReplayHandler(
                         .ActiveOrganisationContextService.HEADER,
             )
         }
+    }
+
+    private fun currentKeycloakSubject(): String {
+        val authentication =
+            SecurityContextHolder.getContext().authentication
+                ?: error("Authenticated principal is required for selection replay")
+        return keycloakSubject(authentication)
     }
 
     private fun store(
@@ -179,6 +215,7 @@ class AuthController(
             description = "Organisation selected",
             content = [
                 Content(
+                    mediaType = org.springframework.http.MediaType.APPLICATION_JSON_VALUE,
                     schema = Schema(implementation = SelectOrganisationResponse::class),
                 ),
             ],
@@ -207,18 +244,30 @@ class AuthController(
         ),
     )
     @PostMapping("/select-organisation")
-    @IdempotentMutation(replayMode = IdempotencyReplayMode.REISSUE_CONTEXT_TOKEN)
+    @IdempotentMutation(
+        scope = IdempotencyScopeKind.ORGANISATION_SELECTION,
+        replayMode = IdempotencyReplayMode.REISSUE_CONTEXT_TOKEN,
+    )
     @ResponseStatus(HttpStatus.OK)
     fun selectOrganisation(
         authentication: Authentication,
         @Valid @RequestBody request: SelectOrganisationRequest,
-    ): Any {
+    ): SelectOrganisationResponse {
         val result =
             service.selectOrganisation(
                 keycloakSubject(authentication),
                 requireNotNull(request.organisationId),
             )
-        return IdempotencyReplayResponse(
+        return SelectOrganisationResponse(
+            organisationId = result.organisationId,
+            membershipId = result.membershipId,
+            contextToken = "",
+            contextHeader =
+                com.finaxis.platform.iam.application.context
+                    .ActiveOrganisationContextService.HEADER,
+            branchId = result.branchId,
+            requiresBranchSelection = result.requiresBranchSelection,
+            assignedBranchIds = result.assignedBranchIds,
             durableBody =
                 SelectOrganisationReplayValue(
                     context = result.context,
@@ -250,7 +299,12 @@ class AuthController(
         ApiResponse(
             responseCode = "200",
             description = "Branch selected",
-            content = [Content(schema = Schema(implementation = SelectBranchResponse::class))],
+            content = [
+                Content(
+                    mediaType = org.springframework.http.MediaType.APPLICATION_JSON_VALUE,
+                    schema = Schema(implementation = SelectBranchResponse::class),
+                ),
+            ],
             headers = [
                 Header(
                     name = "Idempotency-Key",
@@ -276,20 +330,30 @@ class AuthController(
         ),
     )
     @PostMapping("/select-branch")
-    @IdempotentMutation(replayMode = IdempotencyReplayMode.REISSUE_CONTEXT_TOKEN)
+    @IdempotentMutation(
+        scope = IdempotencyScopeKind.TENANT,
+        replayMode = IdempotencyReplayMode.REISSUE_CONTEXT_TOKEN,
+    )
     @ResponseStatus(HttpStatus.OK)
     fun selectBranch(
         authentication: Authentication,
         @Valid @RequestBody request: SelectBranchRequest,
         session: HttpSession,
-    ): Any {
+    ): SelectBranchResponse {
         val result =
             service.selectBranch(
                 keycloakSubject(authentication),
                 requireNotNull(request.branchId),
                 activeContext(authentication, session),
             )
-        return IdempotencyReplayResponse(
+        return SelectBranchResponse(
+            organisationId = result.organisationId,
+            membershipId = result.membershipId,
+            branchId = result.branchId,
+            contextToken = "",
+            contextHeader =
+                com.finaxis.platform.iam.application.context
+                    .ActiveOrganisationContextService.HEADER,
             durableBody = SelectBranchReplayValue(result.context),
         )
     }
@@ -318,4 +382,13 @@ class AuthController(
             ?: session.getAttribute(
                 SessionActiveOrganisationContextResolver.ATTRIBUTE,
             ) as? ActiveOrganisationContext
+}
+
+private fun keycloakSubject(authentication: Authentication): String {
+    val principal = authentication.principal
+    return when (principal) {
+        is Jwt -> requireNotNull(principal.subject) { "JWT subject is required" }
+        is AppPrincipal -> principal.keycloakSubject
+        else -> error("Unsupported authenticated principal")
+    }
 }

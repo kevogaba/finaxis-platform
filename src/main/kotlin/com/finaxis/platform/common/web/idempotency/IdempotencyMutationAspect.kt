@@ -7,6 +7,7 @@ import org.aspectj.lang.ProceedingJoinPoint
 import org.aspectj.lang.annotation.Around
 import org.aspectj.lang.annotation.Aspect
 import org.aspectj.lang.reflect.MethodSignature
+import org.springframework.aop.support.AopUtils
 import org.springframework.core.Ordered
 import org.springframework.core.annotation.AnnotatedElementUtils
 import org.springframework.core.annotation.Order
@@ -16,12 +17,15 @@ import org.springframework.stereotype.Component
 import org.springframework.web.bind.annotation.ResponseStatus
 import org.springframework.web.context.request.RequestContextHolder
 import org.springframework.web.context.request.ServletRequestAttributes
+import java.lang.reflect.ParameterizedType
 import java.util.UUID
+
+private const val IDEMPOTENCY_ADVISOR_OFFSET = 100
 
 /** Applies atomic durable idempotency around annotated MVC mutation methods. */
 @Aspect
 @Component
-@Order(Ordered.LOWEST_PRECEDENCE)
+@Order(Ordered.LOWEST_PRECEDENCE - IDEMPOTENCY_ADVISOR_OFFSET)
 class IdempotencyMutationAspect(
     private val executor: IdempotencyExecutor,
     private val scopeResolver: MutationScopeResolver,
@@ -32,14 +36,19 @@ class IdempotencyMutationAspect(
     private val handlers = replayHandlers.associateBy(IdempotencyReplayHandler::mode)
 
     /** Executes the annotated mutation once and adapts a durable or replayed response. */
-    @Around(
-        "@within(org.springframework.web.bind.annotation.RestController) && " +
-            "@annotation(idempotentMutation)",
-    )
-    fun around(
-        joinPoint: ProceedingJoinPoint,
-        idempotentMutation: IdempotentMutation,
-    ): Any? {
+    @Around("@within(org.springframework.web.bind.annotation.RestController)")
+    fun around(joinPoint: ProceedingJoinPoint): Any? {
+        val signature = joinPoint.signature as MethodSignature
+        val specificMethod =
+            AopUtils.getMostSpecificMethod(
+                signature.method,
+                joinPoint.target.javaClass,
+            )
+        val idempotentMutation =
+            AnnotatedElementUtils.findMergedAnnotation(
+                specificMethod,
+                IdempotentMutation::class.java,
+            ) ?: return joinPoint.proceed()
         val attributes =
             RequestContextHolder.currentRequestAttributes() as ServletRequestAttributes
         val request = attributes.request
@@ -54,7 +63,7 @@ class IdempotencyMutationAspect(
         var originalResult: Any? = null
         val response =
             executor.execute(
-                scope = scopeResolver.resolve(idempotencyRequest),
+                scope = scopeResolver.resolve(idempotencyRequest, idempotentMutation.scope),
                 key = key,
                 fingerprint = requestHasher.fingerprint(idempotencyRequest),
             ) {
@@ -85,28 +94,28 @@ class IdempotencyMutationAspect(
     ): IdempotencyResponse {
         val response =
             when (result) {
-                is IdempotencyReplayResponse -> {
+                is IdempotencyReplayResponse<*> -> {
                     result
                 }
 
                 is ResponseEntity<*> -> {
-                    IdempotencyReplayResponse(
+                    DurableControllerResponse(
                         durableBody = result.body,
-                        status = result.statusCode.value(),
-                        headers = result.headers.toSingleValueMap(),
+                        durableStatus = result.statusCode.value(),
+                        durableHeaders = result.headers.toSingleValueMap(),
                     )
                 }
 
                 else -> {
-                    IdempotencyReplayResponse(
-                        durableBody = result,
-                        status = declaredStatus(joinPoint),
+                    DurableControllerResponse(
+                        durableBody = result.takeUnless { it === Unit },
+                        durableStatus = declaredStatus(joinPoint),
                     )
                 }
             }
         return IdempotencyResponse(
-            status = response.status,
-            headers = response.headers,
+            status = response.durableStatus,
+            headers = response.durableHeaders,
             body = response.durableBody?.let(apiJsonCodec.mapper::writeValueAsString),
         )
     }
@@ -135,7 +144,13 @@ class IdempotencyMutationAspect(
                 val builder = ResponseEntity.status(response.status)
                 response.headers.forEach(builder::header)
                 response.body?.let {
-                    builder.contentType(MediaType.APPLICATION_JSON).body(it)
+                    val genericType = method.genericReturnType as? ParameterizedType
+                    val bodyType = genericType?.actualTypeArguments?.singleOrNull()
+                    val body =
+                        bodyType?.let(apiJsonCodec.mapper.typeFactory::constructType)?.let { type ->
+                            apiJsonCodec.mapper.readValue<Any>(it, type)
+                        } ?: it
+                    builder.contentType(MediaType.APPLICATION_JSON).body(body)
                 } ?: builder.build<Any>()
             }
 
@@ -155,7 +170,7 @@ class IdempotencyMutationAspect(
         response: IdempotencyResponse,
         request: HttpServletRequest,
         servletResponse: HttpServletResponse?,
-    ): Any {
+    ): IdempotencyReplayResponse<*> {
         val durableJson =
             requireNotNull(response.body) {
                 "Context-token replay requires a durable JSON body"
@@ -172,4 +187,10 @@ class IdempotencyMutationAspect(
     private companion object {
         const val HTTP_OK = 200
     }
+
+    private data class DurableControllerResponse(
+        override val durableBody: Any?,
+        override val durableStatus: Int = HTTP_OK,
+        override val durableHeaders: Map<String, String> = emptyMap(),
+    ) : IdempotencyReplayResponse<Any>
 }

@@ -42,9 +42,7 @@ class WebAdapterUnitTests {
                 SelectOrganisationRequest(selectedOrganisationId),
             )
 
-        val replay =
-            (response as com.finaxis.platform.common.web.idempotency.IdempotencyReplayResponse)
-                .durableBody as SelectOrganisationReplayValue
+        val replay = requireNotNull(response.durableBody)
         assertEquals(selectedOrganisationId, replay.context.organisationId)
         assertEquals(selectedMembershipId, replay.context.membershipId)
         assertEquals(false, replay.requiresBranchSelection)
@@ -83,10 +81,7 @@ class WebAdapterUnitTests {
                 selectedMembershipId,
                 branchId,
             ),
-            (
-                (response as com.finaxis.platform.common.web.idempotency.IdempotencyReplayResponse)
-                    .durableBody as SelectBranchReplayValue
-            ).context,
+            requireNotNull(response.durableBody).context,
         )
     }
 
