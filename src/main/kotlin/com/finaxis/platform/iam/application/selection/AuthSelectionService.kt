@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.application.selection
 
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.iam.application.authorization.AuthorizationService
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
@@ -9,6 +10,9 @@ import com.finaxis.platform.iam.domain.OrganisationStatus
 import com.finaxis.platform.iam.domain.allowsLogin
 import org.springframework.stereotype.Service
 import java.util.UUID
+
+private const val PERM_SELECT_ORG = "auth.select_organisation"
+private const val PERM_SELECT_BRANCH = "auth.select_branch"
 
 /**
  * Result returned after selecting an active organisation.
@@ -45,9 +49,12 @@ class OrganisationSelectionDeniedException(
 @Service
 class AuthSelectionService(
     private val lookup: MembershipSelectionLookup,
+    private val authorizationService: AuthorizationService,
 ) {
     /**
      * Selects an active organisation and returns the resulting tenant context.
+     *
+     * Requires the actor to hold [PERM_SELECT_ORG] in the target organisation.
      */
     fun selectOrganisation(
         keycloakSubject: String,
@@ -63,6 +70,10 @@ class AuthSelectionService(
         }
         if (lookup.organisationStatus(organisationId) != OrganisationStatus.ACTIVE) {
             denied("User is not an active member of the organisation")
+        }
+
+        if (!authorizationService.hasPermission(userId, organisationId, PERM_SELECT_ORG)) {
+            denied("Missing permission: $PERM_SELECT_ORG")
         }
 
         val assignedBranchIds = lookup.findAssignedBranchIds(membership.membershipId)
@@ -82,6 +93,8 @@ class AuthSelectionService(
 
     /**
      * Selects an assigned branch inside the active organisation context.
+     *
+     * Requires the actor to hold [PERM_SELECT_BRANCH] in the target organisation.
      */
     fun selectBranch(
         keycloakSubject: String,
@@ -113,6 +126,15 @@ class AuthSelectionService(
         }
         if (!lookup.hasAssignedBranch(existingContext.membershipId, branchId)) {
             denied("User is not assigned to the selected branch")
+        }
+
+        if (!authorizationService.hasPermission(
+                userId = userId,
+                organisationId = existingContext.organisationId,
+                permissionCode = PERM_SELECT_BRANCH,
+            )
+        ) {
+            denied("Missing permission: $PERM_SELECT_BRANCH")
         }
 
         val selectedContext = existingContext.copy(branchId = branchId)

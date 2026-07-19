@@ -435,53 +435,117 @@ private object OrganisationBootstrapDefaults {
     val SEQUENCE_CODES = listOf("MEMBER", "TRANSACTION", "JOURNAL")
     private val BASELINE_PERMISSION_CODES =
         setOf(
+            // Tenant lifecycle
             "tenant.create",
             "tenant.submit_for_approval",
             "tenant.approve",
             "tenant.activate",
             "tenant.suspend",
             "tenant.deprovision",
+            // Foundation API – tenant reads/writes
+            "tenant.view",
+            "tenant.update_draft",
+            "tenant.reject",
+            "tenant.reactivate",
+            "tenant.bootstrap_retry",
+            // Branch lifecycle
             "branch.create",
             "branch.approve",
             "branch.activate",
             "branch.suspend",
             "branch.close",
+            // Foundation API – branch
+            "branch.view",
+            "branch.reactivate",
+            // User / membership administration (no global user lifecycle – platform-only)
+            "user.view",
             "user.invite",
             "user.approve",
-            "user.activate",
-            "user.suspend",
-            "user.deactivate",
             "user.assign_branch",
             "user.assign_role",
+            "user.revoke_branch",
+            "user.revoke_role",
+            // Membership
+            "membership.view",
+            "membership.suspend",
+            "membership.reactivate",
+            "membership.revoke",
+            // Branch assignments
+            "branch_assignment.view",
+            // Roles
             "role.create",
             "role.update",
             "role.assign_permission",
+            "role.view",
+            "role.activate",
+            "role.deactivate",
+            "role.remove_permission",
+            // Role assignments
+            "role_assignment.view",
+            // Permissions catalog
+            "permission.view",
+            // Audit & settings
             "audit.view",
+            "settings.view",
             "settings.update",
+            // Business date & COB
             "business_date.view",
             "business_date.advance",
             "business_date.reopen",
             "cob.start",
             "cob.complete",
+            // Auth selection
+            "auth.select_organisation",
+            "auth.select_branch",
+            // Profile
             "iam.profile.read",
         )
     val ROLE_PERMISSIONS =
         mapOf(
             "TENANT_ADMIN" to BASELINE_PERMISSION_CODES,
-            "TENANT_AUDITOR" to setOf("audit.view", "business_date.view", "iam.profile.read"),
+            "TENANT_AUDITOR" to
+                setOf(
+                    "audit.view",
+                    "business_date.view",
+                    "tenant.view",
+                    "branch.view",
+                    "user.view",
+                    "membership.view",
+                    "branch_assignment.view",
+                    "role.view",
+                    "role_assignment.view",
+                    "permission.view",
+                    "settings.view",
+                    "auth.select_organisation",
+                    "auth.select_branch",
+                    "iam.profile.read",
+                ),
             "IAM_ADMIN" to
                 setOf(
+                    "user.view",
                     "user.invite",
                     "user.approve",
-                    "user.activate",
-                    "user.suspend",
-                    "user.deactivate",
                     "user.assign_branch",
                     "user.assign_role",
+                    "user.revoke_branch",
+                    "user.revoke_role",
+                    "membership.view",
+                    "membership.suspend",
+                    "membership.reactivate",
+                    "membership.revoke",
+                    "branch_assignment.view",
                     "role.create",
                     "role.update",
                     "role.assign_permission",
+                    "role.view",
+                    "role.activate",
+                    "role.deactivate",
+                    "role.remove_permission",
+                    "role_assignment.view",
+                    "permission.view",
                     "audit.view",
+                    "auth.select_organisation",
+                    "auth.select_branch",
                     "iam.profile.read",
                 ),
             "BRANCH_MANAGER" to
@@ -491,11 +555,22 @@ private object OrganisationBootstrapDefaults {
                     "branch.activate",
                     "branch.suspend",
                     "branch.close",
+                    "branch.view",
+                    "branch.reactivate",
                     "user.assign_branch",
+                    "branch_assignment.view",
                     "business_date.view",
+                    "auth.select_organisation",
+                    "auth.select_branch",
                     "iam.profile.read",
                 ),
-            "BRANCH_OPERATOR" to setOf("business_date.view", "iam.profile.read"),
+            "BRANCH_OPERATOR" to
+                setOf(
+                    "business_date.view",
+                    "auth.select_organisation",
+                    "auth.select_branch",
+                    "iam.profile.read",
+                ),
         )
 }
 

@@ -279,6 +279,31 @@ private class FakePermissionGuard : PermissionGuard {
             throw SecurityException("Missing permission: $permissionCode")
         }
     }
+
+    override fun requireTenantPermission(
+        actorId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ) {
+        requirePermission(actorId, organisationId, permissionCode)
+    }
+
+    override fun requireBranchPermission(
+        actorId: UUID,
+        organisationId: UUID,
+        branchId: UUID,
+        permissionCode: String,
+    ) {
+        requirePermission(actorId, organisationId, permissionCode)
+    }
+
+    override fun requirePlatformPermission(
+        actorId: UUID,
+        permissionCode: String,
+    ) {
+        val platformOrgId = UUID.fromString("00000000-0000-0000-0000-000000000000")
+        requirePermission(actorId, platformOrgId, permissionCode)
+    }
 }
 
 private class CapturingPublisherForSettings : TransitionEventPublisher {

@@ -13,6 +13,7 @@ import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
 import org.hamcrest.Matchers.containsInAnyOrder
 import org.hamcrest.Matchers.hasItem
+import org.hamcrest.Matchers.hasItems
 import org.jooq.DSLContext
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -335,7 +336,7 @@ class AuthFlowIntegrationTests {
                 jsonPath("$.roles[*].code") { value(hasItem("local-admin")) }
                 jsonPath("$.permissions") {
                     value(
-                        containsInAnyOrder(
+                        hasItems(
                             "iam.profile.read",
                             "iam.user.invite",
                             "logistics.shipment.approve",

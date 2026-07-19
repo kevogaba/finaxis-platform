@@ -279,6 +279,61 @@ class FoundationSchemaMigrationTests(
         return scopeId to key
     }
 
+    @Test
+    fun `V10 migration seeds all foundation API permission codes`() {
+        val expected =
+            listOf(
+                "auth.select_branch",
+                "auth.select_organisation",
+                "branch.reactivate",
+                "branch.view",
+                "branch_assignment.view",
+                "membership.reactivate",
+                "membership.revoke",
+                "membership.suspend",
+                "membership.view",
+                "permission.view",
+                "role.activate",
+                "role.deactivate",
+                "role.remove_permission",
+                "role.view",
+                "role_assignment.view",
+                "settings.view",
+                "tenant.bootstrap_retry",
+                "tenant.reactivate",
+                "tenant.reject",
+                "tenant.update_draft",
+                "tenant.view",
+                "user.revoke_branch",
+                "user.revoke_role",
+                "user.view",
+            )
+
+        val actual =
+            jdbcTemplate.queryForList(
+                """
+                SELECT permission_code
+                FROM permission
+                WHERE permission_code IN (
+                    'auth.select_organisation', 'auth.select_branch',
+                    'tenant.view', 'tenant.update_draft', 'tenant.reject',
+                    'tenant.reactivate', 'tenant.bootstrap_retry',
+                    'branch.view', 'branch.reactivate',
+                    'user.view', 'membership.view', 'membership.suspend',
+                    'membership.reactivate', 'membership.revoke',
+                    'branch_assignment.view', 'user.revoke_branch',
+                    'role.view', 'role.activate', 'role.deactivate',
+                    'role.remove_permission', 'role_assignment.view',
+                    'user.revoke_role', 'permission.view', 'settings.view'
+                )
+                ORDER BY permission_code
+                """.trimIndent(),
+                String::class.java,
+            )
+
+        assertEquals(expected.sorted(), actual.map { it as String }.sorted())
+    }
+
     private fun column(
         name: String,
         type: String,

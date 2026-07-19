@@ -7,6 +7,8 @@
       "common::id",
       "common::persistence",
       "common::transitions",
+      "common::web-api",
+      "common::web-idempotency",
       "jooq"
     })
 package com.finaxis.platform.lifecycle;

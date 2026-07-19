@@ -2,21 +2,27 @@ package com.finaxis.platform.iam.adapter.inbound.web
 
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.adapter.inbound.security.SessionActiveOrganisationContextResolver
+import com.finaxis.platform.iam.application.authorization.AuthorizationService
+import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
+import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
+import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
 import com.finaxis.platform.iam.application.port.outbound.ProfileBranch
 import com.finaxis.platform.iam.application.port.outbound.ProfileMembership
 import com.finaxis.platform.iam.application.port.outbound.ProfileOrganisation
 import com.finaxis.platform.iam.application.port.outbound.ProfileRole
 import com.finaxis.platform.iam.application.port.outbound.UserProfileLookup
 import com.finaxis.platform.iam.application.profile.UserProfileService
+import com.finaxis.platform.iam.application.security.RequestPermissionCache
 import com.finaxis.platform.iam.application.selection.AuthSelectionService
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
 import com.finaxis.platform.iam.domain.RoleStatus
 import com.finaxis.platform.iam.domain.UserStatus
+import org.springframework.cache.concurrent.ConcurrentMapCacheManager
 import org.springframework.mock.web.MockHttpSession
 import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken
@@ -102,8 +108,26 @@ class WebAdapterUnitTests {
         assertEquals(listOf("local-admin"), response.roles.map { it.code })
     }
 
-    private fun selectionService(lookup: MembershipSelectionLookup): AuthSelectionService =
-        AuthSelectionService(lookup)
+    private fun selectionService(lookup: MembershipSelectionLookup): AuthSelectionService {
+        val resolver =
+            EffectivePermissionResolver(
+                object : PermissionResolutionQueries {
+                    override fun membershipStatus(membershipId: UUID) = MembershipStatus.ACTIVE
+
+                    override fun rolePermissionCodes(
+                        membershipId: UUID,
+                        branchId: UUID?,
+                    ) = setOf("auth.select_organisation", "auth.select_branch")
+
+                    override fun directPermissionEffects(membershipId: UUID) =
+                        emptyList<PermissionEffectAssignment>()
+                },
+                ConcurrentMapCacheManager(),
+            )
+        val cache = RequestPermissionCache(resolver)
+        val authorizationService = AuthorizationService(lookup, cache)
+        return AuthSelectionService(lookup, authorizationService)
+    }
 
     private fun jwtAuthentication(): JwtAuthenticationToken =
         JwtAuthenticationToken(
