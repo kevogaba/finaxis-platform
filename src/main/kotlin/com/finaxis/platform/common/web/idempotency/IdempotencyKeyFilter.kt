@@ -75,22 +75,7 @@ class IdempotencyKeyFilter(
             )
             return
         }
-        val wrapped =
-            try {
-                BoundedContentCachingRequestWrapper(request, properties.maxRequestBodyBytes)
-            } catch (_: RequestTooLargeException) {
-                applyCors(request, response)
-                problemWriter.write(
-                    request,
-                    response,
-                    HttpStatus.CONTENT_TOO_LARGE,
-                    "REQUEST_BODY_TOO_LARGE",
-                    "The request body exceeds the allowed size.",
-                )
-                return
-            }
-        wrapped.setAttribute(IDEMPOTENCY_REQUEST_ATTRIBUTE, wrapped)
-        filterChain.doFilter(wrapped, response)
+        filterChain.doFilter(request, response)
     }
 
     private fun applyCors(
@@ -118,10 +103,50 @@ class IdempotencyKeyFilter(
     }
 }
 
-/** Registers the unproxied idempotency filter before security and MVC processing. */
+/** Captures a bounded repeatable mutation body only after authentication and rate limiting. */
+class IdempotencyBodyFilter(
+    private val properties: IdempotencyProperties,
+    private val problemWriter: ApiProblemWriter,
+) : OncePerRequestFilter() {
+    override fun doFilterInternal(
+        request: HttpServletRequest,
+        response: HttpServletResponse,
+        filterChain: FilterChain,
+    ) {
+        if (request.method in IdempotencyKeyFilter.MUTATION_METHODS) {
+            captureMutationBody(request, response, filterChain)
+        } else {
+            filterChain.doFilter(request, response)
+        }
+    }
+
+    private fun captureMutationBody(
+        request: HttpServletRequest,
+        response: HttpServletResponse,
+        filterChain: FilterChain,
+    ) {
+        val wrapped =
+            try {
+                BoundedContentCachingRequestWrapper(request, properties.maxRequestBodyBytes)
+            } catch (_: RequestTooLargeException) {
+                problemWriter.write(
+                    request,
+                    response,
+                    HttpStatus.CONTENT_TOO_LARGE,
+                    "REQUEST_BODY_TOO_LARGE",
+                    "The request body exceeds the allowed size.",
+                )
+                return
+            }
+        wrapped.setAttribute(IdempotencyKeyFilter.IDEMPOTENCY_REQUEST_ATTRIBUTE, wrapped)
+        filterChain.doFilter(wrapped, response)
+    }
+}
+
+/** Registers key handling before security and body capture after the security filter chain. */
 @Configuration(proxyBeanMethods = false)
 class IdempotencyFilterConfiguration {
-    /** Creates the highest-precedence mutation request wrapper. */
+    /** Creates highest-precedence mutation key and known-length metadata handling. */
     @Bean
     fun idempotencyKeyFilterRegistration(
         properties: IdempotencyProperties,
@@ -136,6 +161,16 @@ class IdempotencyFilterConfiguration {
             ),
         ).apply {
             order = Ordered.HIGHEST_PRECEDENCE
+        }
+
+    /** Captures bodies after Spring Security's negative-order filter chain and before MVC. */
+    @Bean
+    fun idempotencyBodyFilterRegistration(
+        properties: IdempotencyProperties,
+        problemWriter: ApiProblemWriter,
+    ): FilterRegistrationBean<IdempotencyBodyFilter> =
+        FilterRegistrationBean(IdempotencyBodyFilter(properties, problemWriter)).apply {
+            order = 0
         }
 }
 

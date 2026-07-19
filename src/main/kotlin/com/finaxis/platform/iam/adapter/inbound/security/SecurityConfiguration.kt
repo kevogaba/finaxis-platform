@@ -15,7 +15,7 @@ import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationTo
 import com.finaxis.platform.iam.application.port.outbound.AppPrincipalLookup
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
-import com.finaxis.platform.iam.domain.UserStatus
+import com.finaxis.platform.iam.domain.allowsLogin
 import com.finaxis.platform.lifecycle.UserFirstLoginActivation
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
@@ -189,7 +189,7 @@ class AppPrincipalLoader(
                     ?.takeIf {
                         it.userId == user.id && it.organisationId == context.organisationId
                     }?.takeIf {
-                        user.status in LOGIN_ALLOWED_USER_STATUSES &&
+                        user.status.allowsLogin() &&
                             it.status == MembershipStatus.ACTIVE
                     }?.takeIf {
                         principalLookup.organisationStatus(it.organisationId) ==
@@ -220,10 +220,6 @@ class AppPrincipalLoader(
                         )
                     }
             }
-
-    private companion object {
-        val LOGIN_ALLOWED_USER_STATUSES = setOf(UserStatus.ACTIVE, UserStatus.INVITED)
-    }
 }
 
 /**

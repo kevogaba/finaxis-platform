@@ -16,6 +16,7 @@ import com.finaxis.platform.iam.application.selection.AuthSelectionService
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
 import com.finaxis.platform.iam.domain.RoleStatus
+import com.finaxis.platform.iam.domain.UserStatus
 import org.springframework.mock.web.MockHttpSession
 import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken
@@ -137,6 +138,8 @@ private class StaticMembershipLookup(
     val userId = uuidV7()
 
     override fun findUserIdByKeycloakSubject(keycloakSubject: String): UUID = userId
+
+    override fun userStatus(userId: UUID): UserStatus = UserStatus.ACTIVE
 
     override fun findMembership(
         userId: UUID,

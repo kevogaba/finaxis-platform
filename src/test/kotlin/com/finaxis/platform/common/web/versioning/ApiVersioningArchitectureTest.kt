@@ -58,6 +58,18 @@ class ApiVersioningArchitectureTest {
     }
 
     @Test
+    fun `mutation guard treats unrestricted request mappings as mutation capable`() {
+        assertEquals(
+            listOf("${UnrestrictedController::class.java.name}#handle"),
+            mutationViolations(listOf(UnrestrictedController::class.java)),
+        )
+        assertEquals(
+            listOf("${ClassPostUnrestrictedController::class.java.name}#handle"),
+            mutationViolations(listOf(ClassPostUnrestrictedController::class.java)),
+        )
+    }
+
+    @Test
     fun `local smoke script uses versioned api paths`() {
         val script = Path.of("scripts/local-smoke.sh").readText()
 
@@ -123,7 +135,9 @@ class ApiVersioningArchitectureTest {
             type.methods.mapNotNull { method ->
                 val mapping =
                     AnnotatedElementUtils.findMergedAnnotation(method, RequestMapping::class.java)
-                val mutates = mapping?.method?.any(MUTATION_METHODS::contains) == true
+                val mutates =
+                    mapping != null &&
+                        (mapping.method.isEmpty() || mapping.method.any(MUTATION_METHODS::contains))
                 method
                     .takeIf {
                         mutates &&
@@ -184,4 +198,15 @@ private class FakeAnnotationController {
     @RequestMapping(method = [RequestMethod.POST])
     @IdempotentMutation
     fun mutate() = Unit
+}
+
+private class UnrestrictedController {
+    @RequestMapping
+    fun handle() = Unit
+}
+
+@RequestMapping(method = [RequestMethod.POST])
+private class ClassPostUnrestrictedController {
+    @RequestMapping
+    fun handle() = Unit
 }

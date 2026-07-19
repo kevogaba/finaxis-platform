@@ -1,14 +1,17 @@
 package com.finaxis.platform.common.web.idempotency
 
 import com.finaxis.platform.PostgresTestConfiguration
-import com.finaxis.platform.iam.adapter.inbound.security.SessionActiveOrganisationContextResolver
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContextService
 import com.finaxis.platform.jooq.tables.references.API_IDEMPOTENCY_RECORD
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
+import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
+import jakarta.servlet.ReadListener
 import jakarta.servlet.ServletContext
+import jakarta.servlet.ServletInputStream
+import jakarta.servlet.http.Cookie
 import org.assertj.core.api.Assertions.assertThat
 import org.jooq.DSLContext
 import org.junit.jupiter.api.BeforeEach
@@ -38,7 +41,11 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post 
 
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest(
-    properties = ["finaxis.api.idempotency.max-request-body-bytes=512"],
+    properties = [
+        "finaxis.api.idempotency.max-request-body-bytes=512",
+        "finaxis.rate-limit.policies.auth-selection.capacity=100",
+        "finaxis.rate-limit.policies.auth-selection.refill-tokens=100",
+    ],
 )
 @AutoConfigureMockMvc
 class IdempotencyWebIntegrationTests {
@@ -51,6 +58,10 @@ class IdempotencyWebIntegrationTests {
     @Autowired
     @Qualifier("idempotencyKeyFilterRegistration")
     private lateinit var filterRegistration: FilterRegistrationBean<IdempotencyKeyFilter>
+
+    @Autowired
+    @Qualifier("idempotencyBodyFilterRegistration")
+    private lateinit var bodyFilterRegistration: FilterRegistrationBean<IdempotencyBodyFilter>
 
     @BeforeEach
     fun clearRecords() {
@@ -69,6 +80,11 @@ class IdempotencyWebIntegrationTests {
             .update(USER_BRANCH_ASSIGNMENT)
             .set(USER_BRANCH_ASSIGNMENT.STATUS, "ACTIVE")
             .where(USER_BRANCH_ASSIGNMENT.USER_ID.eq(UUID.fromString(LOCAL_USER_SUBJECT)))
+            .execute()
+        dsl
+            .update(USER_ACCOUNT)
+            .set(USER_ACCOUNT.STATUS, "ACTIVE")
+            .where(USER_ACCOUNT.ID.eq(UUID.fromString(LOCAL_USER_SUBJECT)))
             .execute()
     }
 
@@ -92,10 +108,10 @@ class IdempotencyWebIntegrationTests {
     @Test
     fun `same browser session replay keeps keycloak subject fingerprint after enrichment`() {
         val key = UUID.randomUUID()
-        val session = MockHttpSession()
+        val first = selectOrganisation(key, MockHttpSession())
+        val sessionCookie = requireNotNull(first.response.getCookie("SESSION"))
 
-        selectOrganisation(key, session)
-        val replay = selectOrganisation(key, session)
+        val replay = selectOrganisation(key, sessionCookie)
 
         assertThat(replay.response.getHeader(IDEMPOTENCY_REPLAYED_HEADER)).isEqualTo("true")
         assertThat(dsl.fetchCount(API_IDEMPOTENCY_RECORD)).isEqualTo(1)
@@ -122,6 +138,8 @@ class IdempotencyWebIntegrationTests {
     @Test
     fun `registered mutation filter is concrete and initializes in MockMvc`() {
         assertThat(AopUtils.isAopProxy(filterRegistration.filter)).isFalse()
+        assertThat(AopUtils.isAopProxy(bodyFilterRegistration.filter)).isFalse()
+        assertThat(bodyFilterRegistration.order).isGreaterThan(filterRegistration.order)
     }
 
     @Test
@@ -231,10 +249,11 @@ class IdempotencyWebIntegrationTests {
 
     @Test
     fun `unknown length oversized mutation is rejected before mvc reads it`() {
+        val requestBuilder = CountingUnknownLengthRequestBuilder()
         val result =
             mockMvc
                 .perform(
-                    UnknownLengthRequestBuilder()
+                    requestBuilder
                         .uri(SELECT_ORGANISATION_PATH)
                         .with(localJwt())
                         .header("Transfer-Encoding", "chunked")
@@ -251,7 +270,28 @@ class IdempotencyWebIntegrationTests {
                 ).andReturn()
 
         assertThat(UUID.fromString(result.response.getHeader(IDEMPOTENCY_KEY_HEADER))).isNotNull()
+        assertThat(requestBuilder.bytesRead).isEqualTo(513)
         assertThat(dsl.fetchCount(API_IDEMPOTENCY_RECORD)).isZero()
+    }
+
+    @Test
+    fun `unauthenticated mutation consumes no request body bytes`() {
+        val requestBuilder = CountingUnknownLengthRequestBuilder()
+
+        mockMvc
+            .perform(
+                requestBuilder
+                    .uri(SELECT_ORGANISATION_PATH)
+                    .header("Transfer-Encoding", "chunked")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(organisationBody()),
+            ).andExpect(
+                org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                    .status()
+                    .isUnauthorized,
+            )
+
+        assertThat(requestBuilder.bytesRead).isZero()
     }
 
     @Test
@@ -316,12 +356,13 @@ class IdempotencyWebIntegrationTests {
                 .where(API_IDEMPOTENCY_RECORD.IDEMPOTENCY_KEY.eq(key))
                 .fetchSingle(API_IDEMPOTENCY_RECORD.RESPONSE_BODY)
 
-        assertThat(firstSession.activeContext()).isNotNull()
-        assertThat(replaySession.activeContext()).isEqualTo(firstSession.activeContext())
+        val firstCookie = requireNotNull(first.response.getCookie("SESSION"))
+        val replayCookie = requireNotNull(replay.response.getCookie("SESSION"))
+        assertProfileAvailable(firstCookie)
+        assertProfileAvailable(replayCookie)
         assertThat(replay.token()).isNotEqualTo(first.token())
-        assertThat(
-            activeContextService().verify(replay.token()),
-        ).isEqualTo(replaySession.activeContext())
+        assertThat(activeContextService().verify(replay.token())?.organisationId)
+            .isEqualTo(UUID.fromString(LOCAL_ORGANISATION_ID))
         assertThat(storedBody)
             .doesNotContain(first.token())
             .doesNotContain(replay.token())
@@ -341,10 +382,8 @@ class IdempotencyWebIntegrationTests {
                 .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, status)
                 .where(USER_ORGANISATION_MEMBERSHIP.ID.eq(UUID.fromString(LOCAL_MEMBERSHIP_ID)))
                 .execute()
-            val replaySession = MockHttpSession()
-
-            replayOrganisationForbidden(key, replaySession)
-            assertThat(replaySession.activeContext()).isNull()
+            val replay = replayOrganisationForbidden(key)
+            assertThat(replay.response.getCookie("SESSION")).isNull()
 
             dsl
                 .update(USER_ORGANISATION_MEMBERSHIP)
@@ -363,11 +402,34 @@ class IdempotencyWebIntegrationTests {
             .set(ORGANISATION.STATUS, "SUSPENDED")
             .where(ORGANISATION.ID.eq(UUID.fromString(LOCAL_ORGANISATION_ID)))
             .execute()
-        val replaySession = MockHttpSession()
+        val replay = replayOrganisationForbidden(key)
 
-        replayOrganisationForbidden(key, replaySession)
+        assertThat(replay.response.getCookie("SESSION")).isNull()
+    }
 
-        assertThat(replaySession.activeContext()).isNull()
+    @Test
+    fun `selection and replay deny an ineligible application user without restoring context`() {
+        val key = UUID.randomUUID()
+        selectOrganisation(key, MockHttpSession())
+        dsl
+            .update(USER_ACCOUNT)
+            .set(USER_ACCOUNT.STATUS, "SUSPENDED")
+            .where(USER_ACCOUNT.ID.eq(UUID.fromString(LOCAL_USER_SUBJECT)))
+            .execute()
+        val replay = replayOrganisationForbidden(key)
+        val original =
+            mockMvc
+                .post(SELECT_ORGANISATION_PATH) {
+                    with(localJwt())
+                    contentType = MediaType.APPLICATION_JSON
+                    content = organisationBody()
+                }.andExpect { status { isForbidden() } }
+                .andReturn()
+
+        assertThat(replay.response.getCookie("SESSION")).isNull()
+        assertThat(original.response.getCookie("SESSION")).isNull()
+        assertThat(replay.response.contentAsString).doesNotContain("context_token")
+        assertThat(original.response.contentAsString).doesNotContain("context_token")
     }
 
     @Test
@@ -379,11 +441,9 @@ class IdempotencyWebIntegrationTests {
             .set(USER_BRANCH_ASSIGNMENT.STATUS, "INACTIVE")
             .where(USER_BRANCH_ASSIGNMENT.BRANCH_ID.eq(UUID.fromString(HEAD_OFFICE_BRANCH_ID)))
             .execute()
-        val replaySession = MockHttpSession()
+        val replay = replayOrganisationForbidden(key)
 
-        replayOrganisationForbidden(key, replaySession)
-
-        assertThat(replaySession.activeContext()).isNull()
+        assertThat(replay.response.getCookie("SESSION")).isNull()
     }
 
     @Test
@@ -447,18 +507,39 @@ class IdempotencyWebIntegrationTests {
                 status { isOk() }
             }.andReturn()
 
-    private fun replayOrganisationForbidden(
+    private fun selectOrganisation(
         key: UUID,
-        session: MockHttpSession,
-    ) {
+        sessionCookie: Cookie,
+    ): MvcResult =
         mockMvc
             .post(SELECT_ORGANISATION_PATH) {
                 with(localJwt())
-                this.session = session
+                cookie(sessionCookie)
+                header(IDEMPOTENCY_KEY_HEADER, key)
+                contentType = MediaType.APPLICATION_JSON
+                content = organisationBody()
+            }.andExpect { status { isOk() } }
+            .andReturn()
+
+    private fun replayOrganisationForbidden(key: UUID): MvcResult =
+        mockMvc
+            .post(SELECT_ORGANISATION_PATH) {
+                with(localJwt())
                 header(IDEMPOTENCY_KEY_HEADER, key)
                 contentType = MediaType.APPLICATION_JSON
                 content = organisationBody()
             }.andExpect { status { isForbidden() } }
+            .andReturn()
+
+    private fun assertProfileAvailable(sessionCookie: Cookie) {
+        mockMvc
+            .get("/api/v1/auth/me") {
+                with(localJwt())
+                cookie(sessionCookie)
+            }.andExpect {
+                status { isOk() }
+                jsonPath("$.organisation.id") { value(LOCAL_ORGANISATION_ID) }
+            }
     }
 
     private fun organisationBody(): String = """{"organisation_id":"$LOCAL_ORGANISATION_ID"}"""
@@ -495,10 +576,6 @@ class IdempotencyWebIntegrationTests {
                 ).sorted(),
         )
 
-    private fun MockHttpSession.activeContext(): ActiveOrganisationContext? =
-        getAttribute(SessionActiveOrganisationContextResolver.ATTRIBUTE)
-            as? ActiveOrganisationContext
-
     private companion object {
         const val IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
         const val IDEMPOTENCY_REPLAYED_HEADER = "Idempotency-Replayed"
@@ -512,12 +589,42 @@ class IdempotencyWebIntegrationTests {
     }
 }
 
-private class UnknownLengthRequestBuilder :
-    AbstractMockHttpServletRequestBuilder<UnknownLengthRequestBuilder>(HttpMethod.POST) {
+internal class CountingUnknownLengthRequestBuilder :
+    AbstractMockHttpServletRequestBuilder<CountingUnknownLengthRequestBuilder>(HttpMethod.POST) {
+    var bytesRead: Int = 0
+        private set
+
     override fun createServletRequest(servletContext: ServletContext): MockHttpServletRequest =
         object : MockHttpServletRequest(servletContext) {
             override fun getContentLength(): Int = -1
 
             override fun getContentLengthLong(): Long = -1
+
+            override fun getInputStream(): ServletInputStream {
+                val delegate = super.getInputStream()
+                return object : ServletInputStream() {
+                    override fun read(): Int =
+                        delegate.read().also { value ->
+                            if (value >= 0) bytesRead++
+                        }
+
+                    override fun read(
+                        target: ByteArray,
+                        offset: Int,
+                        length: Int,
+                    ): Int =
+                        delegate.read(target, offset, length).also { count ->
+                            if (count > 0) bytesRead += count
+                        }
+
+                    override fun isFinished(): Boolean = delegate.isFinished
+
+                    override fun isReady(): Boolean = delegate.isReady
+
+                    override fun setReadListener(readListener: ReadListener) {
+                        delegate.setReadListener(readListener)
+                    }
+                }
+            }
         }
 }

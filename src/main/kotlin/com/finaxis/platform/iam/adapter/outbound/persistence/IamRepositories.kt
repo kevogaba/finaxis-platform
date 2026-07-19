@@ -40,6 +40,14 @@ class JooqMembershipSelectionLookup(
             .and(KEYCLOAK_IDENTITY_LINK.UNLINKED_AT.isNull)
             .fetchOne(KEYCLOAK_IDENTITY_LINK.USER_ID)
 
+    override fun userStatus(userId: UUID): UserStatus? =
+        dsl
+            .select(USER_ACCOUNT.STATUS)
+            .from(USER_ACCOUNT)
+            .where(USER_ACCOUNT.ID.eq(userId))
+            .fetchOne(USER_ACCOUNT.STATUS)
+            ?.let(UserStatus::valueOf)
+
     override fun findMembership(
         userId: UUID,
         organisationId: UUID,

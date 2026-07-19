@@ -6,6 +6,7 @@ import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
+import com.finaxis.platform.iam.domain.UserStatus
 import org.junit.jupiter.api.assertThrows
 import java.util.UUID
 import kotlin.test.Test
@@ -463,15 +464,77 @@ class AuthSelectionServiceTests {
 
         service.revalidateBranchReplay("keycloak-subject", context)
     }
+
+    @Test
+    fun `select organisation rejects a suspended application user`() {
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val service =
+            AuthSelectionService(
+                FakeMembershipLookup(
+                    userId = userId,
+                    userStatus = UserStatus.SUSPENDED,
+                    membership =
+                        MembershipSelection(
+                            uuidV7(),
+                            userId,
+                            organisationId,
+                            MembershipStatus.ACTIVE,
+                        ),
+                ),
+            )
+
+        assertThrows<OrganisationSelectionDeniedException> {
+            service.selectOrganisation("keycloak-subject", organisationId)
+        }
+    }
+
+    @Test
+    fun `organisation and branch replay reject an ineligible application user`() {
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val branchId = uuidV7()
+        val context = ActiveOrganisationContext(userId, organisationId, membershipId, branchId)
+        val service =
+            AuthSelectionService(
+                FakeMembershipLookup(
+                    userId = userId,
+                    userStatus = UserStatus.DEACTIVATED,
+                    membership =
+                        MembershipSelection(
+                            membershipId,
+                            userId,
+                            organisationId,
+                            MembershipStatus.ACTIVE,
+                        ),
+                    branchIds = listOf(branchId),
+                ),
+            )
+
+        assertThrows<OrganisationSelectionDeniedException> {
+            service.revalidateOrganisationReplay(
+                "keycloak-subject",
+                context,
+                listOf(branchId),
+            )
+        }
+        assertThrows<OrganisationSelectionDeniedException> {
+            service.revalidateBranchReplay("keycloak-subject", context)
+        }
+    }
 }
 
 private class FakeMembershipLookup(
     private val userId: UUID? = null,
+    private val userStatus: UserStatus? = UserStatus.ACTIVE,
     private val membership: MembershipSelection? = null,
     private val branchIds: List<UUID> = emptyList(),
     private val organisationStatus: OrganisationStatus? = OrganisationStatus.ACTIVE,
 ) : MembershipSelectionLookup {
     override fun findUserIdByKeycloakSubject(keycloakSubject: String): UUID? = userId
+
+    override fun userStatus(userId: UUID): UserStatus? = userStatus
 
     override fun findMembership(
         userId: UUID,

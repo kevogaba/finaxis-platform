@@ -16,6 +16,9 @@ enum class UserStatus {
     ARCHIVED,
 }
 
+/** Whether this user lifecycle state may establish an authenticated application context. */
+fun UserStatus.allowsLogin(): Boolean = this == UserStatus.ACTIVE || this == UserStatus.INVITED
+
 /**
  * Lifecycle state for an organisation tenant.
  */

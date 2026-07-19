@@ -10,6 +10,7 @@ import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQu
 import com.finaxis.platform.iam.application.security.RequestPermissionCache
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
+import com.finaxis.platform.iam.domain.UserStatus
 import org.springframework.cache.concurrent.ConcurrentMapCacheManager
 import java.util.UUID
 import kotlin.test.Test
@@ -35,6 +36,8 @@ class LifecyclePermissionGuardAdapterTests {
 
     private object NoMemberships : MembershipSelectionLookup {
         override fun findUserIdByKeycloakSubject(keycloakSubject: String): UUID? = null
+
+        override fun userStatus(userId: UUID): UserStatus? = null
 
         override fun findMembership(
             userId: UUID,

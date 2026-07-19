@@ -6,6 +6,7 @@ import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
+import com.finaxis.platform.iam.domain.allowsLogin
 import org.springframework.stereotype.Service
 import java.util.UUID
 
@@ -52,9 +53,7 @@ class AuthSelectionService(
         keycloakSubject: String,
         organisationId: UUID,
     ): SelectOrganisationResult {
-        val userId =
-            lookup.findUserIdByKeycloakSubject(keycloakSubject)
-                ?: denied("Authenticated user is not registered")
+        val userId = eligibleUserId(keycloakSubject)
         val membership =
             lookup.findMembership(userId, organisationId)
                 ?: denied("User is not an active member of the organisation")
@@ -92,9 +91,7 @@ class AuthSelectionService(
         val existingContext =
             currentContext
                 ?: denied("Select an active organisation before selecting a branch")
-        val userId =
-            lookup.findUserIdByKeycloakSubject(keycloakSubject)
-                ?: denied("Authenticated user is not registered")
+        val userId = eligibleUserId(keycloakSubject)
         if (existingContext.userId != userId) {
             denied(
                 "Active organisation context does not belong to the authenticated user",
@@ -162,9 +159,7 @@ class AuthSelectionService(
         keycloakSubject: String,
         context: ActiveOrganisationContext,
     ): MembershipSelection {
-        val userId =
-            lookup.findUserIdByKeycloakSubject(keycloakSubject)
-                ?: denied("Authenticated user is not registered")
+        val userId = eligibleUserId(keycloakSubject)
         if (userId != context.userId) {
             denied("Durable context does not belong to the authenticated user")
         }
@@ -178,6 +173,16 @@ class AuthSelectionService(
             denied("User is not an active member of the organisation")
         }
         return membership
+    }
+
+    private fun eligibleUserId(keycloakSubject: String): UUID {
+        val userId =
+            lookup.findUserIdByKeycloakSubject(keycloakSubject)
+                ?: denied("Authenticated user is not registered")
+        if (lookup.userStatus(userId)?.allowsLogin() != true) {
+            denied("Authenticated user is not eligible to access the application")
+        }
+        return userId
     }
 
     private fun denied(message: String): Nothing =
