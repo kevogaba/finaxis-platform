@@ -17,19 +17,19 @@ import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
+import com.finaxis.platform.lifecycle.application.AmendOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.AssignUserToBranchCommand
 import com.finaxis.platform.lifecycle.application.BranchAssignmentStore
 import com.finaxis.platform.lifecycle.application.BranchLifecycleSnapshot
 import com.finaxis.platform.lifecycle.application.BranchLifecycleStore
-import com.finaxis.platform.lifecycle.application.AmendOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.CreateBranchCommand
 import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.DeprovisionedAssignment
 import com.finaxis.platform.lifecycle.application.HeadOfficeDraftResult
+import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStatus
 import com.finaxis.platform.lifecycle.application.MembershipLifecycleSnapshot
 import com.finaxis.platform.lifecycle.application.MembershipSnapshot
 import com.finaxis.platform.lifecycle.application.MembershipType
-import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStatus
 import com.finaxis.platform.lifecycle.application.OrganisationAccessStore
 import com.finaxis.platform.lifecycle.application.OrganisationBootstrapStore
 import com.finaxis.platform.lifecycle.application.OrganisationLifecycleProvisioningStore
@@ -165,7 +165,8 @@ class JooqOrganisationBranchProvisioningStore(
                 b.MEMBERSHIP_ID,
                 b.LAST_FAILURE_CODE,
             ).from(ORGANISATION)
-            .leftJoin(b).on(b.ORGANISATION_ID.eq(ORGANISATION.ID))
+            .leftJoin(b)
+            .on(b.ORGANISATION_ID.eq(ORGANISATION.ID))
             .where(ORGANISATION.TENANT_CODE.eq(tenantCode))
             .fetchOne()
             ?.let(::organisationSummary)
@@ -201,7 +202,8 @@ class JooqOrganisationBranchProvisioningStore(
                     b.MEMBERSHIP_ID,
                     b.LAST_FAILURE_CODE,
                 ).from(ORGANISATION)
-                .leftJoin(b).on(b.ORGANISATION_ID.eq(ORGANISATION.ID))
+                .leftJoin(b)
+                .on(b.ORGANISATION_ID.eq(ORGANISATION.ID))
                 .where(condition)
                 .orderBy(ORGANISATION.CREATED_AT.desc())
                 .limit(filter.size)
@@ -609,14 +611,21 @@ private object OrganisationBootstrapDefaults {
 private fun organisationSummary(record: org.jooq.Record): OrganisationSummary {
     val b = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
     val bootstrapStatusRaw = record.get(b.STATUS)
+    val statusVal =
+        OrganisationLifecycleState.valueOf(
+            requireNotNull(record.get(ORGANISATION.STATUS)),
+        )
     return OrganisationSummary(
         organisationId = requireNotNull(record.get(ORGANISATION.ID)),
         tenantCode = requireNotNull(record.get(ORGANISATION.TENANT_CODE)),
         displayName = requireNotNull(record.get(ORGANISATION.DISPLAY_NAME)),
         countryCode = requireNotNull(record.get(ORGANISATION.COUNTRY_CODE)),
-        status = OrganisationLifecycleState.valueOf(requireNotNull(record.get(ORGANISATION.STATUS))),
+        status = statusVal,
         createdAt = requireNotNull(record.get(ORGANISATION.CREATED_AT)).toInstant(),
-        bootstrapStatus = bootstrapStatusRaw?.let { InitialAdministratorBootstrapStatus.valueOf(it) },
+        bootstrapStatus =
+            bootstrapStatusRaw?.let {
+                InitialAdministratorBootstrapStatus.valueOf(it)
+            },
         bootstrapAttempts = record.get(b.ATTEMPTS),
         bootstrapUserId = record.get(b.USER_ID),
         bootstrapMembershipId = record.get(b.MEMBERSHIP_ID),

@@ -37,15 +37,16 @@ interface InitialAdministratorBootstrapStore {
     /** Finds the bootstrap record for an organisation. */
     fun find(organisationId: UUID): InitialAdministratorBootstrapRecord?
 
-    /** Updates the status of the bootstrap process. */
+    /**
+     * Updates the bootstrap status and optionally records a safe failure code.
+     * When [incrementAttempts] is true, the attempt counter is incremented atomically.
+     */
     fun updateStatus(
         organisationId: UUID,
         status: InitialAdministratorBootstrapStatus,
         lastFailureCode: String? = null,
+        incrementAttempts: Boolean = false,
     )
-
-    /** Increments the bootstrap attempt counter. */
-    fun incrementAttempts(organisationId: UUID)
 
     /** Stores references to resolved platform entities. */
     fun linkResolvedEntities(

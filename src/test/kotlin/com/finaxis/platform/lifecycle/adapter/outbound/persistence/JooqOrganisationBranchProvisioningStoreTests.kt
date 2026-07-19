@@ -26,8 +26,8 @@ import org.springframework.transaction.annotation.Transactional
 import java.time.OffsetDateTime
 import java.util.UUID
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @Import(PostgresTestConfiguration::class)
@@ -107,28 +107,34 @@ class JooqOrganisationBranchProvisioningStoreTests(
     @Test
     fun `findByCode returns bootstrap projection when a bootstrap record exists`() {
         val tenantCode = "with-bootstrap-${uuidV7()}"
-        val organisationId = store.createDraft(
-            CreateOrganisationDraftCommand(
-                tenantCode = tenantCode,
-                displayName = "With Bootstrap Org",
-                legalName = null,
-                registrationNumber = null,
-                countryCode = "KE",
-                baseCurrencyCode = "KES",
-                timezone = "Africa/Nairobi",
-                requestedBy = uuidV7(),
-                admin = InitialAdministratorDraft(
-                    email = "proj.admin@bootstrap.test",
-                    username = "projadmin",
-                    displayName = "Proj Admin",
-                    phoneE164 = null,
-                    sendApplicationInvite = false,
+        val organisationId =
+            store.createDraft(
+                CreateOrganisationDraftCommand(
+                    tenantCode = tenantCode,
+                    displayName = "With Bootstrap Org",
+                    legalName = null,
+                    registrationNumber = null,
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    requestedBy = uuidV7(),
+                    admin =
+                        InitialAdministratorDraft(
+                            email = "proj.admin@bootstrap.test",
+                            username = "projadmin",
+                            displayName = "Proj Admin",
+                            phoneE164 = null,
+                            sendApplicationInvite = false,
+                        ),
                 ),
-            ),
-        )
+            )
         // createDraft does NOT persist the bootstrap row; the service does.
         // Seed it directly via the jOOQ bootstrap store.
-        val bootstrapStore = JooqInitialAdministratorBootstrapStore(dsl, java.time.Clock.systemUTC())
+        val bootstrapStore =
+            JooqInitialAdministratorBootstrapStore(
+                dsl,
+                java.time.Clock.systemUTC(),
+            )
         bootstrapStore.createDraft(
             organisationId,
             InitialAdministratorDraft(
@@ -153,19 +159,24 @@ class JooqOrganisationBranchProvisioningStoreTests(
     @Test
     fun `list includes bootstrap projection fields from left join`() {
         val tenantCode = "list-bootstrap-${uuidV7()}"
-        val organisationId = store.createDraft(
-            CreateOrganisationDraftCommand(
-                tenantCode = tenantCode,
-                displayName = "List Bootstrap Org",
-                legalName = null,
-                registrationNumber = null,
-                countryCode = "KE",
-                baseCurrencyCode = "KES",
-                timezone = "Africa/Nairobi",
-                requestedBy = uuidV7(),
-            ),
-        )
-        val bootstrapStore = JooqInitialAdministratorBootstrapStore(dsl, java.time.Clock.systemUTC())
+        val organisationId =
+            store.createDraft(
+                CreateOrganisationDraftCommand(
+                    tenantCode = tenantCode,
+                    displayName = "List Bootstrap Org",
+                    legalName = null,
+                    registrationNumber = null,
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    requestedBy = uuidV7(),
+                ),
+            )
+        val bootstrapStore =
+            JooqInitialAdministratorBootstrapStore(
+                dsl,
+                java.time.Clock.systemUTC(),
+            )
         bootstrapStore.createDraft(
             organisationId,
             InitialAdministratorDraft(

@@ -45,7 +45,7 @@ class JooqInitialAdministratorBootstrapStoreTests(
         dsl
             .insertInto(ORGANISATION)
             .set(ORGANISATION.ID, id)
-            .set(ORGANISATION.TENANT_CODE, "tenant-bootstrap-${id}")
+            .set(ORGANISATION.TENANT_CODE, "tenant-bootstrap-$id")
             .set(ORGANISATION.DISPLAY_NAME, "Bootstrap Store Test Org")
             .set(ORGANISATION.COUNTRY_CODE, "ZZ")
             .set(ORGANISATION.BASE_CURRENCY_CODE, "ZZZ")
@@ -73,7 +73,10 @@ class JooqInitialAdministratorBootstrapStoreTests(
         return id
     }
 
-    private fun insertMembership(organisationId: UUID, userId: UUID): UUID {
+    private fun insertMembership(
+        organisationId: UUID,
+        userId: UUID,
+    ): UUID {
         val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
@@ -124,13 +127,14 @@ class JooqInitialAdministratorBootstrapStoreTests(
         return id
     }
 
-    private fun defaultAdmin(suffix: String = "") = InitialAdministratorDraft(
-        email = "admin${suffix}@bootstrap.test",
-        username = "bootstrapadmin$suffix",
-        displayName = "Bootstrap Admin $suffix",
-        phoneE164 = "+254700000099",
-        sendApplicationInvite = false,
-    )
+    private fun defaultAdmin(suffix: String = "") =
+        InitialAdministratorDraft(
+            email = "admin$suffix@bootstrap.test",
+            username = "bootstrapadmin$suffix",
+            displayName = "Bootstrap Admin $suffix",
+            phoneE164 = "+254700000099",
+            sendApplicationInvite = false,
+        )
 
     // ── createDraft ───────────────────────────────────────────────────────────
 
@@ -166,13 +170,14 @@ class JooqInitialAdministratorBootstrapStoreTests(
         store.createDraft(organisationId, defaultAdmin(), uuidV7())
         val before = assertNotNull(store.find(organisationId))
 
-        val updated = InitialAdministratorDraft(
-            email = "new.admin@bootstrap.test",
-            username = "newadmin",
-            displayName = "New Admin",
-            phoneE164 = "+254711111111",
-            sendApplicationInvite = true,
-        )
+        val updated =
+            InitialAdministratorDraft(
+                email = "new.admin@bootstrap.test",
+                username = "newadmin",
+                displayName = "New Admin",
+                phoneE164 = "+254711111111",
+                sendApplicationInvite = true,
+            )
         store.amendDraft(organisationId, updated)
 
         val after = assertNotNull(store.find(organisationId))
@@ -245,8 +250,11 @@ class JooqInitialAdministratorBootstrapStoreTests(
         store.createDraft(organisationId, defaultAdmin(), uuidV7())
         store.submit(organisationId, uuidV7())
         store.approve(organisationId, uuidV7())
-
-        store.updateStatus(organisationId, InitialAdministratorBootstrapStatus.FAILED, "KEYCLOAK_TIMEOUT")
+        store.updateStatus(
+            organisationId,
+            InitialAdministratorBootstrapStatus.FAILED,
+            "KEYCLOAK_TIMEOUT",
+        )
 
         val record = assertNotNull(store.find(organisationId))
         assertEquals(InitialAdministratorBootstrapStatus.FAILED, record.status)
@@ -268,18 +276,29 @@ class JooqInitialAdministratorBootstrapStoreTests(
         assertNull(record.lastFailureCode)
     }
 
-    // ── incrementAttempts ─────────────────────────────────────────────────────
+    // ── incrementAttempts via updateStatus ─────────────────────────────────────
 
     @Test
     fun `incrementAttempts adds one per call`() {
         val organisationId = insertOrganisation()
         store.createDraft(organisationId, defaultAdmin(), uuidV7())
 
-        store.incrementAttempts(organisationId)
-        store.incrementAttempts(organisationId)
+        store.updateStatus(
+            organisationId = organisationId,
+            status = InitialAdministratorBootstrapStatus.FAILED,
+            lastFailureCode = "ERR1",
+            incrementAttempts = true,
+        )
+        store.updateStatus(
+            organisationId = organisationId,
+            status = InitialAdministratorBootstrapStatus.FAILED,
+            lastFailureCode = "ERR2",
+            incrementAttempts = true,
+        )
 
         val record = assertNotNull(store.find(organisationId))
         assertEquals(2, record.attempts)
+        assertEquals("ERR2", record.lastFailureCode)
     }
 
     // ── linkResolvedEntities ──────────────────────────────────────────────────

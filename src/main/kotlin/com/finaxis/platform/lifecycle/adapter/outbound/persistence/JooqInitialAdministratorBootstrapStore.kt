@@ -21,27 +21,27 @@ class JooqInitialAdministratorBootstrapStore(
     private val dsl: DSLContext,
     private val clock: Clock,
 ) : InitialAdministratorBootstrapStore {
-
     override fun createDraft(
         organisationId: UUID,
         admin: InitialAdministratorDraft,
         requestedBy: UUID,
     ) {
         val now = now()
+        val t = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
         dsl
-            .insertInto(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ORGANISATION_ID, organisationId)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ADMIN_EMAIL, admin.email)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ADMIN_USERNAME, admin.username)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ADMIN_DISPLAY_NAME, admin.displayName)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ADMIN_PHONE_E164, admin.phoneE164)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.SEND_APPLICATION_INVITE, admin.sendApplicationInvite)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.STATUS, InitialAdministratorBootstrapStatus.DRAFT.name)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ATTEMPTS, 0)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.REQUESTED_BY, requestedBy)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.CREATED_AT, now)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.UPDATED_AT, now)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION, 0L)
+            .insertInto(t)
+            .set(t.ORGANISATION_ID, organisationId)
+            .set(t.ADMIN_EMAIL, admin.email)
+            .set(t.ADMIN_USERNAME, admin.username)
+            .set(t.ADMIN_DISPLAY_NAME, admin.displayName)
+            .set(t.ADMIN_PHONE_E164, admin.phoneE164)
+            .set(t.SEND_APPLICATION_INVITE, admin.sendApplicationInvite)
+            .set(t.STATUS, InitialAdministratorBootstrapStatus.DRAFT.name)
+            .set(t.ATTEMPTS, 0)
+            .set(t.REQUESTED_BY, requestedBy)
+            .set(t.CREATED_AT, now)
+            .set(t.UPDATED_AT, now)
+            .set(t.ROW_VERSION, 0L)
             .execute()
     }
 
@@ -50,19 +50,17 @@ class JooqInitialAdministratorBootstrapStore(
         admin: InitialAdministratorDraft,
     ) {
         val now = now()
+        val t = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
         dsl
-            .update(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ADMIN_EMAIL, admin.email)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ADMIN_USERNAME, admin.username)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ADMIN_DISPLAY_NAME, admin.displayName)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ADMIN_PHONE_E164, admin.phoneE164)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.SEND_APPLICATION_INVITE, admin.sendApplicationInvite)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.UPDATED_AT, now)
-            .set(
-                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION,
-                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION.plus(1)
-            )
-            .where(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ORGANISATION_ID.eq(organisationId))
+            .update(t)
+            .set(t.ADMIN_EMAIL, admin.email)
+            .set(t.ADMIN_USERNAME, admin.username)
+            .set(t.ADMIN_DISPLAY_NAME, admin.displayName)
+            .set(t.ADMIN_PHONE_E164, admin.phoneE164)
+            .set(t.SEND_APPLICATION_INVITE, admin.sendApplicationInvite)
+            .set(t.UPDATED_AT, now)
+            .set(t.ROW_VERSION, t.ROW_VERSION.plus(1))
+            .where(t.ORGANISATION_ID.eq(organisationId))
             .execute()
     }
 
@@ -71,17 +69,15 @@ class JooqInitialAdministratorBootstrapStore(
         actorId: UUID,
     ) {
         val now = now()
+        val t = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
         dsl
-            .update(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.STATUS, InitialAdministratorBootstrapStatus.PENDING_ACTIVATION.name)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.SUBMITTED_BY, actorId)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.SUBMITTED_AT, now)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.UPDATED_AT, now)
-            .set(
-                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION,
-                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION.plus(1)
-            )
-            .where(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ORGANISATION_ID.eq(organisationId))
+            .update(t)
+            .set(t.STATUS, InitialAdministratorBootstrapStatus.PENDING_ACTIVATION.name)
+            .set(t.SUBMITTED_BY, actorId)
+            .set(t.SUBMITTED_AT, now)
+            .set(t.UPDATED_AT, now)
+            .set(t.ROW_VERSION, t.ROW_VERSION.plus(1))
+            .where(t.ORGANISATION_ID.eq(organisationId))
             .execute()
     }
 
@@ -90,79 +86,61 @@ class JooqInitialAdministratorBootstrapStore(
         actorId: UUID,
     ) {
         val now = now()
+        val t = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
         dsl
-            .update(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.STATUS, InitialAdministratorBootstrapStatus.QUEUED.name)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.APPROVED_BY, actorId)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.APPROVED_AT, now)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.UPDATED_AT, now)
-            .set(
-                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION,
-                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION.plus(1)
-            )
-            .where(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ORGANISATION_ID.eq(organisationId))
+            .update(t)
+            .set(t.STATUS, InitialAdministratorBootstrapStatus.QUEUED.name)
+            .set(t.APPROVED_BY, actorId)
+            .set(t.APPROVED_AT, now)
+            .set(t.UPDATED_AT, now)
+            .set(t.ROW_VERSION, t.ROW_VERSION.plus(1))
+            .where(t.ORGANISATION_ID.eq(organisationId))
             .execute()
     }
 
     override fun reject(organisationId: UUID) {
         val now = now()
+        val t = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
         dsl
-            .update(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.STATUS, InitialAdministratorBootstrapStatus.DRAFT.name)
-            .setNull(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.SUBMITTED_BY)
-            .setNull(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.SUBMITTED_AT)
-            .setNull(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.APPROVED_BY)
-            .setNull(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.APPROVED_AT)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.UPDATED_AT, now)
-            .set(
-                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION,
-                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION.plus(1)
-            )
-            .where(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ORGANISATION_ID.eq(organisationId))
+            .update(t)
+            .set(t.STATUS, InitialAdministratorBootstrapStatus.DRAFT.name)
+            .setNull(t.SUBMITTED_BY)
+            .setNull(t.SUBMITTED_AT)
+            .setNull(t.APPROVED_BY)
+            .setNull(t.APPROVED_AT)
+            .set(t.UPDATED_AT, now)
+            .set(t.ROW_VERSION, t.ROW_VERSION.plus(1))
+            .where(t.ORGANISATION_ID.eq(organisationId))
             .execute()
     }
 
-    override fun find(organisationId: UUID): InitialAdministratorBootstrapRecord? {
-        return dsl
+    override fun find(organisationId: UUID): InitialAdministratorBootstrapRecord? =
+        dsl
             .selectFrom(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP)
             .where(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ORGANISATION_ID.eq(organisationId))
             .fetchOne(::mapToRecord)
-    }
 
     override fun updateStatus(
         organisationId: UUID,
         status: InitialAdministratorBootstrapStatus,
         lastFailureCode: String?,
+        incrementAttempts: Boolean,
     ) {
         val now = now()
-        dsl
-            .update(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.STATUS, status.name)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.LAST_FAILURE_CODE, lastFailureCode)
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.UPDATED_AT, now)
-            .set(
-                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION,
-                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION.plus(1)
-            )
-            .where(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ORGANISATION_ID.eq(organisationId))
-            .execute()
-    }
+        val t = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
+        val update =
+            dsl
+                .update(t)
+                .set(t.STATUS, status.name)
+                .set(t.LAST_FAILURE_CODE, lastFailureCode)
+                .set(t.UPDATED_AT, now)
+                .set(t.ROW_VERSION, t.ROW_VERSION.plus(1))
 
-    override fun incrementAttempts(organisationId: UUID) {
-        val now = now()
-        dsl
-            .update(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP)
-            .set(
-                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ATTEMPTS,
-                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ATTEMPTS.plus(1)
-            )
-            .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.UPDATED_AT, now)
-            .set(
-                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION,
-                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION.plus(1)
-            )
-            .where(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ORGANISATION_ID.eq(organisationId))
-            .execute()
+        if (incrementAttempts) {
+            update.set(t.ATTEMPTS, t.ATTEMPTS.plus(1))
+        }
+
+        update.where(t.ORGANISATION_ID.eq(organisationId)).execute()
     }
 
     override fun linkResolvedEntities(
@@ -182,39 +160,40 @@ class JooqInitialAdministratorBootstrapStore(
             .set(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.UPDATED_AT, now)
             .set(
                 ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION,
-                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION.plus(1)
-            )
-            .where(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ORGANISATION_ID.eq(organisationId))
+                ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION.plus(1),
+            ).where(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ORGANISATION_ID.eq(organisationId))
             .execute()
     }
 
     private fun now(): OffsetDateTime = clock.instant().atOffset(ZoneOffset.UTC)
 
     private fun mapToRecord(record: Record): InitialAdministratorBootstrapRecord {
+        val t = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
         return InitialAdministratorBootstrapRecord(
-            organisationId = requireNotNull(record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ORGANISATION_ID)),
-            adminEmail = requireNotNull(record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ADMIN_EMAIL)),
-            adminUsername = requireNotNull(record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ADMIN_USERNAME)),
-            adminDisplayName = requireNotNull(record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ADMIN_DISPLAY_NAME)),
-            adminPhoneE164 = record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ADMIN_PHONE_E164),
-            sendApplicationInvite = requireNotNull(record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.SEND_APPLICATION_INVITE)),
-            status = InitialAdministratorBootstrapStatus.valueOf(
-                requireNotNull(record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.STATUS))
-            ),
-            attempts = requireNotNull(record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ATTEMPTS)),
-            requestedBy = requireNotNull(record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.REQUESTED_BY)),
-            submittedBy = record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.SUBMITTED_BY),
-            approvedBy = record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.APPROVED_BY),
-            userId = record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.USER_ID),
-            membershipId = record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.MEMBERSHIP_ID),
-            headOfficeId = record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.HEAD_OFFICE_ID),
-            roleId = record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROLE_ID),
-            lastFailureCode = record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.LAST_FAILURE_CODE),
-            createdAt = requireNotNull(record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.CREATED_AT)).toInstant(),
-            submittedAt = record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.SUBMITTED_AT)?.toInstant(),
-            approvedAt = record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.APPROVED_AT)?.toInstant(),
-            updatedAt = requireNotNull(record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.UPDATED_AT)).toInstant(),
-            rowVersion = requireNotNull(record.get(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ROW_VERSION))
+            organisationId = requireNotNull(record.get(t.ORGANISATION_ID)),
+            adminEmail = requireNotNull(record.get(t.ADMIN_EMAIL)),
+            adminUsername = requireNotNull(record.get(t.ADMIN_USERNAME)),
+            adminDisplayName = requireNotNull(record.get(t.ADMIN_DISPLAY_NAME)),
+            adminPhoneE164 = record.get(t.ADMIN_PHONE_E164),
+            sendApplicationInvite = requireNotNull(record.get(t.SEND_APPLICATION_INVITE)),
+            status =
+                InitialAdministratorBootstrapStatus.valueOf(
+                    requireNotNull(record.get(t.STATUS)),
+                ),
+            attempts = requireNotNull(record.get(t.ATTEMPTS)),
+            requestedBy = requireNotNull(record.get(t.REQUESTED_BY)),
+            submittedBy = record.get(t.SUBMITTED_BY),
+            approvedBy = record.get(t.APPROVED_BY),
+            userId = record.get(t.USER_ID),
+            membershipId = record.get(t.MEMBERSHIP_ID),
+            headOfficeId = record.get(t.HEAD_OFFICE_ID),
+            roleId = record.get(t.ROLE_ID),
+            lastFailureCode = record.get(t.LAST_FAILURE_CODE),
+            createdAt = requireNotNull(record.get(t.CREATED_AT)).toInstant(),
+            submittedAt = record.get(t.SUBMITTED_AT)?.toInstant(),
+            approvedAt = record.get(t.APPROVED_AT)?.toInstant(),
+            updatedAt = requireNotNull(record.get(t.UPDATED_AT)).toInstant(),
+            rowVersion = requireNotNull(record.get(t.ROW_VERSION)),
         )
     }
 }

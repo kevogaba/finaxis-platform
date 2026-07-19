@@ -19,13 +19,14 @@ data class CreateOrganisationDraftCommand(
     val initialSettings: Map<String, String> = emptyMap(),
     val businessDate: LocalDate? = null,
     val requestedBy: UUID,
-    val admin: InitialAdministratorDraft = InitialAdministratorDraft(
-        email = "admin@test.com",
-        username = "admin",
-        displayName = "Admin",
-        phoneE164 = null,
-        sendApplicationInvite = false,
-    ),
+    val admin: InitialAdministratorDraft =
+        InitialAdministratorDraft(
+            email = "admin@test.com",
+            username = "admin",
+            displayName = "Admin",
+            phoneE164 = null,
+            sendApplicationInvite = false,
+        ),
 )
 
 /** Amends an existing organisation draft before it is submitted. */
@@ -95,7 +96,6 @@ data class OrganisationSummary(
     val countryCode: String,
     val status: OrganisationLifecycleState,
     val createdAt: Instant,
-    // ── bootstrap projection (nullable when no bootstrap record exists) ────────
     /** Current bootstrap lifecycle status, or null when not yet requested. */
     val bootstrapStatus: InitialAdministratorBootstrapStatus? = null,
     /** Running attempt count for asynchronous bootstrap retries. */

@@ -10,7 +10,7 @@ Task 3: complete (commits 7461017..0d07040, review clean, qualityGate green)
 Task 4: complete (commits up to `036f296`, review clean, qualityGate green)
 Task 5: complete (commits up to `33402b1`, review clean, qualityGate green)
 Task 6: complete (commit `88f6c0b`, detekt + qualityGate green)
-Task 7: pending
+Task 7: complete (commit 9b0d0ec, all tests green)
 Task 8: pending
 Task 9: pending
 Task 10: pending

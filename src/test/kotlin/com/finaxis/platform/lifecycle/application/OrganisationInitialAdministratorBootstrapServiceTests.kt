@@ -28,12 +28,12 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-class OrganisationBranchProvisioningServiceTests {
+class OrganisationInitialAdministratorBootstrapServiceTests {
     private val clock = Clock.fixed(Instant.parse("2026-07-14T10:00:00Z"), ZoneOffset.UTC)
-    private val lifecyclePersistence = LifecycleFake()
-    private val events = EventCapture()
-    private val audits = AuditCapture()
-    private val transitionLogs = TransitionLogCapture()
+    private val lifecyclePersistence = BootstrapLifecycleFake()
+    private val events = BootstrapEventCapture()
+    private val audits = BootstrapAuditCapture()
+    private val transitionLogs = BootstrapTransitionLogCapture()
     private val lifecycle =
         FoundationLifecycleService(
             TransitionExecutor(clock, transitionLogs, events),
@@ -42,8 +42,8 @@ class OrganisationBranchProvisioningServiceTests {
             lifecyclePersistence,
             AuditService(audits, clock),
         )
-    private val store = ProvisioningFake(lifecyclePersistence)
-    private val adminBootstrapStore = FakeInitialAdministratorBootstrapStore()
+    private val store = BootstrapProvisioningFake(lifecyclePersistence)
+    private val adminBootstrapStore = FakeInitialAdminBootstrapStore()
     private val organisations =
         OrganisationProvisioningService(
             lifecycle,
@@ -55,429 +55,268 @@ class OrganisationBranchProvisioningServiceTests {
             adminBootstrapStore,
             clock,
         )
-    private val branches =
-        BranchProvisioningService(lifecycle, store, store, AuditService(audits, clock), events)
 
     @Test
-    fun `creates organisation draft with timezone business date and requested settings`() {
+    fun `createDraft persists initial administrator bootstrap record in DRAFT status`() {
+        val maker = uuidV7()
         val result =
             organisations.createDraft(
                 CreateOrganisationDraftCommand(
-                    tenantCode = "acme",
-                    displayName = "Acme SACCO",
-                    legalName = "Acme SACCO Limited",
-                    registrationNumber = "C-100",
+                    tenantCode = "boot-test",
+                    displayName = "Bootstrap Test SACCO",
+                    legalName = null,
+                    registrationNumber = null,
                     countryCode = "KE",
                     baseCurrencyCode = "KES",
                     timezone = "Africa/Nairobi",
-                    initialSettings = mapOf("settings.locale" to "en-KE"),
+                    requestedBy = maker,
+                    admin =
+                        InitialAdministratorDraft(
+                            email = "admin@boot.test",
+                            username = "bootstrapadmin",
+                            displayName = "Bootstrap Admin",
+                            phoneE164 = "+254700000001",
+                            sendApplicationInvite = true,
+                        ),
+                ),
+            )
+
+        val record = adminBootstrapStore.records.getValue(result.organisationId)
+        assertEquals(InitialAdministratorBootstrapStatus.DRAFT, record.status)
+        assertEquals("admin@boot.test", record.adminEmail)
+        assertEquals("bootstrapadmin", record.adminUsername)
+        assertEquals("Bootstrap Admin", record.adminDisplayName)
+        assertEquals("+254700000001", record.adminPhoneE164)
+        assertEquals(true, record.sendApplicationInvite)
+        assertEquals(maker, record.requestedBy)
+    }
+
+    @Test
+    fun `createDraft rejects blank admin email`() {
+        assertFailsWith<IllegalArgumentException> {
+            organisations.createDraft(
+                CreateOrganisationDraftCommand(
+                    tenantCode = "bad-email",
+                    displayName = "Bad Email SACCO",
+                    legalName = null,
+                    registrationNumber = null,
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
                     requestedBy = uuidV7(),
+                    admin =
+                        InitialAdministratorDraft(
+                            email = "",
+                            username = "admin",
+                            displayName = "Admin",
+                            phoneE164 = null,
+                            sendApplicationInvite = false,
+                        ),
                 ),
             )
-
-        assertEquals(OrganisationLifecycleState.DRAFT, result.status)
-        assertEquals(LocalDate.of(2026, 7, 14), store.businessDates.getValue(result.organisationId))
-        assertEquals(
-            "en-KE",
-            store.settings.getValue(result.organisationId).getValue("settings.locale"),
-        )
-        assertEquals("organisation.create_draft", audits.events.single().action)
-    }
-
-    @Test
-    fun `classifies the common system actor as system when creating an organisation draft`() {
-        val result =
-            organisations.createDraft(
-                CreateOrganisationDraftCommand(
-                    tenantCode = "system-acme",
-                    displayName = "System Acme SACCO",
-                    legalName = "System Acme SACCO Limited",
-                    registrationNumber = "C-101",
-                    countryCode = "KE",
-                    baseCurrencyCode = "KES",
-                    timezone = "Africa/Nairobi",
-                    requestedBy = SystemActor.ID,
-                ),
-            )
-
-        val audit = audits.events.single()
-        assertEquals(result.organisationId.toString(), audit.tenantId)
-        assertEquals("organisation.create_draft", audit.action)
-        assertEquals("SYSTEM", audit.actorType)
-        assertEquals(SystemActor.ID.toString(), audit.actorId)
-    }
-
-    @Test
-    fun `submitting organisation emits durable approval request after metadata validation`() {
-        val organisationId = activeDraft()
-
-        organisations.submitForApproval(SubmitOrganisationForApprovalCommand(organisationId))
-
-        assertEquals(
-            OrganisationLifecycleState.PENDING_APPROVAL,
-            lifecyclePersistence.organisations.getValue(organisationId).state,
-        )
-        assertEquals(
-            "finaxis.lifecycle.organisation.approval-requested",
-            (events.events.single() as ExternalizedTransitionEvent).target,
-        )
-        assertEquals(
-            OrganisationLifecycleTransition.SUBMIT.name,
-            (events.events.single() as ExternalizedTransitionEvent).transition,
-        )
-    }
-
-    @Test
-    fun `approving organisation creates mandatory local setup before activation`() {
-        val organisationId = activeDraft()
-        organisations.submitForApproval(SubmitOrganisationForApprovalCommand(organisationId))
-
-        organisations.approveProvisioning(ApproveOrganisationProvisioningCommand(organisationId))
-
-        assertEquals(
-            OrganisationLifecycleState.ACTIVE,
-            lifecyclePersistence.organisations.getValue(organisationId).state,
-        )
-        assertTrue(store.headOffices.contains(organisationId))
-        assertTrue(store.referenceSequences.contains(organisationId))
-        assertTrue(store.defaultRoles.contains(organisationId))
-        assertTrue(
-            audits.events.any {
-                it.action == "branch.create_draft" &&
-                    it.actorType == "SYSTEM" &&
-                    it.resourceType == "BRANCH" &&
-                    it.metadata["bootstrap"] == "true"
-            },
-        )
-        assertTrue(
-            events.events.any {
-                (it as? ExternalizedTransitionEvent)?.target ==
-                    "finaxis.lifecycle.organisation.activated"
-            },
-        )
-        assertEquals(
-            OrganisationLifecycleTransition.ACTIVATE.name,
-            (events.events.last() as ExternalizedTransitionEvent).transition,
-        )
-    }
-
-    @Test
-    fun `rejecting an organisation publishes the external rejected lifecycle event`() {
-        val organisationId = activeDraft()
-        organisations.submitForApproval(SubmitOrganisationForApprovalCommand(organisationId))
-        events.events.clear()
-
-        organisations.rejectProvisioning(
-            RejectOrganisationProvisioningCommand(organisationId, "Registration validation failed"),
-        )
-
-        assertEquals(
-            OrganisationLifecycleState.REJECTED,
-            lifecyclePersistence.organisations.getValue(organisationId).state,
-        )
-        assertEquals("Registration validation failed", transitionLogs.logs.last().reason)
-        assertExternalizedTarget("finaxis.lifecycle.organisation.rejected")
-    }
-
-    @Test
-    fun `suspending and reactivating an organisation publish their external lifecycle events`() {
-        val organisationId = uuidV7()
-        lifecyclePersistence.organisations[organisationId] =
-            aggregate(organisationId, OrganisationLifecycleState.ACTIVE, "ORGANISATION")
-        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
-        store.completeSetup(organisationId)
-
-        organisations.suspend(SuspendOrganisationCommand(organisationId, "Regulatory review"))
-
-        assertEquals(
-            OrganisationLifecycleState.SUSPENDED,
-            lifecyclePersistence.organisations.getValue(organisationId).state,
-        )
-        assertEquals("Regulatory review", transitionLogs.logs.last().reason)
-        assertExternalizedTarget("finaxis.lifecycle.organisation.suspended")
-
-        events.events.clear()
-        organisations.reactivate(ReactivateOrganisationCommand(organisationId, "Review complete"))
-
-        assertEquals(
-            OrganisationLifecycleState.ACTIVE,
-            lifecyclePersistence.organisations.getValue(organisationId).state,
-        )
-        assertExternalizedTarget("finaxis.lifecycle.organisation.reactivated")
-    }
-
-    @Test
-    fun `reactivation rejects every missing mandatory setup prerequisite`() {
-        OrganisationSetupRequirement.entries.forEach { missing ->
-            val organisationId = uuidV7()
-            lifecyclePersistence.organisations[organisationId] =
-                aggregate(organisationId, OrganisationLifecycleState.SUSPENDED, "ORGANISATION")
-            store.organisationStates[organisationId] = OrganisationLifecycleState.SUSPENDED
-            store.completeSetup(organisationId)
-            store.missingSetup += missing
-
-            val exception =
-                assertFailsWith<IllegalArgumentException> {
-                    organisations.reactivate(ReactivateOrganisationCommand(organisationId))
-                }
-
-            assertTrue(exception.message!!.contains(missing.name))
-            store.missingSetup -= missing
         }
     }
 
     @Test
-    fun `lists organisations with status country date and pagination filters`() {
-        val filter =
-            OrganisationListFilter(
-                status = OrganisationLifecycleState.ACTIVE,
-                countryCode = "KE",
-                createdFrom = Instant.parse("2026-07-01T00:00:00Z"),
-                createdTo = Instant.parse("2026-07-31T23:59:59Z"),
-                page = 1,
-                size = 10,
-            )
-        val expected =
-            OrganisationPage(
-                listOf(
-                    OrganisationSummary(
-                        uuidV7(),
-                        "KE-ONE",
-                        "Kenya One",
-                        "KE",
-                        OrganisationLifecycleState.ACTIVE,
-                        Instant.parse("2026-07-14T10:00:00Z"),
-                    ),
+    fun `createDraft rejects malformed admin email`() {
+        assertFailsWith<IllegalArgumentException> {
+            organisations.createDraft(
+                CreateOrganisationDraftCommand(
+                    tenantCode = "bad-email2",
+                    displayName = "Bad Email2 SACCO",
+                    legalName = null,
+                    registrationNumber = null,
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    requestedBy = uuidV7(),
+                    admin =
+                        InitialAdministratorDraft(
+                            email = "not-an-email",
+                            username = "admin",
+                            displayName = "Admin",
+                            phoneE164 = null,
+                            sendApplicationInvite = false,
+                        ),
                 ),
-                11,
             )
-        store.listResult = expected
-
-        assertEquals(expected, organisations.list(filter))
-        assertEquals(filter, store.lastListFilter)
+        }
     }
 
     @Test
-    fun `deprovisioning revokes access and retains organisation metadata`() {
-        val organisationId = uuidV7()
-        lifecyclePersistence.organisations[organisationId] =
-            aggregate(organisationId, OrganisationLifecycleState.ACTIVE, "ORGANISATION")
-        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+    fun `createDraft rejects blank admin username`() {
+        assertFailsWith<IllegalArgumentException> {
+            organisations.createDraft(
+                CreateOrganisationDraftCommand(
+                    tenantCode = "bad-user",
+                    displayName = "Bad User SACCO",
+                    legalName = null,
+                    registrationNumber = null,
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    requestedBy = uuidV7(),
+                    admin =
+                        InitialAdministratorDraft(
+                            email = "admin@valid.test",
+                            username = "   ",
+                            displayName = "Admin",
+                            phoneE164 = null,
+                            sendApplicationInvite = false,
+                        ),
+                ),
+            )
+        }
+    }
 
-        organisations.deprovision(DeprovisionOrganisationCommand(organisationId, "contract ended"))
+    @Test
+    fun `createDraft rejects blank admin display name`() {
+        assertFailsWith<IllegalArgumentException> {
+            organisations.createDraft(
+                CreateOrganisationDraftCommand(
+                    tenantCode = "bad-display",
+                    displayName = "Bad Display SACCO",
+                    legalName = null,
+                    registrationNumber = null,
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    requestedBy = uuidV7(),
+                    admin =
+                        InitialAdministratorDraft(
+                            email = "admin@valid.test",
+                            username = "admin",
+                            displayName = "",
+                            phoneE164 = null,
+                            sendApplicationInvite = false,
+                        ),
+                ),
+            )
+        }
+    }
 
-        assertEquals(
-            OrganisationLifecycleState.DEPROVISIONED,
-            lifecyclePersistence.organisations.getValue(organisationId).state,
+    @Test
+    fun `createDraft rejects malformed E164 phone number`() {
+        assertFailsWith<IllegalArgumentException> {
+            organisations.createDraft(
+                CreateOrganisationDraftCommand(
+                    tenantCode = "bad-phone",
+                    displayName = "Bad Phone SACCO",
+                    legalName = null,
+                    registrationNumber = null,
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    requestedBy = uuidV7(),
+                    admin =
+                        InitialAdministratorDraft(
+                            email = "admin@valid.test",
+                            username = "admin",
+                            displayName = "Admin",
+                            phoneE164 = "07001234567", // missing + prefix
+                            sendApplicationInvite = false,
+                        ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `createDraft rejects nil (system-actor sentinel) maker identity`() {
+        assertFailsWith<IllegalArgumentException> {
+            organisations.createDraft(
+                CreateOrganisationDraftCommand(
+                    tenantCode = "no-maker",
+                    displayName = "No Maker SACCO",
+                    legalName = null,
+                    registrationNumber = null,
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    requestedBy = UUID(0L, 0L), // nil / bootstrap sentinel
+                    admin =
+                        InitialAdministratorDraft(
+                            email = "admin@valid.test",
+                            username = "admin",
+                            displayName = "Admin",
+                            phoneE164 = null,
+                            sendApplicationInvite = false,
+                        ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `approving a tenant as the same actor who requested the draft is rejected`() {
+        val maker = uuidV7()
+        val organisationId = activeDraftWithMaker(maker)
+
+        organisations.submitForApproval(
+            SubmitOrganisationForApprovalCommand(organisationId, actorId = uuidV7()),
         )
-        assertEquals("contract ended", transitionLogs.logs.last().reason)
-        assertTrue(store.revokedAssignments.isEmpty())
-    }
-
-    @Test
-    fun `branch assignment rejects an inactive organisation and protects ordinary membership`() {
-        val organisationId = uuidV7()
-        val branchId = uuidV7()
-        val userId = uuidV7()
-        store.organisationStates[organisationId] = OrganisationLifecycleState.SUSPENDED
-        store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
 
         assertFailsWith<IllegalArgumentException> {
-            branches.assignUser(
-                AssignUserToBranchCommand(
-                    organisationId,
-                    userId,
-                    branchId,
-                    BranchAssignmentType.OPERATE,
-                    uuidV7(),
-                ),
+            organisations.approveProvisioning(
+                ApproveOrganisationProvisioningCommand(organisationId, actorId = maker),
             )
         }
+    }
 
-        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
-        store.memberships[organisationId to userId] =
-            MembershipSnapshot(MembershipLifecycleState.ACTIVE, MembershipType.STAFF)
-        branches.assignUser(
-            AssignUserToBranchCommand(
-                organisationId,
-                userId,
-                branchId,
-                BranchAssignmentType.OPERATE,
-                uuidV7(),
+    @Test
+    fun `approving a tenant as the same actor who submitted the draft is rejected`() {
+        val submitter = uuidV7()
+        val organisationId = activeDraft()
+
+        organisations.submitForApproval(
+            SubmitOrganisationForApprovalCommand(organisationId, actorId = submitter),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            organisations.approveProvisioning(
+                ApproveOrganisationProvisioningCommand(organisationId, actorId = submitter),
+            )
+        }
+    }
+
+    @Test
+    fun `rejecting a submitted organisation returns bootstrap status to DRAFT`() {
+        val organisationId = activeDraft()
+        val submitter = uuidV7()
+        organisations.submitForApproval(
+            SubmitOrganisationForApprovalCommand(organisationId, actorId = submitter),
+        )
+
+        organisations.rejectProvisioning(
+            RejectOrganisationProvisioningCommand(
+                organisationId = organisationId,
+                reason = "Documents incomplete",
+                actorId = uuidV7(),
             ),
         )
 
-        assertFailsWith<IllegalArgumentException> {
-            branches.revokeUserAssignment(
-                RevokeUserBranchAssignmentCommand(
-                    organisationId,
-                    userId,
-                    branchId,
-                    BranchAssignmentType.OPERATE,
-                    uuidV7(),
-                ),
-            )
-        }
-    }
-
-    @Test
-    fun `branch assignment rejects an inactive branch`() {
-        val organisationId = uuidV7()
-        val branchId = uuidV7()
-        val userId = uuidV7()
-        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
-        store.branchStates[organisationId to branchId] = BranchLifecycleState.SUSPENDED
-        store.memberships[organisationId to userId] =
-            MembershipSnapshot(MembershipLifecycleState.ACTIVE, MembershipType.STAFF)
-
-        assertFailsWith<IllegalArgumentException> {
-            branches.assignUser(
-                AssignUserToBranchCommand(
-                    organisationId,
-                    userId,
-                    branchId,
-                    BranchAssignmentType.OPERATE,
-                    uuidV7(),
-                ),
-            )
-        }
-
-        assertEquals(0, store.assignmentCount(organisationId, userId))
-    }
-
-    @Test
-    fun `branch assignment is idempotent and cannot cross organisation boundaries`() {
-        val organisationId = uuidV7()
-        val otherOrganisationId = uuidV7()
-        val branchId = uuidV7()
-        val userId = uuidV7()
-        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
-        store.organisationStates[otherOrganisationId] = OrganisationLifecycleState.ACTIVE
-        store.branchStates[otherOrganisationId to branchId] = BranchLifecycleState.ACTIVE
-        store.memberships[organisationId to userId] =
-            MembershipSnapshot(MembershipLifecycleState.ACTIVE, MembershipType.STAFF)
-
-        assertFailsWith<IllegalArgumentException> {
-            branches.assignUser(
-                AssignUserToBranchCommand(
-                    organisationId,
-                    userId,
-                    branchId,
-                    BranchAssignmentType.VIEW,
-                    uuidV7(),
-                ),
-            )
-        }
-
-        store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
-        val command =
-            AssignUserToBranchCommand(
-                organisationId,
-                userId,
-                branchId,
-                BranchAssignmentType.VIEW,
-                uuidV7(),
-            )
-        branches.assignUser(command)
-        branches.assignUser(command)
-
-        assertEquals(1, store.assignmentCount(organisationId, userId))
-        assertEquals(1, events.events.size)
-        assertEquals(1, audits.events.count { it.action == "branch.assign_user" })
-        assertTrue(
-            events.events.all {
-                (it as? ExternalizedTransitionEvent)?.target ==
-                    "finaxis.lifecycle.branch.user-assigned"
-            },
+        assertEquals(
+            InitialAdministratorBootstrapStatus.DRAFT,
+            adminBootstrapStore.records.getValue(organisationId).status,
         )
     }
 
     @Test
-    fun `repeating a completed assignment revocation emits no duplicate audit or outbox event`() {
-        val organisationId = uuidV7()
-        val branchId = uuidV7()
-        val userId = uuidV7()
-        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
-        store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
-        store.memberships[organisationId to userId] =
-            MembershipSnapshot(MembershipLifecycleState.ACTIVE, MembershipType.AUDITOR)
-        val assignment =
-            AssignUserToBranchCommand(
-                organisationId,
-                userId,
-                branchId,
-                BranchAssignmentType.VIEW,
-                uuidV7(),
-            )
-        branches.assignUser(assignment)
-        events.events.clear()
-        val revocation =
-            RevokeUserBranchAssignmentCommand(
-                organisationId,
-                userId,
-                branchId,
-                BranchAssignmentType.VIEW,
-                uuidV7(),
-            )
+    fun `approving a tenant records checker in bootstrap and sets status to QUEUED`() {
+        val maker = uuidV7()
+        val checker = uuidV7()
+        val organisationId = activeDraftWithMaker(maker)
+        organisations.submitForApproval(
+            SubmitOrganisationForApprovalCommand(organisationId, actorId = uuidV7()),
+        )
 
-        branches.revokeUserAssignment(revocation)
-        branches.revokeUserAssignment(revocation)
+        organisations.approveProvisioning(
+            ApproveOrganisationProvisioningCommand(organisationId, actorId = checker),
+        )
 
-        assertEquals(1, events.events.size)
-        assertEquals(1, audits.events.count { it.action == "branch.revoke_user" })
-    }
-
-    @Test
-    fun `branch lifecycle emits externalized events for each operational transition`() {
-        val organisationId = uuidV7()
-        val branchId = uuidV7()
-        lifecyclePersistence.organisations[organisationId] =
-            aggregate(organisationId, OrganisationLifecycleState.ACTIVE, "ORGANISATION")
-        lifecyclePersistence.branches[organisationId to branchId] =
-            aggregate(branchId, BranchLifecycleState.DRAFT, "BRANCH")
-        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
-        store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
-
-        branches.submitForApproval(SubmitBranchForApprovalCommand(organisationId, branchId))
-        assertExternalizedTarget("finaxis.lifecycle.branch.approval-requested")
-
-        events.events.clear()
-        branches.activate(ActivateBranchCommand(organisationId, branchId))
-        assertExternalizedTarget("finaxis.lifecycle.branch.activated")
-
-        events.events.clear()
-        branches.suspend(SuspendBranchCommand(organisationId, branchId, "Maintenance"))
-        assertExternalizedTarget("finaxis.lifecycle.branch.suspended")
-
-        events.events.clear()
-        branches.reactivate(ReactivateBranchCommand(organisationId, branchId, "Maintenance done"))
-        assertExternalizedTarget("finaxis.lifecycle.branch.reactivated")
-
-        events.events.clear()
-        branches.close(CloseBranchCommand(organisationId, branchId, "Branch consolidation"))
-        assertExternalizedTarget("finaxis.lifecycle.branch.closed")
-        assertEquals("Branch consolidation", transitionLogs.logs.last().reason)
-    }
-
-    @Test
-    fun `closing a branch rejects active child branches`() {
-        val organisationId = uuidV7()
-        val branchId = uuidV7()
-        lifecyclePersistence.organisations[organisationId] =
-            aggregate(organisationId, OrganisationLifecycleState.ACTIVE, "ORGANISATION")
-        lifecyclePersistence.branches[organisationId to branchId] =
-            aggregate(branchId, BranchLifecycleState.ACTIVE, "BRANCH")
-        store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
-        lifecyclePersistence.branchesWithActiveChildren += organisationId to branchId
-
-        assertFailsWith<com.finaxis.platform.common.transitions.TransitionGuardException> {
-            branches.close(CloseBranchCommand(organisationId, branchId, "Consolidation"))
-        }
-    }
-
-    private fun assertExternalizedTarget(expectedTarget: String) {
-        val event = assertIs<ExternalizedTransitionEvent>(events.events.single())
-        assertEquals(expectedTarget, event.target)
+        val record = adminBootstrapStore.records.getValue(organisationId)
+        assertEquals(InitialAdministratorBootstrapStatus.QUEUED, record.status)
+        assertEquals(checker, record.approvedBy)
     }
 
     private fun activeDraft(): UUID {
@@ -500,10 +339,31 @@ class OrganisationBranchProvisioningServiceTests {
         )
         return organisationId
     }
+
+    private fun activeDraftWithMaker(maker: UUID): UUID {
+        val organisationId = uuidV7()
+        lifecyclePersistence.organisations[organisationId] =
+            aggregate(organisationId, OrganisationLifecycleState.DRAFT, "ORGANISATION")
+        store.metadataComplete += organisationId
+        store.businessDates[organisationId] = LocalDate.of(2026, 7, 14)
+        adminBootstrapStore.createDraft(
+            organisationId = organisationId,
+            admin =
+                InitialAdministratorDraft(
+                    email = "admin@test.com",
+                    username = "admin",
+                    displayName = "Admin",
+                    phoneE164 = null,
+                    sendApplicationInvite = false,
+                ),
+            requestedBy = maker,
+        )
+        return organisationId
+    }
 }
 
-private class ProvisioningFake(
-    private val lifecycle: LifecycleFake,
+private class BootstrapProvisioningFake(
+    private val lifecycle: BootstrapLifecycleFake,
 ) : OrganisationLifecycleProvisioningStore,
     OrganisationBootstrapStore,
     OrganisationAccessStore,
@@ -522,11 +382,15 @@ private class ProvisioningFake(
     val organisationStates = mutableMapOf<UUID, OrganisationLifecycleState>()
     val branchStates = mutableMapOf<Pair<UUID, UUID>, BranchLifecycleState>()
     val memberships = mutableMapOf<Pair<UUID, UUID>, MembershipSnapshot>()
-    val assignments = mutableSetOf<AssignmentKey>()
+    val assignments = mutableSetOf<BootstrapAssignmentKey>()
     var listResult = OrganisationPage(emptyList(), 0)
     var lastListFilter: OrganisationListFilter? = null
 
     override fun createDraft(command: CreateOrganisationDraftCommand): UUID = uuidV7()
+
+    override fun amendDraft(command: AmendOrganisationDraftCommand) {
+        // no-op
+    }
 
     override fun lifecycleState(organisationId: UUID) = organisationStates[organisationId]
 
@@ -653,7 +517,7 @@ private class ProvisioningFake(
 
     override fun assign(command: AssignUserToBranchCommand): Boolean =
         assignments.add(
-            AssignmentKey(
+            BootstrapAssignmentKey(
                 command.organisationId,
                 command.userId,
                 command.branchId,
@@ -662,7 +526,7 @@ private class ProvisioningFake(
         )
 
     override fun isActive(command: RevokeUserBranchAssignmentCommand) =
-        AssignmentKey(
+        BootstrapAssignmentKey(
             command.organisationId,
             command.userId,
             command.branchId,
@@ -676,40 +540,23 @@ private class ProvisioningFake(
 
     override fun revoke(command: RevokeUserBranchAssignmentCommand): Boolean =
         assignments.remove(
-            AssignmentKey(
+            BootstrapAssignmentKey(
                 command.organisationId,
                 command.userId,
                 command.branchId,
                 command.assignmentType,
             ),
         )
-
-    fun assignmentCount(
-        organisationId: UUID,
-        userId: UUID,
-    ): Int = assignments.count { it.organisationId == organisationId && it.userId == userId }
-
-    fun completeSetup(organisationId: UUID) {
-        settings[organisationId] = mapOf("settings.operational" to "true")
-        businessDates[organisationId] = LocalDate.of(2026, 7, 14)
-        referenceSequences += organisationId
-        defaultRoles += organisationId
-        val branchId = uuidV7()
-        headOfficeIds[organisationId] = branchId
-        headOffices += organisationId
-        lifecycle.branches[organisationId to branchId] =
-            aggregate(branchId, BranchLifecycleState.ACTIVE, "BRANCH")
-    }
 }
 
-private data class AssignmentKey(
+private data class BootstrapAssignmentKey(
     val organisationId: UUID,
     val userId: UUID,
     val branchId: UUID,
     val type: BranchAssignmentType,
 )
 
-private class LifecycleFake :
+private class BootstrapLifecycleFake :
     FoundationLifecycleReader,
     FoundationLifecycleWriter,
     com.finaxis.platform.lifecycle.domain.LifecyclePrerequisites {
@@ -792,7 +639,7 @@ private class LifecycleFake :
     ) = true
 }
 
-private class AuditCapture : AuditEventRepository {
+private class BootstrapAuditCapture : AuditEventRepository {
     val events = mutableListOf<AuditEvent>()
 
     override fun save(event: AuditEvent) {
@@ -800,7 +647,7 @@ private class AuditCapture : AuditEventRepository {
     }
 }
 
-private class EventCapture : TransitionEventPublisher {
+private class BootstrapEventCapture : TransitionEventPublisher {
     val events = mutableListOf<TransitionEvent>()
 
     override fun publish(event: TransitionEvent) {
@@ -808,7 +655,7 @@ private class EventCapture : TransitionEventPublisher {
     }
 }
 
-private class TransitionLogCapture : TransitionLogRepository {
+private class BootstrapTransitionLogCapture : TransitionLogRepository {
     val logs = mutableListOf<TransitionLog>()
 
     override fun save(log: TransitionLog) {
@@ -822,7 +669,7 @@ private fun <S : Enum<S>> aggregate(
     type: String,
 ) = LifecycleAggregate(id, state, type, id, 0)
 
-private class FakeInitialAdministratorBootstrapStore : InitialAdministratorBootstrapStore {
+private class FakeInitialAdminBootstrapStore : InitialAdministratorBootstrapStore {
     val records = mutableMapOf<UUID, InitialAdministratorBootstrapRecord>()
 
     override fun createDraft(

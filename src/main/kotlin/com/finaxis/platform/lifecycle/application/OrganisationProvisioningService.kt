@@ -58,8 +58,9 @@ class OrganisationProvisioningService(
     /** Amends an existing organisation draft before it is submitted. */
     @Transactional
     fun amendDraft(command: AmendOrganisationDraftCommand) {
-        val state = lifecycleStore.lifecycleState(command.organisationId)
-            ?: throw IllegalArgumentException("Organisation not found.")
+        val state =
+            lifecycleStore.lifecycleState(command.organisationId)
+                ?: throw IllegalArgumentException("Organisation not found.")
         require(state == OrganisationLifecycleState.DRAFT) {
             "Only organisation drafts can be amended."
         }
@@ -84,16 +85,17 @@ class OrganisationProvisioningService(
         require(lifecycleStore.hasRequiredMetadata(command.organisationId)) {
             "Organisation metadata is incomplete."
         }
-        val record = adminBootstrapStore.find(command.organisationId)
-            ?: throw IllegalArgumentException("Initial administrator details must be provided.")
+        val record =
+            adminBootstrapStore.find(command.organisationId)
+                ?: throw IllegalArgumentException("Initial administrator details must be provided.")
         validateAdmin(
             InitialAdministratorDraft(
                 email = record.adminEmail,
                 username = record.adminUsername,
                 displayName = record.adminDisplayName,
                 phoneE164 = record.adminPhoneE164,
-                sendApplicationInvite = record.sendApplicationInvite
-            )
+                sendApplicationInvite = record.sendApplicationInvite,
+            ),
         )
         require(command.actorId != SYSTEM_ACTOR) { "Maker identity is required." }
 
@@ -111,8 +113,9 @@ class OrganisationProvisioningService(
     /** Creates mandatory durable setup and activates an approved organisation atomically. */
     @Transactional
     fun approveProvisioning(command: ApproveOrganisationProvisioningCommand) {
-        val record = adminBootstrapStore.find(command.organisationId)
-            ?: throw IllegalArgumentException("Initial administrator details must be provided.")
+        val record =
+            adminBootstrapStore.find(command.organisationId)
+                ?: throw IllegalArgumentException("Initial administrator details must be provided.")
         require(command.actorId != record.requestedBy) {
             "Maker cannot approve their own tenant."
         }
@@ -301,68 +304,8 @@ class OrganisationProvisioningService(
         return queryStore.list(filter)
     }
 
-    private fun validateCreate(command: CreateOrganisationDraftCommand) {
-        require(command.tenantCode.isNotBlank()) { "Tenant code is required." }
-        require(command.displayName.isNotBlank()) { "Display name is required." }
-        require(
-            COUNTRY_CODE.matches(command.countryCode),
-        ) { "Country code must be ISO-3166 alpha-2." }
-        require(CURRENCY_CODE.matches(command.baseCurrencyCode)) {
-            "Base currency code must be ISO-4217 alpha-3."
-        }
-        ZoneId.of(command.timezone)
-    }
-
     private fun businessDate(timezone: String): LocalDate =
         LocalDate.now(clock.withZone(ZoneId.of(timezone)))
-
-    private fun branchSuspensionTransition(
-        status: BranchLifecycleState,
-    ): BranchLifecycleTransition =
-        when (status) {
-            BranchLifecycleState.DRAFT -> {
-                BranchLifecycleTransition.SUSPEND_DRAFT
-            }
-
-            BranchLifecycleState.PENDING_APPROVAL -> {
-                BranchLifecycleTransition.SUSPEND_PENDING_APPROVAL
-            }
-
-            BranchLifecycleState.ACTIVE -> {
-                BranchLifecycleTransition.SUSPEND
-            }
-
-            BranchLifecycleState.SUSPENDED -> {
-                BranchLifecycleTransition.CONFIRM_SUSPENDED
-            }
-
-            BranchLifecycleState.CLOSED,
-            BranchLifecycleState.ARCHIVED,
-            -> {
-                throw IllegalArgumentException("Terminal branches cannot be deprovisioned again.")
-            }
-        }
-
-    private fun membershipDeprovisioningTransition(
-        status: MembershipLifecycleState,
-    ): MembershipLifecycleTransition =
-        when (status) {
-            MembershipLifecycleState.PENDING_APPROVAL -> {
-                MembershipLifecycleTransition.REVOKE_PENDING
-            }
-
-            MembershipLifecycleState.ACTIVE -> {
-                MembershipLifecycleTransition.REVOKE
-            }
-
-            MembershipLifecycleState.SUSPENDED -> {
-                MembershipLifecycleTransition.REVOKE_SUSPENDED
-            }
-
-            MembershipLifecycleState.REVOKED -> {
-                error("Revoked memberships are not deprovisioned.")
-            }
-        }
 
     private fun audit(
         organisationId: UUID,
@@ -386,36 +329,7 @@ class OrganisationProvisioningService(
         )
     }
 
-    private fun validateAmend(command: AmendOrganisationDraftCommand) {
-        require(command.tenantCode.isNotBlank()) { "Tenant code is required." }
-        require(command.displayName.isNotBlank()) { "Display name is required." }
-        require(
-            COUNTRY_CODE.matches(command.countryCode),
-        ) { "Country code must be ISO-3166 alpha-2." }
-        require(CURRENCY_CODE.matches(command.baseCurrencyCode)) {
-            "Base currency code must be ISO-4217 alpha-3."
-        }
-        ZoneId.of(command.timezone)
-    }
-
-    private fun validateAdmin(admin: InitialAdministratorDraft) {
-        require(admin.email.isNotBlank() && EMAIL_REGEX.matches(admin.email)) {
-            "A valid email address is required."
-        }
-        require(admin.username.isNotBlank()) { "Username is required." }
-        require(admin.displayName.isNotBlank()) { "Display name is required." }
-        admin.phoneE164?.let { phone ->
-            require(PHONE_E164_REGEX.matches(phone)) {
-                "Phone number must be in E.164 format."
-            }
-        }
-    }
-
     private companion object {
-        val COUNTRY_CODE = Regex("[A-Z]{2}")
-        val CURRENCY_CODE = Regex("[A-Z]{3}")
-        val EMAIL_REGEX = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
-        val PHONE_E164_REGEX = Regex("^\\+[1-9]\\d{1,14}$")
         val DEFAULT_SETTINGS = mapOf("settings.operational" to "true")
         const val USER = "USER"
         const val SYSTEM = "SYSTEM"
@@ -424,6 +338,94 @@ class OrganisationProvisioningService(
         val SYSTEM_ACTOR = UUID(0L, 0L)
     }
 }
+
+private val COUNTRY_CODE = Regex("[A-Z]{2}")
+private val CURRENCY_CODE = Regex("[A-Z]{3}")
+private val EMAIL_REGEX = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+private val PHONE_E164_REGEX = Regex("^\\+[1-9]\\d{1,14}$")
+
+private fun validateCreate(command: CreateOrganisationDraftCommand) {
+    require(command.tenantCode.isNotBlank()) { "Tenant code is required." }
+    require(command.displayName.isNotBlank()) { "Display name is required." }
+    require(
+        COUNTRY_CODE.matches(command.countryCode),
+    ) { "Country code must be ISO-3166 alpha-2." }
+    require(CURRENCY_CODE.matches(command.baseCurrencyCode)) {
+        "Base currency code must be ISO-4217 alpha-3."
+    }
+    ZoneId.of(command.timezone)
+}
+
+private fun validateAmend(command: AmendOrganisationDraftCommand) {
+    require(command.tenantCode.isNotBlank()) { "Tenant code is required." }
+    require(command.displayName.isNotBlank()) { "Display name is required." }
+    require(
+        COUNTRY_CODE.matches(command.countryCode),
+    ) { "Country code must be ISO-3166 alpha-2." }
+    require(CURRENCY_CODE.matches(command.baseCurrencyCode)) {
+        "Base currency code must be ISO-4217 alpha-3."
+    }
+    ZoneId.of(command.timezone)
+}
+
+private fun validateAdmin(admin: InitialAdministratorDraft) {
+    require(admin.email.isNotBlank() && EMAIL_REGEX.matches(admin.email)) {
+        "A valid email address is required."
+    }
+    require(admin.username.isNotBlank()) { "Username is required." }
+    require(admin.displayName.isNotBlank()) { "Display name is required." }
+    admin.phoneE164?.let { phone ->
+        require(PHONE_E164_REGEX.matches(phone)) {
+            "Phone number must be in E.164 format."
+        }
+    }
+}
+
+private fun branchSuspensionTransition(status: BranchLifecycleState): BranchLifecycleTransition =
+    when (status) {
+        BranchLifecycleState.DRAFT -> {
+            BranchLifecycleTransition.SUSPEND_DRAFT
+        }
+
+        BranchLifecycleState.PENDING_APPROVAL -> {
+            BranchLifecycleTransition.SUSPEND_PENDING_APPROVAL
+        }
+
+        BranchLifecycleState.ACTIVE -> {
+            BranchLifecycleTransition.SUSPEND
+        }
+
+        BranchLifecycleState.SUSPENDED -> {
+            BranchLifecycleTransition.CONFIRM_SUSPENDED
+        }
+
+        BranchLifecycleState.CLOSED,
+        BranchLifecycleState.ARCHIVED,
+        -> {
+            throw IllegalArgumentException("Terminal branches cannot be deprovisioned again.")
+        }
+    }
+
+private fun membershipDeprovisioningTransition(
+    status: MembershipLifecycleState,
+): MembershipLifecycleTransition =
+    when (status) {
+        MembershipLifecycleState.PENDING_APPROVAL -> {
+            MembershipLifecycleTransition.REVOKE_PENDING
+        }
+
+        MembershipLifecycleState.ACTIVE -> {
+            MembershipLifecycleTransition.REVOKE
+        }
+
+        MembershipLifecycleState.SUSPENDED -> {
+            MembershipLifecycleTransition.REVOKE_SUSPENDED
+        }
+
+        MembershipLifecycleState.REVOKED -> {
+            error("Revoked memberships are not deprovisioned.")
+        }
+    }
 
 private fun activateHeadOffice(
     lifecycleService: FoundationLifecycleService,
