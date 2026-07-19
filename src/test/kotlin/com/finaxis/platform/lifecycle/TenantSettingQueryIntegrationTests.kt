@@ -48,10 +48,11 @@ class TenantSettingQueryIntegrationTests(
                     GetTenantSettingQuery(organisationId, "base_currency", LOCAL_USER_ID),
                 )
             }
-        val settings =
+        val page =
             withRequestContext {
                 tenantSettingsService.list(ListTenantSettingsQuery(organisationId, LOCAL_USER_ID))
             }
+        val settings = page.items
 
         assertEquals("KES", baseCurrency.value)
         val catalogKeys = TenantSettingCatalog.keys()

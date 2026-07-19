@@ -117,9 +117,9 @@ class TenantSettingsServiceTests {
     }
 
     @Test
-    fun `get requires settings-update permission`() {
+    fun `get requires settings-view permission`() {
         activate()
-        guard.deny(organisationId, "settings.update")
+        guard.deny(organisationId, "settings.view")
 
         assertFailsWith<SecurityException> {
             service.get(GetTenantSettingQuery(organisationId, "base_currency", actorId))
@@ -127,9 +127,9 @@ class TenantSettingsServiceTests {
     }
 
     @Test
-    fun `list requires settings-update permission`() {
+    fun `list requires settings-view permission`() {
         activate()
-        guard.deny(organisationId, "settings.update")
+        guard.deny(organisationId, "settings.view")
 
         assertFailsWith<SecurityException> {
             service.list(ListTenantSettingsQuery(organisationId, actorId))
@@ -145,9 +145,9 @@ class TenantSettingsServiceTests {
             StoredSetting("audit_retention_days", "30", "INT", false),
         )
 
-        val settings = service.list(ListTenantSettingsQuery(organisationId, actorId))
+        val page = service.list(ListTenantSettingsQuery(organisationId, actorId))
 
-        assertEquals("***REDACTED***", settings.single { it.key == "audit_retention_days" }.value)
+        assertEquals("***REDACTED***", page.items.single { it.key == "audit_retention_days" }.value)
     }
 
     @Test

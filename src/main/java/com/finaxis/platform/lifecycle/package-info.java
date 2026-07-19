@@ -2,6 +2,7 @@
 @org.springframework.modulith.ApplicationModule(
     displayName = "Lifecycle",
     allowedDependencies = {
+      "common::application",
       "common::audit",
       "common::context",
       "common::id",

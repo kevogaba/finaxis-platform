@@ -1,4 +1,4 @@
-package com.finaxis.platform.lifecycle.application
+package com.finaxis.platform.lifecycle
 
 import java.util.UUID
 
