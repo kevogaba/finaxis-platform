@@ -19,24 +19,54 @@ data class CreateOrganisationDraftCommand(
     val initialSettings: Map<String, String> = emptyMap(),
     val businessDate: LocalDate? = null,
     val requestedBy: UUID,
+    val admin: InitialAdministratorDraft = InitialAdministratorDraft(
+        email = "admin@test.com",
+        username = "admin",
+        displayName = "Admin",
+        phoneE164 = null,
+        sendApplicationInvite = false,
+    ),
+)
+
+/** Amends an existing organisation draft before it is submitted. */
+data class AmendOrganisationDraftCommand(
+    val organisationId: UUID,
+    val tenantCode: String,
+    val displayName: String,
+    val legalName: String?,
+    val registrationNumber: String?,
+    val countryCode: String,
+    val baseCurrencyCode: String,
+    val timezone: String,
+    val initialSettings: Map<String, String> = emptyMap(),
+    val businessDate: LocalDate? = null,
+    val actorId: UUID,
+    val requestId: UUID,
+    val admin: InitialAdministratorDraft,
 )
 
 /** Submits an organisation draft to the approval workflow. */
 data class SubmitOrganisationForApprovalCommand(
     val organisationId: UUID,
     val reason: String? = null,
+    val actorId: UUID = UUID.randomUUID(),
+    val requestId: UUID = UUID.randomUUID(),
 )
 
 /** Approves a submitted organisation and performs its durable local setup. */
 data class ApproveOrganisationProvisioningCommand(
     val organisationId: UUID,
     val reason: String? = null,
+    val actorId: UUID = UUID.randomUUID(),
+    val requestId: UUID = UUID.randomUUID(),
 )
 
 /** Rejects an organisation approval request without deleting the draft data. */
 data class RejectOrganisationProvisioningCommand(
     val organisationId: UUID,
     val reason: String,
+    val actorId: UUID = UUID.randomUUID(),
+    val requestId: UUID = UUID.randomUUID(),
 )
 
 /** Suspends an active organisation while retaining all of its data. */
@@ -65,6 +95,20 @@ data class OrganisationSummary(
     val countryCode: String,
     val status: OrganisationLifecycleState,
     val createdAt: Instant,
+    // ── bootstrap projection (nullable when no bootstrap record exists) ────────
+    /** Current bootstrap lifecycle status, or null when not yet requested. */
+    val bootstrapStatus: InitialAdministratorBootstrapStatus? = null,
+    /** Running attempt count for asynchronous bootstrap retries. */
+    val bootstrapAttempts: Int? = null,
+    /** Resolved user account ID, present once the admin identity has been created. */
+    val bootstrapUserId: UUID? = null,
+    /** Resolved membership ID, present once the admin has been enrolled in the organisation. */
+    val bootstrapMembershipId: UUID? = null,
+    /**
+     * Safe failure code recorded on the last failed bootstrap attempt.
+     * Never contains raw exception messages or Keycloak payloads.
+     */
+    val lastBootstrapFailureCode: String? = null,
 )
 
 /** Pagination-safe filter for organisation administration queries. */

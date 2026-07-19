@@ -30,13 +30,17 @@ class OrganisationProvisioningService(
     private val accessStore: OrganisationAccessStore,
     private val queryStore: OrganisationQueryStore,
     private val auditService: AuditService,
+    private val adminBootstrapStore: InitialAdministratorBootstrapStore,
     private val clock: Clock,
 ) {
     /** Creates a non-operational organisation draft with its initial local configuration. */
     @Transactional
     fun createDraft(command: CreateOrganisationDraftCommand): OrganisationDraftResult {
         validateCreate(command)
+        validateAdmin(command.admin)
+        require(command.requestedBy != SYSTEM_ACTOR) { "Maker identity is required." }
         val organisationId = lifecycleStore.createDraft(command)
+        adminBootstrapStore.createDraft(organisationId, command.admin, command.requestedBy)
         lifecycleStore.saveSettings(organisationId, command.initialSettings, command.requestedBy)
         bootstrapStore.ensureBusinessDate(
             organisationId,
@@ -51,12 +55,50 @@ class OrganisationProvisioningService(
         return OrganisationDraftResult(organisationId, OrganisationLifecycleState.DRAFT)
     }
 
+    /** Amends an existing organisation draft before it is submitted. */
+    @Transactional
+    fun amendDraft(command: AmendOrganisationDraftCommand) {
+        val state = lifecycleStore.lifecycleState(command.organisationId)
+            ?: throw IllegalArgumentException("Organisation not found.")
+        require(state == OrganisationLifecycleState.DRAFT) {
+            "Only organisation drafts can be amended."
+        }
+        validateAmend(command)
+        validateAdmin(command.admin)
+        require(command.actorId != SYSTEM_ACTOR) { "Maker identity is required." }
+
+        lifecycleStore.amendDraft(command)
+        adminBootstrapStore.amendDraft(command.organisationId, command.admin)
+
+        audit(
+            organisationId = command.organisationId,
+            action = "organisation.amend_draft",
+            actorId = command.actorId,
+            metadata = mapOf("tenantCode" to command.tenantCode),
+        )
+    }
+
     /** Validates metadata and moves a draft into the approval workflow. */
     @Transactional
     fun submitForApproval(command: SubmitOrganisationForApprovalCommand) {
         require(lifecycleStore.hasRequiredMetadata(command.organisationId)) {
             "Organisation metadata is incomplete."
         }
+        val record = adminBootstrapStore.find(command.organisationId)
+            ?: throw IllegalArgumentException("Initial administrator details must be provided.")
+        validateAdmin(
+            InitialAdministratorDraft(
+                email = record.adminEmail,
+                username = record.adminUsername,
+                displayName = record.adminDisplayName,
+                phoneE164 = record.adminPhoneE164,
+                sendApplicationInvite = record.sendApplicationInvite
+            )
+        )
+        require(command.actorId != SYSTEM_ACTOR) { "Maker identity is required." }
+
+        adminBootstrapStore.submit(command.organisationId, command.actorId)
+
         lifecycleService.transition(
             OrganisationTransitionCommand(
                 command.organisationId,
@@ -69,6 +111,18 @@ class OrganisationProvisioningService(
     /** Creates mandatory durable setup and activates an approved organisation atomically. */
     @Transactional
     fun approveProvisioning(command: ApproveOrganisationProvisioningCommand) {
+        val record = adminBootstrapStore.find(command.organisationId)
+            ?: throw IllegalArgumentException("Initial administrator details must be provided.")
+        require(command.actorId != record.requestedBy) {
+            "Maker cannot approve their own tenant."
+        }
+        if (record.submittedBy != null) {
+            require(command.actorId != record.submittedBy) {
+                "Maker cannot approve their own tenant."
+            }
+        }
+        require(command.actorId != SYSTEM_ACTOR) { "Checker identity is required." }
+
         lifecycleService.transition(
             OrganisationTransitionCommand(
                 command.organisationId,
@@ -90,6 +144,9 @@ class OrganisationProvisioningService(
         )
         bootstrapStore.createDefaultReferenceSequences(command.organisationId)
         bootstrapStore.createDefaultRoles(command.organisationId)
+
+        adminBootstrapStore.approve(command.organisationId, command.actorId)
+
         accessStore.requireCompleteSetup(command.organisationId)
         lifecycleService.transition(
             OrganisationTransitionCommand(
@@ -103,6 +160,9 @@ class OrganisationProvisioningService(
     /** Rejects a pending organisation request and preserves its draft data for auditability. */
     @Transactional
     fun rejectProvisioning(command: RejectOrganisationProvisioningCommand) {
+        require(command.actorId != SYSTEM_ACTOR) { "Checker identity is required." }
+        adminBootstrapStore.reject(command.organisationId)
+
         lifecycleService.transition(
             OrganisationTransitionCommand(
                 command.organisationId,
@@ -326,9 +386,36 @@ class OrganisationProvisioningService(
         )
     }
 
+    private fun validateAmend(command: AmendOrganisationDraftCommand) {
+        require(command.tenantCode.isNotBlank()) { "Tenant code is required." }
+        require(command.displayName.isNotBlank()) { "Display name is required." }
+        require(
+            COUNTRY_CODE.matches(command.countryCode),
+        ) { "Country code must be ISO-3166 alpha-2." }
+        require(CURRENCY_CODE.matches(command.baseCurrencyCode)) {
+            "Base currency code must be ISO-4217 alpha-3."
+        }
+        ZoneId.of(command.timezone)
+    }
+
+    private fun validateAdmin(admin: InitialAdministratorDraft) {
+        require(admin.email.isNotBlank() && EMAIL_REGEX.matches(admin.email)) {
+            "A valid email address is required."
+        }
+        require(admin.username.isNotBlank()) { "Username is required." }
+        require(admin.displayName.isNotBlank()) { "Display name is required." }
+        admin.phoneE164?.let { phone ->
+            require(PHONE_E164_REGEX.matches(phone)) {
+                "Phone number must be in E.164 format."
+            }
+        }
+    }
+
     private companion object {
         val COUNTRY_CODE = Regex("[A-Z]{2}")
         val CURRENCY_CODE = Regex("[A-Z]{3}")
+        val EMAIL_REGEX = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+        val PHONE_E164_REGEX = Regex("^\\+[1-9]\\d{1,14}$")
         val DEFAULT_SETTINGS = mapOf("settings.operational" to "true")
         const val USER = "USER"
         const val SYSTEM = "SYSTEM"

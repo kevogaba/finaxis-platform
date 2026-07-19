@@ -43,7 +43,8 @@ class FoundationSchemaMigrationTests(
                       'role',
                       'role_permission',
                       'membership_permission',
-                      'api_idempotency_record'
+                      'api_idempotency_record',
+                      'organisation_initial_administrator_bootstrap'
                   )
                 ORDER BY tablename
                 """.trimIndent(),
@@ -59,6 +60,7 @@ class FoundationSchemaMigrationTests(
                 "keycloak_identity_link",
                 "membership_permission",
                 "organisation",
+                "organisation_initial_administrator_bootstrap",
                 "organisation_setting",
                 "organisation_transition_log",
                 "permission",
@@ -332,6 +334,47 @@ class FoundationSchemaMigrationTests(
             )
 
         assertEquals(expected.sorted(), actual.map { it as String }.sorted())
+    }
+
+    @Test
+    fun `Flyway creates initial administrator bootstrap schema`() {
+        val columns =
+            jdbcTemplate.queryForList(
+                """
+                SELECT column_name, data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'organisation_initial_administrator_bootstrap'
+                ORDER BY ordinal_position
+                """.trimIndent(),
+            )
+
+        assertEquals(
+            listOf(
+                column("organisation_id", "uuid"),
+                column("admin_email", "character varying"),
+                column("admin_username", "character varying"),
+                column("admin_display_name", "character varying"),
+                column("admin_phone_e164", "character varying"),
+                column("send_application_invite", "boolean"),
+                column("status", "character varying"),
+                column("attempts", "integer"),
+                column("requested_by", "uuid"),
+                column("submitted_by", "uuid"),
+                column("approved_by", "uuid"),
+                column("user_id", "uuid"),
+                column("membership_id", "uuid"),
+                column("head_office_id", "uuid"),
+                column("role_id", "uuid"),
+                column("last_failure_code", "character varying"),
+                column("created_at", "timestamp with time zone"),
+                column("submitted_at", "timestamp with time zone"),
+                column("approved_at", "timestamp with time zone"),
+                column("updated_at", "timestamp with time zone"),
+                column("row_version", "bigint"),
+            ),
+            columns,
+        )
     }
 
     private fun column(

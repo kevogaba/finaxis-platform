@@ -15,6 +15,9 @@ interface OrganisationLifecycleProvisioningStore {
     /** Persists an organisation draft and returns its identifier. */
     fun createDraft(command: CreateOrganisationDraftCommand): UUID
 
+    /** Amends the organisation draft details. */
+    fun amendDraft(command: AmendOrganisationDraftCommand) {}
+
     /** Stores supplied initial non-sensitive organisation settings. */
     fun saveSettings(
         organisationId: UUID,

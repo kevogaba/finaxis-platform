@@ -43,6 +43,7 @@ class OrganisationBranchProvisioningServiceTests {
             AuditService(audits, clock),
         )
     private val store = ProvisioningFake(lifecyclePersistence)
+    private val adminBootstrapStore = FakeInitialAdministratorBootstrapStore()
     private val organisations =
         OrganisationProvisioningService(
             lifecycle,
@@ -51,6 +52,7 @@ class OrganisationBranchProvisioningServiceTests {
             store,
             store,
             AuditService(audits, clock),
+            adminBootstrapStore,
             clock,
         )
     private val branches =
@@ -176,6 +178,258 @@ class OrganisationBranchProvisioningServiceTests {
         assertEquals("Registration validation failed", transitionLogs.logs.last().reason)
         assertExternalizedTarget("finaxis.lifecycle.organisation.rejected")
     }
+
+    // ── Task 7: maker-checker & admin draft validation ────────────────────────
+
+    @Test
+    fun `createDraft persists initial administrator bootstrap record in DRAFT status`() {
+        val maker = uuidV7()
+        val result =
+            organisations.createDraft(
+                CreateOrganisationDraftCommand(
+                    tenantCode = "boot-test",
+                    displayName = "Bootstrap Test SACCO",
+                    legalName = null,
+                    registrationNumber = null,
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    requestedBy = maker,
+                    admin = InitialAdministratorDraft(
+                        email = "admin@boot.test",
+                        username = "bootstrapadmin",
+                        displayName = "Bootstrap Admin",
+                        phoneE164 = "+254700000001",
+                        sendApplicationInvite = true,
+                    ),
+                ),
+            )
+
+        val record = adminBootstrapStore.records.getValue(result.organisationId)
+        assertEquals(InitialAdministratorBootstrapStatus.DRAFT, record.status)
+        assertEquals("admin@boot.test", record.adminEmail)
+        assertEquals("bootstrapadmin", record.adminUsername)
+        assertEquals("Bootstrap Admin", record.adminDisplayName)
+        assertEquals("+254700000001", record.adminPhoneE164)
+        assertEquals(true, record.sendApplicationInvite)
+        assertEquals(maker, record.requestedBy)
+    }
+
+    @Test
+    fun `createDraft rejects blank admin email`() {
+        assertFailsWith<IllegalArgumentException> {
+            organisations.createDraft(
+                CreateOrganisationDraftCommand(
+                    tenantCode = "bad-email",
+                    displayName = "Bad Email SACCO",
+                    legalName = null,
+                    registrationNumber = null,
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    requestedBy = uuidV7(),
+                    admin = InitialAdministratorDraft(
+                        email = "",
+                        username = "admin",
+                        displayName = "Admin",
+                        phoneE164 = null,
+                        sendApplicationInvite = false,
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `createDraft rejects malformed admin email`() {
+        assertFailsWith<IllegalArgumentException> {
+            organisations.createDraft(
+                CreateOrganisationDraftCommand(
+                    tenantCode = "bad-email2",
+                    displayName = "Bad Email2 SACCO",
+                    legalName = null,
+                    registrationNumber = null,
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    requestedBy = uuidV7(),
+                    admin = InitialAdministratorDraft(
+                        email = "not-an-email",
+                        username = "admin",
+                        displayName = "Admin",
+                        phoneE164 = null,
+                        sendApplicationInvite = false,
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `createDraft rejects blank admin username`() {
+        assertFailsWith<IllegalArgumentException> {
+            organisations.createDraft(
+                CreateOrganisationDraftCommand(
+                    tenantCode = "bad-user",
+                    displayName = "Bad User SACCO",
+                    legalName = null,
+                    registrationNumber = null,
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    requestedBy = uuidV7(),
+                    admin = InitialAdministratorDraft(
+                        email = "admin@valid.test",
+                        username = "   ",
+                        displayName = "Admin",
+                        phoneE164 = null,
+                        sendApplicationInvite = false,
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `createDraft rejects blank admin display name`() {
+        assertFailsWith<IllegalArgumentException> {
+            organisations.createDraft(
+                CreateOrganisationDraftCommand(
+                    tenantCode = "bad-display",
+                    displayName = "Bad Display SACCO",
+                    legalName = null,
+                    registrationNumber = null,
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    requestedBy = uuidV7(),
+                    admin = InitialAdministratorDraft(
+                        email = "admin@valid.test",
+                        username = "admin",
+                        displayName = "",
+                        phoneE164 = null,
+                        sendApplicationInvite = false,
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `createDraft rejects malformed E164 phone number`() {
+        assertFailsWith<IllegalArgumentException> {
+            organisations.createDraft(
+                CreateOrganisationDraftCommand(
+                    tenantCode = "bad-phone",
+                    displayName = "Bad Phone SACCO",
+                    legalName = null,
+                    registrationNumber = null,
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    requestedBy = uuidV7(),
+                    admin = InitialAdministratorDraft(
+                        email = "admin@valid.test",
+                        username = "admin",
+                        displayName = "Admin",
+                        phoneE164 = "07001234567",   // missing + prefix
+                        sendApplicationInvite = false,
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `createDraft rejects nil (system-actor sentinel) maker identity`() {
+        assertFailsWith<IllegalArgumentException> {
+            organisations.createDraft(
+                CreateOrganisationDraftCommand(
+                    tenantCode = "no-maker",
+                    displayName = "No Maker SACCO",
+                    legalName = null,
+                    registrationNumber = null,
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    requestedBy = UUID(0L, 0L),   // nil / bootstrap sentinel
+                    admin = InitialAdministratorDraft(
+                        email = "admin@valid.test",
+                        username = "admin",
+                        displayName = "Admin",
+                        phoneE164 = null,
+                        sendApplicationInvite = false,
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `approving a tenant as the same actor who requested the draft is rejected (maker-checker)`() {
+        val maker = uuidV7()
+        val organisationId = activeDraftWithMaker(maker)
+
+        organisations.submitForApproval(
+            SubmitOrganisationForApprovalCommand(organisationId, actorId = uuidV7()),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            organisations.approveProvisioning(
+                ApproveOrganisationProvisioningCommand(organisationId, actorId = maker),
+            )
+        }
+    }
+
+    @Test
+    fun `approving a tenant as the same actor who submitted the draft is rejected (maker-checker)`() {
+        val submitter = uuidV7()
+        val organisationId = activeDraft()
+
+        organisations.submitForApproval(
+            SubmitOrganisationForApprovalCommand(organisationId, actorId = submitter),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            organisations.approveProvisioning(
+                ApproveOrganisationProvisioningCommand(organisationId, actorId = submitter),
+            )
+        }
+    }
+
+    @Test
+    fun `rejecting a submitted organisation returns bootstrap status to DRAFT`() {
+        val organisationId = activeDraft()
+        val submitter = uuidV7()
+        organisations.submitForApproval(
+            SubmitOrganisationForApprovalCommand(organisationId, actorId = submitter),
+        )
+
+        organisations.rejectProvisioning(
+            RejectOrganisationProvisioningCommand(organisationId, "Documents incomplete", actorId = uuidV7()),
+        )
+
+        assertEquals(
+            InitialAdministratorBootstrapStatus.DRAFT,
+            adminBootstrapStore.records.getValue(organisationId).status,
+        )
+    }
+
+    @Test
+    fun `approving a tenant records checker in bootstrap and sets status to QUEUED`() {
+        val maker = uuidV7()
+        val checker = uuidV7()
+        val organisationId = activeDraftWithMaker(maker)
+        organisations.submitForApproval(SubmitOrganisationForApprovalCommand(organisationId, actorId = uuidV7()))
+
+        organisations.approveProvisioning(ApproveOrganisationProvisioningCommand(organisationId, actorId = checker))
+
+        val record = adminBootstrapStore.records.getValue(organisationId)
+        assertEquals(InitialAdministratorBootstrapStatus.QUEUED, record.status)
+        assertEquals(checker, record.approvedBy)
+    }
+
+    // ── end Task 7 ────────────────────────────────────────────────────────────
 
     @Test
     fun `suspending and reactivating an organisation publish their external lifecycle events`() {
@@ -484,6 +738,37 @@ class OrganisationBranchProvisioningServiceTests {
             aggregate(organisationId, OrganisationLifecycleState.DRAFT, "ORGANISATION")
         store.metadataComplete += organisationId
         store.businessDates[organisationId] = LocalDate.of(2026, 7, 14)
+        adminBootstrapStore.createDraft(
+            organisationId = organisationId,
+            admin = InitialAdministratorDraft(
+                email = "admin@test.com",
+                username = "admin",
+                displayName = "Admin",
+                phoneE164 = null,
+                sendApplicationInvite = false
+            ),
+            requestedBy = UUID.randomUUID()
+        )
+        return organisationId
+    }
+
+    private fun activeDraftWithMaker(maker: UUID): UUID {
+        val organisationId = uuidV7()
+        lifecyclePersistence.organisations[organisationId] =
+            aggregate(organisationId, OrganisationLifecycleState.DRAFT, "ORGANISATION")
+        store.metadataComplete += organisationId
+        store.businessDates[organisationId] = LocalDate.of(2026, 7, 14)
+        adminBootstrapStore.createDraft(
+            organisationId = organisationId,
+            admin = InitialAdministratorDraft(
+                email = "admin@test.com",
+                username = "admin",
+                displayName = "Admin",
+                phoneE164 = null,
+                sendApplicationInvite = false
+            ),
+            requestedBy = maker
+        )
         return organisationId
     }
 }
@@ -807,3 +1092,116 @@ private fun <S : Enum<S>> aggregate(
     state: S,
     type: String,
 ) = LifecycleAggregate(id, state, type, id, 0)
+
+private class FakeInitialAdministratorBootstrapStore : InitialAdministratorBootstrapStore {
+    val records = mutableMapOf<UUID, InitialAdministratorBootstrapRecord>()
+
+    override fun createDraft(organisationId: UUID, admin: InitialAdministratorDraft, requestedBy: UUID) {
+        records[organisationId] = InitialAdministratorBootstrapRecord(
+            organisationId = organisationId,
+            adminEmail = admin.email,
+            adminUsername = admin.username,
+            adminDisplayName = admin.displayName,
+            adminPhoneE164 = admin.phoneE164,
+            sendApplicationInvite = admin.sendApplicationInvite,
+            status = InitialAdministratorBootstrapStatus.DRAFT,
+            attempts = 0,
+            requestedBy = requestedBy,
+            submittedBy = null,
+            approvedBy = null,
+            userId = null,
+            membershipId = null,
+            headOfficeId = null,
+            roleId = null,
+            lastFailureCode = null,
+            createdAt = java.time.Instant.now(),
+            submittedAt = null,
+            approvedAt = null,
+            updatedAt = java.time.Instant.now(),
+            rowVersion = 0L
+        )
+    }
+
+    override fun amendDraft(organisationId: UUID, admin: InitialAdministratorDraft) {
+        val record = records[organisationId] ?: error("Not found")
+        records[organisationId] = record.copy(
+            adminEmail = admin.email,
+            adminUsername = admin.username,
+            adminDisplayName = admin.displayName,
+            adminPhoneE164 = admin.phoneE164,
+            sendApplicationInvite = admin.sendApplicationInvite,
+            updatedAt = java.time.Instant.now(),
+            rowVersion = record.rowVersion + 1
+        )
+    }
+
+    override fun submit(organisationId: UUID, actorId: UUID) {
+        val record = records[organisationId] ?: error("Not found")
+        records[organisationId] = record.copy(
+            status = InitialAdministratorBootstrapStatus.PENDING_ACTIVATION,
+            submittedBy = actorId,
+            submittedAt = java.time.Instant.now(),
+            updatedAt = java.time.Instant.now(),
+            rowVersion = record.rowVersion + 1
+        )
+    }
+
+    override fun approve(organisationId: UUID, actorId: UUID) {
+        val record = records[organisationId] ?: error("Not found")
+        records[organisationId] = record.copy(
+            status = InitialAdministratorBootstrapStatus.QUEUED,
+            approvedBy = actorId,
+            approvedAt = java.time.Instant.now(),
+            updatedAt = java.time.Instant.now(),
+            rowVersion = record.rowVersion + 1
+        )
+    }
+
+    override fun reject(organisationId: UUID) {
+        val record = records[organisationId] ?: error("Not found")
+        records[organisationId] = record.copy(
+            status = InitialAdministratorBootstrapStatus.DRAFT,
+            submittedBy = null,
+            submittedAt = null,
+            approvedBy = null,
+            approvedAt = null,
+            updatedAt = java.time.Instant.now(),
+            rowVersion = record.rowVersion + 1
+        )
+    }
+
+    override fun find(organisationId: UUID): InitialAdministratorBootstrapRecord? {
+        return records[organisationId]
+    }
+
+    override fun updateStatus(organisationId: UUID, status: InitialAdministratorBootstrapStatus, lastFailureCode: String?) {
+        val record = records[organisationId] ?: error("Not found")
+        records[organisationId] = record.copy(
+            status = status,
+            lastFailureCode = lastFailureCode,
+            updatedAt = java.time.Instant.now(),
+            rowVersion = record.rowVersion + 1
+        )
+    }
+
+    override fun incrementAttempts(organisationId: UUID) {
+        val record = records[organisationId] ?: error("Not found")
+        records[organisationId] = record.copy(
+            attempts = record.attempts + 1,
+            updatedAt = java.time.Instant.now(),
+            rowVersion = record.rowVersion + 1
+        )
+    }
+
+    override fun linkResolvedEntities(organisationId: UUID, userId: UUID?, membershipId: UUID?, headOfficeId: UUID?, roleId: UUID?) {
+        val record = records[organisationId] ?: error("Not found")
+        records[organisationId] = record.copy(
+            userId = userId,
+            membershipId = membershipId,
+            headOfficeId = headOfficeId,
+            roleId = roleId,
+            updatedAt = java.time.Instant.now(),
+            rowVersion = record.rowVersion + 1
+        )
+    }
+}

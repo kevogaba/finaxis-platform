@@ -13,6 +13,9 @@ import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
 import com.finaxis.platform.lifecycle.application.BranchAssignmentType
 import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
+import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStatus
+import com.finaxis.platform.lifecycle.application.InitialAdministratorDraft
+import com.finaxis.platform.lifecycle.application.OrganisationListFilter
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
@@ -23,6 +26,8 @@ import org.springframework.transaction.annotation.Transactional
 import java.time.OffsetDateTime
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 @Import(PostgresTestConfiguration::class)
@@ -66,6 +71,121 @@ class JooqOrganisationBranchProvisioningStoreTests(
 
         assertEquals(trickyValue, decoded)
     }
+
+    // ── bootstrap projection ──────────────────────────────────────────────────
+
+    @Test
+    fun `findByCode returns null bootstrap fields when no bootstrap record exists`() {
+        val tenantCode = "no-bootstrap-${uuidV7()}"
+        store.createDraft(
+            CreateOrganisationDraftCommand(
+                tenantCode = tenantCode,
+                displayName = "No Bootstrap Org",
+                legalName = null,
+                registrationNumber = null,
+                countryCode = "KE",
+                baseCurrencyCode = "KES",
+                timezone = "Africa/Nairobi",
+                requestedBy = uuidV7(),
+                // Deliberately do NOT pass an admin to test absence of the bootstrap record
+                // Note: the default admin is injected but createDraft always persists it,
+                // so we test via the store directly without going through the service.
+            ),
+        )
+        // Insert a raw ORGANISATION row instead so there is no bootstrap record at all
+        val rawId = insertOrganisationDraftOnly()
+
+        val summary = store.findByCode("raw-org-$rawId")
+        assertNotNull(summary)
+        assertNull(summary.bootstrapStatus)
+        assertNull(summary.bootstrapAttempts)
+        assertNull(summary.bootstrapUserId)
+        assertNull(summary.bootstrapMembershipId)
+        assertNull(summary.lastBootstrapFailureCode)
+    }
+
+    @Test
+    fun `findByCode returns bootstrap projection when a bootstrap record exists`() {
+        val tenantCode = "with-bootstrap-${uuidV7()}"
+        val organisationId = store.createDraft(
+            CreateOrganisationDraftCommand(
+                tenantCode = tenantCode,
+                displayName = "With Bootstrap Org",
+                legalName = null,
+                registrationNumber = null,
+                countryCode = "KE",
+                baseCurrencyCode = "KES",
+                timezone = "Africa/Nairobi",
+                requestedBy = uuidV7(),
+                admin = InitialAdministratorDraft(
+                    email = "proj.admin@bootstrap.test",
+                    username = "projadmin",
+                    displayName = "Proj Admin",
+                    phoneE164 = null,
+                    sendApplicationInvite = false,
+                ),
+            ),
+        )
+        // createDraft does NOT persist the bootstrap row; the service does.
+        // Seed it directly via the jOOQ bootstrap store.
+        val bootstrapStore = JooqInitialAdministratorBootstrapStore(dsl, java.time.Clock.systemUTC())
+        bootstrapStore.createDraft(
+            organisationId,
+            InitialAdministratorDraft(
+                email = "proj.admin@bootstrap.test",
+                username = "projadmin",
+                displayName = "Proj Admin",
+                phoneE164 = null,
+                sendApplicationInvite = false,
+            ),
+            uuidV7(),
+        )
+
+        val summary = store.findByCode(tenantCode)
+        assertNotNull(summary)
+        assertEquals(InitialAdministratorBootstrapStatus.DRAFT, summary.bootstrapStatus)
+        assertEquals(0, summary.bootstrapAttempts)
+        assertNull(summary.bootstrapUserId)
+        assertNull(summary.bootstrapMembershipId)
+        assertNull(summary.lastBootstrapFailureCode)
+    }
+
+    @Test
+    fun `list includes bootstrap projection fields from left join`() {
+        val tenantCode = "list-bootstrap-${uuidV7()}"
+        val organisationId = store.createDraft(
+            CreateOrganisationDraftCommand(
+                tenantCode = tenantCode,
+                displayName = "List Bootstrap Org",
+                legalName = null,
+                registrationNumber = null,
+                countryCode = "KE",
+                baseCurrencyCode = "KES",
+                timezone = "Africa/Nairobi",
+                requestedBy = uuidV7(),
+            ),
+        )
+        val bootstrapStore = JooqInitialAdministratorBootstrapStore(dsl, java.time.Clock.systemUTC())
+        bootstrapStore.createDraft(
+            organisationId,
+            InitialAdministratorDraft(
+                email = "list.admin@bootstrap.test",
+                username = "listadmin",
+                displayName = "List Admin",
+                phoneE164 = null,
+                sendApplicationInvite = false,
+            ),
+            uuidV7(),
+        )
+
+        val page = store.list(OrganisationListFilter(size = 100))
+        val summary = page.items.find { it.tenantCode == tenantCode }
+        assertNotNull(summary)
+        assertEquals(InitialAdministratorBootstrapStatus.DRAFT, summary.bootstrapStatus)
+        assertEquals(0, summary.bootstrapAttempts)
+    }
+
+    // ── end bootstrap projection ──────────────────────────────────────────────
 
     @Test
     fun `revokes active branch and role assignments across users in bulk`() {
@@ -118,6 +238,24 @@ class JooqOrganisationBranchProvisioningStoreTests(
                 .eq(organisationId)
                 .and(USER_ROLE_ASSIGNMENT.STATUS.eq("ACTIVE")),
         )
+
+    private fun insertOrganisationDraftOnly(): UUID {
+        val id = uuidV7()
+        val now = OffsetDateTime.now()
+        dsl
+            .insertInto(ORGANISATION)
+            .set(ORGANISATION.ID, id)
+            .set(ORGANISATION.TENANT_CODE, "raw-org-$id")
+            .set(ORGANISATION.DISPLAY_NAME, "Raw Org")
+            .set(ORGANISATION.COUNTRY_CODE, "KE")
+            .set(ORGANISATION.BASE_CURRENCY_CODE, "KES")
+            .set(ORGANISATION.TIMEZONE, "Africa/Nairobi")
+            .set(ORGANISATION.STATUS, OrganisationLifecycleState.DRAFT.name)
+            .set(ORGANISATION.CREATED_AT, now)
+            .set(ORGANISATION.UPDATED_AT, now)
+            .execute()
+        return id
+    }
 
     private fun insertOrganisation(): UUID {
         val id = uuidV7()
