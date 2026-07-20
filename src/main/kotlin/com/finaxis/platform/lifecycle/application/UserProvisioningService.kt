@@ -453,6 +453,10 @@ class UserProvisioningService(
         snapshot: MembershipProvisioningSnapshot,
         metadata: Map<String, Any?>,
     ) {
+        val correlation = mutableMapOf<String, Any>()
+        command.bootstrapRequestId?.let { correlation["bootstrapRequestId"] = it }
+        command.bootstrapAttempt?.let { correlation["bootstrapAttempt"] = it }
+
         eventPublisher.publish(
             ExternalizedTransitionEvent(
                 target = target,
@@ -468,7 +472,7 @@ class UserProvisioningService(
                         ORGANISATION_ID to command.organisationId.toString(),
                         MEMBERSHIP_ID to snapshot.id.toString(),
                         USER_ID to snapshot.userId.toString(),
-                    ) + metadata,
+                    ) + metadata + correlation,
             ),
         )
     }

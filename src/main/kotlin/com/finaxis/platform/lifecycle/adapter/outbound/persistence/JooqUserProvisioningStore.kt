@@ -262,6 +262,18 @@ private class JooqUserProvisioningAccessStore(
                 .and(ROLE.STATUS.eq(ACTIVE)),
         )
 
+    override fun findRoleIdByCode(
+        organisationId: UUID,
+        roleCode: String,
+    ): UUID? =
+        dsl
+            .select(ROLE.ID)
+            .from(ROLE)
+            .where(ROLE.ORGANISATION_ID.eq(organisationId))
+            .and(ROLE.ROLE_CODE.eq(roleCode))
+            .and(ROLE.STATUS.eq(ACTIVE))
+            .fetchOne(ROLE.ID)
+
     override fun assignRole(
         organisationId: UUID,
         userId: UUID,

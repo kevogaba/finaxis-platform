@@ -24,6 +24,7 @@ errorProneVersion = "2.50.0"
 archUnitVersion = "1.4.2"
 namastackVersion = "1.7.1"
 bucket4jVersion = "8.19.0"
+mockitoKotlinVersion = "5.4.0"
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "springBootVersion" }
@@ -56,3 +57,4 @@ namastack-bom = { module = "io.namastack:namastack-outbox-bom", version.ref = "n
 bucket4j-core = { module = "com.bucket4j:bucket4j_jdk17-core", version.ref = "bucket4jVersion" }
 bucket4j-redis-common = { module = "com.bucket4j:bucket4j_jdk17-redis-common", version.ref = "bucket4jVersion" }
 bucket4j-lettuce = { module = "com.bucket4j:bucket4j_jdk17-lettuce", version.ref = "bucket4jVersion" }
+mockito-kotlin = { module = "org.mockito.kotlin:mockito-kotlin", version.ref = "mockitoKotlinVersion" }

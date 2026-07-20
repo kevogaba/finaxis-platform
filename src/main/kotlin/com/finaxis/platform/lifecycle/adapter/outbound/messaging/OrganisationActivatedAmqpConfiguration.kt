@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.messaging
 
+import org.springframework.amqp.core.Binding
 import org.springframework.amqp.core.BindingBuilder
 import org.springframework.amqp.core.Declarables
 import org.springframework.amqp.core.FanoutExchange
@@ -22,7 +23,22 @@ class OrganisationActivatedAmqpConfiguration {
         return Declarables(listOf(queue) + exchanges + bindings)
     }
 
-    private companion object {
+    /** Dedicated queue for initial-administrator bootstrap. */
+    @Bean
+    fun organisationActivatedBootstrapQueue(): Queue =
+        Queue(ORGANISATION_ACTIVATED_BOOTSTRAP_QUEUE, true)
+
+    /** Binds the bootstrap queue to the organisation activated exchange. */
+    @Bean
+    fun organisationActivatedBootstrapBinding(): Binding =
+        BindingBuilder
+            .bind(organisationActivatedBootstrapQueue())
+            .to(FanoutExchange("finaxis.lifecycle.organisation.activated", true, false))
+
+    /** Integration exchanges and queue name constants. */
+    companion object {
+        const val ORGANISATION_ACTIVATED_BOOTSTRAP_QUEUE =
+            "finaxis.lifecycle.organisation-activated.bootstrap"
         val ORGANISATION_LIFECYCLE_EXCHANGES =
             listOf(
                 "finaxis.lifecycle.organisation.approval-requested",

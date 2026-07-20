@@ -11,12 +11,14 @@ import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.common.transitions.TransitionExecutor
 import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogRepository
+import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.LifecycleAggregate
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
+import org.mockito.Mockito.mock
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
@@ -44,6 +46,8 @@ class OrganisationBranchProvisioningServiceTests {
         )
     private val store = ProvisioningFake(lifecyclePersistence)
     private val adminBootstrapStore = FakeInitialAdministratorBootstrapStore()
+    private val bootstrapService = mock(InitialAdministratorBootstrapService::class.java)
+    private val permissionGuard = mock(PermissionGuard::class.java)
     private val organisations =
         OrganisationProvisioningService(
             lifecycle,
@@ -53,6 +57,8 @@ class OrganisationBranchProvisioningServiceTests {
             store,
             AuditService(audits, clock),
             adminBootstrapStore,
+            bootstrapService,
+            permissionGuard,
             clock,
         )
     private val branches =

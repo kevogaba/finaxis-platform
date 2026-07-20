@@ -21,11 +21,18 @@ class KeycloakUserProvisioningJobRequestHandler(
     private val store: UserProvisioningStore,
     private val lifecycleService: FoundationLifecycleService,
     private val dispatchOutcomeAuditor: DispatchOutcomeAuditor,
-    @Value($$"${finaxis.keycloak.admin.realm:finaxis}") private val realm: String = "finaxis",
+    private val bootstrapService: InitialAdministratorBootstrapService,
+    @Value("\${finaxis.keycloak.admin.realm:finaxis}") private val realm: String = "finaxis",
 ) : JobRequestHandler<KeycloakUserProvisioningJobRequest> {
     /** Runs Keycloak provisioning idempotently and advances the local user and membership FSMs. */
     override fun run(jobRequest: KeycloakUserProvisioningJobRequest) {
-        if (store.dispatchStatus(jobRequest.dispatchKey) == SUCCEEDED) return
+        if (store.dispatchStatus(jobRequest.dispatchKey) == SUCCEEDED) {
+            bootstrapService.completeBootstrapIfCorrelated(
+                jobRequest.organisationId,
+                jobRequest.userId,
+            )
+            return
+        }
         try {
             val keycloakUser =
                 gateway.findOrCreateUser(
@@ -46,6 +53,11 @@ class KeycloakUserProvisioningJobRequestHandler(
             }
             inviteUserIfNeeded(jobRequest)
             activateMembershipIfNeeded(jobRequest)
+            bootstrapService.completeBootstrapIfCorrelated(
+                jobRequest.organisationId,
+                jobRequest.userId,
+            )
+
             dispatchOutcomeAuditor.recordSuccess(
                 dispatchKey = jobRequest.dispatchKey,
                 dispatchRef = keycloakUser.subject,

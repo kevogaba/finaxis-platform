@@ -5,6 +5,9 @@ import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.TransitionCommand
+import com.finaxis.platform.lifecycle.PermissionGuard
+import com.finaxis.platform.lifecycle.PlatformCaller
+import com.finaxis.platform.lifecycle.TenantCaller
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
@@ -31,6 +34,8 @@ class OrganisationProvisioningService(
     private val queryStore: OrganisationQueryStore,
     private val auditService: AuditService,
     private val adminBootstrapStore: InitialAdministratorBootstrapStore,
+    private val bootstrapService: InitialAdministratorBootstrapService,
+    private val permissionGuard: PermissionGuard,
     private val clock: Clock,
 ) {
     /** Creates a non-operational organisation draft with its initial local configuration. */
@@ -173,6 +178,36 @@ class OrganisationProvisioningService(
                 TransitionCommand(reason = command.reason),
             ),
         )
+    }
+
+    /** Retries a failed initial administrator bootstrap process. */
+    @Transactional
+    fun retryBootstrap(command: RetryInitialAdministratorBootstrapCommand) {
+        val record =
+            adminBootstrapStore.find(command.organisationId)
+                ?: throw IllegalArgumentException(
+                    "Bootstrap record not found for organisation: ${command.organisationId}",
+                )
+        require(record.status == InitialAdministratorBootstrapStatus.FAILED) {
+            "Only failed bootstraps can be retried."
+        }
+        when (val caller = command.caller) {
+            is TenantCaller -> {
+                permissionGuard.requireTenantPermission(
+                    caller.actorId,
+                    command.organisationId,
+                    "tenant.bootstrap_retry",
+                )
+            }
+
+            is PlatformCaller -> {
+                permissionGuard.requirePlatformPermission(
+                    caller.actorId,
+                    "tenant.bootstrap_retry",
+                )
+            }
+        }
+        bootstrapService.bootstrap(command.organisationId)
     }
 
     /** Suspends an active organisation without deleting data. */

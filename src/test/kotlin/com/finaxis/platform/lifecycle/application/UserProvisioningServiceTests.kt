@@ -457,6 +457,11 @@ private class UserProvisioningFake :
         roleId: UUID,
     ): Boolean = roles.contains(organisationId to roleId)
 
+    override fun findRoleIdByCode(
+        organisationId: UUID,
+        roleCode: String,
+    ): UUID? = null
+
     override fun hasKeycloakIdentity(userId: UUID): Boolean = identityLinks.contains(userId)
 
     override fun assignRole(

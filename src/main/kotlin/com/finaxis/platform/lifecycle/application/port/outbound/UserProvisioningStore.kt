@@ -86,6 +86,12 @@ interface UserProvisioningAccessStore {
         roleId: UUID,
     ): Boolean
 
+    /** Finds a role ID by its code within the selected organisation. */
+    fun findRoleIdByCode(
+        organisationId: UUID,
+        roleCode: String,
+    ): UUID?
+
     /** Creates an active role assignment idempotently and returns the durable assignment id. */
     fun assignRole(
         organisationId: UUID,

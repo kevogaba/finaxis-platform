@@ -22,6 +22,7 @@ import com.finaxis.platform.lifecycle.domain.LifecyclePrerequisites
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
+import org.mockito.Mockito.mock
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -49,8 +50,96 @@ class KeycloakUserProvisioningHandlerTests {
             auditService,
         )
     private val dispatchOutcomeAuditor = DispatchOutcomeAuditor(store, auditService)
+    private val deactivationAssignmentRevoker = mock(UserDeactivationAssignmentRevoker::class.java)
+    private val branchProvisioningService = mock(BranchProvisioningService::class.java)
+    private val userProvisioningService =
+        UserProvisioningService(
+            lifecycle,
+            store,
+            branchProvisioningService,
+            deactivationAssignmentRevoker,
+            auditService,
+            events,
+            clock,
+        )
+    private val fakeBootstrapStore =
+        object : InitialAdministratorBootstrapStore {
+            override fun createDraft(
+                organisationId: UUID,
+                admin: InitialAdministratorDraft,
+                requestedBy: UUID,
+            ) = Unit
+
+            override fun amendDraft(
+                organisationId: UUID,
+                admin: InitialAdministratorDraft,
+            ) = Unit
+
+            override fun submit(
+                organisationId: UUID,
+                actorId: UUID,
+            ) = Unit
+
+            override fun approve(
+                organisationId: UUID,
+                actorId: UUID,
+            ) = Unit
+
+            override fun reject(organisationId: UUID) = Unit
+
+            override fun find(organisationId: UUID): InitialAdministratorBootstrapRecord? = null
+
+            override fun updateStatus(
+                organisationId: UUID,
+                status: InitialAdministratorBootstrapStatus,
+                lastFailureCode: String?,
+                incrementAttempts: Boolean,
+            ) = Unit
+
+            override fun linkResolvedEntities(
+                organisationId: UUID,
+                userId: UUID?,
+                membershipId: UUID?,
+                headOfficeId: UUID?,
+                roleId: UUID?,
+            ) = Unit
+        }
+    private val fakeBootstrapOrgStore =
+        object : OrganisationBootstrapStore {
+            override fun ensureBusinessDate(
+                organisationId: UUID,
+                date: java.time.LocalDate,
+            ) = Unit
+
+            override fun timezone(organisationId: UUID): String = "UTC"
+
+            override fun ensureHeadOfficeDraft(organisationId: UUID): HeadOfficeDraftResult =
+                HeadOfficeDraftResult(uuidV7(), true)
+
+            override fun createDefaultReferenceSequences(organisationId: UUID) = Unit
+
+            override fun createDefaultRoles(organisationId: UUID) = Unit
+
+            override fun headOfficeState(organisationId: UUID): BranchLifecycleState? =
+                BranchLifecycleState.ACTIVE
+        }
+    private val bootstrapService =
+        InitialAdministratorBootstrapService(
+            fakeBootstrapStore,
+            fakeBootstrapOrgStore,
+            store,
+            userProvisioningService,
+            events,
+            clock,
+        )
     private val handler =
-        KeycloakUserProvisioningJobRequestHandler(gateway, store, lifecycle, dispatchOutcomeAuditor)
+        KeycloakUserProvisioningJobRequestHandler(
+            gateway,
+            store,
+            lifecycle,
+            dispatchOutcomeAuditor,
+            bootstrapService,
+        )
 
     @Test
     fun `new user provisioning links identity invites user activates membership and succeeds`() {
@@ -292,6 +381,11 @@ private class ProvisioningWorkerStoreFake :
         organisationId: UUID,
         roleId: UUID,
     ): Boolean = true
+
+    override fun findRoleIdByCode(
+        organisationId: UUID,
+        roleCode: String,
+    ): UUID? = uuidV7()
 
     override fun assignRole(
         organisationId: UUID,

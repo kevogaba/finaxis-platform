@@ -19,6 +19,8 @@ data class InviteUserCommand(
     val sendKeycloakInvite: Boolean,
     val sendApplicationInvite: Boolean,
     val requestId: String? = null,
+    val bootstrapRequestId: String? = null,
+    val bootstrapAttempt: Int? = null,
 )
 
 /** Requested user-to-branch assignment created during local invitation intake. */
@@ -46,6 +48,8 @@ data class ApproveUserCommand(
     val membershipId: UUID,
     val approvedBy: UUID,
     val requestId: String? = null,
+    val bootstrapRequestId: String? = null,
+    val bootstrapAttempt: Int? = null,
 )
 
 /** Suspends a global user account from an organisation workflow context. */

@@ -128,6 +128,7 @@ dependencies {
     testImplementation("org.springframework.security:spring-security-test")
     testImplementation("org.springframework.modulith:spring-modulith-starter-test")
     testImplementation(libs.archunit.junit5)
+    testImplementation(libs.mockito.kotlin)
     testImplementation("org.testcontainers:testcontainers-grafana")
     testImplementation("org.testcontainers:testcontainers-junit-jupiter")
     testImplementation("org.testcontainers:testcontainers-postgresql")

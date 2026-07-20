@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.lifecycle.FoundationCaller
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
@@ -289,4 +290,11 @@ data class BusinessDateView(
     val organisationId: UUID,
     val currentBusinessDate: LocalDate,
     val status: String,
+)
+
+/** Command to retry failed initial administrator bootstrap process. */
+data class RetryInitialAdministratorBootstrapCommand(
+    val organisationId: UUID,
+    val caller: FoundationCaller,
+    val requestId: String? = null,
 )
