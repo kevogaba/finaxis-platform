@@ -46,10 +46,22 @@ class BranchActivationOutboxIntegrationTests(
                     ),
                 ).branchId
         branchProvisioningService.submitForApproval(
-            SubmitBranchForApprovalCommand(organisationId, branchId),
+            SubmitBranchForApprovalCommand(
+                organisationId = organisationId,
+                branchId = branchId,
+                actorId = LOCAL_USER_ID,
+                requestId = uuidV7(),
+            ),
         )
 
-        branchProvisioningService.activate(ActivateBranchCommand(organisationId, branchId))
+        branchProvisioningService.activate(
+            ActivateBranchCommand(
+                organisationId = organisationId,
+                branchId = branchId,
+                actorId = LOCAL_CHECKER_ID,
+                requestId = uuidV7(),
+            ),
+        )
 
         await()
             .atMost(60, TimeUnit.SECONDS)
@@ -93,6 +105,7 @@ class BranchActivationOutboxIntegrationTests(
 
     private companion object {
         val LOCAL_USER_ID: UUID = UUID.fromString("11111111-1111-1111-1111-111111111111")
+        val LOCAL_CHECKER_ID: UUID = UUID.fromString("11111111-1111-1111-1111-111111111112")
         const val BRANCH_ACTIVATED_TARGET = "finaxis.lifecycle.branch.activated"
     }
 }

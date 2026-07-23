@@ -289,6 +289,12 @@ interface BranchLifecycleStore {
         organisationId: UUID,
         branchId: UUID,
     ): UUID?
+
+    /** Resolves the creator (maker) user ID of a branch. */
+    fun createdBy(
+        organisationId: UUID,
+        branchId: UUID,
+    ): UUID?
 }
 
 /** Organisation-scoped persistence port for user-to-branch assignments. */

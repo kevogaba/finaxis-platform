@@ -325,6 +325,17 @@ class JooqOrganisationBranchProvisioningStore(
             .and(BRANCH.ID.eq(branchId))
             .fetchOne(BRANCH.PARENT_BRANCH_ID)
 
+    override fun createdBy(
+        organisationId: UUID,
+        branchId: UUID,
+    ): UUID? =
+        dsl
+            .select(BRANCH.CREATED_BY)
+            .from(BRANCH)
+            .where(BRANCH.ORGANISATION_ID.eq(organisationId))
+            .and(BRANCH.ID.eq(branchId))
+            .fetchOne(BRANCH.CREATED_BY)
+
     private fun now() = clock.instant().atOffset(ZoneOffset.UTC)
 }
 

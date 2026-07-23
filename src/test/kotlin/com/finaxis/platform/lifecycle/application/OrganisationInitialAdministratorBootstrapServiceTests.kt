@@ -512,6 +512,11 @@ private class BootstrapProvisioningFake(
         branchId: UUID,
     ): UUID? = null
 
+    override fun createdBy(
+        organisationId: UUID,
+        branchId: UUID,
+    ): UUID? = null
+
     override fun userExists(userId: UUID) = true
 
     override fun membership(

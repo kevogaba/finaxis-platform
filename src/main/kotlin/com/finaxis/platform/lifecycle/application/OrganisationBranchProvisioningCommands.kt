@@ -151,6 +151,8 @@ data class SubmitBranchForApprovalCommand(
     val organisationId: UUID,
     val branchId: UUID,
     val reason: String? = null,
+    val actorId: UUID,
+    val requestId: UUID,
 )
 
 /** Activates an approved branch. */
@@ -158,6 +160,8 @@ data class ActivateBranchCommand(
     val organisationId: UUID,
     val branchId: UUID,
     val reason: String? = null,
+    val actorId: UUID,
+    val requestId: UUID,
 )
 
 /** Suspends an active branch. */

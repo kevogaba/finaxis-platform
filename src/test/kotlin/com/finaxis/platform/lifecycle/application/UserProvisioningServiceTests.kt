@@ -657,6 +657,11 @@ private class UserProvisioningFake :
 
     override fun revoke(command: RevokeUserBranchAssignmentCommand): Boolean =
         branchAssignments.remove(BranchAssignmentKey(command.organisationId, command.userId))
+
+    override fun createdBy(
+        organisationId: UUID,
+        branchId: UUID,
+    ): UUID? = null
 }
 
 private class UserProvisioningEventCapture : TransitionEventPublisher {

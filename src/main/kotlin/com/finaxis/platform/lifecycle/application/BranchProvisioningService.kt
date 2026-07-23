@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
@@ -80,6 +81,13 @@ class BranchProvisioningService(
     /** Activates an approved branch only in an active organisation. */
     @Transactional
     fun activate(command: ActivateBranchCommand) {
+        val creator = lifecycleStore.createdBy(command.organisationId, command.branchId)
+        if (creator != null &&
+            command.actorId != com.finaxis.platform.common.persistence.SystemActor.ID &&
+            command.actorId == creator
+        ) {
+            throw ForbiddenOperationException()
+        }
         require(
             lifecycleStore.organisationState(command.organisationId) ==
                 OrganisationLifecycleState.ACTIVE,

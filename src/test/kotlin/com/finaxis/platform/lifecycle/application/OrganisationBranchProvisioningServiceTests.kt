@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
@@ -210,6 +211,59 @@ class OrganisationBranchProvisioningServiceTests {
             lifecyclePersistence.organisations.getValue(organisationId).state,
         )
         assertExternalizedTarget("finaxis.lifecycle.organisation.reactivated")
+    }
+
+    @Test
+    fun `activate branch rejects maker activating their own branch draft`() {
+        val organisationId = uuidV7()
+        val makerId = uuidV7()
+        val checkerId = uuidV7()
+
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        lifecyclePersistence.organisations[organisationId] =
+            aggregate(organisationId, OrganisationLifecycleState.ACTIVE, "ORGANISATION")
+
+        val branchId =
+            branches
+                .createDraft(
+                    CreateBranchCommand(
+                        organisationId = organisationId,
+                        branchCode = "BR-TEST",
+                        branchName = "Test Branch",
+                        branchType = "OPERATIONAL",
+                        timezone = "UTC",
+                        requestedBy = makerId,
+                    ),
+                ).branchId
+
+        lifecyclePersistence.branches[organisationId to branchId] =
+            aggregate(branchId, BranchLifecycleState.PENDING_APPROVAL, "BRANCH")
+
+        // Maker cannot activate
+        assertFailsWith<ForbiddenOperationException> {
+            branches.activate(
+                ActivateBranchCommand(
+                    organisationId = organisationId,
+                    branchId = branchId,
+                    actorId = makerId,
+                    requestId = uuidV7(),
+                ),
+            )
+        }
+
+        // Distinct checker can activate
+        branches.activate(
+            ActivateBranchCommand(
+                organisationId = organisationId,
+                branchId = branchId,
+                actorId = checkerId,
+                requestId = uuidV7(),
+            ),
+        )
+        assertEquals(
+            BranchLifecycleState.ACTIVE,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
     }
 
     @Test
@@ -444,11 +498,25 @@ class OrganisationBranchProvisioningServiceTests {
         store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
         store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
 
-        branches.submitForApproval(SubmitBranchForApprovalCommand(organisationId, branchId))
+        branches.submitForApproval(
+            SubmitBranchForApprovalCommand(
+                organisationId = organisationId,
+                branchId = branchId,
+                actorId = uuidV7(),
+                requestId = uuidV7(),
+            ),
+        )
         assertExternalizedTarget("finaxis.lifecycle.branch.approval-requested")
 
         events.events.clear()
-        branches.activate(ActivateBranchCommand(organisationId, branchId))
+        branches.activate(
+            ActivateBranchCommand(
+                organisationId = organisationId,
+                branchId = branchId,
+                actorId = uuidV7(),
+                requestId = uuidV7(),
+            ),
+        )
         assertExternalizedTarget("finaxis.lifecycle.branch.activated")
 
         events.events.clear()
@@ -614,9 +682,15 @@ private class ProvisioningFake(
         return listResult
     }
 
+    val branchCreators = mutableMapOf<Pair<UUID, UUID>, UUID>()
+
     override fun organisationState(organisationId: UUID) = organisationStates[organisationId]
 
-    override fun createDraft(command: CreateBranchCommand): UUID = uuidV7()
+    override fun createDraft(command: CreateBranchCommand): UUID {
+        val id = uuidV7()
+        branchCreators[command.organisationId to id] = command.requestedBy
+        return id
+    }
 
     override fun branchCodeExists(
         organisationId: UUID,
@@ -646,6 +720,11 @@ private class ProvisioningFake(
         organisationId: UUID,
         branchId: UUID,
     ): UUID? = null
+
+    override fun createdBy(
+        organisationId: UUID,
+        branchId: UUID,
+    ): UUID? = branchCreators[organisationId to branchId]
 
     override fun userExists(userId: UUID) = true
 
