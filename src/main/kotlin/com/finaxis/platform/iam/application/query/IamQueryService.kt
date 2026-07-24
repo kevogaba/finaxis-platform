@@ -48,6 +48,35 @@ class IamQueryService(
         return userQueries.searchUsers(organisationId, filter)
     }
 
+    /** Retrieves user metadata within an organisation, validating caller scope and permission. */
+    fun getUserInTenant(
+        organisationId: UUID,
+        userId: UUID,
+        caller: FoundationCaller,
+    ): UserInTenantDetail {
+        verifyTenantScope(organisationId, caller)
+        when (caller) {
+            is TenantCaller -> {
+                permissionGuard.requireTenantPermission(
+                    caller.actorId,
+                    organisationId,
+                    "user.view",
+                )
+            }
+
+            is PlatformCaller -> {
+                permissionGuard.requirePlatformPermission(
+                    caller.actorId,
+                    "user.view",
+                )
+            }
+        }
+        return userQueries.findUserInTenant(organisationId, userId)
+            ?: throw ResourceNotFoundException(
+                safeDetail = "User not found: $userId",
+            )
+    }
+
     /** Retrieves detailed user membership metadata, validating caller context and permissions. */
     fun getMembership(
         organisationId: UUID,

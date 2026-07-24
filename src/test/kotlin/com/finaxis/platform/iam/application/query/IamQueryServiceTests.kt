@@ -83,6 +83,26 @@ class IamQueryServiceTests {
     }
 
     @Test
+    fun `getUserInTenant returns tenant scoped user detail`() {
+        val caller = TenantCaller(actorId, tenantId)
+
+        val result = service.getUserInTenant(tenantId, itemId, caller)
+
+        assertEquals(itemId, result.id)
+        assertEquals("testuser", result.username)
+    }
+
+    @Test
+    fun `getUserInTenant returns a safe not found result`() {
+        val caller = TenantCaller(actorId, tenantId)
+        queries.shouldReturnNull = true
+
+        assertFailsWith<ResourceNotFoundException> {
+            service.getUserInTenant(tenantId, itemId, caller)
+        }
+    }
+
+    @Test
     fun `getMembership throws when not found`() {
         val caller = TenantCaller(actorId, tenantId)
         queries.shouldReturnNull = true
@@ -263,6 +283,15 @@ class IamQueryServiceTests {
     }
 
     @Test
+    fun `getUserInTenant happy path with PlatformCaller`() {
+        val caller = PlatformCaller(actorId, UUID.randomUUID())
+
+        val result = service.getUserInTenant(tenantId, itemId, caller)
+
+        assertEquals(itemId, result.id)
+    }
+
+    @Test
     fun `getMembership happy path with PlatformCaller`() {
         val caller = PlatformCaller(actorId, UUID.randomUUID())
         val result = service.getMembership(tenantId, itemId, caller)
@@ -361,6 +390,11 @@ class IamQueryServiceTests {
         assertEquals(u1, u1.copy())
         assertEquals(u1.hashCode(), u1.copy().hashCode())
         assertTrue(u1 == u1)
+
+        val u2 = UserInTenantDetail(id, "u", "e", "d", "a", "a")
+        assertNotNull(u2.toString())
+        assertEquals(u2, u2.copy())
+        assertEquals(u2.hashCode(), u2.copy().hashCode())
 
         val m1 = MembershipDetail(id, orgId, userId, "u", "e", "d", "a", "a", "t", null, now, now)
         assertNotNull(m1.toString())
@@ -474,6 +508,21 @@ private class FakeIamAdministrationQueries :
             filter.size,
             1L,
         )
+
+    override fun findUserInTenant(
+        organisationId: UUID,
+        userId: UUID,
+    ): UserInTenantDetail? {
+        if (shouldReturnNull) return null
+        return UserInTenantDetail(
+            id = userId,
+            username = "testuser",
+            email = "email@test.com",
+            displayName = "Test User",
+            userStatus = "ACTIVE",
+            membershipStatus = "ACTIVE",
+        )
+    }
 
     override fun findMembershipById(
         organisationId: UUID,

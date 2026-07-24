@@ -40,6 +40,21 @@ class JooqIamAdministrationQueriesTests(
     }
 
     @Test
+    fun `findUserInTenant resolves details and hides cross tenant users`() {
+        val orgId = insertOrganisation()
+        val otherOrgId = insertOrganisation()
+        val userId = insertUserAccount("alice", "alice@example.test", "Alice")
+        insertMembership(orgId, userId, "ACTIVE", "STAFF")
+
+        val user = queries.findUserInTenant(orgId, userId)
+        val crossTenantUser = queries.findUserInTenant(otherOrgId, userId)
+
+        assertEquals(userId, user?.id)
+        assertEquals("alice@example.test", user?.email)
+        assertNull(crossTenantUser)
+    }
+
+    @Test
     fun `searchRoles retrieves organization roles`() {
         val orgId = insertOrganisation()
         val roleId = insertRole(orgId, "MAKER", "Maker Role")

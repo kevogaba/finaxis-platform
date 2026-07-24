@@ -3,6 +3,9 @@ package com.finaxis.platform.iam.application.role
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
@@ -39,11 +42,11 @@ class RoleManagementServiceTests {
         fixture.persistence.roleCodes += fixture.organisationId to "OPS"
 
         val exception =
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<ConflictException> {
                 fixture.service.createTenantRole(fixture.createRole(roleCode = "OPS"))
             }
 
-        assertEquals("Role code already exists in the organisation.", exception.message)
+        assertEquals("conflict", exception.code)
     }
 
     /** Creates a tenant role, returns its active status, and records the audit event. */
@@ -62,16 +65,16 @@ class RoleManagementServiceTests {
     @Test
     fun `create tenant role requires code and name`() {
         val blankCode =
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<InvalidOperationException> {
                 fixture.service.createTenantRole(fixture.createRole(roleCode = " "))
             }
         val blankName =
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<InvalidOperationException> {
                 fixture.service.createTenantRole(fixture.createRole(roleName = " "))
             }
 
-        assertEquals("Role code is required.", blankCode.message)
-        assertEquals("Role name is required.", blankName.message)
+        assertEquals("invalid_operation", blankCode.code)
+        assertEquals("invalid_operation", blankName.code)
         assertTrue(fixture.persistence.roleCodes.isEmpty())
     }
 
@@ -101,11 +104,11 @@ class RoleManagementServiceTests {
     @Test
     fun `update tenant role rejects unknown role`() {
         val exception =
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<ResourceNotFoundException> {
                 fixture.service.updateTenantRole(fixture.updateRole())
             }
 
-        assertEquals("Role not found in organisation.", exception.message)
+        assertEquals("resource_not_found", exception.code)
         assertTrue(fixture.persistence.updatedRoles.isEmpty())
         assertTrue(fixture.audits.events.isEmpty())
     }
@@ -123,8 +126,8 @@ class RoleManagementServiceTests {
             { fixture.service.assignPermissionToRole(fixture.assignPermission()) },
             { fixture.service.removePermissionFromRole(fixture.removePermission()) },
         ).forEach { operation ->
-            val exception = assertFailsWith<IllegalArgumentException> { operation() }
-            assertEquals("System roles cannot be modified/deactivated.", exception.message)
+            val exception = assertFailsWith<ConflictException> { operation() }
+            assertEquals("conflict", exception.code)
         }
         assertTrue(fixture.persistence.grantedPermissions.isEmpty())
     }
@@ -133,13 +136,13 @@ class RoleManagementServiceTests {
     @Test
     fun `role not found in organisation rejects cross organisation changes`() {
         val exception =
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<ResourceNotFoundException> {
                 fixture.service.activateRole(
                     ActivateRole(fixture.organisationId, fixture.roleId, fixture.actorId),
                 )
             }
 
-        assertEquals("Role not found in organisation.", exception.message)
+        assertEquals("resource_not_found", exception.code)
     }
 
     /** Activates a mutable role, evicts affected memberships, and audits the lifecycle change. */
@@ -244,7 +247,7 @@ class RoleManagementServiceTests {
         fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
 
         val exception =
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<ResourceNotFoundException> {
                 fixture.service.assignPermissionToRole(
                     AssignPermissionToRole(
                         fixture.organisationId,
@@ -255,7 +258,7 @@ class RoleManagementServiceTests {
                 )
             }
 
-        assertEquals("Permission not found.", exception.message)
+        assertEquals("resource_not_found", exception.code)
         assertTrue(fixture.persistence.grantedPermissions.isEmpty())
         assertTrue(fixture.audits.events.isEmpty())
     }
@@ -289,11 +292,11 @@ class RoleManagementServiceTests {
         fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
 
         val exception =
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<ResourceNotFoundException> {
                 fixture.service.removePermissionFromRole(fixture.removePermission())
             }
 
-        assertEquals("Permission not found.", exception.message)
+        assertEquals("resource_not_found", exception.code)
         assertTrue(fixture.persistence.removedPermissions.isEmpty())
         assertTrue(fixture.audits.events.isEmpty())
     }
@@ -304,21 +307,18 @@ class RoleManagementServiceTests {
         fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
 
         val missing =
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<ResourceNotFoundException> {
                 fixture.service.assignRoleToUser(fixture.assignRole())
             }
-        assertEquals(
-            "User does not have a membership in the selected organisation.",
-            missing.message,
-        )
+        assertEquals("resource_not_found", missing.code)
 
         fixture.persistence.memberships[fixture.userId] =
             MembershipSnapshot(fixture.membershipId, MembershipStatus.REVOKED, "STAFF")
         val revoked =
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<ConflictException> {
                 fixture.service.assignRoleToUser(fixture.assignRole())
             }
-        assertEquals("A revoked membership cannot receive role assignments.", revoked.message)
+        assertEquals("conflict", revoked.code)
     }
 
     /** Requires an active organisation before a user can receive a role. */
@@ -329,11 +329,11 @@ class RoleManagementServiceTests {
         fixture.persistence.currentOrganisationStatus = OrganisationStatus.SUSPENDED
 
         val exception =
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<ConflictException> {
                 fixture.service.assignRoleToUser(fixture.assignRole())
             }
 
-        assertEquals("Role assignment requires an active organisation.", exception.message)
+        assertEquals("conflict", exception.code)
     }
 
     /** Assigns tenant-scoped roles without a branch and clears the membership permission cache. */
@@ -394,18 +394,15 @@ class RoleManagementServiceTests {
         fixture.persistence.memberships[fixture.userId] = fixture.activeMembership()
 
         val missingBranch =
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<ConflictException> {
                 fixture.service.assignRoleToUser(
                     fixture.assignRole(scopeType = RoleScopeType.BRANCH),
                 )
             }
-        assertEquals(
-            "Branch-scoped role assignments require an active branch assignment.",
-            missingBranch.message,
-        )
+        assertEquals("conflict", missingBranch.code)
 
         val tenantWithBranch =
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<InvalidOperationException> {
                 fixture.service.assignRoleToUser(
                     fixture.assignRole(
                         scopeType = RoleScopeType.TENANT,
@@ -413,10 +410,7 @@ class RoleManagementServiceTests {
                     ),
                 )
             }
-        assertEquals(
-            "Tenant-scoped role assignments cannot include a branch.",
-            tenantWithBranch.message,
-        )
+        assertEquals("invalid_operation", tenantWithBranch.code)
     }
 
     /** Treats an existing active assignment as an idempotent no-op with no second event. */

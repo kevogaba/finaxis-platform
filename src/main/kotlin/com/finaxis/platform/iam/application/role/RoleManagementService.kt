@@ -3,6 +3,9 @@ package com.finaxis.platform.iam.application.role
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
@@ -28,11 +31,9 @@ class RoleManagementService(
     /** Creates an active tenant-managed role after validating its unique code and name. */
     @Transactional
     fun createTenantRole(command: CreateTenantRole): RoleResult {
-        require(command.roleCode.isNotBlank()) { "Role code is required." }
-        require(command.roleName.isNotBlank()) { "Role name is required." }
-        require(!persistence.roleCodeExists(command.organisationId, command.roleCode)) {
-            "Role code already exists in the organisation."
-        }
+        invalidOperationUnless(command.roleCode.isNotBlank())
+        invalidOperationUnless(command.roleName.isNotBlank())
+        conflictUnless(!persistence.roleCodeExists(command.organisationId, command.roleCode))
         val roleId =
             persistence.createRole(
                 command.organisationId,
@@ -100,10 +101,7 @@ class RoleManagementService(
     fun assignPermissionToRole(command: AssignPermissionToRole) {
         val role = requiredRole(command.organisationId, command.roleId)
         requireMutable(role)
-        val permissionId =
-            requireNotNull(persistence.permissionIdByCode(command.permissionCode)) {
-                "Permission not found."
-            }
+        val permissionId = persistence.permissionIdByCode(command.permissionCode).orResourceNotFound()
         persistence.grantPermission(
             command.organisationId,
             command.roleId,
@@ -130,10 +128,7 @@ class RoleManagementService(
     fun removePermissionFromRole(command: RemovePermissionFromRole) {
         val role = requiredRole(command.organisationId, command.roleId)
         requireMutable(role)
-        val permissionId =
-            requireNotNull(persistence.permissionIdByCode(command.permissionCode)) {
-                "Permission not found."
-            }
+        val permissionId = persistence.permissionIdByCode(command.permissionCode).orResourceNotFound()
         persistence.removePermission(
             command.organisationId,
             command.roleId,
@@ -154,18 +149,9 @@ class RoleManagementService(
     /** Assigns a role idempotently after validating organisation membership and scope. */
     @Transactional
     fun assignRoleToUser(command: AssignRoleToUser): RoleAssignmentResult {
-        val membership =
-            requireNotNull(persistence.membership(command.organisationId, command.userId)) {
-                "User does not have a membership in the selected organisation."
-            }
-        require(membership.status != MembershipStatus.REVOKED) {
-            "A revoked membership cannot receive role assignments."
-        }
-        require(
-            persistence.organisationStatus(command.organisationId) == OrganisationStatus.ACTIVE,
-        ) {
-            "Role assignment requires an active organisation."
-        }
+        val membership = persistence.membership(command.organisationId, command.userId).orResourceNotFound()
+        conflictUnless(membership.status != MembershipStatus.REVOKED)
+        conflictUnless(persistence.organisationStatus(command.organisationId) == OrganisationStatus.ACTIVE)
         requiredRole(command.organisationId, command.roleId)
         validateScope(command)
         persistence
@@ -273,34 +259,27 @@ class RoleManagementService(
     private fun requiredRole(
         organisationId: UUID,
         roleId: UUID,
-    ): RoleSnapshot =
-        requireNotNull(persistence.findRole(organisationId, roleId)) {
-            "Role not found in organisation."
-        }
+    ): RoleSnapshot = persistence.findRole(organisationId, roleId).orResourceNotFound()
 
     private fun requireMutable(role: RoleSnapshot) {
-        require(!role.systemRole) { "System roles cannot be modified/deactivated." }
+        conflictUnless(!role.systemRole)
     }
 
     private fun validateScope(command: AssignRoleToUser) {
         when (command.scopeType) {
             RoleScopeType.BRANCH -> {
-                require(
+                conflictUnless(
                     command.branchId != null &&
                         persistence.hasActiveBranchAssignment(
                             command.organisationId,
                             command.userId,
                             command.branchId,
                         ),
-                ) {
-                    "Branch-scoped role assignments require an active branch assignment."
-                }
+                )
             }
 
             RoleScopeType.TENANT -> {
-                require(command.branchId == null) {
-                    "Tenant-scoped role assignments cannot include a branch."
-                }
+                invalidOperationUnless(command.branchId == null)
             }
         }
     }
@@ -431,3 +410,13 @@ class RoleManagementService(
         const val ROLE_REVOKED_TARGET = "finaxis.iam.user.role-revoked"
     }
 }
+
+private fun invalidOperationUnless(condition: Boolean) {
+    if (!condition) throw InvalidOperationException()
+}
+
+private fun conflictUnless(condition: Boolean) {
+    if (!condition) throw ConflictException()
+}
+
+private fun <T : Any> T?.orResourceNotFound(): T = this ?: throw ResourceNotFoundException()

@@ -24,6 +24,7 @@ import com.finaxis.platform.iam.application.query.RolePermissionDetail
 import com.finaxis.platform.iam.application.query.RolePermissionFilter
 import com.finaxis.platform.iam.application.query.RolePermissionSummary
 import com.finaxis.platform.iam.application.query.RoleSummary
+import com.finaxis.platform.iam.application.query.UserInTenantDetail
 import com.finaxis.platform.iam.application.query.UserInTenantFilter
 import com.finaxis.platform.iam.application.query.UserInTenantSummary
 import com.finaxis.platform.jooq.tables.references.PERMISSION
@@ -111,6 +112,37 @@ class JooqIamAdministrationQueries(
 
         return apiPageOf(items, filter.page, filter.size, total)
     }
+
+    override fun findUserInTenant(
+        organisationId: UUID,
+        userId: UUID,
+    ): UserInTenantDetail? =
+        dsl
+            .select(
+                USER_ACCOUNT.ID,
+                USER_ACCOUNT.USERNAME,
+                USER_ACCOUNT.EMAIL,
+                USER_ACCOUNT.DISPLAY_NAME,
+                USER_ACCOUNT.STATUS,
+                USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS,
+            ).from(USER_ORGANISATION_MEMBERSHIP)
+            .join(USER_ACCOUNT)
+            .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID))
+            .where(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId))
+            .and(USER_ACCOUNT.ID.eq(userId))
+            .fetchOne { record ->
+                UserInTenantDetail(
+                    id = requireNotNull(record.get(USER_ACCOUNT.ID)),
+                    username = requireNotNull(record.get(USER_ACCOUNT.USERNAME)),
+                    email = requireNotNull(record.get(USER_ACCOUNT.EMAIL)),
+                    displayName = requireNotNull(record.get(USER_ACCOUNT.DISPLAY_NAME)),
+                    userStatus = requireNotNull(record.get(USER_ACCOUNT.STATUS)),
+                    membershipStatus =
+                        requireNotNull(
+                            record.get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS),
+                        ),
+                )
+            }
 
     override fun findMembershipById(
         organisationId: UUID,

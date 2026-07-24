@@ -27,4 +27,19 @@ object ApiPaths {
 
     /** Tenant branch-assignment management endpoint namespace. */
     const val BRANCH_ASSIGNMENTS = "$TENANT/branch-assignments"
+
+    /** Tenant role management endpoint namespace. */
+    const val ROLES = "$TENANT/roles"
+
+    /** Tenant role-assignment management endpoint namespace. */
+    const val ROLE_ASSIGNMENTS = "$TENANT/role-assignments"
+
+    /** Tenant permission catalogue endpoint namespace. */
+    const val PERMISSIONS = "$TENANT/permissions"
+
+    /** Tenant user management endpoint namespace. */
+    const val TENANT_USERS = "$TENANT/users"
+
+    /** Platform-wide user lifecycle endpoint namespace. */
+    const val PLATFORM_USERS = "$PLATFORM/users"
 }

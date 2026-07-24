@@ -77,6 +77,12 @@ interface IamUserQueries {
         filter: UserInTenantFilter,
     ): ApiPage<UserInTenantSummary>
 
+    /** Finds a user in an organisation without exposing cross-tenant membership data. */
+    fun findUserInTenant(
+        organisationId: UUID,
+        userId: UUID,
+    ): UserInTenantDetail?
+
     /** Searches memberships in an organisation. */
     fun searchMemberships(
         organisationId: UUID,

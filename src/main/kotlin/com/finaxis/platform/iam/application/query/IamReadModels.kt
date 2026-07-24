@@ -14,6 +14,16 @@ data class UserInTenantSummary(
 )
 
 /** Detailed projection of a user membership in a tenant. */
+data class UserInTenantDetail(
+    val id: UUID,
+    val username: String,
+    val email: String,
+    val displayName: String,
+    val userStatus: String,
+    val membershipStatus: String,
+)
+
+/** Detailed projection of a user membership in a tenant. */
 data class MembershipDetail(
     val id: UUID,
     val organisationId: UUID,
