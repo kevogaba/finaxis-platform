@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.context.ActorContext
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.id.uuidV7
@@ -357,7 +358,7 @@ class JooqFoundationLifecyclePersistenceTests(
                     .and(USER_BRANCH_ASSIGNMENT.STATUS.eq("ACTIVE")),
             ),
         )
-        assertThrows<IllegalArgumentException> {
+        assertThrows<ConflictException> {
             branchProvisioningService.assignUser(command.copy(branchId = otherBranchId))
         }
     }

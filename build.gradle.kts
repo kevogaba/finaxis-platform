@@ -391,6 +391,9 @@ tasks.withType<JavaCompile>().configureEach {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+    // Gradle's worker-daemon default (512m) is too small for Spring Boot + Testcontainers
+    // integration tests loading many distinct application contexts; raise it explicitly.
+    maxHeapSize = "2g"
 }
 
 tasks.withType<JavaExec> {
