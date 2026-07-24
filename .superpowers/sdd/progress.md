@@ -31,7 +31,35 @@ Task 9: complete (commit `0d59617`, amended twice: once to fold in production/te
   - `./gradlew qualityGate` now genuinely green: 607 tests, 0 failures, 0 errors, in ~5 minutes
     (down from a 1h40m OOM crash before the heap fix).
   See `.superpowers/sdd/task-9-brief.md` and `task-9-report.md` for full detail.
-Task 10: pending
+  Re-verified 2026-07-25 after a machine crash/reboot interrupted work partway into Task 10 (see
+  below): confirmed no Task 10 commit touches any Task 9 file, and the full suite (653 tests) is
+  green on the current tree, so Task 9 remains genuinely complete.
+Task 10: in progress. Three commits landed before the crash (`1deae51` Phase A application/query
+  prerequisites, `5070b9b` Phase B1 membership/branch-assignment controllers, `f67d6d7` Phase B2
+  role/permission/tenant-user/platform-user controllers, itself amended 3 times) but `f67d6d7` was
+  never actually compiled or run through the quality gate before the crash — resuming found the
+  tree in a broken state, not merely "unknown". Fixed in `9df79f6`:
+  - `FoundationIamControllerTests.kt` did not compile at all (Kotlin MockMvc DSL mixed with Java
+    `ResultActions.perform(...)`; `apiPageOf(...)` called with missing required args).
+  - `PlatformUserLifecycleController` had no class-level `@RequestMapping`, failing
+    `ApiVersioningArchitectureTest`.
+  - `roleMutationPayload(method)` sent the wrong DTO body for the permission-assign and
+    role-assignment routes regardless of which endpoint was under test, producing spurious 400s
+    where 403/409 was expected (2 test failures).
+  - `gradle/libs.versions.toml` had bundled an unrelated `kotlinVersion` bump (2.4.0 -> 2.4.10)
+    into the feature commit; detekt has no release compatible with 2.4.10 (2.0.0-alpha.5 is
+    latest), so `detekt` failed outright. Reverted the version pin only; left the other dependency
+    bumps in that commit alone.
+  - One genuine detekt `UnusedParameter` finding (`detailRequests(tenantId, ...)`) fixed.
+  - `spotlessApply` run project-wide then mechanically rewrapped several never-linted Task 10
+    files to the 100-char limit and reordered imports; no logic changed (verified via `git diff -w`
+    plus full green test runs before and after).
+  Current state after `9df79f6`: full suite green (653 tests, 0 failures), `spotlessCheck`/
+  `ktlintCheck`/`detekt`/`checkstyleMain`/`checkstyleTest`/`pmdMain`/`pmdTest`/`spotbugsMain`/
+  `spotbugsTest` all green. `jacocoTestCoverageVerification` (iam module, 95% line minimum) still
+  **fails at 92%** — the real remaining gap, not a flake. See `.superpowers/sdd/task-10-brief.md`
+  ("Reconnaissance findings" + "Execution plan" sections) and `task-10-report.md` for what's
+  implemented vs. what's left before Task 10 can be marked complete.
 Task 11: pending
 Task 12: pending
 Task 13: pending
