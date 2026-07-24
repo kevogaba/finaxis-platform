@@ -1,10 +1,15 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.TransitionCommand
+import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.PlatformCaller
 import com.finaxis.platform.lifecycle.TenantCaller
@@ -17,6 +22,7 @@ import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleTransition
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
+import java.time.DateTimeException
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
@@ -43,7 +49,7 @@ class OrganisationProvisioningService(
     fun createDraft(command: CreateOrganisationDraftCommand): OrganisationDraftResult {
         validateCreate(command)
         validateAdmin(command.admin)
-        require(command.requestedBy != SYSTEM_ACTOR) { "Maker identity is required." }
+        errorUnless(command.requestedBy != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
         val organisationId = lifecycleStore.createDraft(command)
         adminBootstrapStore.createDraft(organisationId, command.admin, command.requestedBy)
         lifecycleStore.saveSettings(organisationId, command.initialSettings, command.requestedBy)
@@ -64,14 +70,13 @@ class OrganisationProvisioningService(
     @Transactional
     fun amendDraft(command: AmendOrganisationDraftCommand) {
         val state =
-            lifecycleStore.lifecycleState(command.organisationId)
-                ?: throw IllegalArgumentException("Organisation not found.")
-        require(state == OrganisationLifecycleState.DRAFT) {
-            "Only organisation drafts can be amended."
-        }
+            lifecycleStore
+                .lifecycleState(command.organisationId)
+                .orResourceNotFound()
+        errorUnless(state == OrganisationLifecycleState.DRAFT, SafeError.CONFLICT)
         validateAmend(command)
         validateAdmin(command.admin)
-        require(command.actorId != SYSTEM_ACTOR) { "Maker identity is required." }
+        errorUnless(command.actorId != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
 
         lifecycleStore.amendDraft(command)
         adminBootstrapStore.amendDraft(command.organisationId, command.admin)
@@ -87,12 +92,11 @@ class OrganisationProvisioningService(
     /** Validates metadata and moves a draft into the approval workflow. */
     @Transactional
     fun submitForApproval(command: SubmitOrganisationForApprovalCommand) {
-        require(lifecycleStore.hasRequiredMetadata(command.organisationId)) {
-            "Organisation metadata is incomplete."
-        }
+        errorUnless(lifecycleStore.hasRequiredMetadata(command.organisationId), SafeError.CONFLICT)
         val record =
-            adminBootstrapStore.find(command.organisationId)
-                ?: throw IllegalArgumentException("Initial administrator details must be provided.")
+            adminBootstrapStore
+                .find(command.organisationId)
+                .orResourceNotFound()
         validateAdmin(
             InitialAdministratorDraft(
                 email = record.adminEmail,
@@ -102,7 +106,7 @@ class OrganisationProvisioningService(
                 sendApplicationInvite = record.sendApplicationInvite,
             ),
         )
-        require(command.actorId != SYSTEM_ACTOR) { "Maker identity is required." }
+        errorUnless(command.actorId != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
 
         adminBootstrapStore.submit(command.organisationId, command.actorId)
 
@@ -119,17 +123,14 @@ class OrganisationProvisioningService(
     @Transactional
     fun approveProvisioning(command: ApproveOrganisationProvisioningCommand) {
         val record =
-            adminBootstrapStore.find(command.organisationId)
-                ?: throw IllegalArgumentException("Initial administrator details must be provided.")
-        require(command.actorId != record.requestedBy) {
-            "Maker cannot approve their own tenant."
-        }
+            adminBootstrapStore
+                .find(command.organisationId)
+                .orResourceNotFound()
+        errorUnless(command.actorId != record.requestedBy, SafeError.FORBIDDEN)
         if (record.submittedBy != null) {
-            require(command.actorId != record.submittedBy) {
-                "Maker cannot approve their own tenant."
-            }
+            errorUnless(command.actorId != record.submittedBy, SafeError.FORBIDDEN)
         }
-        require(command.actorId != SYSTEM_ACTOR) { "Checker identity is required." }
+        errorUnless(command.actorId != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
 
         lifecycleService.transition(
             OrganisationTransitionCommand(
@@ -168,7 +169,7 @@ class OrganisationProvisioningService(
     /** Rejects a pending organisation request and preserves its draft data for auditability. */
     @Transactional
     fun rejectProvisioning(command: RejectOrganisationProvisioningCommand) {
-        require(command.actorId != SYSTEM_ACTOR) { "Checker identity is required." }
+        errorUnless(command.actorId != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
         adminBootstrapStore.reject(command.organisationId)
 
         lifecycleService.transition(
@@ -184,13 +185,10 @@ class OrganisationProvisioningService(
     @Transactional
     fun retryBootstrap(command: RetryInitialAdministratorBootstrapCommand) {
         val record =
-            adminBootstrapStore.find(command.organisationId)
-                ?: throw IllegalArgumentException(
-                    "Bootstrap record not found for organisation: ${command.organisationId}",
-                )
-        require(record.status == InitialAdministratorBootstrapStatus.FAILED) {
-            "Only failed bootstraps can be retried."
-        }
+            adminBootstrapStore
+                .find(command.organisationId)
+                .orResourceNotFound()
+        errorUnless(record.status == InitialAdministratorBootstrapStatus.FAILED, SafeError.CONFLICT)
         when (val caller = command.caller) {
             is TenantCaller -> {
                 permissionGuard.requireTenantPermission(
@@ -257,9 +255,7 @@ class OrganisationProvisioningService(
                 }
 
                 else -> {
-                    throw IllegalStateException(
-                        "Only active or suspended organisations can be deprovisioned.",
-                    )
+                    throw ConflictException()
                 }
             }
         lifecycleService.transition(
@@ -332,10 +328,8 @@ class OrganisationProvisioningService(
 
     /** Lists organisations using a bounded, pagination-aware application filter. */
     fun list(filter: OrganisationListFilter): OrganisationPage {
-        require(filter.page >= 0) { "Page must not be negative." }
-        require(filter.size in 1..MAXIMUM_PAGE_SIZE) {
-            "Page size must be between 1 and $MAXIMUM_PAGE_SIZE."
-        }
+        errorUnless(filter.page >= 0, SafeError.INVALID_PAGE_REQUEST)
+        errorUnless(filter.size in 1..MAXIMUM_PAGE_SIZE, SafeError.INVALID_PAGE_REQUEST)
         return queryStore.list(filter)
     }
 
@@ -380,39 +374,38 @@ private val EMAIL_REGEX = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
 private val PHONE_E164_REGEX = Regex("^\\+[1-9]\\d{1,14}$")
 
 private fun validateCreate(command: CreateOrganisationDraftCommand) {
-    require(command.tenantCode.isNotBlank()) { "Tenant code is required." }
-    require(command.displayName.isNotBlank()) { "Display name is required." }
-    require(
-        COUNTRY_CODE.matches(command.countryCode),
-    ) { "Country code must be ISO-3166 alpha-2." }
-    require(CURRENCY_CODE.matches(command.baseCurrencyCode)) {
-        "Base currency code must be ISO-4217 alpha-3."
-    }
-    ZoneId.of(command.timezone)
+    errorUnless(command.tenantCode.isNotBlank(), SafeError.INVALID_OPERATION)
+    errorUnless(command.displayName.isNotBlank(), SafeError.INVALID_OPERATION)
+    errorUnless(COUNTRY_CODE.matches(command.countryCode), SafeError.INVALID_OPERATION)
+    errorUnless(CURRENCY_CODE.matches(command.baseCurrencyCode), SafeError.INVALID_OPERATION)
+    validateTimezone(command.timezone)
 }
 
 private fun validateAmend(command: AmendOrganisationDraftCommand) {
-    require(command.tenantCode.isNotBlank()) { "Tenant code is required." }
-    require(command.displayName.isNotBlank()) { "Display name is required." }
-    require(
-        COUNTRY_CODE.matches(command.countryCode),
-    ) { "Country code must be ISO-3166 alpha-2." }
-    require(CURRENCY_CODE.matches(command.baseCurrencyCode)) {
-        "Base currency code must be ISO-4217 alpha-3."
-    }
-    ZoneId.of(command.timezone)
+    errorUnless(command.tenantCode.isNotBlank(), SafeError.INVALID_OPERATION)
+    errorUnless(command.displayName.isNotBlank(), SafeError.INVALID_OPERATION)
+    errorUnless(COUNTRY_CODE.matches(command.countryCode), SafeError.INVALID_OPERATION)
+    errorUnless(CURRENCY_CODE.matches(command.baseCurrencyCode), SafeError.INVALID_OPERATION)
+    validateTimezone(command.timezone)
 }
 
 private fun validateAdmin(admin: InitialAdministratorDraft) {
-    require(admin.email.isNotBlank() && EMAIL_REGEX.matches(admin.email)) {
-        "A valid email address is required."
-    }
-    require(admin.username.isNotBlank()) { "Username is required." }
-    require(admin.displayName.isNotBlank()) { "Display name is required." }
+    errorUnless(
+        admin.email.isNotBlank() && EMAIL_REGEX.matches(admin.email),
+        SafeError.INVALID_OPERATION,
+    )
+    errorUnless(admin.username.isNotBlank(), SafeError.INVALID_OPERATION)
+    errorUnless(admin.displayName.isNotBlank(), SafeError.INVALID_OPERATION)
     admin.phoneE164?.let { phone ->
-        require(PHONE_E164_REGEX.matches(phone)) {
-            "Phone number must be in E.164 format."
-        }
+        errorUnless(PHONE_E164_REGEX.matches(phone), SafeError.INVALID_OPERATION)
+    }
+}
+
+private fun validateTimezone(timezone: String) {
+    try {
+        ZoneId.of(timezone)
+    } catch (_: DateTimeException) {
+        throw InvalidOperationException()
     }
 }
 
@@ -437,7 +430,7 @@ private fun branchSuspensionTransition(status: BranchLifecycleState): BranchLife
         BranchLifecycleState.CLOSED,
         BranchLifecycleState.ARCHIVED,
         -> {
-            throw IllegalArgumentException("Terminal branches cannot be deprovisioned again.")
+            throw ConflictException()
         }
     }
 
@@ -458,7 +451,7 @@ private fun membershipDeprovisioningTransition(
         }
 
         MembershipLifecycleState.REVOKED -> {
-            error("Revoked memberships are not deprovisioned.")
+            throw ConflictException()
         }
     }
 
@@ -502,9 +495,10 @@ private fun activateHeadOffice(
                     ),
                 ).toState
     }
-    require(state in setOf(BranchLifecycleState.PENDING_APPROVAL, BranchLifecycleState.ACTIVE)) {
-        "Head office must be draft, pending approval, or active."
-    }
+    errorUnless(
+        state in setOf(BranchLifecycleState.PENDING_APPROVAL, BranchLifecycleState.ACTIVE),
+        SafeError.CONFLICT,
+    )
     if (state == BranchLifecycleState.PENDING_APPROVAL) {
         lifecycleService.transition(
             BranchTransitionCommand(
@@ -526,7 +520,23 @@ private const val ORGANISATION_PROVISIONING_SOURCE = "organisation_provisioning"
 
 private fun OrganisationAccessStore.requireCompleteSetup(organisationId: UUID) {
     val missing = missingRequiredSetup(organisationId)
-    require(missing.isEmpty()) {
-        "Organisation mandatory setup is incomplete: ${missing.joinToString()}."
-    }
+    errorUnless(missing.isEmpty(), SafeError.CONFLICT)
 }
+
+private enum class SafeError(
+    val exception: () -> RuntimeException,
+) {
+    INVALID_OPERATION({ InvalidOperationException() }),
+    CONFLICT({ ConflictException() }),
+    FORBIDDEN({ ForbiddenOperationException() }),
+    INVALID_PAGE_REQUEST({ InvalidPageRequestException() }),
+}
+
+private fun errorUnless(
+    condition: Boolean,
+    error: SafeError,
+) {
+    if (!condition) throw error.exception()
+}
+
+private fun <T : Any> T?.orResourceNotFound(): T = this ?: throw ResourceNotFoundException()

@@ -1,5 +1,7 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
@@ -100,7 +102,7 @@ class OrganisationInitialAdministratorBootstrapServiceTests {
 
     @Test
     fun `createDraft rejects blank admin email`() {
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidOperationException> {
             organisations.createDraft(
                 CreateOrganisationDraftCommand(
                     tenantCode = "bad-email",
@@ -126,7 +128,7 @@ class OrganisationInitialAdministratorBootstrapServiceTests {
 
     @Test
     fun `createDraft rejects malformed admin email`() {
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidOperationException> {
             organisations.createDraft(
                 CreateOrganisationDraftCommand(
                     tenantCode = "bad-email2",
@@ -152,7 +154,7 @@ class OrganisationInitialAdministratorBootstrapServiceTests {
 
     @Test
     fun `createDraft rejects blank admin username`() {
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidOperationException> {
             organisations.createDraft(
                 CreateOrganisationDraftCommand(
                     tenantCode = "bad-user",
@@ -178,7 +180,7 @@ class OrganisationInitialAdministratorBootstrapServiceTests {
 
     @Test
     fun `createDraft rejects blank admin display name`() {
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidOperationException> {
             organisations.createDraft(
                 CreateOrganisationDraftCommand(
                     tenantCode = "bad-display",
@@ -204,7 +206,7 @@ class OrganisationInitialAdministratorBootstrapServiceTests {
 
     @Test
     fun `createDraft rejects malformed E164 phone number`() {
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidOperationException> {
             organisations.createDraft(
                 CreateOrganisationDraftCommand(
                     tenantCode = "bad-phone",
@@ -230,7 +232,7 @@ class OrganisationInitialAdministratorBootstrapServiceTests {
 
     @Test
     fun `createDraft rejects nil (system-actor sentinel) maker identity`() {
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidOperationException> {
             organisations.createDraft(
                 CreateOrganisationDraftCommand(
                     tenantCode = "no-maker",
@@ -263,7 +265,7 @@ class OrganisationInitialAdministratorBootstrapServiceTests {
             SubmitOrganisationForApprovalCommand(organisationId, actorId = uuidV7()),
         )
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ForbiddenOperationException> {
             organisations.approveProvisioning(
                 ApproveOrganisationProvisioningCommand(organisationId, actorId = maker),
             )
@@ -279,7 +281,7 @@ class OrganisationInitialAdministratorBootstrapServiceTests {
             SubmitOrganisationForApprovalCommand(organisationId, actorId = submitter),
         )
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ForbiddenOperationException> {
             organisations.approveProvisioning(
                 ApproveOrganisationProvisioningCommand(organisationId, actorId = submitter),
             )

@@ -1,6 +1,9 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
@@ -31,15 +34,13 @@ class BranchProvisioningService(
     @Transactional
     fun createDraft(command: CreateBranchCommand): BranchDraftResult {
         requireOrganisationAllowsBranch(command.organisationId)
-        require(command.branchCode.isNotBlank()) { "Branch code is required." }
-        require(command.branchName.isNotBlank()) { "Branch name is required." }
-        require(!lifecycleStore.branchCodeExists(command.organisationId, command.branchCode)) {
-            "Branch code already exists in the organisation."
-        }
+        invalidOperationUnless(command.branchCode.isNotBlank())
+        invalidOperationUnless(command.branchName.isNotBlank())
+        conflictUnless(!lifecycleStore.branchCodeExists(command.organisationId, command.branchCode))
         command.parentBranchId?.let { parentId ->
-            require(lifecycleStore.parentBelongsToOrganisation(command.organisationId, parentId)) {
-                "Parent branch must belong to the selected organisation."
-            }
+            resourceNotFoundUnless(
+                lifecycleStore.parentBelongsToOrganisation(command.organisationId, parentId),
+            )
         }
         val branchId = lifecycleStore.createDraft(command)
         audit(
@@ -55,18 +56,14 @@ class BranchProvisioningService(
     @Transactional
     fun submitForApproval(command: SubmitBranchForApprovalCommand) {
         val branchCode =
-            requireNotNull(lifecycleStore.branchCode(command.organisationId, command.branchId)) {
-                "Branch was not found in the selected organisation."
-            }
-        require(
+            lifecycleStore.branchCode(command.organisationId, command.branchId).orResourceNotFound()
+        conflictUnless(
             !lifecycleStore.branchCodeExists(command.organisationId, branchCode, command.branchId),
-        ) {
-            "Branch code already exists in the organisation."
-        }
+        )
         lifecycleStore.parentBranchId(command.organisationId, command.branchId)?.let { parentId ->
-            require(lifecycleStore.parentBelongsToOrganisation(command.organisationId, parentId)) {
-                "Parent branch must belong to the selected organisation."
-            }
+            resourceNotFoundUnless(
+                lifecycleStore.parentBelongsToOrganisation(command.organisationId, parentId),
+            )
         }
         lifecycleService.transition(
             BranchTransitionCommand(
@@ -88,12 +85,10 @@ class BranchProvisioningService(
         ) {
             throw ForbiddenOperationException()
         }
-        require(
+        conflictUnless(
             lifecycleStore.organisationState(command.organisationId) ==
                 OrganisationLifecycleState.ACTIVE,
-        ) {
-            "A branch can be activated only for an active organisation."
-        }
+        )
         lifecycleService.transition(
             BranchTransitionCommand(
                 command.organisationId,
@@ -120,12 +115,10 @@ class BranchProvisioningService(
     /** Reactivates a branch only after its organisation returns to active status. */
     @Transactional
     fun reactivate(command: ReactivateBranchCommand) {
-        require(
+        conflictUnless(
             lifecycleStore.organisationState(command.organisationId) ==
                 OrganisationLifecycleState.ACTIVE,
-        ) {
-            "A branch can be reactivated only for an active organisation."
-        }
+        )
         lifecycleService.transition(
             BranchTransitionCommand(
                 command.organisationId,
@@ -142,12 +135,8 @@ class BranchProvisioningService(
         val transition =
             when (lifecycleStore.branchState(command.organisationId, command.branchId)) {
                 BranchLifecycleState.ACTIVE -> BranchLifecycleTransition.CLOSE
-
                 BranchLifecycleState.SUSPENDED -> BranchLifecycleTransition.CLOSE_SUSPENDED
-
-                else -> throw IllegalStateException(
-                    "Only active or suspended branches can be closed.",
-                )
+                else -> throw ConflictException()
             }
         lifecycleService.transition(
             BranchTransitionCommand(
@@ -162,29 +151,21 @@ class BranchProvisioningService(
     /** Creates or reactivates a user assignment only inside an active organisation and branch. */
     @Transactional
     fun assignUser(command: AssignUserToBranchCommand) {
-        require(assignmentStore.userExists(command.userId)) { "User account was not found." }
-        require(
+        resourceNotFoundUnless(assignmentStore.userExists(command.userId))
+        conflictUnless(
             lifecycleStore.organisationState(command.organisationId) ==
                 OrganisationLifecycleState.ACTIVE,
-        ) {
-            "User branch assignments require an active organisation."
-        }
-        require(
+        )
+        conflictUnless(
             lifecycleStore.branchState(command.organisationId, command.branchId) ==
                 BranchLifecycleState.ACTIVE,
-        ) {
-            "User branch assignments require an active branch in the selected organisation."
-        }
+        )
         val membership =
-            requireNotNull(assignmentStore.membership(command.organisationId, command.userId)) {
-                "User does not have a membership in the selected organisation."
-            }
-        require(
+            assignmentStore.membership(command.organisationId, command.userId).orResourceNotFound()
+        conflictUnless(
             membership.status !=
                 com.finaxis.platform.lifecycle.domain.MembershipLifecycleState.REVOKED,
-        ) {
-            "A revoked membership cannot receive branch assignments."
-        }
+        )
         if (!assignmentStore.assign(command)) return
         audit(
             command.organisationId,
@@ -200,15 +181,11 @@ class BranchProvisioningService(
     fun revokeUserAssignment(command: RevokeUserBranchAssignmentCommand) {
         if (!assignmentStore.isActive(command)) return
         val membership =
-            requireNotNull(assignmentStore.membership(command.organisationId, command.userId)) {
-                "User does not have a membership in the selected organisation."
-            }
+            assignmentStore.membership(command.organisationId, command.userId).orResourceNotFound()
         val exempt = membership.type in setOf(MembershipType.SYSTEM, MembershipType.AUDITOR)
-        require(
+        conflictUnless(
             exempt || assignmentStore.activeAssignments(command.organisationId, command.userId) > 1,
-        ) {
-            "An active ordinary membership must retain at least one active branch assignment."
-        }
+        )
         if (!assignmentStore.revoke(command)) return
         audit(
             command.organisationId,
@@ -232,11 +209,9 @@ class BranchProvisioningService(
     }
 
     private fun requireOrganisationAllowsBranch(organisationId: java.util.UUID) {
-        require(
+        conflictUnless(
             lifecycleStore.organisationState(organisationId) in ALLOWED_BRANCH_CREATION_STATES,
-        ) {
-            "Branch creation requires an active or provisioning organisation."
-        }
+        )
     }
 
     private fun publishAssignment(command: AssignUserToBranchCommand) {
@@ -281,3 +256,17 @@ class BranchProvisioningService(
         const val BRANCH_ASSIGNMENT_REVOKED_TARGET = "finaxis.lifecycle.branch.user-revoked"
     }
 }
+
+private fun invalidOperationUnless(condition: Boolean) {
+    if (!condition) throw InvalidOperationException()
+}
+
+private fun conflictUnless(condition: Boolean) {
+    if (!condition) throw ConflictException()
+}
+
+private fun resourceNotFoundUnless(condition: Boolean) {
+    if (!condition) throw ResourceNotFoundException()
+}
+
+private fun <T : Any> T?.orResourceNotFound(): T = this ?: throw ResourceNotFoundException()

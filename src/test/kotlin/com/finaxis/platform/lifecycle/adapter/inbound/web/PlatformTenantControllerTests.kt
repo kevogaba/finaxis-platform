@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
+import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.web.api.ApiExceptionHandler
@@ -21,6 +22,7 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.InitialAdminDto
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReactivateTenantRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.RejectTenantRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SuspendTenantRequest
+import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStore
 import com.finaxis.platform.lifecycle.application.OrganisationDraftResult
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
@@ -30,6 +32,7 @@ import com.finaxis.platform.lifecycle.application.query.TenantSummary
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -361,6 +364,40 @@ class PlatformTenantControllerTests
         }
 
         @Test
+        fun `tenant maker cannot approve while distinct checker succeeds`() {
+            val orgId = uuidV7()
+            val makerId = uuidV7()
+            val checkerId = uuidV7()
+            stubTenantDetail(orgId, "PROVISIONING")
+            doAnswer { invocation ->
+                val command = invocation.getArgument<ApproveOrganisationProvisioningCommand>(0)
+                if (command.actorId == makerId) {
+                    throw ForbiddenOperationException()
+                }
+                Unit
+            }.whenever(organisationProvisioningService).approveProvisioning(any())
+
+            withPlatformContext {
+                mockMvc
+                    .post("${ApiPaths.PLATFORM_TENANTS}/$orgId/approve") {
+                        with(authentication(platformToken(setOf("tenant.approve"), makerId)))
+                    }.andExpect {
+                        status { isForbidden() }
+                        jsonPath("$.code") { value("forbidden") }
+                    }
+
+                mockMvc
+                    .post("${ApiPaths.PLATFORM_TENANTS}/$orgId/approve") {
+                        with(authentication(platformToken(setOf("tenant.approve"), checkerId)))
+                    }.andExpect {
+                        status { isAccepted() }
+                        jsonPath("$.id") { value(orgId.toString()) }
+                        jsonPath("$.status") { value("PROVISIONING") }
+                    }
+            }
+        }
+
+        @Test
         fun `suspend returns updated tenant detail`() {
             val orgId = uuidV7()
             stubTenantDetail(orgId, "SUSPENDED")
@@ -618,10 +655,13 @@ class PlatformTenantControllerTests
                 }
             }
 
-        private fun platformToken(permissions: Set<String>): AppPrincipalAuthenticationToken =
+        private fun platformToken(
+            permissions: Set<String>,
+            userId: UUID = uuidV7(),
+        ): AppPrincipalAuthenticationToken =
             AppPrincipalAuthenticationToken(
                 AppPrincipal(
-                    userId = uuidV7(),
+                    userId = userId,
                     keycloakSubject = "platform-user",
                     organisationId = PlatformOrganisation.ID,
                     membershipId = uuidV7(),

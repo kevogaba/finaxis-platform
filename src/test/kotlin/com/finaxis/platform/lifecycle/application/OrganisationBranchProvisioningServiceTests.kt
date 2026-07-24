@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
@@ -276,12 +277,9 @@ class OrganisationBranchProvisioningServiceTests {
             store.completeSetup(organisationId)
             store.missingSetup += missing
 
-            val exception =
-                assertFailsWith<IllegalArgumentException> {
-                    organisations.reactivate(ReactivateOrganisationCommand(organisationId))
-                }
-
-            assertTrue(exception.message!!.contains(missing.name))
+            assertFailsWith<ConflictException> {
+                organisations.reactivate(ReactivateOrganisationCommand(organisationId))
+            }
             store.missingSetup -= missing
         }
     }
@@ -342,7 +340,7 @@ class OrganisationBranchProvisioningServiceTests {
         store.organisationStates[organisationId] = OrganisationLifecycleState.SUSPENDED
         store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ConflictException> {
             branches.assignUser(
                 AssignUserToBranchCommand(
                     organisationId,
@@ -367,7 +365,7 @@ class OrganisationBranchProvisioningServiceTests {
             ),
         )
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ConflictException> {
             branches.revokeUserAssignment(
                 RevokeUserBranchAssignmentCommand(
                     organisationId,
@@ -390,7 +388,7 @@ class OrganisationBranchProvisioningServiceTests {
         store.memberships[organisationId to userId] =
             MembershipSnapshot(MembershipLifecycleState.ACTIVE, MembershipType.STAFF)
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ConflictException> {
             branches.assignUser(
                 AssignUserToBranchCommand(
                     organisationId,
@@ -417,7 +415,7 @@ class OrganisationBranchProvisioningServiceTests {
         store.memberships[organisationId to userId] =
             MembershipSnapshot(MembershipLifecycleState.ACTIVE, MembershipType.STAFF)
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ConflictException> {
             branches.assignUser(
                 AssignUserToBranchCommand(
                     organisationId,
