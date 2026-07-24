@@ -221,6 +221,17 @@ private class JooqUserProvisioningMembershipStore(
         userId: UUID,
     ): Boolean = existingMembershipId(organisationId, userId) != null
 
+    override fun membershipInvitedBy(
+        organisationId: UUID,
+        membershipId: UUID,
+    ): UUID? =
+        dsl
+            .select(USER_ORGANISATION_MEMBERSHIP.CREATED_BY)
+            .from(USER_ORGANISATION_MEMBERSHIP)
+            .where(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId))
+            .and(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
+            .fetchOne(USER_ORGANISATION_MEMBERSHIP.CREATED_BY)
+
     private fun existingMembershipId(
         organisationId: UUID,
         userId: UUID,

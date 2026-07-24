@@ -88,6 +88,24 @@ data class RevokeTenantMembershipCommand(
     val requestId: String? = null,
 )
 
+/** Suspends an active organisation membership without revoking its access grants. */
+data class SuspendMembershipCommand(
+    val organisationId: UUID,
+    val membershipId: UUID,
+    val actorId: UUID,
+    val reason: String? = null,
+    val requestId: String? = null,
+)
+
+/** Reactivates a suspended organisation membership without recreating access grants. */
+data class ReactivateMembershipCommand(
+    val organisationId: UUID,
+    val membershipId: UUID,
+    val actorId: UUID,
+    val reason: String? = null,
+    val requestId: String? = null,
+)
+
 /** Result returned after local invitation intake has been persisted. */
 data class UserInvitationResult(
     val userId: UUID,

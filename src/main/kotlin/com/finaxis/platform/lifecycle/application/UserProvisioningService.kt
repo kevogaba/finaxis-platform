@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
@@ -68,7 +69,15 @@ class UserProvisioningService(
         )
         createInvitationAssignments(command, userId)
         val snapshot = requireMembership(command.organisationId, membershipId)
-        auditInvitation(command, userId, membershipId)
+        audit(
+            organisationId = command.organisationId,
+            action = "user.invite",
+            actorId = command.invitedBy,
+            resourceType = USER,
+            resourceId = userId,
+            requestId = command.requestId,
+            metadata = mapOf(MEMBERSHIP_ID to membershipId.toString()),
+        )
         return UserInvitationResult(userId, membershipId, snapshot.userStatus, snapshot.status)
     }
 
@@ -99,26 +108,17 @@ class UserProvisioningService(
         }
     }
 
-    private fun auditInvitation(
-        command: InviteUserCommand,
-        userId: UUID,
-        membershipId: UUID,
-    ) {
-        audit(
-            organisationId = command.organisationId,
-            action = "user.invite",
-            actorId = command.invitedBy,
-            resourceType = USER,
-            resourceId = userId,
-            requestId = command.requestId,
-            metadata = mapOf(MEMBERSHIP_ID to membershipId.toString()),
-        )
-    }
-
     /** Approves a pending local invitation and emits downstream provisioning requests as needed. */
     @Transactional
     fun approveUser(command: ApproveUserCommand): UserApprovalResult {
         val snapshot = requireMembership(command.organisationId, command.membershipId)
+        val inviter = store.membershipInvitedBy(command.organisationId, command.membershipId)
+        if (inviter != null &&
+            command.approvedBy != com.finaxis.platform.common.persistence.SystemActor.ID &&
+            command.approvedBy == inviter
+        ) {
+            throw ForbiddenOperationException()
+        }
         require(snapshot.status == MembershipLifecycleState.PENDING_APPROVAL) {
             "Only pending memberships can be approved."
         }
@@ -173,7 +173,15 @@ class UserProvisioningService(
                 command = transitionCommand(command.reason, command.requestId),
             ),
         )
-        auditUser("user.suspend", command.organisationId, command.userId, command.actorId, command)
+        audit(
+            command.organisationId,
+            "user.suspend",
+            command.actorId,
+            USER,
+            command.userId,
+            command.reason,
+            command.requestId,
+        )
     }
 
     /** Reactivates a suspended global user account through the shared lifecycle FSM. */
@@ -187,12 +195,14 @@ class UserProvisioningService(
                 command = transitionCommand(command.reason, command.requestId),
             ),
         )
-        auditUser(
-            "user.reactivate",
+        audit(
             command.organisationId,
-            command.userId,
+            "user.reactivate",
             command.actorId,
-            command,
+            USER,
+            command.userId,
+            command.reason,
+            command.requestId,
         )
     }
 
@@ -215,12 +225,14 @@ class UserProvisioningService(
                 command = transitionCommand(command.reason, command.requestId),
             ),
         )
-        auditUser(
-            "user.deactivate",
+        audit(
             command.organisationId,
-            command.userId,
+            "user.deactivate",
             command.actorId,
-            command,
+            USER,
+            command.userId,
+            command.reason,
+            command.requestId,
         )
         deactivationAssignmentRevoker.revoke(command)
     }
@@ -263,6 +275,52 @@ class UserProvisioningService(
                     "branchAssignmentsRevoked" to branchRevocations.toString(),
                     "roleAssignmentsRevoked" to roleRevocations.toString(),
                 ),
+        )
+    }
+
+    /** Suspends an organisation membership through the shared lifecycle FSM. */
+    @Transactional
+    fun suspendMembership(command: SuspendMembershipCommand) {
+        val snapshot = requireMembership(command.organisationId, command.membershipId)
+        lifecycleService.transition(
+            MembershipTransitionCommand(
+                command.organisationId,
+                command.membershipId,
+                transition = MembershipLifecycleTransition.SUSPEND,
+                command = transitionCommand(command.reason, command.requestId),
+            ),
+        )
+        audit(
+            command.organisationId,
+            "membership.suspend",
+            command.actorId,
+            USER,
+            snapshot.userId,
+            command.reason,
+            command.requestId,
+        )
+    }
+
+    /** Reactivates a suspended organisation membership through the shared lifecycle FSM. */
+    @Transactional
+    fun reactivateMembership(command: ReactivateMembershipCommand) {
+        val snapshot = requireMembership(command.organisationId, command.membershipId)
+        lifecycleService.transition(
+            MembershipTransitionCommand(
+                command.organisationId,
+                command.membershipId,
+                transition = MembershipLifecycleTransition.REACTIVATE,
+                command = transitionCommand(command.reason, command.requestId),
+            ),
+        )
+        audit(
+            command.organisationId,
+            "membership.reactivate",
+            command.actorId,
+            USER,
+            snapshot.userId,
+            command.reason,
+            command.requestId,
         )
     }
 
@@ -484,30 +542,6 @@ class UserProvisioningService(
         requireNotNull(store.membershipSnapshot(organisationId, membershipId)) {
             "Membership was not found in the selected organisation."
         }
-
-    private fun auditUser(
-        action: String,
-        organisationId: UUID,
-        userId: UUID,
-        actorId: UUID,
-        command: Any,
-    ) {
-        val reason =
-            when (command) {
-                is SuspendUserCommand -> command.reason
-                is ReactivateUserCommand -> command.reason
-                is DeactivateUserCommand -> command.reason
-                else -> null
-            }
-        val requestId =
-            when (command) {
-                is SuspendUserCommand -> command.requestId
-                is ReactivateUserCommand -> command.requestId
-                is DeactivateUserCommand -> command.requestId
-                else -> null
-            }
-        audit(organisationId, action, actorId, USER, userId, reason, requestId)
-    }
 
     private fun audit(
         organisationId: UUID,

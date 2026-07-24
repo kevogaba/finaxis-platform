@@ -10,6 +10,8 @@ import com.finaxis.platform.iam.application.query.IamPermissionQueries
 import com.finaxis.platform.iam.application.query.IamRoleQueries
 import com.finaxis.platform.iam.application.query.IamUserQueries
 import com.finaxis.platform.iam.application.query.MembershipDetail
+import com.finaxis.platform.iam.application.query.MembershipFilter
+import com.finaxis.platform.iam.application.query.MembershipSummary
 import com.finaxis.platform.iam.application.query.PermissionDetail
 import com.finaxis.platform.iam.application.query.PermissionFilter
 import com.finaxis.platform.iam.application.query.PermissionSummary
@@ -167,6 +169,83 @@ class JooqIamAdministrationQueries(
                         ).toInstant(),
                 )
             }
+
+    override fun searchMemberships(
+        organisationId: UUID,
+        filter: MembershipFilter,
+    ): ApiPage<MembershipSummary> {
+        val condition = membershipSearchCondition(organisationId, filter)
+
+        val total =
+            dsl
+                .fetchCount(
+                    USER_ORGANISATION_MEMBERSHIP
+                        .join(USER_ACCOUNT)
+                        .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID)),
+                    condition,
+                ).toLong()
+        val items =
+            dsl
+                .select(
+                    USER_ORGANISATION_MEMBERSHIP.ID,
+                    USER_ORGANISATION_MEMBERSHIP.USER_ID,
+                    USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS,
+                    USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE,
+                    USER_ORGANISATION_MEMBERSHIP.PRIMARY_BRANCH_ID,
+                ).from(USER_ORGANISATION_MEMBERSHIP)
+                .join(USER_ACCOUNT)
+                .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID))
+                .where(condition)
+                .orderBy(
+                    USER_ORGANISATION_MEMBERSHIP.CREATED_AT.desc(),
+                    USER_ORGANISATION_MEMBERSHIP.ID.desc(),
+                ).limit(filter.size)
+                .offset(filter.page * filter.size)
+                .fetch { record ->
+                    MembershipSummary(
+                        id = requireNotNull(record.get(USER_ORGANISATION_MEMBERSHIP.ID)),
+                        userId = requireNotNull(record.get(USER_ORGANISATION_MEMBERSHIP.USER_ID)),
+                        membershipStatus =
+                            requireNotNull(
+                                record.get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS),
+                            ),
+                        membershipType =
+                            requireNotNull(
+                                record.get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE),
+                            ),
+                        primaryBranchId =
+                            record.get(
+                                USER_ORGANISATION_MEMBERSHIP.PRIMARY_BRANCH_ID,
+                            ),
+                    )
+                }
+
+        return apiPageOf(items, filter.page, filter.size, total)
+    }
+
+    private fun membershipSearchCondition(
+        organisationId: UUID,
+        filter: MembershipFilter,
+    ): Condition {
+        var condition: Condition = USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId)
+        filter.membershipStatus?.let {
+            condition = condition.and(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS.eq(it))
+        }
+        filter.membershipType?.let {
+            condition = condition.and(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE.eq(it))
+        }
+        filter.q?.let { q ->
+            val query = "%$q%"
+            condition =
+                condition.and(
+                    USER_ACCOUNT.USERNAME
+                        .likeIgnoreCase(query)
+                        .or(USER_ACCOUNT.EMAIL.likeIgnoreCase(query))
+                        .or(USER_ACCOUNT.DISPLAY_NAME.likeIgnoreCase(query)),
+                )
+        }
+        return condition
+    }
 
     override fun searchBranchAssignments(
         organisationId: UUID,

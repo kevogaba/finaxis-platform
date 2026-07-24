@@ -92,6 +92,29 @@ class IamQueryServiceTests {
     }
 
     @Test
+    fun `searchMemberships validates permission and pagination then delegates`() {
+        val caller = TenantCaller(actorId, tenantId)
+        permissionGuard.deny(tenantId, "membership.view")
+
+        assertFailsWith<SecurityException> {
+            service.searchMemberships(tenantId, MembershipFilter(), caller)
+        }
+
+        val permitted = FakePermissionGuard()
+        val permittedService = IamQueryService(queries, queries, queries, queries, permitted)
+        assertFailsWith<IllegalArgumentException> {
+            permittedService.searchMemberships(tenantId, MembershipFilter(page = -1), caller)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            permittedService.searchMemberships(tenantId, MembershipFilter(size = 101), caller)
+        }
+
+        val result = permittedService.searchMemberships(tenantId, MembershipFilter(), caller)
+        assertEquals(1, result.items.size)
+        assertEquals("ACTIVE", result.items.single().membershipStatus)
+    }
+
+    @Test
     fun `searchBranchAssignments happy path`() {
         val caller = TenantCaller(actorId, tenantId)
         val result = service.searchBranchAssignments(tenantId, BranchAssignmentFilter(), caller)
@@ -344,6 +367,11 @@ class IamQueryServiceTests {
         assertEquals(m1, m1.copy())
         assertEquals(m1.hashCode(), m1.copy().hashCode())
 
+        val ms1 = MembershipSummary(id, userId, "a", "t", null)
+        assertNotNull(ms1.toString())
+        assertEquals(ms1, ms1.copy())
+        assertEquals(ms1.hashCode(), ms1.copy().hashCode())
+
         val b1 = BranchAssignmentSummary(id, userId, id, "t", "a")
         assertNotNull(b1.toString())
         assertEquals(b1, b1.copy())
@@ -467,6 +495,25 @@ private class FakeIamAdministrationQueries :
             updatedAt = Instant.now(),
         )
     }
+
+    override fun searchMemberships(
+        organisationId: UUID,
+        filter: MembershipFilter,
+    ): ApiPage<MembershipSummary> =
+        apiPageOf(
+            listOf(
+                MembershipSummary(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    "ACTIVE",
+                    "STAFF",
+                    null,
+                ),
+            ),
+            filter.page,
+            filter.size,
+            1L,
+        )
 
     override fun searchBranchAssignments(
         organisationId: UUID,

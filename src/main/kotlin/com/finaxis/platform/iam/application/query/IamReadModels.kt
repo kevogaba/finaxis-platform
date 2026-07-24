@@ -29,6 +29,15 @@ data class MembershipDetail(
     val updatedAt: Instant,
 )
 
+/** Summary projection of an organisation membership. */
+data class MembershipSummary(
+    val id: UUID,
+    val userId: UUID,
+    val membershipStatus: String,
+    val membershipType: String,
+    val primaryBranchId: UUID?,
+)
+
 /** Summary projection of a branch assignment. */
 data class BranchAssignmentSummary(
     val id: UUID,

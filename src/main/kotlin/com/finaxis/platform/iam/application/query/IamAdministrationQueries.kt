@@ -12,6 +12,15 @@ data class UserInTenantFilter(
     val size: Int = 25,
 )
 
+/** Filter parameters for organisation membership queries. */
+data class MembershipFilter(
+    val q: String? = null,
+    val membershipStatus: String? = null,
+    val membershipType: String? = null,
+    val page: Int = 0,
+    val size: Int = 25,
+)
+
 /** Filter parameters for branch assignment queries. */
 data class BranchAssignmentFilter(
     val branchId: UUID? = null,
@@ -67,6 +76,12 @@ interface IamUserQueries {
         organisationId: UUID,
         filter: UserInTenantFilter,
     ): ApiPage<UserInTenantSummary>
+
+    /** Searches memberships in an organisation. */
+    fun searchMemberships(
+        organisationId: UUID,
+        filter: MembershipFilter,
+    ): ApiPage<MembershipSummary>
 
     /** Finds detailed membership by id. */
     fun findMembershipById(

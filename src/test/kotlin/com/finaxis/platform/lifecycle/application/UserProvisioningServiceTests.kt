@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
@@ -131,7 +132,7 @@ class UserProvisioningServiceTests {
 
         val approval =
             service.approveUser(
-                ApproveUserCommand(context.org, invitation.membershipId, context.actor, "req-1"),
+                ApproveUserCommand(context.org, invitation.membershipId, context.checker, "req-1"),
             )
 
         assertTrue(approval.keycloakProvisioningRequested)
@@ -162,7 +163,7 @@ class UserProvisioningServiceTests {
 
         val approval =
             service.approveUser(
-                ApproveUserCommand(context.org, invitation.membershipId, context.actor),
+                ApproveUserCommand(context.org, invitation.membershipId, context.checker),
             )
 
         assertFalse(approval.keycloakProvisioningRequested)
@@ -177,7 +178,7 @@ class UserProvisioningServiceTests {
 
         val approval =
             service.approveUser(
-                ApproveUserCommand(context.org, invitation.membershipId, context.actor),
+                ApproveUserCommand(context.org, invitation.membershipId, context.checker),
             )
 
         assertTrue(approval.applicationInviteRequested)
@@ -195,6 +196,25 @@ class UserProvisioningServiceTests {
                 ),
             ),
         )
+    }
+
+    @Test
+    fun `inviter cannot approve membership but a distinct checker can`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+
+        assertFailsWith<ForbiddenOperationException> {
+            service.approveUser(
+                ApproveUserCommand(context.org, invitation.membershipId, context.actor),
+            )
+        }
+
+        val approval =
+            service.approveUser(
+                ApproveUserCommand(context.org, invitation.membershipId, context.checker),
+            )
+
+        assertTrue(approval.keycloakProvisioningRequested)
     }
 
     @Test
@@ -268,9 +288,49 @@ class UserProvisioningServiceTests {
         assertTrue(audits.events.any { it.action == "membership.revoke" })
     }
 
+    @Test
+    fun `suspend membership transitions active membership and audits`() {
+        val context = activeInvitationContext()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        val membershipId = fake.addMembership(context.org, userId, MembershipLifecycleState.ACTIVE)
+
+        service.suspendMembership(
+            SuspendMembershipCommand(context.org, membershipId, context.actor, "risk"),
+        )
+
+        assertEquals(
+            MembershipLifecycleState.SUSPENDED,
+            fake.memberships.getValue(context.org to membershipId).state,
+        )
+        assertTrue(audits.events.any { it.action == "membership.suspend" })
+    }
+
+    @Test
+    fun `reactivate membership transitions suspended membership and audits`() {
+        val context = activeInvitationContext()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        val membershipId =
+            fake.addMembership(
+                context.org,
+                userId,
+                MembershipLifecycleState.SUSPENDED,
+            )
+
+        service.reactivateMembership(
+            ReactivateMembershipCommand(context.org, membershipId, context.actor, "cleared"),
+        )
+
+        assertEquals(
+            MembershipLifecycleState.ACTIVE,
+            fake.memberships.getValue(context.org to membershipId).state,
+        )
+        assertTrue(audits.events.any { it.action == "membership.reactivate" })
+    }
+
     private fun activeInvitationContext(): InvitationContext {
         val context =
             InvitationContext(
+                uuidV7(),
                 uuidV7(),
                 uuidV7(),
                 uuidV7(),
@@ -319,6 +379,7 @@ private class UserProvisioningFake :
     val memberships = mutableMapOf<Pair<UUID, UUID>, LifecycleAggregate<MembershipLifecycleState>>()
     val membershipUsers = mutableMapOf<Pair<UUID, UUID>, UUID>()
     val membershipTypes = mutableMapOf<Pair<UUID, UUID>, MembershipType>()
+    val membershipInviters = mutableMapOf<Pair<UUID, UUID>, UUID>()
     val preferences = mutableMapOf<Pair<UUID, UUID>, Pair<Boolean, Boolean>>()
     val roles = mutableSetOf<Pair<UUID, UUID>>()
     val identityLinks = mutableSetOf<UUID>()
@@ -382,7 +443,7 @@ private class UserProvisioningFake :
             userId,
             MembershipLifecycleState.PENDING_APPROVAL,
             membershipType,
-        )
+        ).also { membershipInviters[organisationId to it] = actorId }
 
     override fun saveInvitationPreferences(
         organisationId: UUID,
@@ -423,6 +484,11 @@ private class UserProvisioningFake :
         memberships.any { (key, _) ->
             key.first == organisationId && membershipUsers[key] == userId
         }
+
+    override fun membershipInvitedBy(
+        organisationId: UUID,
+        membershipId: UUID,
+    ): UUID? = membershipInviters[organisationId to membershipId]
 
     override fun branchState(
         organisationId: UUID,
@@ -696,6 +762,7 @@ private data class InvitationContext(
     val branch: UUID,
     val role: UUID,
     val actor: UUID,
+    val checker: UUID,
 )
 
 private data class BranchAssignmentKey(

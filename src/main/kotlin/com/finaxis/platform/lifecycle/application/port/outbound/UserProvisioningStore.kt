@@ -65,6 +65,12 @@ interface UserProvisioningMembershipStore {
         membershipId: UUID,
     ): MembershipProvisioningSnapshot?
 
+    /** Resolves the original inviter (maker) of an organisation membership. */
+    fun membershipInvitedBy(
+        organisationId: UUID,
+        membershipId: UUID,
+    ): UUID? = null
+
     /** Returns whether the user already has a membership row (any status) in the organisation. */
     fun membershipExists(
         organisationId: UUID,

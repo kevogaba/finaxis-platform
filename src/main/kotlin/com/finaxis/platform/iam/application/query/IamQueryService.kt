@@ -77,6 +77,33 @@ class IamQueryService(
             )
     }
 
+    /** Searches membership summaries, validating caller context and permissions. */
+    fun searchMemberships(
+        organisationId: UUID,
+        filter: MembershipFilter,
+        caller: FoundationCaller,
+    ): ApiPage<MembershipSummary> {
+        verifyTenantScope(organisationId, caller)
+        validatePage(filter.page, filter.size)
+        when (caller) {
+            is TenantCaller -> {
+                permissionGuard.requireTenantPermission(
+                    caller.actorId,
+                    organisationId,
+                    "membership.view",
+                )
+            }
+
+            is PlatformCaller -> {
+                permissionGuard.requirePlatformPermission(
+                    caller.actorId,
+                    "membership.view",
+                )
+            }
+        }
+        return userQueries.searchMemberships(organisationId, filter)
+    }
+
     /** Searches branch assignment summaries, validating caller context and permissions. */
     fun searchBranchAssignments(
         organisationId: UUID,

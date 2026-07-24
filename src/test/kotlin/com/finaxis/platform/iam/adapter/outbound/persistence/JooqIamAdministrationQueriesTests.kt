@@ -2,6 +2,7 @@ package com.finaxis.platform.iam.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.iam.application.query.MembershipFilter
 import com.finaxis.platform.iam.application.query.RoleFilter
 import com.finaxis.platform.iam.application.query.UserInTenantFilter
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
@@ -17,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional
 import java.time.OffsetDateTime
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -45,6 +47,36 @@ class JooqIamAdministrationQueriesTests(
         val page = queries.searchRoles(orgId, RoleFilter(q = "Maker"))
         assertEquals(1, page.items.size)
         assertEquals(roleId, page.items.single().id)
+    }
+
+    @Test
+    fun `searchMemberships scopes filters ordering and pages to the selected tenant`() {
+        val orgId = insertOrganisation()
+        val otherOrgId = insertOrganisation()
+        val firstUserId = insertUserAccount("alice", "alice@example.test", "Alice")
+        val secondUserId = insertUserAccount("bob", "bob@example.test", "Bob")
+        val otherUserId = insertUserAccount("other", "other@example.test", "Other")
+        val first = insertMembership(orgId, firstUserId, "ACTIVE", "STAFF")
+        val second = insertMembership(orgId, secondUserId, "SUSPENDED", "AUDITOR")
+        insertMembership(otherOrgId, otherUserId, "ACTIVE", "STAFF")
+
+        val active = queries.searchMemberships(orgId, MembershipFilter(membershipStatus = "ACTIVE"))
+        val firstPage = queries.searchMemberships(orgId, MembershipFilter(size = 1))
+        val secondPage = queries.searchMemberships(orgId, MembershipFilter(page = 1, size = 1))
+
+        assertEquals(listOf(first), active.items.map { it.id })
+        assertEquals(listOf(second), firstPage.items.map { it.id })
+        assertEquals(listOf(first), secondPage.items.map { it.id })
+    }
+
+    @Test
+    fun `findMembershipById returns no cross tenant membership`() {
+        val orgId = insertOrganisation()
+        val otherOrgId = insertOrganisation()
+        val userId = insertUserAccount("alice", "alice@example.test", "Alice")
+        val membershipId = insertMembership(otherOrgId, userId, "ACTIVE", "STAFF")
+
+        assertNull(queries.findMembershipById(orgId, membershipId))
     }
 
     private fun insertOrganisation(): UUID {
