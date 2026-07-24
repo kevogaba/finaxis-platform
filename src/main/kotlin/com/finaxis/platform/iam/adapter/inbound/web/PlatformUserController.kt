@@ -150,6 +150,7 @@ class PlatformUserController(
  * This is separate from [PlatformUserController] because Spring combines class and method mappings.
  */
 @RestController
+@RequestMapping(ApiPaths.PLATFORM_USERS)
 @Tag(name = "Platform Users", description = "Platform-wide user lifecycle APIs")
 @SecurityRequirement(name = "bearerAuth")
 @Validated
@@ -158,7 +159,7 @@ class PlatformUserLifecycleController(
     private val permissionGuard: PermissionGuard,
 ) {
     /** Suspends a global user account. */
-    @PostMapping("${ApiPaths.PLATFORM_USERS}/{user_id}/suspend")
+    @PostMapping("/{user_id}/suspend")
     @IdempotentMutation(scope = IdempotencyScopeKind.PLATFORM)
     @PreAuthorize("hasAuthority('user.suspend')")
     @Operation(
@@ -203,7 +204,7 @@ class PlatformUserLifecycleController(
     }
 
     /** Reactivates a suspended global user account. */
-    @PostMapping("${ApiPaths.PLATFORM_USERS}/{user_id}/reactivate")
+    @PostMapping("/{user_id}/reactivate")
     @IdempotentMutation(scope = IdempotencyScopeKind.PLATFORM)
     @PreAuthorize("hasAuthority('user.activate')")
     @Operation(
@@ -249,7 +250,7 @@ class PlatformUserLifecycleController(
     }
 
     /** Deactivates a global user account. */
-    @PostMapping("${ApiPaths.PLATFORM_USERS}/{user_id}/deactivate")
+    @PostMapping("/{user_id}/deactivate")
     @IdempotentMutation(scope = IdempotencyScopeKind.PLATFORM)
     @PreAuthorize("hasAuthority('user.deactivate')")
     @Operation(

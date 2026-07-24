@@ -1,11 +1,11 @@
 package com.finaxis.platform.iam.application.role
 
-import com.finaxis.platform.common.audit.AuditCommand
-import com.finaxis.platform.common.audit.AuditOutcome
-import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
+import com.finaxis.platform.common.audit.AuditCommand
+import com.finaxis.platform.common.audit.AuditOutcome
+import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
@@ -101,7 +101,11 @@ class RoleManagementService(
     fun assignPermissionToRole(command: AssignPermissionToRole) {
         val role = requiredRole(command.organisationId, command.roleId)
         requireMutable(role)
-        val permissionId = persistence.permissionIdByCode(command.permissionCode).orResourceNotFound()
+        val permissionId =
+            persistence
+                .permissionIdByCode(
+                    command.permissionCode,
+                ).orResourceNotFound()
         persistence.grantPermission(
             command.organisationId,
             command.roleId,
@@ -128,7 +132,11 @@ class RoleManagementService(
     fun removePermissionFromRole(command: RemovePermissionFromRole) {
         val role = requiredRole(command.organisationId, command.roleId)
         requireMutable(role)
-        val permissionId = persistence.permissionIdByCode(command.permissionCode).orResourceNotFound()
+        val permissionId =
+            persistence
+                .permissionIdByCode(
+                    command.permissionCode,
+                ).orResourceNotFound()
         persistence.removePermission(
             command.organisationId,
             command.roleId,
@@ -149,9 +157,16 @@ class RoleManagementService(
     /** Assigns a role idempotently after validating organisation membership and scope. */
     @Transactional
     fun assignRoleToUser(command: AssignRoleToUser): RoleAssignmentResult {
-        val membership = persistence.membership(command.organisationId, command.userId).orResourceNotFound()
+        val membership =
+            persistence
+                .membership(
+                    command.organisationId,
+                    command.userId,
+                ).orResourceNotFound()
         conflictUnless(membership.status != MembershipStatus.REVOKED)
-        conflictUnless(persistence.organisationStatus(command.organisationId) == OrganisationStatus.ACTIVE)
+        conflictUnless(
+            persistence.organisationStatus(command.organisationId) == OrganisationStatus.ACTIVE,
+        )
         requiredRole(command.organisationId, command.roleId)
         validateScope(command)
         persistence

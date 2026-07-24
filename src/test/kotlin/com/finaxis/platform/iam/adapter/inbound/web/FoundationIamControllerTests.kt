@@ -53,7 +53,8 @@ import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
-import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication
+import org.springframework.security.test.web.servlet.request
+    .SecurityMockMvcRequestPostProcessors.authentication
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.delete
@@ -62,16 +63,22 @@ import org.springframework.test.web.servlet.patch
 import org.springframework.test.web.servlet.post
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.header
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import java.time.Instant
 import java.util.UUID
 
 private const val MODULITH_RUNTIME_AUTO_CONFIGURATION =
     "org.springframework.modulith.runtime.autoconfigure.SpringModulithRuntimeAutoConfiguration"
-private const val EXCLUDE_MODULITH_RUNTIME = "spring.autoconfigure.exclude=$MODULITH_RUNTIME_AUTO_CONFIGURATION"
+private const val EXCLUDE_MODULITH_RUNTIME =
+    "spring.autoconfigure.exclude=$MODULITH_RUNTIME_AUTO_CONFIGURATION"
 
 @WebMvcTest(
-    controllers = [RoleController::class, RoleAssignmentController::class, PermissionController::class],
+    controllers = [
+        RoleController::class,
+        RoleAssignmentController::class,
+        PermissionController::class,
+    ],
     properties = [EXCLUDE_MODULITH_RUNTIME],
     useDefaultFilters = false,
 )
@@ -115,13 +122,12 @@ class FoundationIamControllerTests
             fun idempotencyKeyFilter(
                 problemFactory: ApiProblemFactory,
                 jsonCodec: ApiJsonCodec,
-            ) =
-                org.springframework.boot.web.servlet.FilterRegistrationBean(
-                    IdempotencyKeyFilter(
-                        IdempotencyProperties(),
-                        ApiProblemWriter(problemFactory, jsonCodec),
-                    ),
-                )
+            ) = org.springframework.boot.web.servlet.FilterRegistrationBean(
+                IdempotencyKeyFilter(
+                    IdempotencyProperties(),
+                    ApiProblemWriter(problemFactory, jsonCodec),
+                ),
+            )
         }
 
         @MockitoBean
@@ -143,10 +149,20 @@ class FoundationIamControllerTests
                 apiPageOf(listOf(roleSummary(roleId)), number = 1, size = 10, totalItems = 11),
             )
             whenever(iamQueryService.searchRoleAssignments(eq(tenantId), any(), any())).thenReturn(
-                apiPageOf(listOf(roleAssignmentSummary(assignmentId)), number = 1, size = 10, totalItems = 11),
+                apiPageOf(
+                    listOf(roleAssignmentSummary(assignmentId)),
+                    number = 1,
+                    size = 10,
+                    totalItems = 11,
+                ),
             )
             whenever(iamQueryService.searchPermissions(eq(tenantId), any(), any())).thenReturn(
-                apiPageOf(listOf(permissionSummary(permissionId)), number = 1, size = 10, totalItems = 11),
+                apiPageOf(
+                    listOf(permissionSummary(permissionId)),
+                    number = 1,
+                    size = 10,
+                    totalItems = 11,
+                ),
             )
 
             listOf(
@@ -173,19 +189,25 @@ class FoundationIamControllerTests
             val roleId = uuidV7()
             val assignmentId = uuidV7()
             val permissionId = uuidV7()
-            whenever(iamQueryService.getRole(eq(tenantId), eq(roleId), any())).thenReturn(roleDetail(tenantId, roleId))
-            whenever(iamQueryService.getRoleAssignment(eq(tenantId), eq(assignmentId), any())).thenReturn(
-                roleAssignmentDetail(tenantId, assignmentId),
+            whenever(iamQueryService.getRole(eq(tenantId), eq(roleId), any())).thenReturn(
+                roleDetail(tenantId, roleId),
             )
-            whenever(iamQueryService.getPermission(eq(tenantId), eq(permissionId), any())).thenReturn(
-                permissionDetail(permissionId),
-            )
+            whenever(
+                iamQueryService.getRoleAssignment(eq(tenantId), eq(assignmentId), any()),
+            ).thenReturn(roleAssignmentDetail(tenantId, assignmentId))
+            whenever(
+                iamQueryService.getPermission(eq(tenantId), eq(permissionId), any()),
+            ).thenReturn(permissionDetail(permissionId))
 
-            detailRequests(tenantId, roleId, assignmentId, permissionId).forEach { (path, permission) ->
-                mockMvc.get(path) { with(authentication(tenantToken(setOf(permission), tenantId))) }.andExpect {
-                    status { isOk() }
+            detailRequests(roleId, assignmentId, permissionId)
+                .forEach { (path, permission) ->
+                    mockMvc
+                        .get(path) {
+                            with(authentication(tenantToken(setOf(permission), tenantId)))
+                        }.andExpect {
+                            status { isOk() }
+                        }
                 }
-            }
         }
 
         @Test
@@ -194,36 +216,55 @@ class FoundationIamControllerTests
             val roleId = uuidV7()
             val assignmentId = uuidV7()
             val permissionId = uuidV7()
-            whenever(iamQueryService.getRole(eq(tenantId), eq(roleId), any())).thenThrow(ResourceNotFoundException())
-            whenever(iamQueryService.getRoleAssignment(eq(tenantId), eq(assignmentId), any())).thenThrow(
+            whenever(iamQueryService.getRole(eq(tenantId), eq(roleId), any())).thenThrow(
                 ResourceNotFoundException(),
             )
-            whenever(iamQueryService.getPermission(eq(tenantId), eq(permissionId), any())).thenThrow(
-                ResourceNotFoundException(),
-            )
+            whenever(
+                iamQueryService.getRoleAssignment(eq(tenantId), eq(assignmentId), any()),
+            ).thenThrow(ResourceNotFoundException())
+            whenever(
+                iamQueryService.getPermission(eq(tenantId), eq(permissionId), any()),
+            ).thenThrow(ResourceNotFoundException())
 
-            detailRequests(tenantId, roleId, assignmentId, permissionId).forEach { (path, permission) ->
-                mockMvc.get(path) { with(authentication(tenantToken(setOf(permission), tenantId))) }.andExpect {
-                    status { isNotFound() }
-                    jsonPath("$.code") { value("resource_not_found") }
+            detailRequests(roleId, assignmentId, permissionId)
+                .forEach { (path, permission) ->
+                    mockMvc
+                        .get(path) {
+                            with(authentication(tenantToken(setOf(permission), tenantId)))
+                        }.andExpect {
+                            status { isNotFound() }
+                            jsonPath("$.code") { value("resource_not_found") }
+                        }
                 }
-            }
         }
 
         @Test
         fun `role create update activate and deactivate return re fetched details`() {
             val tenantId = uuidV7()
             val roleId = uuidV7()
-            whenever(roleManagementService.createTenantRole(any())).thenReturn(RoleResult(roleId, RoleStatus.ACTIVE))
-            whenever(roleManagementService.updateTenantRole(any())).thenReturn(RoleResult(roleId, RoleStatus.ACTIVE))
-            whenever(roleManagementService.activateRole(any())).thenReturn(RoleResult(roleId, RoleStatus.ACTIVE))
-            whenever(roleManagementService.deactivateRole(any())).thenReturn(RoleResult(roleId, RoleStatus.DISABLED))
-            whenever(iamQueryService.getRole(eq(tenantId), eq(roleId), any())).thenReturn(roleDetail(tenantId, roleId))
+            whenever(roleManagementService.createTenantRole(any())).thenReturn(
+                RoleResult(roleId, RoleStatus.ACTIVE),
+            )
+            whenever(roleManagementService.updateTenantRole(any())).thenReturn(
+                RoleResult(roleId, RoleStatus.ACTIVE),
+            )
+            whenever(roleManagementService.activateRole(any())).thenReturn(
+                RoleResult(roleId, RoleStatus.ACTIVE),
+            )
+            whenever(roleManagementService.deactivateRole(any())).thenReturn(
+                RoleResult(roleId, RoleStatus.DISABLED),
+            )
+            whenever(iamQueryService.getRole(eq(tenantId), eq(roleId), any())).thenReturn(
+                roleDetail(tenantId, roleId),
+            )
 
             mockMvc
                 .post(ApiPaths.ROLES) {
                     contentType = MediaType.APPLICATION_JSON
-                    content = apiJsonCodec.mapper.writeValueAsString(CreateRoleRequest("OPS", "Operations"))
+                    content =
+                        apiJsonCodec.mapper.writeValueAsString(
+                            CreateRoleRequest("OPS", "Operations"),
+                        )
                     with(authentication(tenantToken(setOf("role.create"), tenantId)))
                 }.andExpect {
                     status { isCreated() }
@@ -252,8 +293,12 @@ class FoundationIamControllerTests
             val roleId = uuidV7()
             whenever(roleManagementService.updateTenantRole(any())).thenThrow(ConflictException())
             whenever(roleManagementService.deactivateRole(any())).thenThrow(ConflictException())
-            whenever(roleManagementService.assignPermissionToRole(any())).thenThrow(ConflictException())
-            whenever(roleManagementService.removePermissionFromRole(any())).thenThrow(ConflictException())
+            whenever(
+                roleManagementService.assignPermissionToRole(any()),
+            ).thenThrow(ConflictException())
+            whenever(
+                roleManagementService.removePermissionFromRole(any()),
+            ).thenThrow(ConflictException())
             whenever(iamQueryService.getRolePermission(eq(tenantId), any(), any())).thenReturn(
                 rolePermissionDetail(tenantId, roleId = roleId),
             )
@@ -268,12 +313,14 @@ class FoundationIamControllerTests
                     .perform(
                         request(method, path)
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content(roleMutationPayload(method))
-                            .with(authentication(tenantToken(setOf(permissionFor(method, path)), tenantId))),
-                    ).andExpect {
-                        status { isConflict() }
-                        jsonPath("$.code") { value("conflict") }
-                    }
+                            .content(roleMutationPayload(method, path))
+                            .with(
+                                authentication(
+                                    tenantToken(setOf(permissionFor(method, path)), tenantId),
+                                ),
+                            ),
+                    ).andExpect(status().isConflict)
+                    .andExpect(jsonPath("$.code").value("conflict"))
             }
         }
 
@@ -283,17 +330,20 @@ class FoundationIamControllerTests
             val roleId = uuidV7()
             val grantId = uuidV7()
             val grant = rolePermissionSummary(grantId, roleId, "permission.view")
-            whenever(iamQueryService.listRolePermissions(eq(tenantId), eq(roleId), any(), any())).thenReturn(
-                apiPageOf(listOf(grant)),
-            )
-            whenever(iamQueryService.getRolePermission(eq(tenantId), eq(grantId), any())).thenReturn(
-                rolePermissionDetail(tenantId, grantId, roleId, "permission.view"),
-            )
+            whenever(
+                iamQueryService.listRolePermissions(eq(tenantId), eq(roleId), any(), any()),
+            ).thenReturn(apiPageOf(listOf(grant), number = 0, size = 20, totalItems = 1))
+            whenever(
+                iamQueryService.getRolePermission(eq(tenantId), eq(grantId), any()),
+            ).thenReturn(rolePermissionDetail(tenantId, grantId, roleId, "permission.view"))
 
             mockMvc
                 .post("${ApiPaths.ROLES}/$roleId/permissions") {
                     contentType = MediaType.APPLICATION_JSON
-                    content = apiJsonCodec.mapper.writeValueAsString(AssignPermissionRequest("permission.view"))
+                    content =
+                        apiJsonCodec.mapper.writeValueAsString(
+                            AssignPermissionRequest("permission.view"),
+                        )
                     with(authentication(tenantToken(setOf("role.assign_permission"), tenantId)))
                 }.andExpect {
                     status { isCreated() }
@@ -305,7 +355,8 @@ class FoundationIamControllerTests
                     with(authentication(tenantToken(setOf("role.remove_permission"), tenantId)))
                 }.andExpect { status { isOk() } }
 
-            val commandCaptor = argumentCaptor<com.finaxis.platform.iam.application.role.RemovePermissionFromRole>()
+            val commandCaptor =
+                argumentCaptor<com.finaxis.platform.iam.application.role.RemovePermissionFromRole>()
             verify(roleManagementService).removePermissionFromRole(commandCaptor.capture())
             kotlin.test.assertEquals("permission.view", commandCaptor.firstValue.permissionCode)
         }
@@ -320,16 +371,32 @@ class FoundationIamControllerTests
             whenever(roleManagementService.assignRoleToUser(any())).thenReturn(
                 RoleAssignmentResult(assignmentId, "ACTIVE"),
             )
-            whenever(iamQueryService.getRoleAssignment(eq(tenantId), eq(assignmentId), any())).thenReturn(
-                roleAssignmentDetail(tenantId, assignmentId, userId, roleId, branchId, "BRANCH", "REVOKED"),
+            whenever(
+                iamQueryService.getRoleAssignment(eq(tenantId), eq(assignmentId), any()),
+            ).thenReturn(
+                roleAssignmentDetail(
+                    tenantId,
+                    assignmentId,
+                    userId,
+                    roleId,
+                    branchId,
+                    "BRANCH",
+                    "REVOKED",
+                ),
             )
 
             mockMvc
                 .post(ApiPaths.ROLE_ASSIGNMENTS) {
                     contentType = MediaType.APPLICATION_JSON
-                    content = apiJsonCodec.mapper.writeValueAsString(
-                        AssignRoleRequest(userId, roleId, RoleAssignmentScopeType.BRANCH, branchId),
-                    )
+                    content =
+                        apiJsonCodec.mapper.writeValueAsString(
+                            AssignRoleRequest(
+                                userId,
+                                roleId,
+                                RoleAssignmentScopeType.BRANCH,
+                                branchId,
+                            ),
+                        )
                     with(authentication(tenantToken(setOf("user.assign_role"), tenantId)))
                 }.andExpect {
                     status { isCreated() }
@@ -373,10 +440,13 @@ class FoundationIamControllerTests
             val grantId = uuidV7()
             val assignmentId = uuidV7()
             mutationRoutes(roleId, grantId, assignmentId).forEach { (method, path, permission) ->
-                val payload = roleMutationPayload(method)
+                val payload = roleMutationPayload(method, path)
                 mockMvc
-                    .perform(request(method, path).contentType(MediaType.APPLICATION_JSON).content(payload))
-                    .andExpect(status().isUnauthorized)
+                    .perform(
+                        request(method, path)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(payload),
+                    ).andExpect(status().isUnauthorized)
                 mockMvc
                     .perform(
                         request(method, path)
@@ -397,37 +467,76 @@ class FoundationIamControllerTests
         }
 
         private fun detailRequests(
-            tenantId: UUID,
             roleId: UUID,
             assignmentId: UUID,
             permissionId: UUID,
-        ) =
-            listOf(
-                "${ApiPaths.ROLES}/$roleId" to "role.view",
-                "${ApiPaths.ROLE_ASSIGNMENTS}/$assignmentId" to "role_assignment.view",
-                "${ApiPaths.PERMISSIONS}/$permissionId" to "permission.view",
-            )
+        ) = listOf(
+            "${ApiPaths.ROLES}/$roleId" to "role.view",
+            "${ApiPaths.ROLE_ASSIGNMENTS}/$assignmentId" to "role_assignment.view",
+            "${ApiPaths.PERMISSIONS}/$permissionId" to "permission.view",
+        )
 
-        private fun mutationRoutes(roleId: UUID, grantId: UUID, assignmentId: UUID) =
-            listOf(
-                Triple(HttpMethod.POST, ApiPaths.ROLES, "role.create"),
-                Triple(HttpMethod.PATCH, "${ApiPaths.ROLES}/$roleId", "role.update"),
-                Triple(HttpMethod.POST, "${ApiPaths.ROLES}/$roleId/activate", "role.activate"),
-                Triple(HttpMethod.POST, "${ApiPaths.ROLES}/$roleId/deactivate", "role.deactivate"),
-                Triple(HttpMethod.POST, "${ApiPaths.ROLES}/$roleId/permissions", "role.assign_permission"),
-                Triple(HttpMethod.DELETE, "${ApiPaths.ROLES}/$roleId/permissions/$grantId", "role.remove_permission"),
-                Triple(HttpMethod.POST, ApiPaths.ROLE_ASSIGNMENTS, "user.assign_role"),
-                Triple(HttpMethod.DELETE, "${ApiPaths.ROLE_ASSIGNMENTS}/$assignmentId", "user.revoke_role"),
-            )
+        private fun mutationRoutes(
+            roleId: UUID,
+            grantId: UUID,
+            assignmentId: UUID,
+        ) = listOf(
+            Triple(HttpMethod.POST, ApiPaths.ROLES, "role.create"),
+            Triple(HttpMethod.PATCH, "${ApiPaths.ROLES}/$roleId", "role.update"),
+            Triple(HttpMethod.POST, "${ApiPaths.ROLES}/$roleId/activate", "role.activate"),
+            Triple(HttpMethod.POST, "${ApiPaths.ROLES}/$roleId/deactivate", "role.deactivate"),
+            Triple(
+                HttpMethod.POST,
+                "${ApiPaths.ROLES}/$roleId/permissions",
+                "role.assign_permission",
+            ),
+            Triple(
+                HttpMethod.DELETE,
+                "${ApiPaths.ROLES}/$roleId/permissions/$grantId",
+                "role.remove_permission",
+            ),
+            Triple(HttpMethod.POST, ApiPaths.ROLE_ASSIGNMENTS, "user.assign_role"),
+            Triple(
+                HttpMethod.DELETE,
+                "${ApiPaths.ROLE_ASSIGNMENTS}/$assignmentId",
+                "user.revoke_role",
+            ),
+        )
 
-        private fun roleMutationPayload(method: HttpMethod): String =
-            when (method) {
-                HttpMethod.POST -> apiJsonCodec.mapper.writeValueAsString(CreateRoleRequest("OPS", "Operations"))
-                HttpMethod.PATCH -> apiJsonCodec.mapper.writeValueAsString(UpdateRoleRequest("Operations", null))
-                else -> ""
+        private fun roleMutationPayload(
+            method: HttpMethod,
+            path: String,
+        ): String =
+            when {
+                method == HttpMethod.PATCH -> {
+                    apiJsonCodec.mapper.writeValueAsString(UpdateRoleRequest("Operations", null))
+                }
+
+                method == HttpMethod.POST && path.endsWith("/permissions") -> {
+                    apiJsonCodec.mapper.writeValueAsString(
+                        AssignPermissionRequest("permission.view"),
+                    )
+                }
+
+                method == HttpMethod.POST && path == ApiPaths.ROLE_ASSIGNMENTS -> {
+                    apiJsonCodec.mapper.writeValueAsString(
+                        AssignRoleRequest(uuidV7(), uuidV7(), RoleAssignmentScopeType.TENANT, null),
+                    )
+                }
+
+                method == HttpMethod.POST && path == ApiPaths.ROLES -> {
+                    apiJsonCodec.mapper.writeValueAsString(CreateRoleRequest("OPS", "Operations"))
+                }
+
+                else -> {
+                    ""
+                }
             }
 
-        private fun permissionFor(method: HttpMethod, path: String): String =
+        private fun permissionFor(
+            method: HttpMethod,
+            path: String,
+        ): String =
             when {
                 method == HttpMethod.PATCH -> "role.update"
                 method == HttpMethod.DELETE -> "role.remove_permission"
@@ -435,20 +544,23 @@ class FoundationIamControllerTests
                 else -> "role.assign_permission"
             }
 
-        private fun roleSummary(roleId: UUID) = RoleSummary(roleId, "OPS", "Operations", false, "ACTIVE")
+        private fun roleSummary(roleId: UUID) =
+            RoleSummary(roleId, "OPS", "Operations", false, "ACTIVE")
 
-        private fun roleDetail(tenantId: UUID, roleId: UUID) =
-            RoleDetail(
-                roleId,
-                tenantId,
-                "OPS",
-                "Operations",
-                null,
-                false,
-                "ACTIVE",
-                NOW,
-                NOW,
-            )
+        private fun roleDetail(
+            tenantId: UUID,
+            roleId: UUID,
+        ) = RoleDetail(
+            roleId,
+            tenantId,
+            "OPS",
+            "Operations",
+            null,
+            false,
+            "ACTIVE",
+            NOW,
+            NOW,
+        )
 
         private fun roleAssignmentSummary(assignmentId: UUID) =
             RoleAssignmentSummary(assignmentId, uuidV7(), uuidV7(), null, "TENANT", "ACTIVE")
@@ -461,28 +573,44 @@ class FoundationIamControllerTests
             branchId: UUID? = null,
             scopeType: String = "TENANT",
             status: String = "ACTIVE",
-        ) =
-            RoleAssignmentDetail(
-                assignmentId,
-                tenantId,
-                userId,
-                roleId,
-                branchId,
-                scopeType,
-                status,
-                NOW,
-                uuidV7(),
+        ) = RoleAssignmentDetail(
+            assignmentId,
+            tenantId,
+            userId,
+            roleId,
+            branchId,
+            scopeType,
+            status,
+            NOW,
+            uuidV7(),
+            null,
+            null,
+            NOW,
+            NOW,
+        )
+
+        private fun permissionSummary(permissionId: UUID) =
+            PermissionSummary(
+                permissionId,
+                "permission.view",
+                "View permission",
+                "IAM",
+                "LOW",
+                "ACTIVE",
+            )
+
+        private fun permissionDetail(permissionId: UUID) =
+            PermissionDetail(
+                permissionId,
+                "permission.view",
+                "View permission",
+                "IAM",
                 null,
-                null,
+                "LOW",
+                "ACTIVE",
                 NOW,
                 NOW,
             )
-
-        private fun permissionSummary(permissionId: UUID) =
-            PermissionSummary(permissionId, "permission.view", "View permission", "IAM", "LOW", "ACTIVE")
-
-        private fun permissionDetail(permissionId: UUID) =
-            PermissionDetail(permissionId, "permission.view", "View permission", "IAM", null, "LOW", "ACTIVE", NOW, NOW)
 
         private fun rolePermissionSummary(
             grantId: UUID,
@@ -495,24 +623,33 @@ class FoundationIamControllerTests
             grantId: UUID = uuidV7(),
             roleId: UUID = uuidV7(),
             permissionCode: String = "permission.view",
-        ) = RolePermissionDetail(grantId, tenantId, roleId, uuidV7(), permissionCode, NOW, uuidV7(), NOW, NOW)
+        ) = RolePermissionDetail(
+            grantId,
+            tenantId,
+            roleId,
+            uuidV7(),
+            permissionCode,
+            NOW,
+            uuidV7(),
+            NOW,
+            NOW,
+        )
 
         private fun tenantToken(
             permissions: Set<String>,
             tenantId: UUID = uuidV7(),
-        ) =
-            AppPrincipalAuthenticationToken(
-                AppPrincipal(
-                    userId = uuidV7(),
-                    keycloakSubject = "tenant-user",
-                    organisationId = tenantId,
-                    membershipId = uuidV7(),
-                    branchId = null,
-                    email = "admin@tenant.test",
-                    fullName = "Tenant Admin",
-                    permissions = permissions,
-                ),
-            )
+        ) = AppPrincipalAuthenticationToken(
+            AppPrincipal(
+                userId = uuidV7(),
+                keycloakSubject = "tenant-user",
+                organisationId = tenantId,
+                membershipId = uuidV7(),
+                branchId = null,
+                email = "admin@tenant.test",
+                fullName = "Tenant Admin",
+                permissions = permissions,
+            ),
+        )
 
         private companion object {
             val NOW: Instant = Instant.parse("2026-07-24T10:00:00Z")

@@ -42,7 +42,10 @@ class PermissionController(
     /** Searches immutable permission catalogue entries. */
     @GetMapping
     @PreAuthorize("hasAuthority('permission.view')")
-    @Operation(summary = "Search permissions", description = "Searches immutable permission catalogue entries.")
+    @Operation(
+        summary = "Search permissions",
+        description = "Searches immutable permission catalogue entries.",
+    )
     @ApiResponses(
         ApiResponse(
             responseCode = "200",
@@ -75,7 +78,11 @@ class PermissionController(
         @RequestParam(required = false, name = "sort_dir") sortDir: String?,
     ): ApiPage<PermissionSummaryResponse> {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(caller.actorId, caller.activeOrganisationId, "permission.view")
+        permissionGuard.requireTenantPermission(
+            caller.actorId,
+            caller.activeOrganisationId,
+            "permission.view",
+        )
         val result =
             iamQueryService.searchPermissions(
                 caller.activeOrganisationId,
@@ -111,10 +118,21 @@ class PermissionController(
             content = [Content(schema = Schema(implementation = ApiProblem::class))],
         ),
     )
-    fun getPermission(@PathVariable("permission_id") permissionId: UUID): PermissionDetailResponse {
+    fun getPermission(
+        @PathVariable("permission_id") permissionId: UUID,
+    ): PermissionDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(caller.actorId, caller.activeOrganisationId, "permission.view")
-        return iamQueryService.getPermission(caller.activeOrganisationId, permissionId, caller).toResponse()
+        permissionGuard.requireTenantPermission(
+            caller.actorId,
+            caller.activeOrganisationId,
+            "permission.view",
+        )
+        return iamQueryService
+            .getPermission(
+                caller.activeOrganisationId,
+                permissionId,
+                caller,
+            ).toResponse()
     }
 
     private fun PermissionSummary.toResponse() =

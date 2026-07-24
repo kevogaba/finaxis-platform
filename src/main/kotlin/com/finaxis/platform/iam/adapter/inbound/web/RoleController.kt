@@ -73,10 +73,26 @@ class RoleController(
     @PreAuthorize("hasAuthority('role.view')")
     @Operation(summary = "Search roles", description = "Searches roles in the active tenant.")
     @ApiResponses(
-        ApiResponse(responseCode = "200", description = "Role page", content = [Content(schema = Schema(implementation = ApiPage::class))]),
-        ApiResponse(responseCode = "400", description = "Invalid page or filter", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "401", description = "Unauthenticated", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "403", description = "Forbidden", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
+        ApiResponse(
+            responseCode = "200",
+            description = "Role page",
+            content = [Content(schema = Schema(implementation = ApiPage::class))],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description = "Invalid page or filter",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
     )
     fun searchRoles(
         @RequestParam(required = false) q: String?,
@@ -88,7 +104,11 @@ class RoleController(
         @RequestParam(required = false, name = "sort_dir") sortDir: String?,
     ): ApiPage<RoleSummaryResponse> {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(caller.actorId, caller.activeOrganisationId, "role.view")
+        permissionGuard.requireTenantPermission(
+            caller.actorId,
+            caller.activeOrganisationId,
+            "role.view",
+        )
         val result =
             iamQueryService.searchRoles(
                 caller.activeOrganisationId,
@@ -115,17 +135,41 @@ class RoleController(
         ],
     )
     @ApiResponses(
-        ApiResponse(responseCode = "201", description = "Role created", content = [Content(schema = Schema(implementation = RoleDetailResponse::class))]),
-        ApiResponse(responseCode = "400", description = "Invalid request", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "401", description = "Unauthenticated", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "403", description = "Forbidden", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "409", description = "Role code already exists", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
+        ApiResponse(
+            responseCode = "201",
+            description = "Role created",
+            content = [Content(schema = Schema(implementation = RoleDetailResponse::class))],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description = "Invalid request",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "409",
+            description = "Role code already exists",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
     )
     fun createRole(
         @RequestBody @Valid request: CreateRoleRequest,
     ): ResponseEntity<RoleDetailResponse> {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(caller.actorId, caller.activeOrganisationId, "role.create")
+        permissionGuard.requireTenantPermission(
+            caller.actorId,
+            caller.activeOrganisationId,
+            "role.create",
+        )
         val result =
             roleManagementService.createTenantRole(
                 CreateTenantRole(
@@ -137,8 +181,17 @@ class RoleController(
                     UUID.randomUUID().toString(),
                 ),
             )
-        val response = iamQueryService.getRole(caller.activeOrganisationId, result.roleId, caller).toResponse()
-        return ResponseEntity.created(URI.create("${ApiPaths.ROLES}/${result.roleId}")).body(response)
+        val response =
+            iamQueryService
+                .getRole(
+                    caller.activeOrganisationId,
+                    result.roleId,
+                    caller,
+                ).toResponse()
+        return ResponseEntity
+            .created(
+                URI.create("${ApiPaths.ROLES}/${result.roleId}"),
+            ).body(response)
     }
 
     /** Retrieves role metadata within the active tenant. */
@@ -146,14 +199,36 @@ class RoleController(
     @PreAuthorize("hasAuthority('role.view')")
     @Operation(summary = "Get role", description = "Retrieves role metadata in the active tenant.")
     @ApiResponses(
-        ApiResponse(responseCode = "200", description = "Role details", content = [Content(schema = Schema(implementation = RoleDetailResponse::class))]),
-        ApiResponse(responseCode = "401", description = "Unauthenticated", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "403", description = "Forbidden", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "404", description = "Role not found", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
+        ApiResponse(
+            responseCode = "200",
+            description = "Role details",
+            content = [Content(schema = Schema(implementation = RoleDetailResponse::class))],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description = "Role not found",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
     )
-    fun getRole(@PathVariable("role_id") roleId: UUID): RoleDetailResponse {
+    fun getRole(
+        @PathVariable("role_id") roleId: UUID,
+    ): RoleDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(caller.actorId, caller.activeOrganisationId, "role.view")
+        permissionGuard.requireTenantPermission(
+            caller.actorId,
+            caller.activeOrganisationId,
+            "role.view",
+        )
         return iamQueryService.getRole(caller.activeOrganisationId, roleId, caller).toResponse()
     }
 
@@ -174,19 +249,47 @@ class RoleController(
         ],
     )
     @ApiResponses(
-        ApiResponse(responseCode = "200", description = "Role updated", content = [Content(schema = Schema(implementation = RoleDetailResponse::class))]),
-        ApiResponse(responseCode = "400", description = "Invalid request", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "401", description = "Unauthenticated", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "403", description = "Forbidden", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "404", description = "Role not found", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "409", description = "Immutable role", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
+        ApiResponse(
+            responseCode = "200",
+            description = "Role updated",
+            content = [Content(schema = Schema(implementation = RoleDetailResponse::class))],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description = "Invalid request",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description = "Role not found",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "409",
+            description = "Immutable role",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
     )
     fun updateRole(
         @PathVariable("role_id") roleId: UUID,
         @RequestBody @Valid request: UpdateRoleRequest,
     ): RoleDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(caller.actorId, caller.activeOrganisationId, "role.update")
+        permissionGuard.requireTenantPermission(
+            caller.actorId,
+            caller.activeOrganisationId,
+            "role.update",
+        )
         roleManagementService.updateTenantRole(
             UpdateTenantRole(
                 caller.activeOrganisationId,
@@ -217,14 +320,40 @@ class RoleController(
         ],
     )
     @ApiResponses(
-        ApiResponse(responseCode = "200", description = "Role activated", content = [Content(schema = Schema(implementation = RoleDetailResponse::class))]),
-        ApiResponse(responseCode = "400", description = "Invalid request", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "401", description = "Unauthenticated", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "403", description = "Forbidden", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "404", description = "Role not found", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "409", description = "Immutable role", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
+        ApiResponse(
+            responseCode = "200",
+            description = "Role activated",
+            content = [Content(schema = Schema(implementation = RoleDetailResponse::class))],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description = "Invalid request",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description = "Role not found",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "409",
+            description = "Immutable role",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
     )
-    fun activateRole(@PathVariable("role_id") roleId: UUID): RoleDetailResponse = mutateStatus(roleId, true)
+    fun activateRole(
+        @PathVariable("role_id") roleId: UUID,
+    ): RoleDetailResponse = mutateStatus(roleId, true)
 
     /** Deactivates a tenant-managed role. */
     @PostMapping("/{role_id}/deactivate")
@@ -243,24 +372,69 @@ class RoleController(
         ],
     )
     @ApiResponses(
-        ApiResponse(responseCode = "200", description = "Role deactivated", content = [Content(schema = Schema(implementation = RoleDetailResponse::class))]),
-        ApiResponse(responseCode = "400", description = "Invalid request", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "401", description = "Unauthenticated", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "403", description = "Forbidden", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "404", description = "Role not found", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "409", description = "Immutable role", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
+        ApiResponse(
+            responseCode = "200",
+            description = "Role deactivated",
+            content = [Content(schema = Schema(implementation = RoleDetailResponse::class))],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description = "Invalid request",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description = "Role not found",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "409",
+            description = "Immutable role",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
     )
-    fun deactivateRole(@PathVariable("role_id") roleId: UUID): RoleDetailResponse = mutateStatus(roleId, false)
+    fun deactivateRole(
+        @PathVariable("role_id") roleId: UUID,
+    ): RoleDetailResponse = mutateStatus(roleId, false)
 
     /** Lists permission grants on a role. */
     @GetMapping("/{role_id}/permissions")
     @PreAuthorize("hasAuthority('role.view')")
-    @Operation(summary = "List role permissions", description = "Lists permission grants on a role.")
+    @Operation(
+        summary = "List role permissions",
+        description = "Lists permission grants on a role.",
+    )
     @ApiResponses(
-        ApiResponse(responseCode = "200", description = "Role-permission page", content = [Content(schema = Schema(implementation = ApiPage::class))]),
-        ApiResponse(responseCode = "400", description = "Invalid page", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "401", description = "Unauthenticated", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "403", description = "Forbidden", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
+        ApiResponse(
+            responseCode = "200",
+            description = "Role-permission page",
+            content = [Content(schema = Schema(implementation = ApiPage::class))],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description = "Invalid page",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
     )
     fun listRolePermissions(
         @PathVariable("role_id") roleId: UUID,
@@ -285,12 +459,40 @@ class RoleController(
         ],
     )
     @ApiResponses(
-        ApiResponse(responseCode = "201", description = "Permission granted", content = [Content(schema = Schema(implementation = RolePermissionSummaryResponse::class))]),
-        ApiResponse(responseCode = "400", description = "Invalid request", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "401", description = "Unauthenticated", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "403", description = "Forbidden", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "404", description = "Role or permission not found", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "409", description = "Immutable role", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
+        ApiResponse(
+            responseCode = "201",
+            description = "Permission granted",
+            content = [
+                Content(
+                    schema = Schema(implementation = RolePermissionSummaryResponse::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description = "Invalid request",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description = "Role or permission not found",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "409",
+            description = "Immutable role",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
     )
     fun assignPermission(
         @PathVariable("role_id") roleId: UUID,
@@ -320,7 +522,9 @@ class RoleController(
                     caller,
                 ).items
                 .firstOrNull { it.permissionCode == request.permissionCode }
-                ?: throw ResourceNotFoundException(safeDetail = "Role permission not found after grant")
+                ?: throw ResourceNotFoundException(
+                    safeDetail = "Role permission not found after grant",
+                )
         val response = grant.toResponse()
         return ResponseEntity
             .created(URI.create("${ApiPaths.ROLES}/$roleId/permissions/${grant.id}"))
@@ -344,20 +548,53 @@ class RoleController(
         ],
     )
     @ApiResponses(
-        ApiResponse(responseCode = "200", description = "Permission removed", content = [Content(schema = Schema(implementation = ApiPage::class))]),
-        ApiResponse(responseCode = "400", description = "Invalid request", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "401", description = "Unauthenticated", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "403", description = "Forbidden", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "404", description = "Role permission not found", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
-        ApiResponse(responseCode = "409", description = "Immutable role", content = [Content(schema = Schema(implementation = ApiProblem::class))]),
+        ApiResponse(
+            responseCode = "200",
+            description = "Permission removed",
+            content = [Content(schema = Schema(implementation = ApiPage::class))],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description = "Invalid request",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description = "Role permission not found",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "409",
+            description = "Immutable role",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
     )
     fun removePermission(
         @PathVariable("role_id") roleId: UUID,
         @PathVariable("role_permission_id") rolePermissionId: UUID,
     ): ApiPage<RolePermissionSummaryResponse> {
         val caller = CallerContextResolver.getTenantCaller()
-        val grant = iamQueryService.getRolePermission(caller.activeOrganisationId, rolePermissionId, caller)
-        if (grant.roleId != roleId) throw ResourceNotFoundException(safeDetail = "Role permission not found")
+        val grant =
+            iamQueryService.getRolePermission(
+                caller.activeOrganisationId,
+                rolePermissionId,
+                caller,
+            )
+        if (grant.roleId !=
+            roleId
+        ) {
+            throw ResourceNotFoundException(safeDetail = "Role permission not found")
+        }
         permissionGuard.requireTenantPermission(
             caller.actorId,
             caller.activeOrganisationId,
@@ -375,17 +612,34 @@ class RoleController(
         return rolePermissions(roleId, 0, MAXIMUM_PAGE_SIZE.toInt())
     }
 
-    private fun mutateStatus(roleId: UUID, activate: Boolean): RoleDetailResponse {
+    private fun mutateStatus(
+        roleId: UUID,
+        activate: Boolean,
+    ): RoleDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
         val permission = if (activate) "role.activate" else "role.deactivate"
-        permissionGuard.requireTenantPermission(caller.actorId, caller.activeOrganisationId, permission)
+        permissionGuard.requireTenantPermission(
+            caller.actorId,
+            caller.activeOrganisationId,
+            permission,
+        )
         if (activate) {
             roleManagementService.activateRole(
-                ActivateRole(caller.activeOrganisationId, roleId, caller.actorId, UUID.randomUUID().toString()),
+                ActivateRole(
+                    caller.activeOrganisationId,
+                    roleId,
+                    caller.actorId,
+                    UUID.randomUUID().toString(),
+                ),
             )
         } else {
             roleManagementService.deactivateRole(
-                DeactivateRole(caller.activeOrganisationId, roleId, caller.actorId, UUID.randomUUID().toString()),
+                DeactivateRole(
+                    caller.activeOrganisationId,
+                    roleId,
+                    caller.actorId,
+                    UUID.randomUUID().toString(),
+                ),
             )
         }
         return iamQueryService.getRole(caller.activeOrganisationId, roleId, caller).toResponse()
@@ -397,7 +651,11 @@ class RoleController(
         size: Int,
     ): ApiPage<RolePermissionSummaryResponse> {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(caller.actorId, caller.activeOrganisationId, "role.view")
+        permissionGuard.requireTenantPermission(
+            caller.actorId,
+            caller.activeOrganisationId,
+            "role.view",
+        )
         val result =
             iamQueryService.listRolePermissions(
                 caller.activeOrganisationId,
@@ -443,6 +701,5 @@ class RoleController(
 
     private companion object {
         const val MAXIMUM_PAGE_SIZE = 100L
-
     }
 }

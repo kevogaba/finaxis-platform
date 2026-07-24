@@ -113,7 +113,11 @@ class RoleAssignmentController(
         ApiResponse(
             responseCode = "200",
             description = "Role-assignment details",
-            content = [Content(schema = Schema(implementation = RoleAssignmentDetailResponse::class))],
+            content = [
+                Content(
+                    schema = Schema(implementation = RoleAssignmentDetailResponse::class),
+                ),
+            ],
         ),
         ApiResponse(
             responseCode = "401",
@@ -140,7 +144,12 @@ class RoleAssignmentController(
             caller.activeOrganisationId,
             "role_assignment.view",
         )
-        return iamQueryService.getRoleAssignment(caller.activeOrganisationId, assignmentId, caller).toResponse()
+        return iamQueryService
+            .getRoleAssignment(
+                caller.activeOrganisationId,
+                assignmentId,
+                caller,
+            ).toResponse()
     }
 
     /** Assigns a role to a user membership. */
@@ -163,7 +172,11 @@ class RoleAssignmentController(
         ApiResponse(
             responseCode = "201",
             description = "Role assignment created",
-            content = [Content(schema = Schema(implementation = RoleAssignmentSummaryResponse::class))],
+            content = [
+                Content(
+                    schema = Schema(implementation = RoleAssignmentSummaryResponse::class),
+                ),
+            ],
         ),
         ApiResponse(
             responseCode = "400",
@@ -195,7 +208,11 @@ class RoleAssignmentController(
         @RequestBody @Valid request: AssignRoleRequest,
     ): ResponseEntity<RoleAssignmentSummaryResponse> {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(caller.actorId, caller.activeOrganisationId, "user.assign_role")
+        permissionGuard.requireTenantPermission(
+            caller.actorId,
+            caller.activeOrganisationId,
+            "user.assign_role",
+        )
         val result =
             roleManagementService.assignRoleToUser(
                 AssignRoleToUser(
@@ -242,7 +259,11 @@ class RoleAssignmentController(
         ApiResponse(
             responseCode = "200",
             description = "Role assignment revoked",
-            content = [Content(schema = Schema(implementation = RoleAssignmentDetailResponse::class))],
+            content = [
+                Content(
+                    schema = Schema(implementation = RoleAssignmentDetailResponse::class),
+                ),
+            ],
         ),
         ApiResponse(
             responseCode = "400",
@@ -271,7 +292,11 @@ class RoleAssignmentController(
         val caller = CallerContextResolver.getTenantCaller()
         val assignment =
             iamQueryService.getRoleAssignment(caller.activeOrganisationId, assignmentId, caller)
-        permissionGuard.requireTenantPermission(caller.actorId, caller.activeOrganisationId, "user.revoke_role")
+        permissionGuard.requireTenantPermission(
+            caller.actorId,
+            caller.activeOrganisationId,
+            "user.revoke_role",
+        )
         roleManagementService.revokeRoleFromUser(
             RevokeRoleFromUser(
                 caller.activeOrganisationId,
@@ -283,7 +308,12 @@ class RoleAssignmentController(
                 UUID.randomUUID().toString(),
             ),
         )
-        return iamQueryService.getRoleAssignment(caller.activeOrganisationId, assignmentId, caller).toResponse()
+        return iamQueryService
+            .getRoleAssignment(
+                caller.activeOrganisationId,
+                assignmentId,
+                caller,
+            ).toResponse()
     }
 
     private fun RoleAssignmentSummary.toResponse() =
