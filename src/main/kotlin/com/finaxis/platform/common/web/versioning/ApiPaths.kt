@@ -21,4 +21,10 @@ object ApiPaths {
 
     /** Branch management endpoint namespace. */
     const val BRANCHES = "$API_V1/branches"
+
+    /** Tenant membership management endpoint namespace. */
+    const val MEMBERSHIPS = "$TENANT/memberships"
+
+    /** Tenant branch-assignment management endpoint namespace. */
+    const val BRANCH_ASSIGNMENTS = "$TENANT/branch-assignments"
 }
