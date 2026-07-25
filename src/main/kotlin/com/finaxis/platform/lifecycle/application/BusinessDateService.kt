@@ -1,9 +1,13 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
+import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import org.springframework.stereotype.Service
@@ -32,13 +36,14 @@ class BusinessDateService(
     fun initialize(command: InitializeBusinessDateCommand): BusinessDateView {
         requireActive(command.organisationId)
         requirePermission(command.actorId, command.organisationId, BUSINESS_DATE_ADVANCE_PERMISSION)
-        check(
-            businessDateStore.initialize(
+        if (!businessDateStore.initialize(
                 command.organisationId,
                 command.initialBusinessDate,
                 command.actorId,
-            ),
-        ) { "Business date is already initialized for the organisation." }
+            )
+        ) {
+            throw ConflictException()
+        }
         record(
             BusinessDateTransition(
                 organisationId = command.organisationId,
@@ -64,18 +69,16 @@ class BusinessDateService(
         requireActive(command.organisationId)
         requirePermission(command.actorId, command.organisationId, BUSINESS_DATE_ADVANCE_PERMISSION)
         val current = requireCurrent(command.organisationId)
-        require(current.status == OPEN) { "Business date can be advanced only while it is open." }
-        require(command.newBusinessDate.isAfter(current.currentBusinessDate)) {
-            "The new business date must be after the current business date."
-        }
-        check(
+        conflictUnless(current.status == OPEN)
+        invalidOperationUnless(command.newBusinessDate.isAfter(current.currentBusinessDate))
+        conflictUnless(
             businessDateStore.advance(
                 command.organisationId,
                 command.newBusinessDate,
                 current.rowVersion,
                 command.actorId,
             ),
-        ) { "Business date was concurrently advanced; retry with the latest version." }
+        )
         record(
             BusinessDateTransition(
                 organisationId = command.organisationId,
@@ -107,17 +110,18 @@ class BusinessDateService(
         requireActive(command.organisationId)
         requirePermission(command.actorId, command.organisationId, COB_START_PERMISSION)
         val current = requireCurrent(command.organisationId)
-        require(current.status == OPEN) {
-            "COB can be started only while the business date is open."
+        if (current.status != OPEN) {
+            throw ConflictException()
         }
-        check(
-            businessDateStore.startCob(
+        if (!businessDateStore.startCob(
                 command.organisationId,
                 current.currentBusinessDate,
                 current.rowVersion,
                 command.actorId,
-            ),
-        ) { "Business date was concurrently changed; retry with the latest version." }
+            )
+        ) {
+            throw ConflictException()
+        }
         record(
             BusinessDateTransition(
                 organisationId = command.organisationId,
@@ -143,17 +147,18 @@ class BusinessDateService(
         requireActive(command.organisationId)
         requirePermission(command.actorId, command.organisationId, COB_COMPLETE_PERMISSION)
         val current = requireCurrent(command.organisationId)
-        require(current.status == CLOSING) {
-            "COB can be completed only while the business date is closing."
+        if (current.status != CLOSING) {
+            throw ConflictException()
         }
-        check(
-            businessDateStore.changeStatus(
+        if (!businessDateStore.changeStatus(
                 command.organisationId,
                 CLOSED,
                 current.rowVersion,
                 command.actorId,
-            ),
-        ) { "Business date was concurrently changed; retry with the latest version." }
+            )
+        ) {
+            throw ConflictException()
+        }
         record(
             BusinessDateTransition(
                 organisationId = command.organisationId,
@@ -179,17 +184,18 @@ class BusinessDateService(
         requireActive(command.organisationId)
         requirePermission(command.actorId, command.organisationId, BUSINESS_DATE_REOPEN_PERMISSION)
         val current = requireCurrent(command.organisationId)
-        require(current.status == CLOSED) {
-            "Business date can be reopened only while it is closed."
+        if (current.status != CLOSED) {
+            throw ConflictException()
         }
-        check(
-            businessDateStore.changeStatus(
+        if (!businessDateStore.changeStatus(
                 command.organisationId,
                 OPEN,
                 current.rowVersion,
                 command.actorId,
-            ),
-        ) { "Business date was concurrently changed; retry with the latest version." }
+            )
+        ) {
+            throw ConflictException()
+        }
         record(
             BusinessDateTransition(
                 organisationId = command.organisationId,
@@ -220,19 +226,19 @@ class BusinessDateService(
     /** Lists bounded business-date history after verifying tenant-scoped view permission. */
     @Transactional(readOnly = true)
     fun listHistory(query: ListBusinessDateHistoryQuery): BusinessDateHistoryPage {
-        require(query.page >= 0) { "Page must not be negative." }
-        require(query.size in 1..MAXIMUM_PAGE_SIZE) {
-            "Page size must be between 1 and $MAXIMUM_PAGE_SIZE."
+        if (query.page < 0) {
+            throw InvalidPageRequestException()
+        }
+        if (query.size !in 1..MAXIMUM_PAGE_SIZE) {
+            throw InvalidPageRequestException()
         }
         requirePermission(query.actorId, query.organisationId, BUSINESS_DATE_VIEW_PERMISSION)
         return historyStore.list(query.organisationId, query.page, query.size)
     }
 
     private fun requireActive(organisationId: UUID) {
-        require(
-            lifecycleStore.lifecycleState(organisationId) == OrganisationLifecycleState.ACTIVE,
-        ) {
-            "Business date can be changed only for an active organisation."
+        if (lifecycleStore.lifecycleState(organisationId) != OrganisationLifecycleState.ACTIVE) {
+            throw ConflictException()
         }
     }
 
@@ -245,9 +251,7 @@ class BusinessDateService(
     }
 
     private fun requireCurrent(organisationId: UUID): BusinessDateSnapshot =
-        requireNotNull(businessDateStore.current(organisationId)) {
-            "Business date was not found for the organisation."
-        }
+        businessDateStore.current(organisationId) ?: throw ResourceNotFoundException()
 
     private fun record(transition: BusinessDateTransition) {
         val occurredAt = clock.instant()
@@ -321,6 +325,14 @@ class BusinessDateService(
         const val BUSINESS_DATE_REOPENED_TARGET =
             "finaxis.lifecycle.organisation.business-date-reopened"
     }
+}
+
+private fun conflictUnless(condition: Boolean) {
+    if (!condition) throw ConflictException()
+}
+
+private fun invalidOperationUnless(condition: Boolean) {
+    if (!condition) throw InvalidOperationException()
 }
 
 /** Descriptor for one business-date/COB state change, recorded as history, audit, and an event. */

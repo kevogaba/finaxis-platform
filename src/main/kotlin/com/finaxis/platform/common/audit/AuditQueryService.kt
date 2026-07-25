@@ -1,6 +1,7 @@
 package com.finaxis.platform.common.audit
 
 import com.finaxis.platform.common.application.ResourceNotFoundException
+import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import org.springframework.stereotype.Service
 import java.time.Instant
 import java.util.UUID
@@ -109,9 +110,11 @@ class AuditQueryService(
         actorId: UUID,
     ): AuditEventPage {
         permissionGuard.requireTenantPermission(actorId, filter.organisationId, "audit.view")
-        require(filter.page >= 0) { "Page must not be negative." }
-        require(filter.size in 1..MAXIMUM_PAGE_SIZE) {
-            "Page size must be between 1 and $MAXIMUM_PAGE_SIZE."
+        if (filter.page < 0) {
+            throw InvalidPageRequestException()
+        }
+        if (filter.size !in 1..MAXIMUM_PAGE_SIZE) {
+            throw InvalidPageRequestException()
         }
         return queries.search(filter)
     }

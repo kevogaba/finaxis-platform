@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.domain
 
+import com.finaxis.platform.common.application.InvalidOperationException
 import java.time.ZoneId
 import java.util.Currency
 
@@ -75,16 +76,17 @@ object TenantSettingCatalog {
     /** Returns the definition for [key], or null when the key is not in the catalog. */
     fun definition(key: String): TenantSettingDefinition? = byKey[key]
 
-    /** Returns the definition for [key]; throws [IllegalArgumentException] when unknown. */
+    /** Returns the definition for [key]; throws [InvalidOperationException] when unknown. */
     fun require(key: String): TenantSettingDefinition =
-        requireNotNull(byKey[key]) { "Unknown tenant setting key: $key" }
+        byKey[key]
+            ?: throw InvalidOperationException(safeDetail = "Unknown tenant setting key: $key")
 
     /** Returns every catalog key. */
     fun keys(): Set<String> = byKey.keys
 
     /**
      * Validates [rawValue] for [key] and returns the canonical stored string form. Throws
-     * [IllegalArgumentException] for an unknown key or a value that fails its type rule.
+     * [InvalidOperationException] for an unknown key or a value that fails its type rule.
      */
     fun canonicalize(
         key: String,
@@ -92,7 +94,9 @@ object TenantSettingCatalog {
     ): String {
         val definition = require(key)
         val trimmed = rawValue.trim()
-        require(trimmed.isNotEmpty()) { "Setting $key must not be blank." }
+        if (trimmed.isEmpty()) {
+            throw InvalidOperationException()
+        }
         return when (definition.valueType) {
             TenantSettingValueType.STRING -> trimmed
             TenantSettingValueType.BOOLEAN -> canonicalizeBoolean(key, trimmed)
@@ -108,8 +112,12 @@ object TenantSettingCatalog {
     ): String =
         when (value.lowercase()) {
             "true" -> "true"
+
             "false" -> "false"
-            else -> throw IllegalArgumentException("Setting $key must be true or false.")
+
+            else -> throw InvalidOperationException(
+                safeDetail = "Setting $key must be true or false.",
+            )
         }
 
     private fun canonicalizeInt(
@@ -117,8 +125,10 @@ object TenantSettingCatalog {
         value: String,
     ): String {
         val parsed = value.toIntOrNull()
-        require(parsed != null && parsed >= 0) {
-            "Setting $key must be a non-negative integer."
+        if (parsed == null || parsed < 0) {
+            throw InvalidOperationException(
+                safeDetail = "Setting $key must be a non-negative integer.",
+            )
         }
         return parsed.toString()
     }
@@ -127,8 +137,10 @@ object TenantSettingCatalog {
         key: String,
         value: String,
     ): String {
-        require(ZoneId.getAvailableZoneIds().contains(value)) {
-            "Setting $key must be a valid IANA time-zone id."
+        if (!ZoneId.getAvailableZoneIds().contains(value)) {
+            throw InvalidOperationException(
+                safeDetail = "Setting $key must be a valid IANA time-zone id.",
+            )
         }
         return value
     }
@@ -139,7 +151,11 @@ object TenantSettingCatalog {
     ): String {
         val upper = value.uppercase()
         val valid = Currency.getAvailableCurrencies().any { it.currencyCode == upper }
-        require(valid) { "Setting $key must be a valid ISO 4217 currency code." }
+        if (!valid) {
+            throw InvalidOperationException(
+                safeDetail = "Setting $key must be a valid ISO 4217 currency code.",
+            )
+        }
         return upper
     }
 }

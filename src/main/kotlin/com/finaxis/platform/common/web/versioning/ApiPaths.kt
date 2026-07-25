@@ -42,4 +42,13 @@ object ApiPaths {
 
     /** Platform-wide user lifecycle endpoint namespace. */
     const val PLATFORM_USERS = "$PLATFORM/users"
+
+    /** Tenant setup-level settings endpoint namespace. */
+    const val TENANT_SETTINGS = "$TENANT/settings"
+
+    /** Tenant controlled business date endpoint namespace (singleton resource). */
+    const val BUSINESS_DATE = "$TENANT/business-date"
+
+    /** Tenant audit event administration endpoint namespace. */
+    const val AUDIT_EVENTS = "$TENANT/audit-events"
 }

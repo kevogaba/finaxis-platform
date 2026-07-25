@@ -1,11 +1,13 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.audit.Redacted
 import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
+import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.TenantSettingCatalog
@@ -119,9 +121,11 @@ class TenantSettingsService(
             query.organisationId,
             SETTING_READ_PERMISSION,
         )
-        require(query.page >= 0) { "Page must not be negative." }
-        require(query.size in MINIMUM_PAGE_SIZE..MAXIMUM_PAGE_SIZE) {
-            "Page size must be between $MINIMUM_PAGE_SIZE and $MAXIMUM_PAGE_SIZE."
+        if (query.page < 0) {
+            throw InvalidPageRequestException()
+        }
+        if (query.size !in MINIMUM_PAGE_SIZE..MAXIMUM_PAGE_SIZE) {
+            throw InvalidPageRequestException()
         }
 
         val canManagePlatformSettings = canManagePlatformSettings(query.actorId)
@@ -159,10 +163,8 @@ class TenantSettingsService(
     }
 
     private fun requireActive(organisationId: UUID) {
-        require(
-            lifecycleStore.lifecycleState(organisationId) == OrganisationLifecycleState.ACTIVE,
-        ) {
-            "Settings can be changed only for an active organisation."
+        if (lifecycleStore.lifecycleState(organisationId) != OrganisationLifecycleState.ACTIVE) {
+            throw ConflictException()
         }
     }
 

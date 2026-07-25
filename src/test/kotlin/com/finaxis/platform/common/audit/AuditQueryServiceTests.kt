@@ -2,6 +2,7 @@ package com.finaxis.platform.common.audit
 
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
+import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import org.junit.jupiter.api.Test
 import java.time.Instant
 import java.util.UUID
@@ -81,7 +82,7 @@ class AuditQueryServiceTests {
     @Test
     fun `search rejects a negative page`() {
         val actorId = UUID.randomUUID()
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidPageRequestException> {
             service.search(AuditEventFilter(organisationId = UUID.randomUUID(), page = -1), actorId)
         }
     }
@@ -91,10 +92,10 @@ class AuditQueryServiceTests {
         val organisationId = UUID.randomUUID()
         val actorId = UUID.randomUUID()
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidPageRequestException> {
             service.search(AuditEventFilter(organisationId = organisationId, size = 0), actorId)
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidPageRequestException> {
             service.search(AuditEventFilter(organisationId = organisationId, size = 101), actorId)
         }
     }

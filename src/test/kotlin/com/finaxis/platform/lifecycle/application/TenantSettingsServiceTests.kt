@@ -1,5 +1,7 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
@@ -38,7 +40,7 @@ class TenantSettingsServiceTests {
     @Test
     fun `createOrUpdate rejects an inactive organisation`() {
         lifecycleStore.states[organisationId] = OrganisationLifecycleState.SUSPENDED
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ConflictException> {
             service.createOrUpdate(
                 CreateOrUpdateTenantSettingCommand(
                     organisationId,
@@ -53,7 +55,7 @@ class TenantSettingsServiceTests {
     @Test
     fun `createOrUpdate rejects an unknown key`() {
         activate()
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidOperationException> {
             service.createOrUpdate(
                 CreateOrUpdateTenantSettingCommand(organisationId, "bogus", "x", actorId),
             )
