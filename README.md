@@ -7,11 +7,11 @@ and core-banking modular monolith. It uses hexagonal architecture and Spring Mod
 
 | Module | Responsibility | Current status |
 | --- | --- | --- |
-| `iam` | Identity, authorization, and active-organisation context | The only REST surface today. |
-| `lifecycle` | FSM services for organisation, branch, user, and membership | No inbound adapter. |
+| `iam` | Identity, authorization, and tenant context | REST: auth, users, roles, permissions. |
+| `lifecycle` | Organisation, branch, setup FSMs | REST: tenants, branches, dates, audit. |
 | `notifications` | RabbitMQ listener and JobRunr welcome-email stub | Reference event pipeline. |
 | `common` | Transitions, audit, context, persistence, and web infrastructure | Shared interfaces. |
-| `config` | Application configuration | Supporting configuration package. |
+| `config` | Application configuration | Infrastructure wiring, not a domain module. |
 
 Authentication is provided by Keycloak; application permissions are the runtime authorization
 source of truth.
@@ -81,14 +81,26 @@ event → Namastack outbox → RabbitMQ → notifications listener → JobRunr w
 
 ## API
 
-Public endpoints are versioned under `/api/v1`. The current endpoints are:
-
-- `POST /api/v1/auth/select-organisation`
-- `POST /api/v1/auth/select-branch`
-- `GET /api/v1/auth/me`
+Public endpoints are versioned under `/api/v1`. The implemented foundation REST surface covers
+auth/profile selection, platform tenant administration, tenant branches, tenant users,
+memberships, branch assignments, roles, role assignments, permissions, audit events, business
+date, and tenant settings. The canonical contract reference is
+[Foundation REST API](docs/api/foundation-api.md).
 
 In local development, Scalar API documentation is available at `/scalar` and OpenAPI JSON at
 `/v3/api-docs`. Both are disabled in the production profile.
+
+Foundation REST rules:
+
+- Inbound adapters stay thin and delegate to module-owned application services.
+- Queries are bounded and tenant-filtered; every collection endpoint returns the standard
+  paginated envelope.
+- Every endpoint has an explicit application-layer permission check. Organisation/branch
+  selection and tenant settings are intentional service-enforced exceptions.
+- Every mutation is idempotent with optional/generated UUID `Idempotency-Key` handling.
+- Tenant and branch context are enforced before tenant data is returned or mutated.
+- Public JSON uses `snake_case`; business dates use `dd-MM-yyyy`, times use `HH:mm:ss`, and
+  datetimes use ISO-8601 offset format.
 
 ## Security profiles
 
@@ -116,15 +128,16 @@ Qodana job in `.github/workflows/static-analysis-and-tests.yml`.
 
 ## Project status and follow-ups
 
-- `lifecycle` has no inbound adapter yet; transitions are currently internal or test-driven.
 - The welcome-email provider integration is pending; the current JobRunr handler is a stub.
-- `iam` and `config` do not yet declare explicit `@ApplicationModule` package metadata.
+- `config` intentionally does not declare `@ApplicationModule`; it is infrastructure wiring
+  rather than a domain module.
 - JaCoCo's enforced coverage rule is scoped to `iam` only.
 
 ## Documentation index
 
 | Area | Document |
 | --- | --- |
+| API | [Foundation REST API](docs/api/foundation-api.md) |
 | Architecture | [FSM transitions](docs/architecture/fsm-transitions.md) |
 | Architecture | [Foundation plan](docs/architecture/foundation-implementation-plan.md) |
 | Architecture | [Lifecycle FSM](docs/architecture/lifecycle-fsm.md) |
