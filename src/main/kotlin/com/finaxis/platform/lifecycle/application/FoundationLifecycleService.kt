@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.context.RequestContexts
@@ -11,6 +12,7 @@ import com.finaxis.platform.common.transitions.TransitionExecution
 import com.finaxis.platform.common.transitions.TransitionExecutor
 import com.finaxis.platform.common.transitions.TransitionGraph
 import com.finaxis.platform.common.transitions.TransitionGuardException
+import com.finaxis.platform.common.transitions.TransitionNotAllowedException
 import com.finaxis.platform.common.transitions.TransitionResult
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleTransition
@@ -168,6 +170,15 @@ class FoundationLifecycleService(
                     command,
                     ex,
                 )
+                if (ex is TransitionNotAllowedException) {
+                    // The current resource state does not allow this transition (e.g. a caller
+                    // retrying a mutation on an already-terminal or already-transitioned
+                    // resource). This is a foreseeable client-facing conflict, not a server fault
+                    // - map it to the same safe ApplicationException subtype every other lifecycle
+                    // state-conflict already uses, instead of leaking the internal FSM exception
+                    // type to ApiExceptionHandler's generic 500 fallback.
+                    throw ConflictException()
+                }
                 throw ex
             }
         recordOutcome(result, organisationId)

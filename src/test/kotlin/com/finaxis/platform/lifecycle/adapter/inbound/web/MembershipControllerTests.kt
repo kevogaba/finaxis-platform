@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiExceptionHandler
@@ -26,6 +27,7 @@ import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -263,6 +265,52 @@ class MembershipControllerTests
                     status { isBadRequest() }
                     jsonPath("$.code") { value("validation_failed") }
                 }
+        }
+
+        @Test
+        fun `membership state conflicts map to safe problem responses`() {
+            val tenantId = uuidV7()
+            val membershipId = uuidV7()
+            whenever(userProvisioningService.approveUser(any())).thenThrow(ConflictException())
+            doThrow(ConflictException()).whenever(userProvisioningService).suspendMembership(any())
+            doThrow(ConflictException()).whenever(userProvisioningService).reactivateMembership(
+                any(),
+            )
+
+            listOf(
+                Triple(
+                    "user.approve",
+                    "${ApiPaths.MEMBERSHIPS}/$membershipId/activate",
+                    "{}",
+                ),
+                Triple(
+                    "membership.suspend",
+                    "${ApiPaths.MEMBERSHIPS}/$membershipId/suspend",
+                    apiJsonCodec.mapper.writeValueAsString(
+                        SuspendMembershipRequest("Already revoked"),
+                    ),
+                ),
+                Triple(
+                    "membership.reactivate",
+                    "${ApiPaths.MEMBERSHIPS}/$membershipId/reactivate",
+                    apiJsonCodec.mapper.writeValueAsString(
+                        ReactivateMembershipRequest("Already revoked"),
+                    ),
+                ),
+            ).forEach { (permission, path, payload) ->
+                mockMvc
+                    .post(path) {
+                        contentType = MediaType.APPLICATION_JSON
+                        content = payload
+                        with(authentication(tenantToken(setOf(permission), tenantId)))
+                    }.andExpect {
+                        status { isConflict() }
+                        content {
+                            contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
+                        }
+                        jsonPath("$.code") { value("conflict") }
+                    }
+            }
         }
 
         @Test

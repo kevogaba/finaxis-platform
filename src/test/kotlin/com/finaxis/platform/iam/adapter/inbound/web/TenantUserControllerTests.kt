@@ -32,6 +32,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.context.annotation.Import
+import org.springframework.http.HttpMethod
 import org.springframework.http.MediaType
 import org.springframework.security.test.web.servlet.request
     .SecurityMockMvcRequestPostProcessors.authentication
@@ -39,6 +40,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import java.util.UUID
 
 private const val MODULITH_RUNTIME_AUTO_CONFIGURATION =
@@ -108,6 +111,29 @@ class TenantUserControllerTests
         private lateinit var permissionGuard: PermissionGuard
 
         @Test
+        fun `read routes enforce authentication and permission`() {
+            val tenantId = uuidV7()
+            val userId = uuidV7()
+            val routes =
+                listOf(
+                    ApiPaths.TENANT_USERS,
+                    "${ApiPaths.TENANT_USERS}/$userId",
+                )
+
+            routes.forEach { path ->
+                mockMvc
+                    .get(path)
+                    .andExpect { status { isUnauthorized() } }
+                mockMvc
+                    .get(path) {
+                        with(authentication(tenantToken(emptySet(), tenantId)))
+                    }.andExpect {
+                        status { isForbidden() }
+                    }
+            }
+        }
+
+        @Test
         fun `searchUsers returns tenant scoped paginated users`() {
             val tenantId = uuidV7()
             val userId = uuidV7()
@@ -164,6 +190,28 @@ class TenantUserControllerTests
         }
 
         @Test
+        fun `tenant mutation routes enforce authentication and permission`() {
+            val tenantId = uuidV7()
+            tenantMutationRoutes().forEach { (method, path, permission) ->
+                val payload = tenantMutationPayload(path)
+                mockMvc
+                    .perform(
+                        request(method, path)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(payload),
+                    ).andExpect(status().isUnauthorized)
+                mockMvc
+                    .perform(
+                        request(method, path)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(payload)
+                            .with(authentication(tenantToken(emptySet(), tenantId))),
+                    ).andExpect(status().isForbidden)
+                kotlin.test.assertTrue(permission.isNotBlank())
+            }
+        }
+
+        @Test
         fun `inviteUser rejects invalid email before invoking the service`() {
             val tenantId = uuidV7()
 
@@ -212,6 +260,17 @@ class TenantUserControllerTests
                     jsonPath("$.email") { value("admin@tenant.test") }
                 }
         }
+
+        private fun tenantMutationRoutes() =
+            listOf(
+                Triple(HttpMethod.POST, ApiPaths.TENANT_USERS, "user.invite"),
+            )
+
+        private fun tenantMutationPayload(path: String): String =
+            when (path) {
+                ApiPaths.TENANT_USERS -> apiJsonCodec.mapper.writeValueAsString(inviteRequest())
+                else -> ""
+            }
 
         private fun inviteRequest() =
             InviteUserRequest(

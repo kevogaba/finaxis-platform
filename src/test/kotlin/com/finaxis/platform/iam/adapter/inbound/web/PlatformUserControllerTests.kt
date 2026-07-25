@@ -35,6 +35,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.context.annotation.Import
+import org.springframework.http.HttpMethod
 import org.springframework.http.MediaType
 import org.springframework.security.test.web.servlet.request
     .SecurityMockMvcRequestPostProcessors.authentication
@@ -42,6 +43,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import java.util.UUID
 
 private const val MODULITH_RUNTIME_AUTO_CONFIGURATION =
@@ -110,6 +113,29 @@ class PlatformUserControllerTests
 
         @MockitoBean
         private lateinit var permissionGuard: PermissionGuard
+
+        @Test
+        fun `read routes enforce authentication and permission`() {
+            val tenantId = uuidV7()
+            val userId = uuidV7()
+            val routes =
+                listOf(
+                    "${ApiPaths.PLATFORM_TENANTS}/$tenantId/users",
+                    "${ApiPaths.PLATFORM_TENANTS}/$tenantId/users/$userId",
+                )
+
+            routes.forEach { path ->
+                mockMvc
+                    .get(path)
+                    .andExpect { status { isUnauthorized() } }
+                mockMvc
+                    .get(path) {
+                        with(authentication(platformToken(emptySet())))
+                    }.andExpect {
+                        status { isForbidden() }
+                    }
+            }
+        }
 
         @Test
         fun `searchUsers lists users within nested tenant route`() {
@@ -197,6 +223,28 @@ class PlatformUserControllerTests
         }
 
         @Test
+        fun `platform lifecycle mutation routes enforce authentication and permission`() {
+            val userId = uuidV7()
+            platformLifecycleMutationRoutes(userId).forEach { (method, path, permission) ->
+                val payload = platformLifecycleMutationPayload(path)
+                mockMvc
+                    .perform(
+                        request(method, path)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(payload),
+                    ).andExpect(status().isUnauthorized)
+                mockMvc
+                    .perform(
+                        request(method, path)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(payload)
+                            .with(authentication(platformToken(emptySet()))),
+                    ).andExpect(status().isForbidden)
+                kotlin.test.assertTrue(permission.isNotBlank())
+            }
+        }
+
+        @Test
         fun `suspendUser rejects blank reason`() {
             mockMvc
                 .post("${ApiPaths.PLATFORM_USERS}/${uuidV7()}/suspend") {
@@ -208,6 +256,46 @@ class PlatformUserControllerTests
                     jsonPath("$.code") { value("validation_failed") }
                 }
         }
+
+        private fun platformLifecycleMutationRoutes(userId: UUID) =
+            listOf(
+                Triple(
+                    HttpMethod.POST,
+                    "${ApiPaths.PLATFORM_USERS}/$userId/suspend",
+                    "user.suspend",
+                ),
+                Triple(
+                    HttpMethod.POST,
+                    "${ApiPaths.PLATFORM_USERS}/$userId/reactivate",
+                    "user.activate",
+                ),
+                Triple(
+                    HttpMethod.POST,
+                    "${ApiPaths.PLATFORM_USERS}/$userId/deactivate",
+                    "user.deactivate",
+                ),
+            )
+
+        private fun platformLifecycleMutationPayload(path: String): String =
+            when {
+                path.endsWith("/suspend") -> {
+                    apiJsonCodec.mapper.writeValueAsString(
+                        SuspendUserRequest("Security investigation"),
+                    )
+                }
+
+                path.endsWith("/reactivate") -> {
+                    apiJsonCodec.mapper.writeValueAsString(
+                        ReactivateUserRequest("Investigation complete"),
+                    )
+                }
+
+                else -> {
+                    apiJsonCodec.mapper.writeValueAsString(
+                        DeactivateUserRequest("No longer eligible"),
+                    )
+                }
+            }
 
         private fun userSummary(userId: UUID) =
             UserInTenantSummary(

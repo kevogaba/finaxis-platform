@@ -281,6 +281,42 @@ class BranchAssignmentControllerTests
         }
 
         @Test
+        fun `revoke hides assignments outside the caller branch context`() {
+            val tenantId = uuidV7()
+            val assignmentId = uuidV7()
+            val assignmentBranchId = uuidV7()
+            val callerBranchId = uuidV7()
+            whenever(
+                lifecycleIamReadService.getBranchAssignment(eq(tenantId), eq(assignmentId), any()),
+            ).thenReturn(
+                assignmentDetail(
+                    tenantId = tenantId,
+                    assignmentId = assignmentId,
+                    branchId = assignmentBranchId,
+                ),
+            )
+
+            mockMvc
+                .delete("${ApiPaths.BRANCH_ASSIGNMENTS}/$assignmentId") {
+                    with(
+                        authentication(
+                            tenantToken(
+                                setOf("user.revoke_branch"),
+                                tenantId,
+                                branchId = callerBranchId,
+                            ),
+                        ),
+                    )
+                }.andExpect {
+                    status { isNotFound() }
+                    content {
+                        contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
+                    }
+                    jsonPath("$.code") { value("resource_not_found") }
+                }
+        }
+
+        @Test
         fun `branch assignment mutations validate keys before authentication`() {
             val assignmentId = uuidV7()
             val routes =
@@ -359,6 +395,7 @@ class BranchAssignmentControllerTests
         private fun tenantToken(
             permissions: Set<String>,
             tenantId: UUID = uuidV7(),
+            branchId: UUID? = null,
             userId: UUID = uuidV7(),
         ): AppPrincipalAuthenticationToken =
             AppPrincipalAuthenticationToken(
@@ -367,7 +404,7 @@ class BranchAssignmentControllerTests
                     keycloakSubject = "tenant-user",
                     organisationId = tenantId,
                     membershipId = uuidV7(),
-                    branchId = null,
+                    branchId = branchId,
                     email = "admin@tenant.test",
                     fullName = "Tenant Admin",
                     permissions = permissions,
