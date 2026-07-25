@@ -123,16 +123,3 @@ data class RolePermissionSummaryResponse(
     val permissionCode: String,
     val grantedAt: Instant,
 )
-
-/** Detailed response for a permission grant on a role. */
-data class RolePermissionDetailResponse(
-    val id: UUID,
-    val organisationId: UUID,
-    val roleId: UUID,
-    val permissionId: UUID,
-    val permissionCode: String,
-    val grantedAt: Instant,
-    val grantedBy: UUID?,
-    val createdAt: Instant,
-    val updatedAt: Instant,
-)

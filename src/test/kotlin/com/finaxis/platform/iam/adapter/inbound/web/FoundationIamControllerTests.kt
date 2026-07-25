@@ -362,6 +362,75 @@ class FoundationIamControllerTests
         }
 
         @Test
+        fun `listRolePermissions returns the paginated grants for a role`() {
+            val tenantId = uuidV7()
+            val roleId = uuidV7()
+            val grantId = uuidV7()
+            whenever(
+                iamQueryService.listRolePermissions(eq(tenantId), eq(roleId), any(), any()),
+            ).thenReturn(
+                apiPageOf(
+                    listOf(rolePermissionSummary(grantId, roleId, "permission.view")),
+                    number = 0,
+                    size = 25,
+                    totalItems = 1,
+                ),
+            )
+
+            mockMvc
+                .get("${ApiPaths.ROLES}/$roleId/permissions") {
+                    with(authentication(tenantToken(setOf("role.view"), tenantId)))
+                }.andExpect {
+                    status { isOk() }
+                    jsonPath("$.items[0].id") { value(grantId.toString()) }
+                    jsonPath("$.items[0].permission_code") { value("permission.view") }
+                }
+        }
+
+        @Test
+        fun `assignPermission surfaces a safe not found when the grant cannot be resolved`() {
+            val tenantId = uuidV7()
+            val roleId = uuidV7()
+            whenever(
+                iamQueryService.listRolePermissions(eq(tenantId), eq(roleId), any(), any()),
+            ).thenReturn(apiPageOf(emptyList(), number = 0, size = 100, totalItems = 0))
+
+            mockMvc
+                .post("${ApiPaths.ROLES}/$roleId/permissions") {
+                    contentType = MediaType.APPLICATION_JSON
+                    content =
+                        apiJsonCodec.mapper.writeValueAsString(
+                            AssignPermissionRequest("permission.view"),
+                        )
+                    with(authentication(tenantToken(setOf("role.assign_permission"), tenantId)))
+                }.andExpect {
+                    status { isNotFound() }
+                    jsonPath("$.code") { value("resource_not_found") }
+                }
+        }
+
+        @Test
+        fun `removePermission rejects a grant id owned by a different role`() {
+            val tenantId = uuidV7()
+            val roleId = uuidV7()
+            val otherRoleId = uuidV7()
+            val grantId = uuidV7()
+            whenever(iamQueryService.getRolePermission(eq(tenantId), eq(grantId), any()))
+                .thenReturn(rolePermissionDetail(tenantId, grantId, otherRoleId, "permission.view"))
+
+            mockMvc
+                .delete("${ApiPaths.ROLES}/$roleId/permissions/$grantId") {
+                    with(authentication(tenantToken(setOf("role.remove_permission"), tenantId)))
+                }.andExpect {
+                    status { isNotFound() }
+                    jsonPath("$.code") { value("resource_not_found") }
+                }
+
+            verify(roleManagementService, org.mockito.kotlin.never())
+                .removePermissionFromRole(any())
+        }
+
+        @Test
         fun `role assignment assign and revoke use command result and resolved tuple`() {
             val tenantId = uuidV7()
             val assignmentId = uuidV7()

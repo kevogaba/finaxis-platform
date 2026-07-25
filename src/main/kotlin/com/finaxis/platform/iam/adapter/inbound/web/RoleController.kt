@@ -9,7 +9,6 @@ import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.adapter.inbound.web.dto.AssignPermissionRequest
 import com.finaxis.platform.iam.adapter.inbound.web.dto.CreateRoleRequest
 import com.finaxis.platform.iam.adapter.inbound.web.dto.RoleDetailResponse
-import com.finaxis.platform.iam.adapter.inbound.web.dto.RolePermissionDetailResponse
 import com.finaxis.platform.iam.adapter.inbound.web.dto.RolePermissionSummaryResponse
 import com.finaxis.platform.iam.adapter.inbound.web.dto.RoleSummaryResponse
 import com.finaxis.platform.iam.adapter.inbound.web.dto.UpdateRoleRequest
@@ -684,20 +683,6 @@ class RoleController(
 
     private fun RolePermissionSummary.toResponse() =
         RolePermissionSummaryResponse(id, roleId, permissionId, permissionCode, grantedAt)
-
-    @Suppress("UnusedPrivateMember")
-    private fun RolePermissionDetail.toResponse() =
-        RolePermissionDetailResponse(
-            id,
-            organisationId,
-            roleId,
-            permissionId,
-            permissionCode,
-            grantedAt,
-            grantedBy,
-            createdAt,
-            updatedAt,
-        )
 
     private companion object {
         const val MAXIMUM_PAGE_SIZE = 100L
