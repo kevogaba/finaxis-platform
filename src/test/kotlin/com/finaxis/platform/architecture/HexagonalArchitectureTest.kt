@@ -3,6 +3,7 @@ package com.finaxis.platform.architecture
 import com.tngtech.archunit.core.domain.JavaClasses
 import com.tngtech.archunit.core.importer.ClassFileImporter
 import com.tngtech.archunit.core.importer.ImportOption
+import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
 import com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.slices
 import org.junit.jupiter.api.Test
@@ -83,6 +84,46 @@ class HexagonalArchitectureTest {
             .dependOnClassesThat()
             .resideInAPackage("org.springframework.data.repository..")
             .check(importedClasses)
+    }
+
+    @Test
+    fun `web adapters do not depend on outbox RabbitMQ JobRunr or Keycloak infrastructure`() {
+        noClasses()
+            .that()
+            .resideInAPackage("..adapter.inbound.web..")
+            .should()
+            .dependOnClassesThat()
+            .resideInAnyPackage(
+                "org.springframework.amqp..",
+                "io.namastack.outbox..",
+                "org.jobrunr..",
+                "org.keycloak..",
+            ).check(importedClasses)
+    }
+
+    @Test
+    fun `web adapters only depend on approved layers and infrastructure`() {
+        classes()
+            .that()
+            .resideInAPackage("..adapter.inbound.web..")
+            .should()
+            .onlyDependOnClassesThat()
+            .resideInAnyPackage(
+                "..adapter.inbound.web..",
+                "..application..",
+                "..domain..",
+                "com.finaxis.platform.common..",
+                "com.finaxis.platform.lifecycle",
+                "java..",
+                "javax..",
+                "jakarta..",
+                "kotlin..",
+                "com.fasterxml.jackson.annotation..",
+                "org.springframework..",
+                "org.jetbrains.annotations..",
+                "io.swagger..",
+                "tools.jackson..",
+            ).check(importedClasses)
     }
 
     @Test
