@@ -89,7 +89,7 @@ class SecurityConfiguration(
                 requests
                     .requestMatchers(
                         "/actuator/health",
-                        "/docs/**",
+                        "/scalar/**",
                         "/v3/api-docs/**",
                         "/swagger-ui/**",
                     ).permitAll()

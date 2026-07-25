@@ -31,6 +31,17 @@ class SecurityHeadersIntegrationTests {
     }
 
     @Test
+    fun `the real scalar docs UI and OpenAPI document are publicly accessible`() {
+        // Regression test: the security allowlist previously permitted "/docs/**", but the
+        // Scalar starter's actual default UI path is "/scalar" - "/docs" was never a real route,
+        // so this permitAll entry silently protected nothing and every request to the real docs
+        // UI path required authentication instead of being publicly viewable like the OpenAPI
+        // JSON it renders.
+        mockMvc.get("/scalar").andExpect { status { isOk() } }
+        mockMvc.get("/v3/api-docs").andExpect { status { isOk() } }
+    }
+
+    @Test
     fun `disabled cors does not allow cross origin preflight requests`() {
         mockMvc
             .options("/api/v1/auth/me") {

@@ -10,7 +10,7 @@ data class RateLimitPathProperties(
             "/actuator/health/**",
             "/actuator/prometheus",
             "/error",
-            "/docs/**",
+            "/scalar/**",
             "/v3/api-docs/**",
             "/swagger-ui/**",
         ),

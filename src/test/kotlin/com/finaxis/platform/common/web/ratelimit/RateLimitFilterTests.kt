@@ -103,6 +103,16 @@ class RateLimitFilterTests {
     }
 
     @Test
+    fun `the real scalar docs UI path is excluded from rate limiting`() {
+        // Regression test: the excluded-paths default previously listed "/docs/**", but the
+        // Scalar starter's actual default UI path is "/scalar" - "/docs" was never a real route,
+        // so the exclusion silently protected nothing and every request to the real docs UI path
+        // fell through to the "no rate-limit policy configured" rejection instead.
+        assertEquals(200, performRequest("/scalar").status)
+        assertEquals(200, performRequest("/scalar").status)
+    }
+
+    @Test
     fun `unavailable limiter returns shared problem when fail closed`() {
         val unavailable =
             RateLimitFilter(

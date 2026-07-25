@@ -87,7 +87,7 @@ Public endpoints are versioned under `/api/v1`. The current endpoints are:
 - `POST /api/v1/auth/select-branch`
 - `GET /api/v1/auth/me`
 
-In local development, Scalar API documentation is available at `/docs` and OpenAPI JSON at
+In local development, Scalar API documentation is available at `/scalar` and OpenAPI JSON at
 `/v3/api-docs`. Both are disabled in the production profile.
 
 ## Security profiles
