@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
@@ -33,6 +34,16 @@ class InitialAdministratorBootstrapServiceTests {
     private val userProvisioningStore = mock<UserProvisioningStore>()
     private val userProvisioningService = mock<UserProvisioningService>()
     private val eventPublisher = mock<TransitionEventPublisher>()
+    private val failureRecorder = mock<InitialAdministratorBootstrapFailureRecorder>()
+    private val asynchronousApproval =
+        UserApprovalResult(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UserLifecycleState.PROVISIONING_IDP,
+            MembershipLifecycleState.PENDING_APPROVAL,
+            keycloakProvisioningRequested = true,
+            applicationInviteRequested = false,
+        )
     private val service =
         InitialAdministratorBootstrapService(
             adminBootstrapStore,
@@ -40,12 +51,17 @@ class InitialAdministratorBootstrapServiceTests {
             userProvisioningStore,
             userProvisioningService,
             eventPublisher,
+            failureRecorder,
             clock,
         )
 
     private val orgId = UUID.randomUUID()
     private val requestedBy = UUID.randomUUID()
     private val approvedBy = UUID.randomUUID()
+
+    init {
+        whenever(userProvisioningService.approveUser(any())).thenReturn(asynchronousApproval)
+    }
 
     @Test
     fun `throws when bootstrap record is not found`() {
@@ -122,7 +138,7 @@ class InitialAdministratorBootstrapServiceTests {
         assertEquals(1, inviteCmd.roleAssignments.size)
         assertEquals(roleId, inviteCmd.roleAssignments[0].roleId)
         assertEquals(RoleAssignmentScopeType.TENANT, inviteCmd.roleAssignments[0].scopeType)
-        assertEquals(record.requestedBy, inviteCmd.invitedBy)
+        assertEquals(SystemActor.ID, inviteCmd.invitedBy)
         assertEquals(true, inviteCmd.sendKeycloakInvite)
         assertEquals(record.sendApplicationInvite, inviteCmd.sendApplicationInvite)
         assertEquals("BOOTSTRAP-$orgId", inviteCmd.requestId)
@@ -222,7 +238,69 @@ class InitialAdministratorBootstrapServiceTests {
     }
 
     @Test
-    fun `records failure status and truncated failure code on exceptions`() {
+    fun `completes bootstrap when approval needs no Keycloak dispatch`() {
+        val userId = UUID.randomUUID()
+        val membershipId = UUID.randomUUID()
+        val record =
+            createRecord(
+                status = InitialAdministratorBootstrapStatus.QUEUED,
+                userId = userId,
+                membershipId = membershipId,
+                headOfficeId = UUID.randomUUID(),
+                roleId = UUID.randomUUID(),
+            )
+        whenever(adminBootstrapStore.find(orgId)).thenReturn(record)
+        whenever(userProvisioningStore.dispatchStatus("$orgId:$userId:KEYCLOAK_PROVISIONING"))
+            .thenReturn(null)
+        whenever(userProvisioningService.approveUser(any())).thenReturn(
+            UserApprovalResult(
+                userId,
+                membershipId,
+                UserLifecycleState.ACTIVE,
+                MembershipLifecycleState.ACTIVE,
+                keycloakProvisioningRequested = false,
+                applicationInviteRequested = false,
+            ),
+        )
+
+        service.bootstrap(orgId)
+
+        verify(adminBootstrapStore).updateStatus(
+            eq(orgId),
+            eq(InitialAdministratorBootstrapStatus.COMPLETED),
+            isNull(),
+            eq(false),
+        )
+    }
+
+    @Test
+    fun `completes bootstrap when identity dispatch already succeeded`() {
+        val userId = UUID.randomUUID()
+        val record =
+            createRecord(
+                status = InitialAdministratorBootstrapStatus.PROVISIONING_IDENTITY,
+                userId = userId,
+                membershipId = UUID.randomUUID(),
+                headOfficeId = UUID.randomUUID(),
+                roleId = UUID.randomUUID(),
+            )
+        whenever(adminBootstrapStore.find(orgId)).thenReturn(record)
+        whenever(userProvisioningStore.dispatchStatus("$orgId:$userId:KEYCLOAK_PROVISIONING"))
+            .thenReturn("SUCCEEDED")
+
+        service.bootstrap(orgId)
+
+        verify(adminBootstrapStore).updateStatus(
+            eq(orgId),
+            eq(InitialAdministratorBootstrapStatus.COMPLETED),
+            isNull(),
+            eq(false),
+        )
+        verifyNoInteractions(userProvisioningService)
+    }
+
+    @Test
+    fun `records failure independently on exceptions`() {
         val record = createRecord(status = InitialAdministratorBootstrapStatus.QUEUED)
         whenever(adminBootstrapStore.find(orgId)).thenReturn(record)
 
@@ -236,12 +314,9 @@ class InitialAdministratorBootstrapServiceTests {
             }
         assertEquals(errorMsg, exception.message)
 
-        verify(adminBootstrapStore).updateStatus(
-            eq(orgId),
-            eq(InitialAdministratorBootstrapStatus.FAILED),
-            eq("A".repeat(100)),
-            eq(false),
-        )
+        val failureCaptor = argumentCaptor<Throwable>()
+        verify(failureRecorder).recordFailure(eq(orgId), failureCaptor.capture())
+        assertEquals("A".repeat(120), failureCaptor.firstValue.message)
     }
 
     @Test

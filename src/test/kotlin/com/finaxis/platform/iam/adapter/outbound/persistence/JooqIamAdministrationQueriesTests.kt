@@ -40,6 +40,19 @@ class JooqIamAdministrationQueriesTests(
     }
 
     @Test
+    fun `searchUsers returns empty page for extreme page offset`() {
+        val orgId = insertOrganisation()
+        val userId = insertUserAccount("extreme", "extreme@example.test", "Extreme")
+        insertMembership(orgId, userId, "ACTIVE", "STAFF")
+
+        val page = queries.searchUsers(orgId, UserInTenantFilter(page = Int.MAX_VALUE, size = 100))
+
+        assertEquals(emptyList(), page.items)
+        assertEquals(1, page.page.totalItems)
+        assertEquals(false, page.page.hasNext)
+    }
+
+    @Test
     fun `findUserInTenant resolves details and hides cross tenant users`() {
         val orgId = insertOrganisation()
         val otherOrgId = insertOrganisation()

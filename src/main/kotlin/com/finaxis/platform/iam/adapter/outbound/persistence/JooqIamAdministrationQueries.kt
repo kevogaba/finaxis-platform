@@ -2,6 +2,7 @@ package com.finaxis.platform.iam.adapter.outbound.persistence
 
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.apiPageOf
+import com.finaxis.platform.common.web.api.boundedPageOffset
 import com.finaxis.platform.iam.application.query.BranchAssignmentDetail
 import com.finaxis.platform.iam.application.query.BranchAssignmentFilter
 import com.finaxis.platform.iam.application.query.BranchAssignmentSummary
@@ -79,6 +80,9 @@ class JooqIamAdministrationQueries(
                         .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID)),
                     condition,
                 ).toLong()
+        val offset =
+            boundedPageOffset(filter.page, filter.size, total)
+                ?: return apiPageOf(emptyList(), filter.page, filter.size, total)
 
         val items =
             dsl
@@ -95,7 +99,7 @@ class JooqIamAdministrationQueries(
                 .where(condition)
                 .orderBy(USER_ACCOUNT.CREATED_AT.desc(), USER_ACCOUNT.ID.desc())
                 .limit(filter.size)
-                .offset(filter.page * filter.size)
+                .offset(offset)
                 .fetch { record ->
                     UserInTenantSummary(
                         id = requireNotNull(record.get(USER_ACCOUNT.ID)),
@@ -216,6 +220,9 @@ class JooqIamAdministrationQueries(
                         .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID)),
                     condition,
                 ).toLong()
+        val offset =
+            boundedPageOffset(filter.page, filter.size, total)
+                ?: return apiPageOf(emptyList(), filter.page, filter.size, total)
         val items =
             dsl
                 .select(
@@ -232,7 +239,7 @@ class JooqIamAdministrationQueries(
                     USER_ORGANISATION_MEMBERSHIP.CREATED_AT.desc(),
                     USER_ORGANISATION_MEMBERSHIP.ID.desc(),
                 ).limit(filter.size)
-                .offset(filter.page * filter.size)
+                .offset(offset)
                 .fetch { record ->
                     MembershipSummary(
                         id = requireNotNull(record.get(USER_ORGANISATION_MEMBERSHIP.ID)),
@@ -292,6 +299,9 @@ class JooqIamAdministrationQueries(
         filter.status?.let { condition = condition.and(USER_BRANCH_ASSIGNMENT.STATUS.eq(it)) }
 
         val total = dsl.fetchCount(USER_BRANCH_ASSIGNMENT, condition).toLong()
+        val offset =
+            boundedPageOffset(filter.page, filter.size, total)
+                ?: return apiPageOf(emptyList(), filter.page, filter.size, total)
         val items =
             dsl
                 .select(
@@ -306,7 +316,7 @@ class JooqIamAdministrationQueries(
                     USER_BRANCH_ASSIGNMENT.ASSIGNED_AT.desc(),
                     USER_BRANCH_ASSIGNMENT.ID.desc(),
                 ).limit(filter.size)
-                .offset(filter.page * filter.size)
+                .offset(offset)
                 .fetch { record ->
                     BranchAssignmentSummary(
                         id = requireNotNull(record.get(USER_BRANCH_ASSIGNMENT.ID)),
@@ -366,6 +376,9 @@ class JooqIamAdministrationQueries(
         }
 
         val total = dsl.fetchCount(ROLE, condition).toLong()
+        val offset =
+            boundedPageOffset(filter.page, filter.size, total)
+                ?: return apiPageOf(emptyList(), filter.page, filter.size, total)
         val items =
             dsl
                 .select(
@@ -380,7 +393,7 @@ class JooqIamAdministrationQueries(
                     roleSortOrder(roleSortField(filter.sortBy), filter.sortDir),
                     ROLE.ID.desc(),
                 ).limit(filter.size)
-                .offset(filter.page * filter.size)
+                .offset(offset)
                 .fetch { record ->
                     RoleSummary(
                         id = requireNotNull(record.get(ROLE.ID)),
@@ -428,6 +441,9 @@ class JooqIamAdministrationQueries(
         filter.status?.let { condition = condition.and(USER_ROLE_ASSIGNMENT.STATUS.eq(it)) }
 
         val total = dsl.fetchCount(USER_ROLE_ASSIGNMENT, condition).toLong()
+        val offset =
+            boundedPageOffset(filter.page, filter.size, total)
+                ?: return apiPageOf(emptyList(), filter.page, filter.size, total)
         val items =
             dsl
                 .select(
@@ -441,7 +457,7 @@ class JooqIamAdministrationQueries(
                 .where(condition)
                 .orderBy(USER_ROLE_ASSIGNMENT.ASSIGNED_AT.desc(), USER_ROLE_ASSIGNMENT.ID.desc())
                 .limit(filter.size)
-                .offset(filter.page * filter.size)
+                .offset(offset)
                 .fetch { record ->
                     RoleAssignmentSummary(
                         id = requireNotNull(record.get(USER_ROLE_ASSIGNMENT.ID)),
@@ -497,6 +513,9 @@ class JooqIamAdministrationQueries(
         }
 
         val total = dsl.fetchCount(PERMISSION, condition).toLong()
+        val offset =
+            boundedPageOffset(filter.page, filter.size, total)
+                ?: return apiPageOf(emptyList(), filter.page, filter.size, total)
         val items =
             dsl
                 .select(
@@ -512,7 +531,7 @@ class JooqIamAdministrationQueries(
                     permissionSortOrder(permissionSortField(filter.sortBy), filter.sortDir),
                     PERMISSION.ID.desc(),
                 ).limit(filter.size)
-                .offset(filter.page * filter.size)
+                .offset(offset)
                 .fetch { record ->
                     PermissionSummary(
                         id = requireNotNull(record.get(PERMISSION.ID)),
@@ -556,6 +575,9 @@ class JooqIamAdministrationQueries(
                     organisationId,
                 ).and(ROLE_PERMISSION.ROLE_ID.eq(roleId))
         val total = dsl.fetchCount(ROLE_PERMISSION, condition).toLong()
+        val offset =
+            boundedPageOffset(filter.page, filter.size, total)
+                ?: return apiPageOf(emptyList(), filter.page, filter.size, total)
         val items =
             dsl
                 .select(
@@ -570,7 +592,7 @@ class JooqIamAdministrationQueries(
                 .where(condition)
                 .orderBy(ROLE_PERMISSION.GRANTED_AT.desc(), ROLE_PERMISSION.ID.desc())
                 .limit(filter.size)
-                .offset(filter.page * filter.size)
+                .offset(offset)
                 .fetch { record ->
                     RolePermissionSummary(
                         id = requireNotNull(record.get(ROLE_PERMISSION.ID)),

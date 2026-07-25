@@ -64,7 +64,7 @@ realm includes `local.admin` / `local-admin` for the smoke path.
 
 ```bash
 docker compose up -d postgres redis rabbitmq keycloak
-./gradlew bootRun
+SPRING_PROFILES_ACTIVE=local ./gradlew bootRun
 ./scripts/local-smoke.sh
 ```
 

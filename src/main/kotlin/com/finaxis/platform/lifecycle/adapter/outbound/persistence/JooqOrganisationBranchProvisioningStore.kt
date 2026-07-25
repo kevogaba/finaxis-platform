@@ -3,6 +3,7 @@ package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
+import com.finaxis.platform.common.web.api.boundedPageOffset
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.BRANCH_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
@@ -187,6 +188,9 @@ class JooqOrganisationBranchProvisioningStore(
                 condition.and(ORGANISATION.CREATED_AT.le(it.atOffset(ZoneOffset.UTC)))
         }
         val total = dsl.fetchCount(ORGANISATION, condition).toLong()
+        val offset =
+            boundedPageOffset(filter.page, filter.size, total)
+                ?: return OrganisationPage(emptyList(), total)
         val items =
             dsl
                 .select(
@@ -207,7 +211,7 @@ class JooqOrganisationBranchProvisioningStore(
                 .where(condition)
                 .orderBy(ORGANISATION.CREATED_AT.desc())
                 .limit(filter.size)
-                .offset(filter.page * filter.size)
+                .offset(offset)
                 .fetch(::organisationSummary)
         return OrganisationPage(items, total)
     }

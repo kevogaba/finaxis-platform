@@ -8,6 +8,7 @@ import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.common.web.api.InvalidPageRequestException
+import com.finaxis.platform.common.web.api.boundedPageOffset
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.TenantSettingCatalog
@@ -149,8 +150,13 @@ class TenantSettingsService(
 
         val sortedList = (catalogViews + extraViews).sortedBy { it.key }
         val total = sortedList.size.toLong()
-        val fromIndex = (query.page * query.size).coerceAtMost(sortedList.size)
-        val toIndex = ((query.page + 1) * query.size).coerceAtMost(sortedList.size)
+        val fromIndex =
+            boundedPageOffset(query.page, query.size, total)
+                ?: return TenantSettingPage(emptyList(), total)
+        val toIndex =
+            (fromIndex.toLong() + query.size.toLong())
+                .coerceAtMost(total)
+                .toInt()
         val paginatedItems =
             sortedList.subList(fromIndex, toIndex).map { setting ->
                 if (setting.platformAdminOnly && !canManagePlatformSettings) {

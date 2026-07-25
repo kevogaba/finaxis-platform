@@ -153,6 +153,14 @@ class AuthSelectionService(
         expectedAssignedBranchIds: List<UUID>,
     ) {
         val membership = activeReplayMembership(keycloakSubject, context)
+        if (!authorizationService.hasPermission(
+                userId = membership.userId,
+                organisationId = context.organisationId,
+                permissionCode = PERM_SELECT_ORG,
+            )
+        ) {
+            denied("Missing permission: $PERM_SELECT_ORG")
+        }
         if (lookup.findAssignedBranchIds(membership.membershipId).toSet() !=
             expectedAssignedBranchIds.toSet()
         ) {
@@ -171,6 +179,14 @@ class AuthSelectionService(
         context: ActiveOrganisationContext,
     ) {
         val membership = activeReplayMembership(keycloakSubject, context)
+        if (!authorizationService.hasPermission(
+                userId = membership.userId,
+                organisationId = context.organisationId,
+                permissionCode = PERM_SELECT_BRANCH,
+            )
+        ) {
+            denied("Missing permission: $PERM_SELECT_BRANCH")
+        }
         val branchId = context.branchId ?: denied("Durable branch selection is incomplete")
         if (!lookup.hasAssignedBranch(membership.membershipId, branchId)) {
             denied("Selected branch is no longer assigned")

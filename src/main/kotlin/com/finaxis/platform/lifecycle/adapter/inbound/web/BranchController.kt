@@ -380,9 +380,10 @@ class BranchController(
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
         verifyBranchContext(caller, branchId)
-        permissionGuard.requireTenantPermission(
+        permissionGuard.requireBranchPermission(
             caller.actorId,
             caller.activeOrganisationId,
+            branchId,
             "branch.create",
         )
 
@@ -485,9 +486,10 @@ class BranchController(
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
         verifyBranchContext(caller, branchId)
-        permissionGuard.requireTenantPermission(
+        permissionGuard.requireBranchPermission(
             caller.actorId,
             caller.activeOrganisationId,
+            branchId,
             "branch.activate",
         )
 
@@ -590,9 +592,10 @@ class BranchController(
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
         verifyBranchContext(caller, branchId)
-        permissionGuard.requireTenantPermission(
+        permissionGuard.requireBranchPermission(
             caller.actorId,
             caller.activeOrganisationId,
+            branchId,
             "branch.suspend",
         )
 
@@ -601,6 +604,7 @@ class BranchController(
                 organisationId = caller.activeOrganisationId,
                 branchId = branchId,
                 reason = request.reason,
+                actorId = caller.actorId,
             )
         branchProvisioningService.suspend(command)
         val updated =
@@ -693,9 +697,10 @@ class BranchController(
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
         verifyBranchContext(caller, branchId)
-        permissionGuard.requireTenantPermission(
+        permissionGuard.requireBranchPermission(
             caller.actorId,
             caller.activeOrganisationId,
+            branchId,
             "branch.reactivate",
         )
 
@@ -704,6 +709,7 @@ class BranchController(
                 organisationId = caller.activeOrganisationId,
                 branchId = branchId,
                 reason = request?.reason,
+                actorId = caller.actorId,
             )
         branchProvisioningService.reactivate(command)
         val updated =
@@ -796,9 +802,10 @@ class BranchController(
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
         verifyBranchContext(caller, branchId)
-        permissionGuard.requireTenantPermission(
+        permissionGuard.requireBranchPermission(
             caller.actorId,
             caller.activeOrganisationId,
+            branchId,
             "branch.close",
         )
 
@@ -807,6 +814,7 @@ class BranchController(
                 organisationId = caller.activeOrganisationId,
                 branchId = branchId,
                 reason = request.reason,
+                actorId = caller.actorId,
             )
         branchProvisioningService.close(command)
         val updated =

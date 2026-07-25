@@ -14,13 +14,13 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath("io.zonky.test:embedded-postgres:2.2.2")
+        classpath(libs.embedded.postgres)
         // Pins the Dockerless embedded Postgres used for jOOQ codegen bootstrapping to the
         // Postgres 18 binaries (library default is 14.22). See
         // https://github.com/zonkyio/embedded-postgres#postgres-version.
-        classpath(enforcedPlatform("io.zonky.test.postgres:embedded-postgres-binaries-bom:18.4.0"))
-        classpath("org.flywaydb:flyway-database-postgresql:12.11.0")
-        classpath("org.postgresql:postgresql:42.7.13")
+        classpath(enforcedPlatform(libs.embedded.postgres.bom))
+        classpath(libs.flyway.postgresql)
+        classpath(libs.postgresql)
     }
 }
 
@@ -56,6 +56,14 @@ java {
 
 repositories {
     mavenCentral()
+}
+
+configurations.matching { it.name == "detekt" }.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "org.jetbrains.kotlin") {
+            useVersion("2.4.0")
+        }
+    }
 }
 
 dependencies {

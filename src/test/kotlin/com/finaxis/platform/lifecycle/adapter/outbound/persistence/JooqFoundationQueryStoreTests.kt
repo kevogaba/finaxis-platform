@@ -38,6 +38,20 @@ class JooqFoundationQueryStoreTests(
     }
 
     @Test
+    fun `searchTenants returns empty page for extreme page offset`() {
+        insertOrganisation("offset-max", "Offset Max", "YY")
+
+        val page =
+            store.searchTenants(
+                TenantFilter(country = "YY", page = Int.MAX_VALUE, size = 100),
+            )
+
+        assertEquals(emptyList(), page.items)
+        assertEquals(1, page.page.totalItems)
+        assertEquals(false, page.page.hasNext)
+    }
+
+    @Test
     fun `findTenantById returns tenant details when found`() {
         val orgId = insertOrganisation("org3", "Test Org 3", "KE")
         val detail = store.findTenantById(orgId)

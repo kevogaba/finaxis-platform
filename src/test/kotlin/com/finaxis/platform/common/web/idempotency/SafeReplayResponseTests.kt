@@ -85,6 +85,13 @@ class SafeReplayResponseTests {
             "Session-Identifier",
             "active_org_context",
             "activeOrgContext",
+            "otp",
+            "one_time_otp",
+            "pin",
+            "api_key",
+            "private_key",
+            "totp_secret",
+            "recovery_code",
         ],
     )
     fun `nested prohibited secret and session fields are rejected recursively`(field: String) {
@@ -99,13 +106,15 @@ class SafeReplayResponseTests {
     @ValueSource(
         strings = [
             "secretary",
-            "password_policy",
-            "cookie_consent",
-            "session_timeout",
-            "access_token_expiry",
+            "keyholder_name",
+            "sessionable",
+            "organisation_id",
+            "role_code",
+            "assigned_branch_ids",
+            "bootstrap_failure_code",
         ],
     )
-    fun `benign near-match fields are allowed by exact normalized matching`(field: String) {
+    fun `benign response fields are allowed by token-aware matching`(field: String) {
         val body = """{"$field":"safe metadata"}"""
 
         assertEquals(

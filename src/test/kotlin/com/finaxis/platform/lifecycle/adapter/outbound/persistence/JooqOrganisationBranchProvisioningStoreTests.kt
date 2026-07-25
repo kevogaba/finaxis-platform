@@ -196,6 +196,23 @@ class JooqOrganisationBranchProvisioningStoreTests(
         assertEquals(0, summary.bootstrapAttempts)
     }
 
+    @Test
+    fun `list returns empty page for extreme page offset`() {
+        insertOrganisation()
+
+        val page =
+            store.list(
+                OrganisationListFilter(
+                    status = OrganisationLifecycleState.ACTIVE,
+                    page = Int.MAX_VALUE,
+                    size = 100,
+                ),
+            )
+
+        assertEquals(emptyList(), page.items)
+        assertTrue(page.totalItems >= 1)
+    }
+
     // ── end bootstrap projection ──────────────────────────────────────────────
 
     @Test

@@ -5,12 +5,14 @@ import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.common.transitions.TransitionExecutor
 import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogRepository
+import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityDispatchType
 import com.finaxis.platform.lifecycle.application.port.outbound.MembershipProvisioningSnapshot
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
@@ -22,6 +24,7 @@ import com.finaxis.platform.lifecycle.domain.MembershipLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleTransition
+import org.mockito.Mockito.mock
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -38,6 +41,7 @@ class UserProvisioningServiceTests {
     private val events = UserProvisioningEventCapture()
     private val audits = UserProvisioningAuditCapture()
     private val logs = UserProvisioningTransitionLogCapture()
+    private val permissionGuard = mock(PermissionGuard::class.java)
     private val lifecycle =
         FoundationLifecycleService(
             TransitionExecutor(clock, logs, events),
@@ -47,9 +51,16 @@ class UserProvisioningServiceTests {
             AuditService(audits, clock),
         )
     private val branches =
-        BranchProvisioningService(lifecycle, fake, fake, AuditService(audits, clock), events)
+        BranchProvisioningService(
+            lifecycle,
+            fake,
+            fake,
+            AuditService(audits, clock),
+            events,
+            permissionGuard,
+        )
     private val deactivationAssignmentRevoker =
-        UserDeactivationAssignmentRevoker(fake, AuditService(audits, clock), events, clock)
+        UserDeactivationAssignmentRevoker(fake, fake, AuditService(audits, clock), events, clock)
     private val service =
         UserProvisioningService(
             lifecycle,
@@ -264,6 +275,37 @@ class UserProvisioningServiceTests {
             events.externalTargets().count {
                 it == "finaxis.lifecycle.user.deactivation-assignment-revoked"
             } == 2,
+        )
+    }
+
+    @Test
+    fun `global deactivation revokes assignments in every tenant organisation`() {
+        val firstTenantId = uuidV7()
+        val secondTenantId = uuidV7()
+        val actor = uuidV7()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        fake.addMembership(firstTenantId, userId, MembershipLifecycleState.ACTIVE)
+        fake.addMembership(secondTenantId, userId, MembershipLifecycleState.ACTIVE)
+        fake.branchAssignments += BranchAssignmentKey(firstTenantId, userId)
+        fake.branchAssignments += BranchAssignmentKey(secondTenantId, userId)
+        fake.roleAssignments += RoleAssignmentKey(firstTenantId, userId, uuidV7(), null)
+        fake.roleAssignments += RoleAssignmentKey(secondTenantId, userId, uuidV7(), null)
+
+        service.deactivateUser(
+            DeactivateUserCommand(PlatformOrganisation.ID, userId, actor, "left"),
+        )
+
+        assertTrue(fake.branchAssignments.isEmpty())
+        assertTrue(fake.roleAssignments.isEmpty())
+        val revocationAudits =
+            audits.events.filter {
+                it.action ==
+                    "user.deactivation_assignment_revoked"
+            }
+        assertEquals(4, revocationAudits.size)
+        assertEquals(
+            setOf(firstTenantId.toString(), secondTenantId.toString()),
+            revocationAudits.map { it.tenantId }.toSet(),
         )
     }
 
@@ -623,6 +665,17 @@ private class UserProvisioningFake :
         organisationId: UUID,
         membershipId: UUID,
     ): UUID? = membershipUsers[organisationId to membershipId]
+
+    override fun findOrganisationIdsForActiveUserAccess(userId: UUID): Set<UUID> =
+        memberships
+            .filter { (key, membership) ->
+                membershipUsers[key] == userId &&
+                    membership.state == MembershipLifecycleState.ACTIVE
+            }.keys
+            .map { it.first }
+            .plus(branchAssignments.filter { it.userId == userId }.map { it.organisationId })
+            .plus(roleAssignments.filter { it.userId == userId }.map { it.organisationId })
+            .toSet()
 
     override fun saveOrganisation(
         aggregate: LifecycleAggregate<OrganisationLifecycleState>,

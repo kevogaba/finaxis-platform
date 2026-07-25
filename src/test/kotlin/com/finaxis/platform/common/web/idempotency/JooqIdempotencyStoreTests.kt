@@ -19,7 +19,6 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -58,31 +57,40 @@ class JooqIdempotencyStoreTests(
     }
 
     @Test
-    fun `transaction advisory lock selects one concurrent acquisition winner`() {
-        val command = acquireCommand()
+    fun `concurrent acquisition returns in progress within the configured wait budget`() {
+        val timeout = Duration.ofMillis(200)
+        val command = acquireCommand(inProgressTimeout = timeout)
         val firstAcquired = CountDownLatch(1)
         val releaseFirst = CountDownLatch(1)
         Executors.newVirtualThreadPerTaskExecutor().use { executorService ->
-            val first =
-                executorService.submit<IdempotencyAcquisition> {
-                    inTransaction {
-                        store.acquire(command).also {
-                            firstAcquired.countDown()
-                            assertTrue(releaseFirst.await(10, TimeUnit.SECONDS))
+            try {
+                val first =
+                    executorService.submit<IdempotencyAcquisition> {
+                        inTransaction {
+                            store.acquire(command).also {
+                                firstAcquired.countDown()
+                                assertTrue(releaseFirst.await(10, TimeUnit.SECONDS))
+                            }
                         }
                     }
-                }
-            assertTrue(firstAcquired.await(10, TimeUnit.SECONDS))
-            val second =
-                executorService.submit<IdempotencyAcquisition> {
-                    inTransaction { store.acquire(command) }
-                }
+                assertTrue(firstAcquired.await(10, TimeUnit.SECONDS))
+                val startedAt = System.nanoTime()
+                val second =
+                    executorService.submit<IdempotencyAcquisition> {
+                        inTransaction { store.acquire(command) }
+                    }
 
-            assertFalse(second.isDone)
-            releaseFirst.countDown()
+                val secondResult =
+                    second.get(timeout.multipliedBy(3).toMillis(), TimeUnit.MILLISECONDS)
+                val elapsed = Duration.ofNanos(System.nanoTime() - startedAt)
 
-            assertIs<IdempotencyAcquisition.Acquired>(first.get(10, TimeUnit.SECONDS))
-            assertIs<IdempotencyAcquisition.InProgress>(second.get(10, TimeUnit.SECONDS))
+                assertIs<IdempotencyAcquisition.InProgress>(secondResult)
+                assertTrue(elapsed <= timeout.multipliedBy(3))
+                releaseFirst.countDown()
+                assertIs<IdempotencyAcquisition.Acquired>(first.get(10, TimeUnit.SECONDS))
+            } finally {
+                releaseFirst.countDown()
+            }
         }
         assertEquals(1, dsl.fetchCount(API_IDEMPOTENCY_RECORD))
     }
@@ -216,6 +224,7 @@ class JooqIdempotencyStoreTests(
     private fun acquireCommand(
         key: UUID = uuidV7(),
         expiresAt: Instant = NOW.plus(Duration.ofDays(1)),
+        inProgressTimeout: Duration = Duration.ofMinutes(5),
     ): IdempotencyAcquireCommand =
         IdempotencyAcquireCommand(
             scope = IdempotencyScope(uuidV7()),
@@ -229,7 +238,7 @@ class JooqIdempotencyStoreTests(
                 ),
             now = NOW,
             expiresAt = expiresAt,
-            inProgressTimeout = Duration.ofMinutes(5),
+            inProgressTimeout = inProgressTimeout,
         )
 
     private fun expectConflict(block: () -> Unit): ConflictException =

@@ -20,6 +20,9 @@ import com.finaxis.platform.iam.application.port.outbound.RoleSnapshot
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
 import com.finaxis.platform.iam.domain.RoleStatus
+import com.finaxis.platform.lifecycle.PermissionGuard
+import org.mockito.Mockito.mock
+import org.mockito.Mockito.verify
 import org.springframework.cache.concurrent.ConcurrentMapCacheManager
 import java.time.Clock
 import java.time.Instant
@@ -385,6 +388,12 @@ class RoleManagementServiceTests {
         val audit = fixture.audits.events.single()
         assertEquals(fixture.branchId.toString(), event.metadata["branchId"])
         assertEquals("BRANCH", audit.metadata["scopeType"])
+        verify(fixture.permissionGuard).requireBranchPermission(
+            fixture.actorId,
+            fixture.organisationId,
+            fixture.branchId,
+            "user.assign_role",
+        )
     }
 
     /** Requires branch access for branch-scoped roles and forbids a branch for tenant scope. */
@@ -482,8 +491,15 @@ class RoleManagementServiceTests {
             requireNotNull(cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME))
         val resolver = EffectivePermissionResolver(PermissionQueriesFake(), cacheManager)
         val invalidator = PermissionCacheInvalidator(cacheManager, resolver)
+        val permissionGuard = mock(PermissionGuard::class.java)
         val service =
-            RoleManagementService(persistence, AuditService(audits, clock), events, invalidator)
+            RoleManagementService(
+                persistence,
+                AuditService(audits, clock),
+                events,
+                invalidator,
+                permissionGuard,
+            )
 
         fun createRole(
             roleCode: String = "OPS",

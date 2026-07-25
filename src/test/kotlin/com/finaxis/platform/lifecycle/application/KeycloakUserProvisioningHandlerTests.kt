@@ -65,6 +65,8 @@ class KeycloakUserProvisioningHandlerTests {
         )
     private val fakeBootstrapStore =
         object : InitialAdministratorBootstrapStore {
+            val records = mutableMapOf<UUID, InitialAdministratorBootstrapRecord>()
+
             override fun createDraft(
                 organisationId: UUID,
                 admin: InitialAdministratorDraft,
@@ -88,14 +90,28 @@ class KeycloakUserProvisioningHandlerTests {
 
             override fun reject(organisationId: UUID) = Unit
 
-            override fun find(organisationId: UUID): InitialAdministratorBootstrapRecord? = null
+            override fun find(organisationId: UUID): InitialAdministratorBootstrapRecord? =
+                records[organisationId]
 
             override fun updateStatus(
                 organisationId: UUID,
                 status: InitialAdministratorBootstrapStatus,
                 lastFailureCode: String?,
                 incrementAttempts: Boolean,
-            ) = Unit
+            ) {
+                val record = records[organisationId] ?: return
+                records[organisationId] =
+                    record.copy(
+                        status = status,
+                        lastFailureCode = lastFailureCode,
+                        attempts =
+                            if (incrementAttempts) {
+                                record.attempts + 1
+                            } else {
+                                record.attempts
+                            },
+                    )
+            }
 
             override fun linkResolvedEntities(
                 organisationId: UUID,
@@ -124,6 +140,9 @@ class KeycloakUserProvisioningHandlerTests {
             override fun headOfficeState(organisationId: UUID): BranchLifecycleState? =
                 BranchLifecycleState.ACTIVE
         }
+    private val failureStatusWriter =
+        InitialAdministratorBootstrapFailureStatusWriter(fakeBootstrapStore)
+    private val failureRecorder = InitialAdministratorBootstrapFailureRecorder(failureStatusWriter)
     private val bootstrapService =
         InitialAdministratorBootstrapService(
             fakeBootstrapStore,
@@ -131,6 +150,7 @@ class KeycloakUserProvisioningHandlerTests {
             store,
             userProvisioningService,
             events,
+            failureRecorder,
             clock,
         )
     private val handler =
@@ -140,6 +160,7 @@ class KeycloakUserProvisioningHandlerTests {
             lifecycle,
             dispatchOutcomeAuditor,
             bootstrapService,
+            failureRecorder,
         )
 
     @Test
@@ -193,6 +214,7 @@ class KeycloakUserProvisioningHandlerTests {
     @Test
     fun `gateway failure marks dispatch failed and rethrows for retry`() {
         val context = store.activePendingProvisioningContext()
+        fakeBootstrapStore.records[context.organisationId] = bootstrapRecord(context)
         gateway.failure = IllegalStateException("keycloak unavailable")
 
         val failure =
@@ -205,6 +227,10 @@ class KeycloakUserProvisioningHandlerTests {
         assertEquals("FAILED", dispatch.status)
         assertEquals(1, dispatch.attempts)
         assertTrue(requireNotNull(dispatch.lastError).contains("keycloak unavailable"))
+        assertEquals(
+            InitialAdministratorBootstrapStatus.FAILED,
+            fakeBootstrapStore.records.getValue(context.organisationId).status,
+        )
         val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
         assertEquals("keycloak unavailable", dispatchAudit.reason)
@@ -259,6 +285,31 @@ class KeycloakUserProvisioningHandlerTests {
             displayName = "Member One",
             sendKeycloakInvite = sendKeycloakInvite,
             dispatchKey = context.dispatchKey,
+        )
+
+    private fun bootstrapRecord(context: ProvisioningWorkerContext) =
+        InitialAdministratorBootstrapRecord(
+            organisationId = context.organisationId,
+            adminEmail = "admin@example.test",
+            adminUsername = "admin",
+            adminDisplayName = "Admin",
+            adminPhoneE164 = null,
+            sendApplicationInvite = false,
+            status = InitialAdministratorBootstrapStatus.PROVISIONING_IDENTITY,
+            attempts = 1,
+            requestedBy = uuidV7(),
+            submittedBy = uuidV7(),
+            approvedBy = uuidV7(),
+            userId = context.userId,
+            membershipId = context.membershipId,
+            headOfficeId = uuidV7(),
+            roleId = uuidV7(),
+            lastFailureCode = null,
+            createdAt = clock.instant(),
+            submittedAt = clock.instant(),
+            approvedAt = clock.instant(),
+            updatedAt = clock.instant(),
+            rowVersion = 1,
         )
 }
 
@@ -481,6 +532,8 @@ private class ProvisioningWorkerStoreFake :
         organisationId: UUID,
         membershipId: UUID,
     ): UUID? = membershipUsers[organisationId to membershipId]
+
+    override fun findOrganisationIdsForActiveUserAccess(userId: UUID): Set<UUID> = emptySet()
 
     override fun saveOrganisation(
         aggregate: LifecycleAggregate<OrganisationLifecycleState>,

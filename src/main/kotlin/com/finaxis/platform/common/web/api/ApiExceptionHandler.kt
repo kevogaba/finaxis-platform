@@ -12,6 +12,7 @@ import org.springframework.http.ResponseEntity
 import org.springframework.http.converter.HttpMessageNotReadableException
 import org.springframework.validation.FieldError
 import org.springframework.web.HttpMediaTypeNotSupportedException
+import org.springframework.web.HttpRequestMethodNotSupportedException
 import org.springframework.web.bind.MethodArgumentNotValidException
 import org.springframework.web.bind.MissingServletRequestParameterException
 import org.springframework.web.bind.annotation.ExceptionHandler
@@ -217,6 +218,22 @@ class ApiExceptionHandler(
                 HttpStatus.UNSUPPORTED_MEDIA_TYPE,
                 "unsupported_media_type",
                 "The request media type is not supported.",
+                request,
+            ),
+            exception,
+        )
+
+    /** Maps unsupported HTTP methods on existing routes to a public client error. */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException::class)
+    fun methodNotAllowed(
+        exception: HttpRequestMethodNotSupportedException,
+        request: HttpServletRequest,
+    ): ResponseEntity<ApiProblem> =
+        response(
+            problem(
+                HttpStatus.METHOD_NOT_ALLOWED,
+                "method_not_allowed",
+                "The request method is not supported.",
                 request,
             ),
             exception,

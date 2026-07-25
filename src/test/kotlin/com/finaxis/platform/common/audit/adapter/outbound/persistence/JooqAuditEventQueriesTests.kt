@@ -41,6 +41,24 @@ class JooqAuditEventQueriesTests(
     }
 
     @Test
+    fun `search returns empty page for extreme page offset`() {
+        val organisationId = insertOrganisation()
+        insertAuditEvent(organisationId, actorId = null, action = "organisation.activate")
+
+        val page =
+            queries.search(
+                AuditEventFilter(
+                    organisationId = organisationId,
+                    page = Int.MAX_VALUE,
+                    size = 100,
+                ),
+            )
+
+        assertEquals(emptyList(), page.items)
+        assertEquals(1, page.totalItems)
+    }
+
+    @Test
     fun `search filters by entity type and id`() {
         val organisationId = insertOrganisation()
         val entityId = uuidV7()

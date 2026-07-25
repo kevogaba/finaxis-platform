@@ -20,6 +20,7 @@ import com.finaxis.platform.lifecycle.application.BranchAssignmentType
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.RevokeUserBranchAssignmentCommand
 import com.finaxis.platform.lifecycle.application.query.LifecycleBranchAssignmentDetail
+import com.finaxis.platform.lifecycle.application.query.LifecycleBranchAssignmentFilter
 import com.finaxis.platform.lifecycle.application.query.LifecycleBranchAssignmentSummary
 import com.finaxis.platform.lifecycle.application.query.LifecycleIamReadService
 import org.junit.jupiter.api.Test
@@ -116,6 +117,7 @@ class BranchAssignmentControllerTests
         @Test
         fun `searchBranchAssignments returns a bounded page`() {
             val tenantId = uuidV7()
+            val branchId = uuidV7()
             val assignmentId = uuidV7()
             whenever(
                 lifecycleIamReadService.searchBranchAssignments(eq(tenantId), any(), any()),
@@ -142,13 +144,51 @@ class BranchAssignmentControllerTests
                     param("size", "10")
                     param("assignment_type", "OPERATE")
                     param("status", "ACTIVE")
-                    with(authentication(tenantToken(setOf("branch_assignment.view"), tenantId)))
+                    with(
+                        authentication(
+                            tenantToken(setOf("branch_assignment.view"), tenantId, branchId),
+                        ),
+                    )
                 }.andExpect {
                     status { isOk() }
                     jsonPath("$.items[0].id") { value(assignmentId.toString()) }
                     jsonPath("$.page.number") { value(1) }
                     jsonPath("$.page.size") { value(10) }
                 }
+
+            val filterCaptor = argumentCaptor<LifecycleBranchAssignmentFilter>()
+            verify(lifecycleIamReadService).searchBranchAssignments(
+                eq(tenantId),
+                filterCaptor.capture(),
+                any(),
+            )
+            kotlin.test.assertEquals(branchId, filterCaptor.firstValue.branchId)
+        }
+
+        @Test
+        fun `searchBranchAssignments rejects a branch outside the active context`() {
+            val tenantId = uuidV7()
+            val activeBranchId = uuidV7()
+
+            mockMvc
+                .get(ApiPaths.BRANCH_ASSIGNMENTS) {
+                    param("branch_id", uuidV7().toString())
+                    with(
+                        authentication(
+                            tenantToken(
+                                setOf("branch_assignment.view"),
+                                tenantId,
+                                activeBranchId,
+                            ),
+                        ),
+                    )
+                }.andExpect {
+                    status { isNotFound() }
+                    jsonPath("$.code") { value("resource_not_found") }
+                }
+
+            verify(lifecycleIamReadService, org.mockito.kotlin.never())
+                .searchBranchAssignments(any(), any(), any())
         }
 
         @Test

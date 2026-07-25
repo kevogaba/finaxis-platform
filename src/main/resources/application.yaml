@@ -282,6 +282,30 @@ finaxis:
         - method: POST
           path: /api/v1/auth/**
           policy: platform-command
+        - method: PUT
+          path: /api/v1/auth/**
+          policy: platform-command
+        - method: PATCH
+          path: /api/v1/auth/**
+          policy: platform-command
+        - method: DELETE
+          path: /api/v1/auth/**
+          policy: platform-command
+        - method: GET
+          path: /api/v1/platform/**
+          policy: platform-read
+        - method: POST
+          path: /api/v1/platform/**
+          policy: platform-command
+        - method: PUT
+          path: /api/v1/platform/**
+          policy: platform-command
+        - method: PATCH
+          path: /api/v1/platform/**
+          policy: platform-command
+        - method: DELETE
+          path: /api/v1/platform/**
+          policy: platform-command
         - method: GET
           path: /api/v1/**
           policy: tenant-read

@@ -300,6 +300,12 @@ class BranchControllerTests
                 }
 
             verify(branchProvisioningService).activate(any())
+            verify(permissionGuard).requireBranchPermission(
+                org.mockito.kotlin.any(),
+                eq(tenantId),
+                eq(branchId),
+                eq("branch.activate"),
+            )
         }
 
         @Test

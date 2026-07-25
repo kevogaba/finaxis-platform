@@ -21,6 +21,7 @@ import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.verify
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
@@ -64,7 +65,14 @@ class OrganisationBranchProvisioningServiceTests {
             clock,
         )
     private val branches =
-        BranchProvisioningService(lifecycle, store, store, AuditService(audits, clock), events)
+        BranchProvisioningService(
+            lifecycle,
+            store,
+            store,
+            AuditService(audits, clock),
+            events,
+            permissionGuard,
+        )
 
     @Test
     fun `creates organisation draft with timezone business date and requested settings`() {
@@ -264,6 +272,12 @@ class OrganisationBranchProvisioningServiceTests {
         assertEquals(
             BranchLifecycleState.ACTIVE,
             lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+        verify(permissionGuard).requireBranchPermission(
+            checkerId,
+            organisationId,
+            branchId,
+            "branch.activate",
         )
     }
 
@@ -518,15 +532,19 @@ class OrganisationBranchProvisioningServiceTests {
         assertExternalizedTarget("finaxis.lifecycle.branch.activated")
 
         events.events.clear()
-        branches.suspend(SuspendBranchCommand(organisationId, branchId, "Maintenance"))
+        branches.suspend(SuspendBranchCommand(organisationId, branchId, "Maintenance", uuidV7()))
         assertExternalizedTarget("finaxis.lifecycle.branch.suspended")
 
         events.events.clear()
-        branches.reactivate(ReactivateBranchCommand(organisationId, branchId, "Maintenance done"))
+        branches.reactivate(
+            ReactivateBranchCommand(organisationId, branchId, "Maintenance done", uuidV7()),
+        )
         assertExternalizedTarget("finaxis.lifecycle.branch.reactivated")
 
         events.events.clear()
-        branches.close(CloseBranchCommand(organisationId, branchId, "Branch consolidation"))
+        branches.close(
+            CloseBranchCommand(organisationId, branchId, "Branch consolidation", uuidV7()),
+        )
         assertExternalizedTarget("finaxis.lifecycle.branch.closed")
         assertEquals("Branch consolidation", transitionLogs.logs.last().reason)
     }
@@ -543,7 +561,7 @@ class OrganisationBranchProvisioningServiceTests {
         lifecyclePersistence.branchesWithActiveChildren += organisationId to branchId
 
         assertFailsWith<ConflictException> {
-            branches.close(CloseBranchCommand(organisationId, branchId, "Consolidation"))
+            branches.close(CloseBranchCommand(organisationId, branchId, "Consolidation", uuidV7()))
         }
     }
 
@@ -818,6 +836,8 @@ private class LifecycleFake :
         organisationId: UUID,
         membershipId: UUID,
     ): UUID? = null
+
+    override fun findOrganisationIdsForActiveUserAccess(userId: UUID): Set<UUID> = emptySet()
 
     override fun saveOrganisation(aggregate: LifecycleAggregate<OrganisationLifecycleState>) =
         aggregate

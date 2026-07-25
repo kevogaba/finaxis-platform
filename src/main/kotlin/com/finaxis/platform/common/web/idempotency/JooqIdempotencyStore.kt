@@ -14,6 +14,7 @@ import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.UUID
+import java.util.concurrent.locks.LockSupport
 
 /** jOOQ/PostgreSQL adapter for durable tenant-scoped mutation idempotency. */
 @Repository
@@ -24,22 +25,40 @@ class JooqIdempotencyStore(
 ) : IdempotencyStore {
     override fun acquire(command: IdempotencyAcquireCommand): IdempotencyAcquisition {
         requireActiveTransaction()
-        acquireTransactionLock(command.scope, command.key)
+        if (!acquireTransactionLock(command.scope, command.key, command.inProgressTimeout)) {
+            return IdempotencyAcquisition.InProgress
+        }
         val record = find(command.scope, command.key)
-        if (record == null) {
-            insert(command)
-            return IdempotencyAcquisition.Acquired
-        }
-        if (record.expiresAt!!.toInstant() <= command.now) {
-            delete(command.scope, command.key)
-            insert(command)
-            return IdempotencyAcquisition.Acquired
-        }
-        ensureSameRequest(record, command.fingerprint)
-        return when (record.status) {
-            IdempotencyStatus.COMPLETED.name -> IdempotencyAcquisition.Replay(toResponse(record))
-            IdempotencyStatus.IN_PROGRESS.name -> reacquireIfStale(record, command)
-            else -> error("Unsupported idempotency status")
+        return when {
+            record == null -> {
+                insert(command)
+                IdempotencyAcquisition.Acquired
+            }
+
+            record.expiresAt!!.toInstant() <= command.now -> {
+                delete(command.scope, command.key)
+                insert(command)
+                IdempotencyAcquisition.Acquired
+            }
+
+            else -> {
+                ensureSameRequest(record, command.fingerprint)
+                when (record.status) {
+                    IdempotencyStatus.COMPLETED.name -> {
+                        IdempotencyAcquisition.Replay(
+                            toResponse(record),
+                        )
+                    }
+
+                    IdempotencyStatus.IN_PROGRESS.name -> {
+                        reacquireIfStale(record, command)
+                    }
+
+                    else -> {
+                        error("Unsupported idempotency status")
+                    }
+                }
+            }
         }
     }
 
@@ -95,17 +114,30 @@ class JooqIdempotencyStore(
     private fun acquireTransactionLock(
         scope: IdempotencyScope,
         key: UUID,
-    ) {
-        dsl.fetch(
+        timeout: java.time.Duration,
+    ): Boolean {
+        val deadline = System.nanoTime() + timeout.toNanos()
+        do {
+            if (tryAcquireTransactionLock(scope, key)) return true
+            val remainingNanos = deadline - System.nanoTime()
+            if (remainingNanos <= 0) return false
+            LockSupport.parkNanos(minOf(remainingNanos, LOCK_POLL_INTERVAL_NANOS))
+        } while (true)
+    }
+
+    private fun tryAcquireTransactionLock(
+        scope: IdempotencyScope,
+        key: UUID,
+    ): Boolean =
+        dsl.fetchValue(
             """
-            SELECT pg_advisory_xact_lock(
+            SELECT pg_try_advisory_xact_lock(
                 hashtextextended(CAST(? AS text) || ':' || CAST(? AS text), 0)
             )
             """.trimIndent(),
             scope.organisationId,
             key,
-        )
-    }
+        ) == true
 
     private fun find(
         scope: IdempotencyScope,
@@ -195,6 +227,10 @@ class JooqIdempotencyStore(
         check(TransactionSynchronizationManager.isActualTransactionActive()) {
             "Idempotency store operations require an active transaction"
         }
+    }
+
+    private companion object {
+        const val LOCK_POLL_INTERVAL_NANOS: Long = 10_000_000
     }
 
     private fun Instant.toOffsetDateTime(): OffsetDateTime = atOffset(ZoneOffset.UTC)

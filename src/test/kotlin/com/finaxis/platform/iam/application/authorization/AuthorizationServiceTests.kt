@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.application.authorization
 
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
@@ -129,6 +130,15 @@ class AuthorizationServiceTests {
         )
         assertTrue(service.hasPermission(userId, organisationId, branchId, "branch.create"))
         assertFalse(service.hasPermission(userId, organisationId, branchId, "organisation.read"))
+    }
+
+    @Test
+    fun `system actors bypass tenant and branch permission lookups`() {
+        val service = authorizationService()
+        val branchId = uuidV7()
+
+        assertTrue(service.hasPermission(SystemActor.ID, organisationId, "branch.create"))
+        assertTrue(service.hasPermission(UUID(0L, 0L), organisationId, branchId, "branch.activate"))
     }
 
     @Test

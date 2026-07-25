@@ -8,6 +8,7 @@ import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import org.springframework.stereotype.Component
 import java.time.Clock
+import java.util.UUID
 
 /**
  * Revokes every active branch and role assignment left behind by a completed user deactivation.
@@ -17,6 +18,7 @@ import java.time.Clock
  */
 @Component
 class UserDeactivationAssignmentRevoker(
+    private val reader: FoundationLifecycleReader,
     private val writer: FoundationLifecycleWriter,
     private val auditService: AuditService,
     private val eventPublisher: TransitionEventPublisher,
@@ -24,40 +26,46 @@ class UserDeactivationAssignmentRevoker(
 ) {
     /** Revokes and audits every active assignment left behind by [command]'s deactivated user. */
     fun revoke(command: DeactivateUserCommand) {
-        val revoked = writer.revokeActiveAssignments(command.organisationId, command.userId)
-        revoked.forEach { assignment ->
-            auditService.record(
-                AuditCommand(
-                    actorType = USER,
-                    actorId = command.actorId.toString(),
-                    tenantId = command.organisationId.toString(),
-                    action = "user.deactivation_assignment_revoked",
-                    resourceType = assignment.assignmentType,
-                    resourceId = assignment.assignmentId.toString(),
-                    outcome = AuditOutcome.SUCCESS,
-                    reason = command.reason,
-                    requestId = command.requestId,
-                    metadata = mapOf(USER_ID to command.userId.toString()),
-                ),
-            )
-            eventPublisher.publish(
-                ExternalizedTransitionEvent(
-                    target = USER_DEACTIVATION_ASSIGNMENT_REVOKED_TARGET,
-                    aggregateType = assignment.assignmentType,
-                    aggregateId = assignment.assignmentId.toString(),
-                    transition = "REVOKE",
-                    fromState = "ACTIVE",
-                    toState = "REVOKED",
-                    actor = TransitionActor(USER, command.actorId.toString()),
-                    occurredAt = clock.instant(),
-                    metadata =
-                        mapOf(
-                            ORGANISATION_ID to command.organisationId.toString(),
-                            USER_ID to command.userId.toString(),
-                        ),
-                ),
-            )
-        }
+        reader
+            .findOrganisationIdsForActiveUserAccess(command.userId)
+            .sortedBy(UUID::toString)
+            .flatMap { organisationId ->
+                writer.revokeActiveAssignments(organisationId, command.userId).map { assignment ->
+                    organisationId to assignment
+                }
+            }.forEach { (organisationId, assignment) ->
+                auditService.record(
+                    AuditCommand(
+                        actorType = USER,
+                        actorId = command.actorId.toString(),
+                        tenantId = organisationId.toString(),
+                        action = "user.deactivation_assignment_revoked",
+                        resourceType = assignment.assignmentType,
+                        resourceId = assignment.assignmentId.toString(),
+                        outcome = AuditOutcome.SUCCESS,
+                        reason = command.reason,
+                        requestId = command.requestId,
+                        metadata = mapOf(USER_ID to command.userId.toString()),
+                    ),
+                )
+                eventPublisher.publish(
+                    ExternalizedTransitionEvent(
+                        target = USER_DEACTIVATION_ASSIGNMENT_REVOKED_TARGET,
+                        aggregateType = assignment.assignmentType,
+                        aggregateId = assignment.assignmentId.toString(),
+                        transition = "REVOKE",
+                        fromState = "ACTIVE",
+                        toState = "REVOKED",
+                        actor = TransitionActor(USER, command.actorId.toString()),
+                        occurredAt = clock.instant(),
+                        metadata =
+                            mapOf(
+                                ORGANISATION_ID to organisationId.toString(),
+                                USER_ID to command.userId.toString(),
+                            ),
+                    ),
+                )
+            }
     }
 
     private companion object {

@@ -169,6 +169,7 @@ data class SuspendBranchCommand(
     val organisationId: UUID,
     val branchId: UUID,
     val reason: String,
+    val actorId: UUID,
 )
 
 /** Reactivates a suspended branch. */
@@ -176,6 +177,7 @@ data class ReactivateBranchCommand(
     val organisationId: UUID,
     val branchId: UUID,
     val reason: String? = null,
+    val actorId: UUID,
 )
 
 /** Closes a branch without physically deleting it. */
@@ -183,6 +185,7 @@ data class CloseBranchCommand(
     val organisationId: UUID,
     val branchId: UUID,
     val reason: String,
+    val actorId: UUID,
 )
 
 /** Types of active operational access a user may have at a branch. */

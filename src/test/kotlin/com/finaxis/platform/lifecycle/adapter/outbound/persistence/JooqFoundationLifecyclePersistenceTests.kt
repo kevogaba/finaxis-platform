@@ -19,6 +19,7 @@ import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
+import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
 import com.finaxis.platform.lifecycle.application.AssignUserToBranchCommand
 import com.finaxis.platform.lifecycle.application.BranchAssignmentType
@@ -35,6 +36,7 @@ import com.finaxis.platform.lifecycle.domain.LifecycleAggregate
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleTransition
+import com.finaxis.platform.lifecycle.withRequestContext
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -61,6 +63,8 @@ class JooqFoundationLifecyclePersistenceTests(
     private val organisationProvisioningService: OrganisationProvisioningService,
     private val branchProvisioningService: BranchProvisioningService,
 ) {
+    private val fixture = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
+
     @Test
     fun `organisation submission durably writes transition log and audit event`() {
         val organisationId = insertOrganisation(OrganisationLifecycleState.DRAFT)
@@ -328,12 +332,11 @@ class JooqFoundationLifecyclePersistenceTests(
 
     @Test
     fun `branch assignment is active once and never crosses organisation boundaries`() {
-        val organisationId = insertOrganisation(OrganisationLifecycleState.ACTIVE)
+        val userId = insertUser()
+        val organisationId = fixture.createActiveOrganisation("branch-assignment", userId)
         val otherOrganisationId = insertOrganisation(OrganisationLifecycleState.ACTIVE)
         val branchId = insertBranch(organisationId, BranchLifecycleState.ACTIVE)
         val otherBranchId = insertBranch(otherOrganisationId, BranchLifecycleState.ACTIVE)
-        val userId = insertUser()
-        insertMembership(organisationId, userId, MembershipLifecycleState.ACTIVE)
         val command =
             AssignUserToBranchCommand(
                 organisationId,
@@ -343,8 +346,10 @@ class JooqFoundationLifecyclePersistenceTests(
                 userId,
             )
 
-        branchProvisioningService.assignUser(command)
-        branchProvisioningService.assignUser(command)
+        withRequestContext {
+            branchProvisioningService.assignUser(command)
+            branchProvisioningService.assignUser(command)
+        }
 
         assertEquals(
             1,
@@ -358,27 +363,31 @@ class JooqFoundationLifecyclePersistenceTests(
                     .and(USER_BRANCH_ASSIGNMENT.STATUS.eq("ACTIVE")),
             ),
         )
-        assertThrows<ConflictException> {
-            branchProvisioningService.assignUser(command.copy(branchId = otherBranchId))
+        withRequestContext {
+            assertThrows<ConflictException> {
+                branchProvisioningService.assignUser(command.copy(branchId = otherBranchId))
+            }
         }
     }
 
     @Test
     fun `branch draft creation records a lifecycle creation log`() {
-        val organisationId = insertOrganisation(OrganisationLifecycleState.ACTIVE)
         val requestedBy = insertUser()
+        val organisationId = fixture.createActiveOrganisation("branch-creation-log", requestedBy)
 
         val result =
-            branchProvisioningService.createDraft(
-                CreateBranchCommand(
-                    organisationId = organisationId,
-                    branchCode = "NAIROBI",
-                    branchName = "Nairobi Branch",
-                    branchType = "OPERATIONS",
-                    timezone = "Africa/Nairobi",
-                    requestedBy = requestedBy,
-                ),
-            )
+            withRequestContext {
+                branchProvisioningService.createDraft(
+                    CreateBranchCommand(
+                        organisationId = organisationId,
+                        branchCode = "NAIROBI",
+                        branchName = "Nairobi Branch",
+                        branchType = "OPERATIONS",
+                        timezone = "Africa/Nairobi",
+                        requestedBy = requestedBy,
+                    ),
+                )
+            }
 
         assertEquals(
             "CREATE_DRAFT",

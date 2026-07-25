@@ -18,6 +18,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class TenantSettingsServiceTests {
     private val lifecycleStore = FakeLifecycleStoreForSettings()
@@ -150,6 +151,24 @@ class TenantSettingsServiceTests {
         val page = service.list(ListTenantSettingsQuery(organisationId, actorId))
 
         assertEquals("***REDACTED***", page.items.single { it.key == "audit_retention_days" }.value)
+    }
+
+    @Test
+    fun `list returns empty page for extreme page offset`() {
+        activate()
+
+        val page =
+            service.list(
+                ListTenantSettingsQuery(
+                    organisationId,
+                    actorId,
+                    page = Int.MAX_VALUE,
+                    size = 100,
+                ),
+            )
+
+        assertEquals(emptyList(), page.items)
+        assertTrue(page.totalItems > 0)
     }
 
     @Test

@@ -16,14 +16,22 @@ import org.springframework.http.HttpStatus
 import org.springframework.http.HttpStatusCode
 import org.springframework.http.MediaType
 import org.springframework.http.converter.HttpMessageNotReadableException
+import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter
 import org.springframework.mock.web.MockHttpServletRequest
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.content
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
+import org.springframework.test.web.servlet.setup.MockMvcBuilders
 import org.springframework.web.HttpMediaTypeNotSupportedException
 import org.springframework.web.bind.MissingServletRequestParameterException
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException
 import org.springframework.web.servlet.resource.NoResourceFoundException
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /** Verifies every MVC error family has the same safe RFC 9457 representation. */
 class ApiExceptionHandlerTests {
@@ -269,10 +277,45 @@ class ApiExceptionHandlerTests {
         assertFalse(unexpected.body!!.detail.contains("secret"))
     }
 
+    @Test
+    fun `unsupported method on existing route returns method not allowed problem`() {
+        val response =
+            MockMvcBuilders
+                .standaloneSetup(MethodOnlyController())
+                .setControllerAdvice(handler)
+                .setMessageConverters(JacksonJsonHttpMessageConverter(ApiJsonCodec().mapper))
+                .build()
+                .perform(
+                    put("/api/v1/tenant/business-date")
+                        .header("X-Request-Id", "request-123"),
+                ).andExpect(status().isMethodNotAllowed)
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andReturn()
+                .response
+
+        assertEquals(405, response.status)
+        assertTrue(
+            response.contentAsString.contains(
+                "\"type\":\"urn:finaxis:problem:method_not_allowed\"",
+            ),
+        )
+        assertTrue(response.contentAsString.contains("\"title\":\"Method Not Allowed\""))
+        assertTrue(response.contentAsString.contains("\"status\":405"))
+        assertTrue(response.contentAsString.contains("\"code\":\"method_not_allowed\""))
+        assertTrue(response.contentAsString.contains("\"request_id\":\"request-123\""))
+        assertFalse(response.contentAsString.contains("internal_error"))
+    }
+
     private fun request(): MockHttpServletRequest =
         MockHttpServletRequest("POST", "/api/v1/tenants").apply {
             addHeader("X-Request-Id", "request-123")
         }
+
+    @RestController
+    private class MethodOnlyController {
+        @GetMapping("/api/v1/tenant/business-date")
+        fun currentBusinessDate(): Map<String, String> = mapOf("business_date" to "25-07-2026")
+    }
 
     @Suppress("unused")
     private fun dummyPageMethod(page: Int) = page

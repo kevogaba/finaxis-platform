@@ -11,6 +11,7 @@ import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionCommand
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
+import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
@@ -29,10 +30,16 @@ class BranchProvisioningService(
     private val assignmentStore: BranchAssignmentStore,
     private val auditService: AuditService,
     private val eventPublisher: TransitionEventPublisher,
+    private val permissionGuard: PermissionGuard,
 ) {
     /** Creates a branch draft under an active or provisioning organisation. */
     @Transactional
     fun createDraft(command: CreateBranchCommand): BranchDraftResult {
+        permissionGuard.requireTenantPermission(
+            command.requestedBy,
+            command.organisationId,
+            "branch.create",
+        )
         requireOrganisationAllowsBranch(command.organisationId)
         invalidOperationUnless(command.branchCode.isNotBlank())
         invalidOperationUnless(command.branchName.isNotBlank())
@@ -55,6 +62,12 @@ class BranchProvisioningService(
     /** Validates branch boundaries and submits a draft for approval. */
     @Transactional
     fun submitForApproval(command: SubmitBranchForApprovalCommand) {
+        requireBranchPermission(
+            command.actorId,
+            command.organisationId,
+            command.branchId,
+            "branch.create",
+        )
         val branchCode =
             lifecycleStore.branchCode(command.organisationId, command.branchId).orResourceNotFound()
         conflictUnless(
@@ -78,6 +91,12 @@ class BranchProvisioningService(
     /** Activates an approved branch only in an active organisation. */
     @Transactional
     fun activate(command: ActivateBranchCommand) {
+        requireBranchPermission(
+            command.actorId,
+            command.organisationId,
+            command.branchId,
+            "branch.activate",
+        )
         val creator = lifecycleStore.createdBy(command.organisationId, command.branchId)
         if (creator != null &&
             command.actorId != com.finaxis.platform.common.persistence.SystemActor.ID &&
@@ -102,6 +121,12 @@ class BranchProvisioningService(
     /** Suspends a branch, preventing new operational assignments. */
     @Transactional
     fun suspend(command: SuspendBranchCommand) {
+        requireBranchPermission(
+            command.actorId,
+            command.organisationId,
+            command.branchId,
+            "branch.suspend",
+        )
         lifecycleService.transition(
             BranchTransitionCommand(
                 command.organisationId,
@@ -115,6 +140,12 @@ class BranchProvisioningService(
     /** Reactivates a branch only after its organisation returns to active status. */
     @Transactional
     fun reactivate(command: ReactivateBranchCommand) {
+        requireBranchPermission(
+            command.actorId,
+            command.organisationId,
+            command.branchId,
+            "branch.reactivate",
+        )
         conflictUnless(
             lifecycleStore.organisationState(command.organisationId) ==
                 OrganisationLifecycleState.ACTIVE,
@@ -132,6 +163,12 @@ class BranchProvisioningService(
     /** Closes a branch through the FSM after existing closure guards have been evaluated. */
     @Transactional
     fun close(command: CloseBranchCommand) {
+        requireBranchPermission(
+            command.actorId,
+            command.organisationId,
+            command.branchId,
+            "branch.close",
+        )
         val transition =
             when (lifecycleStore.branchState(command.organisationId, command.branchId)) {
                 BranchLifecycleState.ACTIVE -> BranchLifecycleTransition.CLOSE
@@ -151,6 +188,12 @@ class BranchProvisioningService(
     /** Creates or reactivates a user assignment only inside an active organisation and branch. */
     @Transactional
     fun assignUser(command: AssignUserToBranchCommand) {
+        requireBranchPermission(
+            command.assignedBy,
+            command.organisationId,
+            command.branchId,
+            "user.assign_branch",
+        )
         resourceNotFoundUnless(assignmentStore.userExists(command.userId))
         conflictUnless(
             lifecycleStore.organisationState(command.organisationId) ==
@@ -179,6 +222,12 @@ class BranchProvisioningService(
     /** Revokes an assignment while preserving required operational access for ordinary members. */
     @Transactional
     fun revokeUserAssignment(command: RevokeUserBranchAssignmentCommand) {
+        requireBranchPermission(
+            command.revokedBy,
+            command.organisationId,
+            command.branchId,
+            "user.revoke_branch",
+        )
         if (!assignmentStore.isActive(command)) return
         val membership =
             assignmentStore.membership(command.organisationId, command.userId).orResourceNotFound()
@@ -212,6 +261,15 @@ class BranchProvisioningService(
         conflictUnless(
             lifecycleStore.organisationState(organisationId) in ALLOWED_BRANCH_CREATION_STATES,
         )
+    }
+
+    private fun requireBranchPermission(
+        actorId: java.util.UUID,
+        organisationId: java.util.UUID,
+        branchId: java.util.UUID,
+        permissionCode: String,
+    ) {
+        permissionGuard.requireBranchPermission(actorId, organisationId, branchId, permissionCode)
     }
 
     private fun publishAssignment(command: AssignUserToBranchCommand) {

@@ -7,6 +7,7 @@ import com.finaxis.platform.common.audit.AuditEventQueries
 import com.finaxis.platform.common.audit.AuditEventSummary
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditSeverity
+import com.finaxis.platform.common.web.api.boundedPageOffset
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import org.jooq.Condition
 import org.jooq.DSLContext
@@ -22,6 +23,9 @@ class JooqAuditEventQueries(
     override fun search(filter: AuditEventFilter): AuditEventPage {
         val condition = buildCondition(filter)
         val total = dsl.fetchCount(AUDIT_EVENT, condition).toLong()
+        val offset =
+            boundedPageOffset(filter.page, filter.size, total)
+                ?: return AuditEventPage(emptyList(), total)
         val items =
             dsl
                 .select(
@@ -40,7 +44,7 @@ class JooqAuditEventQueries(
                 .where(condition)
                 .orderBy(AUDIT_EVENT.EVENT_TIME.desc(), AUDIT_EVENT.ID.desc())
                 .limit(filter.size)
-                .offset(filter.page * filter.size)
+                .offset(offset)
                 .fetch(::toSummary)
         return AuditEventPage(items, total)
     }

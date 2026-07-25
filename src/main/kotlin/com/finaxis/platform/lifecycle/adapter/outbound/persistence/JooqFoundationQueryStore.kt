@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.apiPageOf
+import com.finaxis.platform.common.web.api.boundedPageOffset
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE_HISTORY
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
@@ -57,6 +58,9 @@ class JooqFoundationQueryStore(
         }
 
         val total = dsl.fetchCount(ORGANISATION, condition).toLong()
+        val offset =
+            boundedPageOffset(filter.page, filter.size, total)
+                ?: return apiPageOf(emptyList(), filter.page, filter.size, total)
         val items =
             dsl
                 .select(
@@ -72,7 +76,7 @@ class JooqFoundationQueryStore(
                     tenantSortOrder(tenantSortField(filter.sortBy), filter.sortDir),
                     ORGANISATION.ID.desc(),
                 ).limit(filter.size)
-                .offset(filter.page * filter.size)
+                .offset(offset)
                 .fetch { record ->
                     TenantSummary(
                         id = requireNotNull(record.get(ORGANISATION.ID)),
@@ -133,6 +137,9 @@ class JooqFoundationQueryStore(
         }
 
         val total = dsl.fetchCount(BRANCH, condition).toLong()
+        val offset =
+            boundedPageOffset(filter.page, filter.size, total)
+                ?: return apiPageOf(emptyList(), filter.page, filter.size, total)
         val items =
             dsl
                 .select(
@@ -149,7 +156,7 @@ class JooqFoundationQueryStore(
                     branchSortOrder(branchSortField(filter.sortBy), filter.sortDir),
                     BRANCH.ID.desc(),
                 ).limit(filter.size)
-                .offset(filter.page * filter.size)
+                .offset(offset)
                 .fetch { record ->
                     BranchSummary(
                         id = requireNotNull(record.get(BRANCH.ID)),
@@ -213,6 +220,9 @@ class JooqFoundationQueryStore(
     ): ApiPage<BusinessDateHistorySummary> {
         val condition = BUSINESS_DATE_HISTORY.ORGANISATION_ID.eq(organisationId)
         val total = dsl.fetchCount(BUSINESS_DATE_HISTORY, condition).toLong()
+        val offset =
+            boundedPageOffset(filter.page, filter.size, total)
+                ?: return apiPageOf(emptyList(), filter.page, filter.size, total)
         val items =
             dsl
                 .select(
@@ -226,7 +236,7 @@ class JooqFoundationQueryStore(
                 .where(condition)
                 .orderBy(BUSINESS_DATE_HISTORY.OCCURRED_AT.desc(), BUSINESS_DATE_HISTORY.ID.desc())
                 .limit(filter.size)
-                .offset(filter.page * filter.size)
+                .offset(offset)
                 .fetch { record ->
                     BusinessDateHistorySummary(
                         id = requireNotNull(record.get(BUSINESS_DATE_HISTORY.ID)),

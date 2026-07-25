@@ -41,10 +41,19 @@ fun <T> apiPageOf(
                 size = size,
                 totalItems = totalItems,
                 totalPages = totalPages,
-                hasNext = number + 1 < totalPages,
+                hasNext = number.toLong() + 1L < totalPages.toLong(),
                 hasPrevious = number > 0,
             ),
     )
+}
+
+internal fun boundedPageOffset(
+    page: Int,
+    size: Int,
+    totalItems: Long,
+): Int? {
+    val offset = page.toLong() * size.toLong()
+    return if (offset > Int.MAX_VALUE || offset >= totalItems) null else offset.toInt()
 }
 
 internal const val MINIMUM_PAGE_SIZE = 1

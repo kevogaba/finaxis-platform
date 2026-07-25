@@ -13,6 +13,7 @@ import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.common.transitions.TransitionExecutor
 import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogRepository
+import com.finaxis.platform.lifecycle.PlatformCaller
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityDispatchType
 import com.finaxis.platform.lifecycle.application.port.outbound.MembershipProvisioningSnapshot
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
@@ -328,6 +329,27 @@ class OrganisationInitialAdministratorBootstrapServiceTests {
         assertEquals(checker, record.approvedBy)
     }
 
+    @Test
+    fun `retryBootstrap restarts a bootstrap marked FAILED`() {
+        val organisationId = activeDraft()
+        adminBootstrapStore.updateStatus(
+            organisationId,
+            InitialAdministratorBootstrapStatus.FAILED,
+            lastFailureCode = "Keycloak unavailable",
+        )
+
+        organisations.retryBootstrap(
+            RetryInitialAdministratorBootstrapCommand(
+                organisationId,
+                PlatformCaller(uuidV7(), uuidV7()),
+            ),
+        )
+
+        org.mockito.Mockito
+            .verify(bootstrapService)
+            .bootstrap(organisationId)
+    }
+
     private fun activeDraft(): UUID {
         val organisationId = uuidV7()
         lifecyclePersistence.organisations[organisationId] =
@@ -596,6 +618,8 @@ private class BootstrapLifecycleFake :
         organisationId: UUID,
         membershipId: UUID,
     ): UUID? = null
+
+    override fun findOrganisationIdsForActiveUserAccess(userId: UUID): Set<UUID> = emptySet()
 
     override fun saveOrganisation(aggregate: LifecycleAggregate<OrganisationLifecycleState>) =
         aggregate

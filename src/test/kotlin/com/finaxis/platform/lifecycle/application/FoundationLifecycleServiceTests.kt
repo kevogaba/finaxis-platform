@@ -399,6 +399,8 @@ private class FakeLifecyclePersistence :
         membershipId: UUID,
     ) = membershipUsers[organisationId to membershipId]
 
+    override fun findOrganisationIdsForActiveUserAccess(userId: UUID): Set<UUID> = emptySet()
+
     override fun saveOrganisation(aggregate: LifecycleAggregate<OrganisationLifecycleState>) =
         aggregate
 

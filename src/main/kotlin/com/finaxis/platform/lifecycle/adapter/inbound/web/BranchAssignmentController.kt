@@ -119,11 +119,12 @@ class BranchAssignmentController(
         @RequestParam(required = false, name = "sort_dir") sortDir: String?,
     ): ApiPage<BranchAssignmentSummaryResponse> {
         val caller = CallerContextResolver.getTenantCaller()
+        branchId?.let { verifyBranchContext(caller, it) }
         val pageResult =
             lifecycleIamReadService.searchBranchAssignments(
                 caller.activeOrganisationId,
                 LifecycleBranchAssignmentFilter(
-                    branchId = branchId,
+                    branchId = caller.activeBranchId ?: branchId,
                     assignmentType = assignmentType,
                     status = status,
                     page = page,

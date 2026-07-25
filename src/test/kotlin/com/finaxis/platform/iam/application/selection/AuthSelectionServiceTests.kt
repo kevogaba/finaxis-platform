@@ -583,46 +583,158 @@ class AuthSelectionServiceTests {
             service.revalidateBranchReplay("keycloak-subject", context)
         }
     }
+}
 
-    // ------------------------------------------------------------------
-    // Factory helpers
-    // ------------------------------------------------------------------
+private fun serviceWith(
+    lookup: FakeMembershipLookup,
+    emptyPermissions: Boolean = false,
+    grantedPermissions: Set<String> = setOf("auth.select_organisation", "auth.select_branch"),
+): AuthSelectionService {
+    val perms: PermissionResolutionQueries =
+        if (emptyPermissions) {
+            object : PermissionResolutionQueries {
+                override fun membershipStatus(membershipId: UUID) = MembershipStatus.ACTIVE
 
-    private fun serviceWith(
-        lookup: FakeMembershipLookup,
-        emptyPermissions: Boolean = false,
-        grantedPermissions: Set<String> = setOf("auth.select_organisation", "auth.select_branch"),
-    ): AuthSelectionService {
-        val perms: PermissionResolutionQueries =
-            if (emptyPermissions) {
-                object : PermissionResolutionQueries {
-                    override fun membershipStatus(membershipId: UUID) = MembershipStatus.ACTIVE
+                override fun rolePermissionCodes(
+                    membershipId: UUID,
+                    branchId: UUID?,
+                ) = emptySet<String>()
 
-                    override fun rolePermissionCodes(
-                        membershipId: UUID,
-                        branchId: UUID?,
-                    ) = emptySet<String>()
-
-                    override fun directPermissionEffects(membershipId: UUID) =
-                        emptyList<PermissionEffectAssignment>()
-                }
-            } else {
-                object : PermissionResolutionQueries {
-                    override fun membershipStatus(membershipId: UUID) = MembershipStatus.ACTIVE
-
-                    override fun rolePermissionCodes(
-                        membershipId: UUID,
-                        branchId: UUID?,
-                    ) = grantedPermissions
-
-                    override fun directPermissionEffects(membershipId: UUID) =
-                        emptyList<PermissionEffectAssignment>()
-                }
+                override fun directPermissionEffects(membershipId: UUID) =
+                    emptyList<PermissionEffectAssignment>()
             }
-        val resolver = EffectivePermissionResolver(perms, ConcurrentMapCacheManager())
-        val cache = RequestPermissionCache(resolver)
-        val authorizationService = AuthorizationService(lookup, cache)
-        return AuthSelectionService(lookup, authorizationService)
+        } else {
+            object : PermissionResolutionQueries {
+                override fun membershipStatus(membershipId: UUID) = MembershipStatus.ACTIVE
+
+                override fun rolePermissionCodes(
+                    membershipId: UUID,
+                    branchId: UUID?,
+                ) = grantedPermissions
+
+                override fun directPermissionEffects(membershipId: UUID) =
+                    emptyList<PermissionEffectAssignment>()
+            }
+        }
+    val resolver = EffectivePermissionResolver(perms, ConcurrentMapCacheManager())
+    val cache = RequestPermissionCache(resolver)
+    val authorizationService = AuthorizationService(lookup, cache)
+    return AuthSelectionService(lookup, authorizationService)
+}
+
+class AuthSelectionReplayPermissionTests {
+    @Test
+    fun `organisation replay rejects when permission is revoked after original selection`() {
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val branchId = uuidV7()
+        val lookup =
+            FakeMembershipLookup(
+                userId = userId,
+                membership =
+                    MembershipSelection(
+                        membershipId,
+                        userId,
+                        organisationId,
+                        MembershipStatus.ACTIVE,
+                    ),
+                branchIds = listOf(branchId),
+            )
+        val original = serviceWith(lookup).selectOrganisation("keycloak-subject", organisationId)
+        val replayService =
+            serviceWith(
+                lookup,
+                grantedPermissions = setOf("auth.select_branch"),
+            )
+
+        assertThrows<OrganisationSelectionDeniedException> {
+            replayService.revalidateOrganisationReplay(
+                "keycloak-subject",
+                original.context,
+                original.assignedBranchIds,
+            )
+        }
+    }
+
+    @Test
+    fun `organisation replay remains valid when permission is still held`() {
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val lookup =
+            FakeMembershipLookup(
+                userId = userId,
+                membership =
+                    MembershipSelection(
+                        membershipId,
+                        userId,
+                        organisationId,
+                        MembershipStatus.ACTIVE,
+                    ),
+            )
+        val original = serviceWith(lookup).selectOrganisation("keycloak-subject", organisationId)
+
+        serviceWith(lookup).revalidateOrganisationReplay(
+            "keycloak-subject",
+            original.context,
+            original.assignedBranchIds,
+        )
+    }
+
+    @Test
+    fun `branch replay rejects when permission is revoked after original selection`() {
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val branchId = uuidV7()
+        val context = ActiveOrganisationContext(userId, organisationId, membershipId)
+        val lookup =
+            FakeMembershipLookup(
+                userId = userId,
+                membership =
+                    MembershipSelection(
+                        membershipId,
+                        userId,
+                        organisationId,
+                        MembershipStatus.ACTIVE,
+                    ),
+                branchIds = listOf(branchId),
+            )
+        val original = serviceWith(lookup).selectBranch("keycloak-subject", branchId, context)
+        val replayService =
+            serviceWith(
+                lookup,
+                grantedPermissions = setOf("auth.select_organisation"),
+            )
+
+        assertThrows<OrganisationSelectionDeniedException> {
+            replayService.revalidateBranchReplay("keycloak-subject", original.context)
+        }
+    }
+
+    @Test
+    fun `branch replay remains valid when permission is still held`() {
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val branchId = uuidV7()
+        val context = ActiveOrganisationContext(userId, organisationId, membershipId)
+        val lookup =
+            FakeMembershipLookup(
+                userId = userId,
+                membership =
+                    MembershipSelection(
+                        membershipId,
+                        userId,
+                        organisationId,
+                        MembershipStatus.ACTIVE,
+                    ),
+                branchIds = listOf(branchId),
+            )
+        val original = serviceWith(lookup).selectBranch("keycloak-subject", branchId, context)
+
+        serviceWith(lookup).revalidateBranchReplay("keycloak-subject", original.context)
     }
 }
 

@@ -1,5 +1,5 @@
 [versions]
-kotlinVersion = "2.4.0"
+kotlinVersion = "2.4.10"
 springBootVersion = "4.1.0"
 springCloudVersion = "2025.1.2"
 springModulithVersion = "2.1.0"
@@ -25,6 +25,11 @@ archUnitVersion = "1.4.2"
 namastackVersion = "1.7.1"
 bucket4jVersion = "8.19.0"
 mockitoKotlinVersion = "5.4.0"
+embeddedPostgresVersion = "2.2.2"
+embeddedPostgresBinariesBomVersion = "18.4.0"
+flywayPostgresqlVersion = "12.11.0"
+postgresqlDependencyVersion = "42.7.13"
+
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "springBootVersion" }
@@ -58,3 +63,8 @@ bucket4j-core = { module = "com.bucket4j:bucket4j_jdk17-core", version.ref = "bu
 bucket4j-redis-common = { module = "com.bucket4j:bucket4j_jdk17-redis-common", version.ref = "bucket4jVersion" }
 bucket4j-lettuce = { module = "com.bucket4j:bucket4j_jdk17-lettuce", version.ref = "bucket4jVersion" }
 mockito-kotlin = { module = "org.mockito.kotlin:mockito-kotlin", version.ref = "mockitoKotlinVersion" }
+
+embedded-postgres = { module = "io.zonky.test:embedded-postgres", version.ref = "embeddedPostgresVersion" }
+embedded-postgres-bom = { module = "io.zonky.test.postgres:embedded-postgres-binaries-bom", version.ref = "embeddedPostgresBinariesBomVersion" }
+flyway-postgresql = { module = "org.flywaydb:flyway-database-postgresql", version.ref = "flywayPostgresqlVersion" }
+postgresql = { module = "org.postgresql:postgresql", version.ref = "postgresqlDependencyVersion" }

@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
@@ -20,6 +21,7 @@ class InitialAdministratorBootstrapService(
     private val userProvisioningStore: UserProvisioningStore,
     private val userProvisioningService: UserProvisioningService,
     private val eventPublisher: TransitionEventPublisher,
+    private val failureRecorder: InitialAdministratorBootstrapFailureRecorder,
     private val clock: Clock,
 ) {
     /**
@@ -64,12 +66,7 @@ class InitialAdministratorBootstrapService(
             val (userId, membershipId) = inviteUserIfNeeded(record, headOfficeId, roleId)
             approveOrRepublish(record, userId, membershipId)
         } catch (ex: Exception) {
-            val safeMessage = ex.message ?: ex.javaClass.name
-            adminBootstrapStore.updateStatus(
-                organisationId = organisationId,
-                status = InitialAdministratorBootstrapStatus.FAILED,
-                lastFailureCode = safeMessage.take(MAX_FAILURE_CODE_LENGTH),
-            )
+            failureRecorder.recordFailure(organisationId, ex)
             throw ex
         }
     }
@@ -101,7 +98,7 @@ class InitialAdministratorBootstrapService(
                         listOf(
                             RoleAssignmentRequest(roleId, RoleAssignmentScopeType.TENANT),
                         ),
-                    invitedBy = record.requestedBy,
+                    invitedBy = SystemActor.ID,
                     sendKeycloakInvite = true,
                     sendApplicationInvite = record.sendApplicationInvite,
                     requestId = "BOOTSTRAP-$organisationId",
@@ -136,13 +133,21 @@ class InitialAdministratorBootstrapService(
                 ApproveUserCommand(
                     organisationId = organisationId,
                     membershipId = membershipId,
-                    approvedBy = record.approvedBy!!,
+                    approvedBy =
+                        requireNotNull(record.approvedBy) {
+                            "Bootstrap record must be approved before identity provisioning."
+                        },
                     requestId = "BOOTSTRAP-$organisationId",
                     bootstrapRequestId = "BOOTSTRAP-$organisationId",
                     bootstrapAttempt = record.attempts + 1,
                 )
-            userProvisioningService.approveUser(approveCmd)
-        } else if (dispatchStatus != "SUCCEEDED") {
+            val approvalResult = userProvisioningService.approveUser(approveCmd)
+            if (!approvalResult.keycloakProvisioningRequested) {
+                completeBootstrapIfCorrelated(organisationId, userId)
+            }
+        } else if (dispatchStatus == "SUCCEEDED") {
+            completeBootstrapIfCorrelated(organisationId, userId)
+        } else {
             eventPublisher.publish(
                 ExternalizedTransitionEvent(
                     target = "finaxis.lifecycle.user.keycloak-provisioning-requested",
@@ -188,9 +193,5 @@ class InitialAdministratorBootstrapService(
                 status = InitialAdministratorBootstrapStatus.COMPLETED,
             )
         }
-    }
-
-    private companion object {
-        const val MAX_FAILURE_CODE_LENGTH = 100
     }
 }

@@ -22,6 +22,7 @@ class KeycloakUserProvisioningJobRequestHandler(
     private val lifecycleService: FoundationLifecycleService,
     private val dispatchOutcomeAuditor: DispatchOutcomeAuditor,
     private val bootstrapService: InitialAdministratorBootstrapService,
+    private val failureRecorder: InitialAdministratorBootstrapFailureRecorder,
     @Value("\${finaxis.keycloak.admin.realm:finaxis}") private val realm: String = "finaxis",
 ) : JobRequestHandler<KeycloakUserProvisioningJobRequest> {
     /** Runs Keycloak provisioning idempotently and advances the local user and membership FSMs. */
@@ -95,6 +96,7 @@ class KeycloakUserProvisioningJobRequestHandler(
             reason = ex.message ?: ex.javaClass.name,
             metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
         )
+        failureRecorder.recordFailure(jobRequest.organisationId, ex)
         throw ex
     }
 

@@ -15,6 +15,7 @@ import com.finaxis.platform.iam.application.port.outbound.RoleSnapshot
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
 import com.finaxis.platform.iam.domain.RoleStatus
+import com.finaxis.platform.lifecycle.PermissionGuard
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
@@ -27,10 +28,12 @@ class RoleManagementService(
     private val auditService: AuditService,
     private val eventPublisher: TransitionEventPublisher,
     private val permissionCacheInvalidator: PermissionCacheInvalidator,
+    private val permissionGuard: PermissionGuard,
 ) {
     /** Creates an active tenant-managed role after validating its unique code and name. */
     @Transactional
     fun createTenantRole(command: CreateTenantRole): RoleResult {
+        requireTenantPermission(command.actorId, command.organisationId, "role.create")
         invalidOperationUnless(command.roleCode.isNotBlank())
         invalidOperationUnless(command.roleName.isNotBlank())
         conflictUnless(!persistence.roleCodeExists(command.organisationId, command.roleCode))
@@ -49,6 +52,7 @@ class RoleManagementService(
     /** Updates mutable descriptive attributes of a tenant-managed role. */
     @Transactional
     fun updateTenantRole(command: UpdateTenantRole): RoleResult {
+        requireTenantPermission(command.actorId, command.organisationId, "role.update")
         val role = requiredRole(command.organisationId, command.roleId)
         requireMutable(role)
         persistence.updateRole(
@@ -76,6 +80,7 @@ class RoleManagementService(
     /** Disables a tenant-managed role that is visible in the selected organisation. */
     @Transactional
     fun deactivateRole(command: DeactivateRole): RoleResult {
+        requireTenantPermission(command.actorId, command.organisationId, "role.deactivate")
         val role = requiredRole(command.organisationId, command.roleId)
         requireMutable(role)
         persistence.setRoleStatus(
@@ -99,6 +104,7 @@ class RoleManagementService(
     /** Idempotently grants a catalogue permission and evicts affected permission caches. */
     @Transactional
     fun assignPermissionToRole(command: AssignPermissionToRole) {
+        requireTenantPermission(command.actorId, command.organisationId, "role.assign_permission")
         val role = requiredRole(command.organisationId, command.roleId)
         requireMutable(role)
         val permissionId =
@@ -130,6 +136,7 @@ class RoleManagementService(
     /** Removes a permission from a mutable role and evicts affected permission caches. */
     @Transactional
     fun removePermissionFromRole(command: RemovePermissionFromRole) {
+        requireTenantPermission(command.actorId, command.organisationId, "role.remove_permission")
         val role = requiredRole(command.organisationId, command.roleId)
         requireMutable(role)
         val permissionId =
@@ -169,6 +176,13 @@ class RoleManagementService(
         )
         requiredRole(command.organisationId, command.roleId)
         validateScope(command)
+        requireRoleAssignmentPermission(
+            command.actorId,
+            command.organisationId,
+            command.scopeType,
+            command.branchId,
+            "user.assign_role",
+        )
         persistence
             .activeRoleAssignment(
                 command.organisationId,
@@ -208,6 +222,13 @@ class RoleManagementService(
     /** Revokes an active role assignment, preserving an idempotent no-op for absent assignments. */
     @Transactional
     fun revokeRoleFromUser(command: RevokeRoleFromUser) {
+        requireRoleAssignmentPermission(
+            command.actorId,
+            command.organisationId,
+            command.scopeType,
+            command.branchId,
+            "user.revoke_role",
+        )
         val assignmentId =
             persistence.activeRoleAssignment(
                 command.organisationId,
@@ -251,6 +272,7 @@ class RoleManagementService(
         command: ActivateRole,
         status: RoleStatus,
     ): RoleResult {
+        requireTenantPermission(command.actorId, command.organisationId, "role.activate")
         val role = requiredRole(command.organisationId, command.roleId)
         requireMutable(role)
         persistence.setRoleStatus(
@@ -297,6 +319,37 @@ class RoleManagementService(
                 invalidOperationUnless(command.branchId == null)
             }
         }
+    }
+
+    private fun requireRoleAssignmentPermission(
+        actorId: UUID,
+        organisationId: UUID,
+        scopeType: RoleScopeType,
+        branchId: UUID?,
+        permissionCode: String,
+    ) {
+        when (scopeType) {
+            RoleScopeType.TENANT -> {
+                requireTenantPermission(actorId, organisationId, permissionCode)
+            }
+
+            RoleScopeType.BRANCH -> {
+                permissionGuard.requireBranchPermission(
+                    actorId,
+                    organisationId,
+                    requireNotNull(branchId),
+                    permissionCode,
+                )
+            }
+        }
+    }
+
+    private fun requireTenantPermission(
+        actorId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ) {
+        permissionGuard.requireTenantPermission(actorId, organisationId, permissionCode)
     }
 
     private fun invalidateRoleMemberships(

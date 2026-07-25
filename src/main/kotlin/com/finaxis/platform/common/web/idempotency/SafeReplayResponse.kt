@@ -113,7 +113,7 @@ class SafeReplayResponseFactory(
         when {
             node.isObject -> {
                 node.properties().forEach { (fieldName, value) ->
-                    require(normalizeFieldName(fieldName) !in PROHIBITED_FIELD_NAMES) {
+                    require(!containsProhibitedFieldName(fieldName)) {
                         "Replay response body contains a prohibited field"
                     }
                     rejectProhibitedFields(value)
@@ -126,10 +126,31 @@ class SafeReplayResponseFactory(
         }
     }
 
-    private fun normalizeFieldName(fieldName: String): String =
+    private fun containsProhibitedFieldName(fieldName: String): Boolean {
+        val tokens = fieldNameTokens(fieldName)
+        return tokens.any(::isSensitiveToken) ||
+            PROHIBITED_TOKEN_SEQUENCES.any { sequence ->
+                tokens.windowed(sequence.size).any { it == sequence }
+            }
+    }
+
+    private fun fieldNameTokens(fieldName: String): List<String> =
         fieldName
-            .lowercase(Locale.ROOT)
-            .filter(Char::isLetterOrDigit)
+            .split(NON_ALPHANUMERIC)
+            .filter(String::isNotBlank)
+            .flatMap { segment ->
+                listOf(segment) +
+                    segment
+                        .replace(CAMEL_CASE_BOUNDARY, "$1 $2")
+                        .replace(ACRONYM_BOUNDARY, "$1 $2")
+                        .split(' ')
+            }.distinct()
+            .map { it.lowercase(Locale.ROOT) }
+
+    private fun isSensitiveToken(token: String): Boolean =
+        SENSITIVE_TOKENS.any { sensitiveToken ->
+            token == sensitiveToken || token == "${sensitiveToken}s"
+        }
 
     private companion object {
         const val SUCCESS_STATUS_MINIMUM: Int = 200
@@ -137,29 +158,29 @@ class SafeReplayResponseFactory(
         const val NO_CONTENT_STATUS: Int = 204
         val STANDARD_SAFE_HEADERS: Set<String> = setOf("Location", "ETag")
 
-        // Match complete field names after case and separator normalization. Explicit aliases
-        // reject known sensitive shapes without rejecting benign metadata by substring.
-        val PROHIBITED_FIELD_NAMES: Set<String> =
+        val CAMEL_CASE_BOUNDARY = Regex("([a-z0-9])([A-Z])")
+        val ACRONYM_BOUNDARY = Regex("([A-Z]+)([A-Z][a-z])")
+        val NON_ALPHANUMERIC = Regex("[^A-Za-z0-9]+")
+        val SENSITIVE_TOKENS: Set<String> =
             setOf(
                 "authorization",
+                "auth",
                 "cookie",
-                "cookies",
-                "setcookie",
+                "token",
                 "password",
-                "passwordhash",
                 "secret",
-                "clientsecret",
-                "accesstoken",
-                "accesstokenvalue",
-                "refreshtoken",
-                "refreshtokenvalue",
-                "idtoken",
-                "idtokenvalue",
-                "contexttoken",
+                "credential",
+                "otp",
+                "pin",
+                "key",
+                "session",
                 "sessionid",
-                "sessionidentifier",
-                "activeorgcontext",
-                "activeorganisationcontext",
+            )
+        val PROHIBITED_TOKEN_SEQUENCES: Set<List<String>> =
+            setOf(
+                listOf("recovery", "code"),
+                listOf("active", "org", "context"),
+                listOf("active", "organisation", "context"),
             )
     }
 }

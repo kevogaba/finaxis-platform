@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
@@ -17,7 +18,9 @@ import com.finaxis.platform.iam.application.role.RevokeRoleFromUser
 import com.finaxis.platform.iam.application.role.RoleManagementService
 import com.finaxis.platform.iam.application.role.RoleScopeType
 import com.finaxis.platform.lifecycle.PermissionGuard
+import com.finaxis.platform.lifecycle.TenantCaller
 import com.finaxis.platform.lifecycle.adapter.inbound.web.CallerContextResolver
+import com.finaxis.platform.lifecycle.application.RoleAssignmentScopeType
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.Parameter
 import io.swagger.v3.oas.annotations.enums.ParameterIn
@@ -208,11 +211,7 @@ class RoleAssignmentController(
         @RequestBody @Valid request: AssignRoleRequest,
     ): ResponseEntity<RoleAssignmentSummaryResponse> {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            "user.assign_role",
-        )
+        requireAssignmentPermission(caller, request.scopeType, request.branchId, "user.assign_role")
         val result =
             roleManagementService.assignRoleToUser(
                 AssignRoleToUser(
@@ -292,9 +291,10 @@ class RoleAssignmentController(
         val caller = CallerContextResolver.getTenantCaller()
         val assignment =
             iamQueryService.getRoleAssignment(caller.activeOrganisationId, assignmentId, caller)
-        permissionGuard.requireTenantPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
+        requireAssignmentPermission(
+            caller,
+            RoleAssignmentScopeType.valueOf(assignment.scopeType),
+            assignment.branchId,
             "user.revoke_role",
         )
         roleManagementService.revokeRoleFromUser(
@@ -314,6 +314,39 @@ class RoleAssignmentController(
                 assignmentId,
                 caller,
             ).toResponse()
+    }
+
+    private fun requireAssignmentPermission(
+        caller: TenantCaller,
+        scopeType: RoleAssignmentScopeType,
+        branchId: UUID?,
+        permissionCode: String,
+    ) {
+        if (scopeType == RoleAssignmentScopeType.BRANCH) {
+            val targetBranchId = requireNotNull(branchId)
+            verifyBranchContext(caller, targetBranchId)
+            permissionGuard.requireBranchPermission(
+                caller.actorId,
+                caller.activeOrganisationId,
+                targetBranchId,
+                permissionCode,
+            )
+            return
+        }
+        permissionGuard.requireTenantPermission(
+            caller.actorId,
+            caller.activeOrganisationId,
+            permissionCode,
+        )
+    }
+
+    private fun verifyBranchContext(
+        caller: TenantCaller,
+        targetBranchId: UUID,
+    ) {
+        if (caller.activeBranchId != null && caller.activeBranchId != targetBranchId) {
+            throw ResourceNotFoundException(safeDetail = "Role assignment not found")
+        }
     }
 
     private fun RoleAssignmentSummary.toResponse() =

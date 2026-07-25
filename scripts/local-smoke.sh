@@ -51,7 +51,7 @@ Infrastructure is ready and a Keycloak token was issued.
 
 Start the application in another shell, then rerun this script:
 
-  ./gradlew bootRun
+  SPRING_PROFILES_ACTIVE=local ./gradlew bootRun
 
 Expected app URL: $APP_URL
 EOF

@@ -35,6 +35,14 @@ interface FoundationLifecycleReader {
         organisationId: UUID,
         membershipId: UUID,
     ): UUID?
+
+    /**
+     * Finds each organisation where the user retains active membership or assignment access.
+     *
+     * The deactivation workflow uses this platform-wide read to revoke every active assignment,
+     * including assignments whose membership state is no longer active.
+     */
+    fun findOrganisationIdsForActiveUserAccess(userId: UUID): Set<UUID>
 }
 
 /** Outbound write port for lifecycle state changes and deactivation cleanup. */

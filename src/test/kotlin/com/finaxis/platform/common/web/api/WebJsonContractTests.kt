@@ -19,6 +19,7 @@ import java.time.LocalTime
 import java.time.OffsetDateTime
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 
 /** Verifies the shared MVC JSON contract used by every REST adapter. */
 @WebMvcTest(
@@ -117,6 +118,13 @@ class WebJsonContractTests
         @Test
         fun `converts pageable results and rejects invalid page bounds`() {
             val page = apiPageOf(items = listOf("one", "two"), number = 1, size = 2, totalItems = 5)
+            val extremePage =
+                apiPageOf(
+                    items = emptyList<String>(),
+                    number = Int.MAX_VALUE,
+                    size = 100,
+                    totalItems = 1,
+                )
 
             assertEquals(
                 ApiPage(
@@ -125,6 +133,7 @@ class WebJsonContractTests
                 ),
                 page,
             )
+            assertFalse(extremePage.page.hasNext)
             assertFailsWith<InvalidPageRequestException> {
                 apiPageOf(
                     items = emptyList<String>(),
