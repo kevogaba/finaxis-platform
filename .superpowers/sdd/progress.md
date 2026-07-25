@@ -84,12 +84,30 @@ Task 10: complete. Three commits landed before a machine crash (`1deae51` Phase 
     `PLATFORM_SUPER_ADMIN` roles already carry every new Task 10 permission code.
   Final state: `./gradlew qualityGate` genuinely green — 664 tests, 0 failures, 0 errors; iam-module
   line coverage ~96.5% (was 92%); all static analysis green. See `.superpowers/sdd/task-10-brief.md`
-  and `task-10-report.md` for full detail. Known, deliberately out-of-scope follow-ups: RoleController
-  at 91% line coverage (below the module average but not gating), `InvalidTransitionException`/
-  `TransitionGuardException` status-code mapping for other FSM transitions, and a full
-  operation-by-operation OpenAPI/RFC 9457 completeness pass (spot-checked present, not exhaustively
-  verified).
-Task 11: pending
+  and `task-10-report.md` for full detail. Two of the three documented follow-ups (`RoleController`
+  coverage, `TransitionGuardException` status mapping) closed in commits `5b72f65`/`ad3d3e7` before
+  starting Task 11; the third (full OpenAPI/RFC 9457 operation-by-operation audit) is explicitly
+  Task 12's job, not deferred maintenance.
+Task 11: complete (commits `b70a591` exception-mapping groundwork, `ea6c6fa` controllers). The
+  entire application layer (`TenantSettingsService`, `BusinessDateService`, `AuditQueryService`)
+  already existed, unlike Tasks 9/10 — this was purely a web-adapter task, except for a real gap
+  found during reconnaissance: those services used bare `require()`/`check()` for business guards,
+  including a genuine optimistic-concurrency conflict in business-date advancement
+  ("business date was concurrently changed; retry with the latest version") that would have leaked
+  through `ApiExceptionHandler`'s generic 500 fallback exactly like the gaps already fixed in Tasks
+  9/10. Mapped per a frozen table (see `task-11-brief.md`) before writing any controller, so the new
+  controllers could trust safe exception types from day one. `TenantSettingsController` deliberately
+  carries no per-route `@PreAuthorize` (the required permission is data-dependent on the setting
+  key; the service's own conditional `authorize()` is the sole enforcement point) — a documented,
+  deliberate exception to this codebase's usual coarse-gate pattern.
+  A genuine Spring Modulith cycle was caught before commit (not after): the plan's specified
+  location for `AuditEventController` (`common/audit/adapter/inbound/web`) required importing
+  `lifecycle`'s `CallerContextResolver`, creating a `common -> lifecycle` dependency where
+  `lifecycle -> common` already legitimately exists. Fixed by moving the web adapter (not the
+  application service) into `lifecycle/adapter/inbound/web`, mirroring how
+  `MembershipController`/`BranchAssignmentController` already live there despite depending on `iam`
+  via dependency inversion. `./gradlew qualityGate` green — 703 tests, 0 failures, 0 errors. See
+  `.superpowers/sdd/task-11-brief.md` and `task-11-report.md` for full detail.
 Task 12: pending
 Task 13: pending
 
