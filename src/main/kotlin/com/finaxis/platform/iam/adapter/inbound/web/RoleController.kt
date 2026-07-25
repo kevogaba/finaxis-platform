@@ -59,7 +59,7 @@ import java.util.UUID
 @RestController
 @RequestMapping(ApiPaths.ROLES)
 @Tag(name = "Roles", description = "Tenant role and role-permission APIs")
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirement(name = "bearer-key")
 @Validated
 @Suppress("LargeClass")
 class RoleController(

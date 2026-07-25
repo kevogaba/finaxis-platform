@@ -50,7 +50,7 @@ import java.util.UUID
 @RestController
 @RequestMapping("${ApiPaths.PLATFORM_TENANTS}/{tenant_id}/users")
 @Tag(name = "Platform Tenant Users", description = "Platform administration of tenant users")
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirement(name = "bearer-key")
 @Validated
 class PlatformUserController(
     private val iamQueryService: IamQueryService,
@@ -152,7 +152,7 @@ class PlatformUserController(
 @RestController
 @RequestMapping(ApiPaths.PLATFORM_USERS)
 @Tag(name = "Platform Users", description = "Platform-wide user lifecycle APIs")
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirement(name = "bearer-key")
 @Validated
 class PlatformUserLifecycleController(
     private val userProvisioningService: UserProvisioningService,

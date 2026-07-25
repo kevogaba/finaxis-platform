@@ -68,7 +68,7 @@ import java.util.UUID
     name = "Platform Tenant Administration",
     description = "Platform lifecycle endpoints for tenant organisation onboarding and governance",
 )
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirement(name = "bearer-key")
 @Validated
 // Required endpoint-level OpenAPI response documentation is intentionally colocated.
 @Suppress("LargeClass")

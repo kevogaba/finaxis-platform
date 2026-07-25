@@ -50,7 +50,7 @@ import java.util.UUID
     name = "Platform Tenant Branches",
     description = "Reserved platform administration of nested tenant branches",
 )
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirement(name = "bearer-key")
 @Validated
 class PlatformTenantBranchController(
     private val branchProvisioningService: BranchProvisioningService,

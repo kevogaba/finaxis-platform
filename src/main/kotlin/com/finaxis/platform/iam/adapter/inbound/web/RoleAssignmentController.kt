@@ -48,7 +48,7 @@ import java.util.UUID
 @RestController
 @RequestMapping(ApiPaths.ROLE_ASSIGNMENTS)
 @Tag(name = "Role assignments", description = "Tenant user role-assignment APIs")
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirement(name = "bearer-key")
 @Validated
 class RoleAssignmentController(
     private val roleManagementService: RoleManagementService,

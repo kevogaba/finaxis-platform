@@ -49,7 +49,7 @@ import org.springframework.web.bind.annotation.RestController
     name = "Business Date",
     description = "Controlled organisation business date and close-of-business operations",
 )
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirement(name = "bearer-key")
 @Validated
 class BusinessDateController(
     private val businessDateService: BusinessDateService,

@@ -33,7 +33,7 @@ import java.util.UUID
 @RestController
 @RequestMapping(ApiPaths.AUDIT_EVENTS)
 @Tag(name = "Audit Events", description = "Tenant audit event administration")
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirement(name = "bearer-key")
 @Validated
 class AuditEventController(
     private val auditQueryService: AuditQueryService,

@@ -50,7 +50,7 @@ import java.util.UUID
 @RestController
 @RequestMapping(ApiPaths.MEMBERSHIPS)
 @Tag(name = "Memberships", description = "Tenant membership lifecycle APIs")
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirement(name = "bearer-key")
 @Validated
 @Suppress("LargeClass")
 class MembershipController(

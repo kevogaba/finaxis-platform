@@ -1,10 +1,6 @@
 package com.finaxis.platform.config
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import io.swagger.v3.oas.models.Components
-import io.swagger.v3.oas.models.OpenAPI
-import io.swagger.v3.oas.models.info.Info
-import io.swagger.v3.oas.models.security.SecurityScheme
 import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.cache.annotation.EnableCaching
 import org.springframework.context.annotation.Bean
@@ -41,21 +37,4 @@ class ApplicationConfiguration {
         FilterRegistrationBean(HttpAccessLogFilter()).apply {
             order = Ordered.LOWEST_PRECEDENCE
         }
-
-    /**
-     * Configures the OpenAPI document and bearer authentication scheme.
-     */
-    @Bean
-    fun openApi(): OpenAPI =
-        OpenAPI()
-            .info(Info().title("Finaxis Platform API").version("v1"))
-            .components(
-                Components().addSecuritySchemes(
-                    "bearer-key",
-                    SecurityScheme()
-                        .type(SecurityScheme.Type.HTTP)
-                        .scheme("bearer")
-                        .bearerFormat("JWT"),
-                ),
-            )
 }

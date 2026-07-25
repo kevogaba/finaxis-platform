@@ -24,7 +24,7 @@ import org.springframework.web.bind.annotation.RestController
 @RestController
 @RequestMapping(ApiPaths.TENANT)
 @Tag(name = "Current Tenant", description = "Active tenant metadata endpoints")
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirement(name = "bearer-key")
 class TenantController(
     private val foundationQueryService: FoundationQueryService,
     private val adminBootstrapStore: InitialAdministratorBootstrapStore,

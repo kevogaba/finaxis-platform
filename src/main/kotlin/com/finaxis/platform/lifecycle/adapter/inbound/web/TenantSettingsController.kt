@@ -43,7 +43,7 @@ import org.springframework.web.bind.annotation.RestController
 @RestController
 @RequestMapping(ApiPaths.TENANT_SETTINGS)
 @Tag(name = "Tenant Settings", description = "Tenant setup-level configuration settings")
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirement(name = "bearer-key")
 @Validated
 class TenantSettingsController(
     private val tenantSettingsService: TenantSettingsService,

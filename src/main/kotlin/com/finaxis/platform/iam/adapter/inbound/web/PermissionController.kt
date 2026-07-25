@@ -33,7 +33,7 @@ import java.util.UUID
 @RestController
 @RequestMapping(ApiPaths.PERMISSIONS)
 @Tag(name = "Permissions", description = "Immutable permission catalogue APIs")
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirement(name = "bearer-key")
 @Validated
 class PermissionController(
     private val iamQueryService: IamQueryService,

@@ -51,7 +51,7 @@ import java.util.UUID
 @RestController
 @RequestMapping(ApiPaths.BRANCH_ASSIGNMENTS)
 @Tag(name = "Branch assignments", description = "Tenant user branch-assignment APIs")
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirement(name = "bearer-key")
 @Validated
 @Suppress("LargeClass")
 class BranchAssignmentController(

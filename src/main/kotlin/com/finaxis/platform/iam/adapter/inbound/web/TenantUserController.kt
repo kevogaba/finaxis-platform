@@ -50,7 +50,7 @@ import java.util.UUID
 @RestController
 @RequestMapping(ApiPaths.TENANT_USERS)
 @Tag(name = "Tenant Users", description = "Tenant user invitation and lookup APIs")
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirement(name = "bearer-key")
 @Validated
 class TenantUserController(
     private val userProvisioningService: UserProvisioningService,

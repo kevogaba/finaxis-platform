@@ -59,7 +59,7 @@ import java.util.UUID
 @RestController
 @RequestMapping(ApiPaths.BRANCHES)
 @Tag(name = "Branches", description = "Tenant branch management APIs")
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirement(name = "bearer-key")
 @Validated
 // Required endpoint-level OpenAPI response documentation is intentionally colocated.
 @Suppress("LargeClass")
