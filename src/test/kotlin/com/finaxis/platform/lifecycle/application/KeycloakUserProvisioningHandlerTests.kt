@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
@@ -207,6 +208,40 @@ class KeycloakUserProvisioningHandlerTests {
         val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
         assertEquals("keycloak unavailable", dispatchAudit.reason)
+    }
+
+    @Test
+    fun `membership activation guard failure marks dispatch failed and rethrows for retry`() {
+        val context = store.activePendingProvisioningContext()
+        store.branchAssignments.remove(context.organisationId to context.userId)
+
+        val failure =
+            assertFailsWith<ConflictException> {
+                handler.run(keycloakRequest(context, "member@example.test", "member"))
+            }
+
+        assertEquals("Membership requires an active branch assignment.", failure.message)
+        assertEquals(
+            UserLifecycleState.INVITED,
+            store.users.getValue(context.userId).state,
+        )
+        assertEquals(
+            MembershipLifecycleState.PENDING_APPROVAL,
+            store.memberships.getValue(context.organisationId to context.membershipId).state,
+        )
+        val dispatch = store.dispatches.getValue(context.dispatchKey)
+        assertEquals("FAILED", dispatch.status)
+        assertEquals(1, dispatch.attempts)
+        assertTrue(
+            requireNotNull(dispatch.lastError)
+                .contains("Membership requires an active branch assignment."),
+        )
+        val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
+        assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
+        assertEquals(
+            "Membership requires an active branch assignment.",
+            dispatchAudit.reason,
+        )
     }
 
     private fun keycloakRequest(

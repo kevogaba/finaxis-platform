@@ -117,7 +117,7 @@ class FoundationLifecycleServiceTests {
             LifecycleAggregate(branchId, BranchLifecycleState.PENDING_APPROVAL, BRANCH)
 
         val exception =
-            assertThrows<com.finaxis.platform.common.transitions.TransitionGuardException> {
+            assertThrows<ConflictException> {
                 service.transition(
                     BranchTransitionCommand(
                         organisationId,
@@ -147,7 +147,7 @@ class FoundationLifecycleServiceTests {
             LifecycleAggregate(branchId, BranchLifecycleState.SUSPENDED, BRANCH)
 
         val exception =
-            assertThrows<com.finaxis.platform.common.transitions.TransitionGuardException> {
+            assertThrows<ConflictException> {
                 service.transition(
                     BranchTransitionCommand(
                         organisationId,
@@ -178,7 +178,7 @@ class FoundationLifecycleServiceTests {
             LifecycleAggregate(branchId, BranchLifecycleState.ACTIVE, BRANCH)
 
         val exception =
-            assertThrows<com.finaxis.platform.common.transitions.TransitionGuardException> {
+            assertThrows<ConflictException> {
                 service.transition(
                     BranchTransitionCommand(
                         organisationId,
@@ -206,7 +206,7 @@ class FoundationLifecycleServiceTests {
         persistence.userStates[userId] = UserLifecycleState.ACTIVE
 
         val exception =
-            assertThrows<com.finaxis.platform.common.transitions.TransitionGuardException> {
+            assertThrows<ConflictException> {
                 service.transition(
                     MembershipTransitionCommand(
                         organisationId,

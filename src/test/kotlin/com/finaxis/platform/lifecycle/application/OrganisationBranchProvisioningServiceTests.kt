@@ -542,7 +542,7 @@ class OrganisationBranchProvisioningServiceTests {
         store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
         lifecyclePersistence.branchesWithActiveChildren += organisationId to branchId
 
-        assertFailsWith<com.finaxis.platform.common.transitions.TransitionGuardException> {
+        assertFailsWith<ConflictException> {
             branches.close(CloseBranchCommand(organisationId, branchId, "Consolidation"))
         }
     }

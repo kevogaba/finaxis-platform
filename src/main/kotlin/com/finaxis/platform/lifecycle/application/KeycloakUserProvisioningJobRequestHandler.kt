@@ -1,6 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
-import com.finaxis.platform.common.transitions.TransitionGuardException
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningException
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningGateway
 import com.finaxis.platform.lifecycle.application.port.outbound.KeycloakUserProvisioningRequest
@@ -70,7 +70,7 @@ class KeycloakUserProvisioningJobRequestHandler(
             )
         } catch (ex: IdentityProvisioningException) {
             recordFailure(jobRequest, ex)
-        } catch (ex: TransitionGuardException) {
+        } catch (ex: ConflictException) {
             recordFailure(jobRequest, ex)
         } catch (ex: IllegalArgumentException) {
             recordFailure(jobRequest, ex)

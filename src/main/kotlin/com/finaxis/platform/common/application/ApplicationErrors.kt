@@ -4,7 +4,8 @@ package com.finaxis.platform.common.application
 sealed class ApplicationException(
     val code: String,
     val safeDetail: String,
-) : RuntimeException(safeDetail)
+    cause: Throwable? = null,
+) : RuntimeException(safeDetail, cause)
 
 /** Raised when a requested resource is unknown or deliberately hidden. */
 class ResourceNotFoundException(
@@ -16,7 +17,8 @@ class ResourceNotFoundException(
 class ConflictException(
     code: String = "conflict",
     safeDetail: String = "The request conflicts with the current resource state.",
-) : ApplicationException(code, safeDetail)
+    cause: Throwable? = null,
+) : ApplicationException(code, safeDetail, cause)
 
 /** Raised when an authenticated caller cannot perform an operation. */
 open class ForbiddenOperationException(
