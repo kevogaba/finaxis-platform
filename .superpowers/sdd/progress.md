@@ -108,7 +108,52 @@ Task 11: complete (commits `b70a591` exception-mapping groundwork, `ea6c6fa` con
   `MembershipController`/`BranchAssignmentController` already live there despite depending on `iam`
   via dependency inversion. `./gradlew qualityGate` green — 703 tests, 0 failures, 0 errors. See
   `.superpowers/sdd/task-11-brief.md` and `task-11-report.md` for full detail.
-Task 12: pending
+Task 12: complete (commits `c55b759` architecture-test rewrites, `b35aa2d` OpenAPI configuration and
+  contract verification, `6526d3e` manual-verification bug fixes). Phase A closed the real enforcement
+  gap: `PaginationArchitectureTest`
+  hardcoded exactly 2 controller names, leaving 15 of 17 real controllers with zero pagination
+  enforcement — rewritten to classpath-scan like `ApiVersioningArchitectureTest` already did (shared
+  helper extracted to `RestControllerScan.kt`), plus a positive check that `ApiPage`-returning GETs
+  declare `page`/`size` params, and dropped an incorrect `Optional`-as-collection check.
+  `HexagonalArchitectureTest` gained an outbox/RabbitMQ/JobRunr/Keycloak exclusion rule and a
+  positive allow-list rule for web adapters. `iam/package-info.java` gained an explicit
+  `allowedDependencies` list (previously declared with none, so Modulith's per-dependency
+  allow-listing — confirmed via Context7 to be opt-in per module — simply wasn't active for `iam`).
+  Building that list from `iam`'s imports surfaced a real methodology gap, not a production bug:
+  `TenantUserController` reads `.name` off `UserLifecycleState`/`MembershipLifecycleState` values
+  returned by an already-allowed `lifecycle.application` result type, with no source-level import of
+  either enum ever appearing (Kotlin doesn't require one for property-type-inferred access) — a
+  grep-based dependency list cannot see this; only Modulith's own bytecode-level verification
+  (confirmed independently via `javap -c -p`) reveals it. Added `lifecycle::domain` (the exact,
+  intentional relationship that named interface's own package-info documents) rather than treating
+  it as a violation to fix in production code.
+  Phase B relocated the OpenAPI bean into a new `FoundationOpenApiConfiguration.kt` with named,
+  reusable `ApiProblem`/`ApiViolation`/`ApiPage`/`ApiPageMetadata` schemas and shared header
+  parameters, added `FoundationOpenApiContractTests.kt` (a real test hitting the actual generated
+  `/v3/api-docs` document, cross-referenced against Spring's real handler-mapping table so every
+  route is proven present, not just that whatever's there looks right), and extended
+  `PlatformApplicationTests.kt` with explicit bean-wiring assertions across controllers, permission
+  guards, idempotency components, query adapters, `@RabbitListener`s, and JobRunr handlers. Writing
+  the contract test surfaced a real, broader-than-planned documentation defect: 15 of 17
+  controllers declared `@SecurityRequirement(name = "bearerAuth")`, a name never actually registered
+  as a security scheme (the real one has always been `"bearer-key"`) — never a functional
+  authorization gap (Spring Security doesn't read this annotation), but the generated docs showed no
+  effective bearer-auth requirement on nearly every endpoint. Fixed across all 15, verified against
+  the real generated document.
+  Manual verification (starting the app for real against Postgres/Redis/RabbitMQ/Keycloak, per
+  explicit request — the automated contract test alone only exercises `/v3/api-docs`, never the
+  Scalar UI route) found two more real bugs the contract test structurally could not catch: the
+  rate-limit exclusion list and the Spring Security `permitAll` allowlist both listed `/docs/**` as
+  the public docs-UI path, but that path was never real — the Scalar starter's actual default UI
+  path is `/scalar` (confirmed via bytecode inspection of the `scalar-webmvc` dependency:
+  `@ConfigurationProperties(prefix = "scalar")`, no path override configured). `/docs/**` protected
+  nothing at either layer. Fixing one layer at a time revealed the other: `GET /scalar` first
+  returned `429` (no rate-limit rule or exclusion matched the real path), then after that fix
+  returned `401` (the security allowlist had the identical stale entry), then finally `200` with
+  real Scalar UI HTML once both were corrected to `/scalar/**`. Also fixed a matching stale claim in
+  `README.md`. Regression tests added at both layers.
+  `qualityGate` genuinely green — 712 tests, 0 failures. See `.superpowers/sdd/task-12-brief.md` and
+  `task-12-report.md` for full detail.
 Task 13: pending
 
 Minor review findings to revisit in final review: no `review-*.diff` artifact and no task brief/report
