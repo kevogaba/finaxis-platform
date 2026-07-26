@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
@@ -116,7 +117,7 @@ class FoundationLifecycleServiceTests {
             LifecycleAggregate(branchId, BranchLifecycleState.PENDING_APPROVAL, BRANCH)
 
         val exception =
-            assertThrows<com.finaxis.platform.common.transitions.TransitionGuardException> {
+            assertThrows<ConflictException> {
                 service.transition(
                     BranchTransitionCommand(
                         organisationId,
@@ -146,7 +147,7 @@ class FoundationLifecycleServiceTests {
             LifecycleAggregate(branchId, BranchLifecycleState.SUSPENDED, BRANCH)
 
         val exception =
-            assertThrows<com.finaxis.platform.common.transitions.TransitionGuardException> {
+            assertThrows<ConflictException> {
                 service.transition(
                     BranchTransitionCommand(
                         organisationId,
@@ -177,7 +178,7 @@ class FoundationLifecycleServiceTests {
             LifecycleAggregate(branchId, BranchLifecycleState.ACTIVE, BRANCH)
 
         val exception =
-            assertThrows<com.finaxis.platform.common.transitions.TransitionGuardException> {
+            assertThrows<ConflictException> {
                 service.transition(
                     BranchTransitionCommand(
                         organisationId,
@@ -205,7 +206,7 @@ class FoundationLifecycleServiceTests {
         persistence.userStates[userId] = UserLifecycleState.ACTIVE
 
         val exception =
-            assertThrows<com.finaxis.platform.common.transitions.TransitionGuardException> {
+            assertThrows<ConflictException> {
                 service.transition(
                     MembershipTransitionCommand(
                         organisationId,
@@ -228,7 +229,7 @@ class FoundationLifecycleServiceTests {
     }
 
     @Test
-    fun `a transition attempted from the wrong source state is audited as a failure`() {
+    fun `a transition from the wrong source state is audited and rejected as a conflict`() {
         val organisationId = uuidV7()
         val membershipId = uuidV7()
         val userId = uuidV7()
@@ -236,7 +237,7 @@ class FoundationLifecycleServiceTests {
         persistence.memberships[organisationId to membershipId] =
             LifecycleAggregate(membershipId, MembershipLifecycleState.ACTIVE, MEMBERSHIP)
 
-        assertThrows<com.finaxis.platform.common.transitions.TransitionNotAllowedException> {
+        assertThrows<ConflictException> {
             service.transition(
                 MembershipTransitionCommand(
                     organisationId,
@@ -397,6 +398,8 @@ private class FakeLifecyclePersistence :
         organisationId: UUID,
         membershipId: UUID,
     ) = membershipUsers[organisationId to membershipId]
+
+    override fun findOrganisationIdsForActiveUserAccess(userId: UUID): Set<UUID> = emptySet()
 
     override fun saveOrganisation(aggregate: LifecycleAggregate<OrganisationLifecycleState>) =
         aggregate

@@ -1,10 +1,11 @@
 package com.finaxis.platform.common.web.pagination
 
+import com.finaxis.platform.common.web.api.ApiPage
+import com.finaxis.platform.common.web.scanRestControllers
 import org.junit.jupiter.api.Test
 import org.springframework.web.bind.annotation.GetMapping
-import org.springframework.web.bind.annotation.RestController
+import org.springframework.web.bind.annotation.RequestParam
 import java.lang.reflect.ParameterizedType
-import java.util.Optional
 import kotlin.reflect.full.declaredFunctions
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.jvm.javaMethod
@@ -14,10 +15,7 @@ class PaginationArchitectureTest {
     @Test
     fun `get listing endpoints do not return unbounded collections`() {
         val violations =
-            listOf(
-                "com.finaxis.platform.iam.adapter.inbound.web.AuthController",
-                "com.finaxis.platform.iam.adapter.inbound.web.UserProfileController",
-            ).flatMap(::collectionReturningGetEndpoints)
+            scanRestControllers().flatMap(::collectionReturningGetEndpoints)
 
         assertTrue(
             violations.isEmpty(),
@@ -26,16 +24,49 @@ class PaginationArchitectureTest {
         )
     }
 
-    private fun collectionReturningGetEndpoints(className: String): List<String> {
-        val type = Class.forName(className).kotlin
-        if (type.findAnnotation<RestController>() == null) {
-            return emptyList()
-        }
-        return type.declaredFunctions
+    @Test
+    fun `paginated get endpoints declare page and size request parameters`() {
+        val violations = scanRestControllers().flatMap(::apiPageWithoutPageAndSizeParameters)
+
+        assertTrue(
+            violations.isEmpty(),
+            "ApiPage endpoints must declare page and size request parameters: " +
+                violations.joinToString(),
+        )
+    }
+
+    private fun collectionReturningGetEndpoints(type: Class<*>): List<String> =
+        type.kotlin
+            .declaredFunctions
             .filter { function -> function.findAnnotation<GetMapping>() != null }
             .filter { function -> returnsCollection(function.javaMethod?.genericReturnType) }
-            .map { function -> "$className.${function.name}" }
+            .map { function -> "${type.name}.${function.name}" }
+
+    private fun apiPageWithoutPageAndSizeParameters(type: Class<*>): List<String> =
+        type.kotlin
+            .declaredFunctions
+            .filter { function -> function.findAnnotation<GetMapping>() != null }
+            .filter { function -> returnsApiPage(function.javaMethod?.genericReturnType) }
+            .filterNot(::declaresPageAndSizeRequestParameters)
+            .map { function -> "${type.name}.${function.name}" }
+
+    private fun declaresPageAndSizeRequestParameters(
+        function: kotlin.reflect.KFunction<*>,
+    ): Boolean {
+        val requestParameterNames =
+            function.parameters
+                .filter { parameter -> parameter.findAnnotation<RequestParam>() != null }
+                .mapNotNull { parameter -> parameter.name }
+
+        return requestParameterNames.containsAll(PAGINATION_PARAMETER_NAMES)
     }
+
+    private fun returnsApiPage(returnType: java.lang.reflect.Type?): Boolean =
+        when (returnType) {
+            is Class<*> -> returnType == ApiPage::class.java
+            is ParameterizedType -> returnType.rawType == ApiPage::class.java
+            else -> false
+        }
 
     private fun returnsCollection(returnType: java.lang.reflect.Type?): Boolean =
         when (returnType) {
@@ -45,10 +76,7 @@ class PaginationArchitectureTest {
 
             is ParameterizedType -> {
                 (returnType.rawType as? Class<*>)
-                    ?.let {
-                        Collection::class.java.isAssignableFrom(it) ||
-                            Optional::class.java == it
-                    }
+                    ?.let { Collection::class.java.isAssignableFrom(it) }
                     ?: false
             }
 
@@ -56,4 +84,8 @@ class PaginationArchitectureTest {
                 false
             }
         }
+
+    private companion object {
+        val PAGINATION_PARAMETER_NAMES = setOf("page", "size")
+    }
 }

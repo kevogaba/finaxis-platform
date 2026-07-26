@@ -222,30 +222,105 @@ sentry:
   dsn: ""
 
 finaxis:
+  api:
+    idempotency:
+      retention: ${FINAXIS_API_IDEMPOTENCY_RETENTION:24h}
+      in-progress-timeout: ${FINAXIS_API_IDEMPOTENCY_IN_PROGRESS_TIMEOUT:5m}
+      cleanup-schedule: ${FINAXIS_API_IDEMPOTENCY_CLEANUP_SCHEDULE:0 */15 * * * *}
+      cleanup-batch-size: ${FINAXIS_API_IDEMPOTENCY_CLEANUP_BATCH_SIZE:500}
+      max-request-body-bytes: ${FINAXIS_API_IDEMPOTENCY_MAX_REQUEST_BODY_BYTES:1048576}
+      max-response-body-bytes: ${FINAXIS_API_IDEMPOTENCY_MAX_RESPONSE_BODY_BYTES:1048576}
+      safe-domain-headers:
+        - X-Domain-Reference
   pagination:
-    default-page-size: ${FINAXIS_PAGINATION_DEFAULT_PAGE_SIZE:50}
-    max-page-size: ${FINAXIS_PAGINATION_MAX_PAGE_SIZE:200}
+    default-page-size: ${FINAXIS_PAGINATION_DEFAULT_PAGE_SIZE:25}
+    max-page-size: ${FINAXIS_PAGINATION_MAX_PAGE_SIZE:100}
   rate-limit:
     enabled: ${FINAXIS_RATE_LIMIT_ENABLED:true}
     include-headers: ${FINAXIS_RATE_LIMIT_INCLUDE_HEADERS:true}
     fail-open: ${FINAXIS_RATE_LIMIT_FAIL_OPEN:true}
-    anonymous:
-      capacity: ${FINAXIS_RATE_LIMIT_ANONYMOUS_CAPACITY:100}
-      refill-tokens: ${FINAXIS_RATE_LIMIT_ANONYMOUS_REFILL_TOKENS:100}
-      refill-period: ${FINAXIS_RATE_LIMIT_ANONYMOUS_REFILL_PERIOD:1m}
-    authenticated:
-      capacity: ${FINAXIS_RATE_LIMIT_AUTHENTICATED_CAPACITY:1000}
-      refill-tokens: ${FINAXIS_RATE_LIMIT_AUTHENTICATED_REFILL_TOKENS:1000}
-      refill-period: ${FINAXIS_RATE_LIMIT_AUTHENTICATED_REFILL_PERIOD:1m}
+    policies:
+      auth-selection:
+        capacity: ${FINAXIS_RATE_LIMIT_AUTH_SELECTION_CAPACITY:20}
+        refill-tokens: ${FINAXIS_RATE_LIMIT_AUTH_SELECTION_REFILL_TOKENS:20}
+        refill-period: ${FINAXIS_RATE_LIMIT_AUTH_SELECTION_REFILL_PERIOD:1m}
+      platform-read:
+        capacity: ${FINAXIS_RATE_LIMIT_PLATFORM_READ_CAPACITY:600}
+        refill-tokens: ${FINAXIS_RATE_LIMIT_PLATFORM_READ_REFILL_TOKENS:600}
+        refill-period: ${FINAXIS_RATE_LIMIT_PLATFORM_READ_REFILL_PERIOD:1m}
+      platform-command:
+        capacity: ${FINAXIS_RATE_LIMIT_PLATFORM_COMMAND_CAPACITY:120}
+        refill-tokens: ${FINAXIS_RATE_LIMIT_PLATFORM_COMMAND_REFILL_TOKENS:120}
+        refill-period: ${FINAXIS_RATE_LIMIT_PLATFORM_COMMAND_REFILL_PERIOD:1m}
+      tenant-read:
+        capacity: ${FINAXIS_RATE_LIMIT_TENANT_READ_CAPACITY:600}
+        refill-tokens: ${FINAXIS_RATE_LIMIT_TENANT_READ_REFILL_TOKENS:600}
+        refill-period: ${FINAXIS_RATE_LIMIT_TENANT_READ_REFILL_PERIOD:1m}
+      tenant-command:
+        capacity: ${FINAXIS_RATE_LIMIT_TENANT_COMMAND_CAPACITY:120}
+        refill-tokens: ${FINAXIS_RATE_LIMIT_TENANT_COMMAND_REFILL_TOKENS:120}
+        refill-period: ${FINAXIS_RATE_LIMIT_TENANT_COMMAND_REFILL_PERIOD:1m}
     paths:
       enabled: true
       excluded:
         - /actuator/health/**
         - /actuator/prometheus
         - /error
-        - /docs/**
+        - /scalar/**
         - /v3/api-docs/**
         - /swagger-ui/**
+      rules:
+        - method: POST
+          path: /api/v1/auth/select-organisation
+          policy: auth-selection
+        - method: POST
+          path: /api/v1/auth/select-branch
+          policy: auth-selection
+        - method: GET
+          path: /api/v1/auth/**
+          policy: platform-read
+        - method: POST
+          path: /api/v1/auth/**
+          policy: platform-command
+        - method: PUT
+          path: /api/v1/auth/**
+          policy: platform-command
+        - method: PATCH
+          path: /api/v1/auth/**
+          policy: platform-command
+        - method: DELETE
+          path: /api/v1/auth/**
+          policy: platform-command
+        - method: GET
+          path: /api/v1/platform/**
+          policy: platform-read
+        - method: POST
+          path: /api/v1/platform/**
+          policy: platform-command
+        - method: PUT
+          path: /api/v1/platform/**
+          policy: platform-command
+        - method: PATCH
+          path: /api/v1/platform/**
+          policy: platform-command
+        - method: DELETE
+          path: /api/v1/platform/**
+          policy: platform-command
+        - method: GET
+          path: /api/v1/**
+          policy: tenant-read
+        - method: POST
+          path: /api/v1/**
+          policy: tenant-command
+        - method: PUT
+          path: /api/v1/**
+          policy: tenant-command
+        - method: PATCH
+          path: /api/v1/**
+          policy: tenant-command
+        - method: DELETE
+          path: /api/v1/**
+          policy: tenant-command
   iam:
     active-organisation-context:
       secret: ${FINAXIS_ACTIVE_ORGANISATION_CONTEXT_SECRET:local-development-change-me-active-organisation-context-secret}

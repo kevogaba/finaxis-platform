@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.web.api.boundedPageOffset
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE_HISTORY
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_SETTING
@@ -350,6 +351,9 @@ class JooqBusinessDateHistoryStore(
                 .from(BUSINESS_DATE_HISTORY)
                 .where(BUSINESS_DATE_HISTORY.ORGANISATION_ID.eq(organisationId))
                 .fetchOne(0, Long::class.java) ?: 0L
+        val offset =
+            boundedPageOffset(page, size, total)
+                ?: return BusinessDateHistoryPage(emptyList(), total)
         val items =
             dsl
                 .select(
@@ -365,7 +369,7 @@ class JooqBusinessDateHistoryStore(
                 .where(BUSINESS_DATE_HISTORY.ORGANISATION_ID.eq(organisationId))
                 .orderBy(BUSINESS_DATE_HISTORY.OCCURRED_AT.desc())
                 .limit(size)
-                .offset(page * size)
+                .offset(offset)
                 .fetch(::historyRecord)
         return BusinessDateHistoryPage(items, total)
     }

@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
@@ -22,6 +23,7 @@ import com.finaxis.platform.lifecycle.domain.LifecyclePrerequisites
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
+import org.mockito.Mockito.mock
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -49,8 +51,117 @@ class KeycloakUserProvisioningHandlerTests {
             auditService,
         )
     private val dispatchOutcomeAuditor = DispatchOutcomeAuditor(store, auditService)
+    private val deactivationAssignmentRevoker = mock(UserDeactivationAssignmentRevoker::class.java)
+    private val branchProvisioningService = mock(BranchProvisioningService::class.java)
+    private val userProvisioningService =
+        UserProvisioningService(
+            lifecycle,
+            store,
+            branchProvisioningService,
+            deactivationAssignmentRevoker,
+            auditService,
+            events,
+            clock,
+        )
+    private val fakeBootstrapStore =
+        object : InitialAdministratorBootstrapStore {
+            val records = mutableMapOf<UUID, InitialAdministratorBootstrapRecord>()
+
+            override fun createDraft(
+                organisationId: UUID,
+                admin: InitialAdministratorDraft,
+                requestedBy: UUID,
+            ) = Unit
+
+            override fun amendDraft(
+                organisationId: UUID,
+                admin: InitialAdministratorDraft,
+            ) = Unit
+
+            override fun submit(
+                organisationId: UUID,
+                actorId: UUID,
+            ) = Unit
+
+            override fun approve(
+                organisationId: UUID,
+                actorId: UUID,
+            ) = Unit
+
+            override fun reject(organisationId: UUID) = Unit
+
+            override fun find(organisationId: UUID): InitialAdministratorBootstrapRecord? =
+                records[organisationId]
+
+            override fun updateStatus(
+                organisationId: UUID,
+                status: InitialAdministratorBootstrapStatus,
+                lastFailureCode: String?,
+                incrementAttempts: Boolean,
+            ) {
+                val record = records[organisationId] ?: return
+                records[organisationId] =
+                    record.copy(
+                        status = status,
+                        lastFailureCode = lastFailureCode,
+                        attempts =
+                            if (incrementAttempts) {
+                                record.attempts + 1
+                            } else {
+                                record.attempts
+                            },
+                    )
+            }
+
+            override fun linkResolvedEntities(
+                organisationId: UUID,
+                userId: UUID?,
+                membershipId: UUID?,
+                headOfficeId: UUID?,
+                roleId: UUID?,
+            ) = Unit
+        }
+    private val fakeBootstrapOrgStore =
+        object : OrganisationBootstrapStore {
+            override fun ensureBusinessDate(
+                organisationId: UUID,
+                date: java.time.LocalDate,
+            ) = Unit
+
+            override fun timezone(organisationId: UUID): String = "UTC"
+
+            override fun ensureHeadOfficeDraft(organisationId: UUID): HeadOfficeDraftResult =
+                HeadOfficeDraftResult(uuidV7(), true)
+
+            override fun createDefaultReferenceSequences(organisationId: UUID) = Unit
+
+            override fun createDefaultRoles(organisationId: UUID) = Unit
+
+            override fun headOfficeState(organisationId: UUID): BranchLifecycleState? =
+                BranchLifecycleState.ACTIVE
+        }
+    private val failureStatusWriter =
+        InitialAdministratorBootstrapFailureStatusWriter(fakeBootstrapStore)
+    private val failureRecorder = InitialAdministratorBootstrapFailureRecorder(failureStatusWriter)
+    private val bootstrapService =
+        InitialAdministratorBootstrapService(
+            fakeBootstrapStore,
+            fakeBootstrapOrgStore,
+            store,
+            userProvisioningService,
+            events,
+            failureRecorder,
+            clock,
+        )
     private val handler =
-        KeycloakUserProvisioningJobRequestHandler(gateway, store, lifecycle, dispatchOutcomeAuditor)
+        KeycloakUserProvisioningJobRequestHandler(
+            gateway,
+            store,
+            lifecycle,
+            dispatchOutcomeAuditor,
+            bootstrapService,
+            failureRecorder,
+        )
 
     @Test
     fun `new user provisioning links identity invites user activates membership and succeeds`() {
@@ -103,6 +214,7 @@ class KeycloakUserProvisioningHandlerTests {
     @Test
     fun `gateway failure marks dispatch failed and rethrows for retry`() {
         val context = store.activePendingProvisioningContext()
+        fakeBootstrapStore.records[context.organisationId] = bootstrapRecord(context)
         gateway.failure = IllegalStateException("keycloak unavailable")
 
         val failure =
@@ -115,9 +227,47 @@ class KeycloakUserProvisioningHandlerTests {
         assertEquals("FAILED", dispatch.status)
         assertEquals(1, dispatch.attempts)
         assertTrue(requireNotNull(dispatch.lastError).contains("keycloak unavailable"))
+        assertEquals(
+            InitialAdministratorBootstrapStatus.FAILED,
+            fakeBootstrapStore.records.getValue(context.organisationId).status,
+        )
         val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
         assertEquals("keycloak unavailable", dispatchAudit.reason)
+    }
+
+    @Test
+    fun `membership activation guard failure marks dispatch failed and rethrows for retry`() {
+        val context = store.activePendingProvisioningContext()
+        store.branchAssignments.remove(context.organisationId to context.userId)
+
+        val failure =
+            assertFailsWith<ConflictException> {
+                handler.run(keycloakRequest(context, "member@example.test", "member"))
+            }
+
+        assertEquals("Membership requires an active branch assignment.", failure.message)
+        assertEquals(
+            UserLifecycleState.INVITED,
+            store.users.getValue(context.userId).state,
+        )
+        assertEquals(
+            MembershipLifecycleState.PENDING_APPROVAL,
+            store.memberships.getValue(context.organisationId to context.membershipId).state,
+        )
+        val dispatch = store.dispatches.getValue(context.dispatchKey)
+        assertEquals("FAILED", dispatch.status)
+        assertEquals(1, dispatch.attempts)
+        assertTrue(
+            requireNotNull(dispatch.lastError)
+                .contains("Membership requires an active branch assignment."),
+        )
+        val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
+        assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
+        assertEquals(
+            "Membership requires an active branch assignment.",
+            dispatchAudit.reason,
+        )
     }
 
     private fun keycloakRequest(
@@ -135,6 +285,31 @@ class KeycloakUserProvisioningHandlerTests {
             displayName = "Member One",
             sendKeycloakInvite = sendKeycloakInvite,
             dispatchKey = context.dispatchKey,
+        )
+
+    private fun bootstrapRecord(context: ProvisioningWorkerContext) =
+        InitialAdministratorBootstrapRecord(
+            organisationId = context.organisationId,
+            adminEmail = "admin@example.test",
+            adminUsername = "admin",
+            adminDisplayName = "Admin",
+            adminPhoneE164 = null,
+            sendApplicationInvite = false,
+            status = InitialAdministratorBootstrapStatus.PROVISIONING_IDENTITY,
+            attempts = 1,
+            requestedBy = uuidV7(),
+            submittedBy = uuidV7(),
+            approvedBy = uuidV7(),
+            userId = context.userId,
+            membershipId = context.membershipId,
+            headOfficeId = uuidV7(),
+            roleId = uuidV7(),
+            lastFailureCode = null,
+            createdAt = clock.instant(),
+            submittedAt = clock.instant(),
+            approvedAt = clock.instant(),
+            updatedAt = clock.instant(),
+            rowVersion = 1,
         )
 }
 
@@ -293,6 +468,11 @@ private class ProvisioningWorkerStoreFake :
         roleId: UUID,
     ): Boolean = true
 
+    override fun findRoleIdByCode(
+        organisationId: UUID,
+        roleCode: String,
+    ): UUID? = uuidV7()
+
     override fun assignRole(
         organisationId: UUID,
         userId: UUID,
@@ -352,6 +532,8 @@ private class ProvisioningWorkerStoreFake :
         organisationId: UUID,
         membershipId: UUID,
     ): UUID? = membershipUsers[organisationId to membershipId]
+
+    override fun findOrganisationIdsForActiveUserAccess(userId: UUID): Set<UUID> = emptySet()
 
     override fun saveOrganisation(
         aggregate: LifecycleAggregate<OrganisationLifecycleState>,

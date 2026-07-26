@@ -200,6 +200,21 @@ class JooqUserProvisioningStoreTests(
         assertNull(store.membershipSnapshot(organisationId, membershipId))
     }
 
+    @Test
+    fun `resolves role ID by code`() {
+        val organisationId = insertOrganisation()
+        val roleId = insertRole(organisationId)
+        val roleCode =
+            dsl
+                .select(ROLE.ROLE_CODE)
+                .from(ROLE)
+                .where(ROLE.ID.eq(roleId))
+                .fetchOne(ROLE.ROLE_CODE)!!
+
+        assertEquals(roleId, store.findRoleIdByCode(organisationId, roleCode))
+        assertNull(store.findRoleIdByCode(organisationId, "NON_EXISTENT"))
+    }
+
     private fun insertOrganisation(
         status: OrganisationLifecycleState = OrganisationLifecycleState.ACTIVE,
     ): UUID {

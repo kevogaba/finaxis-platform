@@ -1,5 +1,7 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
@@ -16,6 +18,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class TenantSettingsServiceTests {
     private val lifecycleStore = FakeLifecycleStoreForSettings()
@@ -38,7 +41,7 @@ class TenantSettingsServiceTests {
     @Test
     fun `createOrUpdate rejects an inactive organisation`() {
         lifecycleStore.states[organisationId] = OrganisationLifecycleState.SUSPENDED
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ConflictException> {
             service.createOrUpdate(
                 CreateOrUpdateTenantSettingCommand(
                     organisationId,
@@ -53,7 +56,7 @@ class TenantSettingsServiceTests {
     @Test
     fun `createOrUpdate rejects an unknown key`() {
         activate()
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidOperationException> {
             service.createOrUpdate(
                 CreateOrUpdateTenantSettingCommand(organisationId, "bogus", "x", actorId),
             )
@@ -117,9 +120,9 @@ class TenantSettingsServiceTests {
     }
 
     @Test
-    fun `get requires settings-update permission`() {
+    fun `get requires settings-view permission`() {
         activate()
-        guard.deny(organisationId, "settings.update")
+        guard.deny(organisationId, "settings.view")
 
         assertFailsWith<SecurityException> {
             service.get(GetTenantSettingQuery(organisationId, "base_currency", actorId))
@@ -127,9 +130,9 @@ class TenantSettingsServiceTests {
     }
 
     @Test
-    fun `list requires settings-update permission`() {
+    fun `list requires settings-view permission`() {
         activate()
-        guard.deny(organisationId, "settings.update")
+        guard.deny(organisationId, "settings.view")
 
         assertFailsWith<SecurityException> {
             service.list(ListTenantSettingsQuery(organisationId, actorId))
@@ -145,9 +148,27 @@ class TenantSettingsServiceTests {
             StoredSetting("audit_retention_days", "30", "INT", false),
         )
 
-        val settings = service.list(ListTenantSettingsQuery(organisationId, actorId))
+        val page = service.list(ListTenantSettingsQuery(organisationId, actorId))
 
-        assertEquals("***REDACTED***", settings.single { it.key == "audit_retention_days" }.value)
+        assertEquals("***REDACTED***", page.items.single { it.key == "audit_retention_days" }.value)
+    }
+
+    @Test
+    fun `list returns empty page for extreme page offset`() {
+        activate()
+
+        val page =
+            service.list(
+                ListTenantSettingsQuery(
+                    organisationId,
+                    actorId,
+                    page = Int.MAX_VALUE,
+                    size = 100,
+                ),
+            )
+
+        assertEquals(emptyList(), page.items)
+        assertTrue(page.totalItems > 0)
     }
 
     @Test
@@ -278,6 +299,31 @@ private class FakePermissionGuard : PermissionGuard {
         if (denied.contains(organisationId to permissionCode)) {
             throw SecurityException("Missing permission: $permissionCode")
         }
+    }
+
+    override fun requireTenantPermission(
+        actorId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ) {
+        requirePermission(actorId, organisationId, permissionCode)
+    }
+
+    override fun requireBranchPermission(
+        actorId: UUID,
+        organisationId: UUID,
+        branchId: UUID,
+        permissionCode: String,
+    ) {
+        requirePermission(actorId, organisationId, permissionCode)
+    }
+
+    override fun requirePlatformPermission(
+        actorId: UUID,
+        permissionCode: String,
+    ) {
+        val platformOrgId = UUID.fromString("00000000-0000-0000-0000-000000000000")
+        requirePermission(actorId, platformOrgId, permissionCode)
     }
 }
 

@@ -6,6 +6,7 @@ import com.finaxis.platform.common.context.CorrelationContext
 import com.finaxis.platform.common.context.RequestContext
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.context.TenantContext
+import com.finaxis.platform.common.web.api.ApiProblemWriter
 import com.finaxis.platform.common.web.ratelimit.RateLimitFilter
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
@@ -14,21 +15,26 @@ import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationTo
 import com.finaxis.platform.iam.application.port.outbound.AppPrincipalLookup
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
-import com.finaxis.platform.iam.domain.UserStatus
+import com.finaxis.platform.iam.domain.allowsLogin
 import com.finaxis.platform.lifecycle.UserFirstLoginActivation
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.http.HttpStatus
+import org.springframework.security.access.AccessDeniedException
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
+import org.springframework.security.core.AuthenticationException
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter
+import org.springframework.security.web.AuthenticationEntryPoint
 import org.springframework.security.web.SecurityFilterChain
+import org.springframework.security.web.access.AccessDeniedHandler
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy
 import org.springframework.stereotype.Service
 import org.springframework.web.cors.CorsConfiguration
@@ -47,6 +53,7 @@ class SecurityConfiguration(
     private val rateLimitFilter: RateLimitFilter,
     private val corsProperties: CorsProperties,
     private val securityHeadersProperties: SecurityHeadersProperties,
+    private val problemWriter: ApiProblemWriter,
 ) {
     /**
      * Builds the servlet security filter chain for JWT authentication and method security.
@@ -82,14 +89,18 @@ class SecurityConfiguration(
                 requests
                     .requestMatchers(
                         "/actuator/health",
-                        "/docs/**",
+                        "/scalar/**",
                         "/v3/api-docs/**",
                         "/swagger-ui/**",
                     ).permitAll()
                     .anyRequest()
                     .authenticated()
             }.oauth2ResourceServer { resourceServer -> resourceServer.jwt { } }
-            .addFilterAfter(activeOrganisationFilter, BearerTokenAuthenticationFilter::class.java)
+            .exceptionHandling { exceptions ->
+                exceptions
+                    .authenticationEntryPoint(ApiAuthenticationEntryPoint(problemWriter))
+                    .accessDeniedHandler(ApiAccessDeniedHandler(problemWriter))
+            }.addFilterAfter(activeOrganisationFilter, BearerTokenAuthenticationFilter::class.java)
             .addFilterAfter(rateLimitFilter, ActiveOrganisationContextFilter::class.java)
         return http.build()
     }
@@ -107,11 +118,50 @@ class SecurityConfiguration(
                         allowedOrigins = corsProperties.allowedOrigins
                         allowedMethods = corsProperties.allowedMethods
                         allowedHeaders = corsProperties.allowedHeaders
+                        exposedHeaders = corsProperties.exposedHeaders
                         allowCredentials = corsProperties.allowCredentials
                     },
                 )
             }
         }
+}
+
+/** Writes unauthenticated Spring Security failures through the public API problem contract. */
+class ApiAuthenticationEntryPoint(
+    private val problemWriter: ApiProblemWriter,
+) : AuthenticationEntryPoint {
+    override fun commence(
+        request: HttpServletRequest,
+        response: HttpServletResponse,
+        authException: AuthenticationException,
+    ) {
+        problemWriter.write(
+            request,
+            response,
+            HttpStatus.UNAUTHORIZED,
+            "authentication_required",
+            "Authentication is required.",
+        )
+    }
+}
+
+/** Writes unauthorized Spring Security failures through the public API problem contract. */
+class ApiAccessDeniedHandler(
+    private val problemWriter: ApiProblemWriter,
+) : AccessDeniedHandler {
+    override fun handle(
+        request: HttpServletRequest,
+        response: HttpServletResponse,
+        accessDeniedException: AccessDeniedException,
+    ) {
+        problemWriter.write(
+            request,
+            response,
+            HttpStatus.FORBIDDEN,
+            "access_denied",
+            "Access is denied.",
+        )
+    }
 }
 
 /**
@@ -139,7 +189,7 @@ class AppPrincipalLoader(
                     ?.takeIf {
                         it.userId == user.id && it.organisationId == context.organisationId
                     }?.takeIf {
-                        user.status in LOGIN_ALLOWED_USER_STATUSES &&
+                        user.status.allowsLogin() &&
                             it.status == MembershipStatus.ACTIVE
                     }?.takeIf {
                         principalLookup.organisationStatus(it.organisationId) ==
@@ -170,10 +220,6 @@ class AppPrincipalLoader(
                         )
                     }
             }
-
-    private companion object {
-        val LOGIN_ALLOWED_USER_STATUSES = setOf(UserStatus.ACTIVE, UserStatus.INVITED)
-    }
 }
 
 /**
@@ -184,6 +230,7 @@ class AppPrincipalLoader(
 class ActiveOrganisationContextFilter(
     private val contextResolver: ActiveOrganisationContextResolver,
     private val principalLoader: AppPrincipalLoader,
+    private val problemWriter: ApiProblemWriter,
 ) : OncePerRequestFilter() {
     override fun doFilterInternal(
         request: HttpServletRequest,
@@ -210,15 +257,15 @@ class ActiveOrganisationContextFilter(
         response: HttpServletResponse,
     ): Boolean {
         val resolution = contextResolver.resolve(request)
-        return resolution.failureMessage?.let { forbidden(response, it) }
+        return resolution.failureMessage?.let { forbidden(request, response) }
             ?: resolution.context?.let { context ->
                 authentication.token.subject?.let { subject ->
                     principalLoader.load(subject, context)?.let { principal ->
                         SecurityContextHolder.getContext().authentication =
                             AppPrincipalAuthenticationToken(principal)
                         true
-                    } ?: forbidden(response, "Invalid active organisation context")
-                } ?: forbidden(response, "JWT subject is required")
+                    } ?: forbidden(request, response)
+                } ?: forbidden(request, response)
             }
             ?: true
     }
@@ -266,10 +313,10 @@ class ActiveOrganisationContextFilter(
         )
 
     private fun forbidden(
+        request: HttpServletRequest,
         response: HttpServletResponse,
-        message: String,
     ): Boolean {
-        response.sendError(HttpServletResponse.SC_FORBIDDEN, message)
+        problemWriter.writeForbiddenTenantContext(request, response)
         return false
     }
 

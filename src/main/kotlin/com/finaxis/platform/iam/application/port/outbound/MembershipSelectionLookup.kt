@@ -2,6 +2,7 @@ package com.finaxis.platform.iam.application.port.outbound
 
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
+import com.finaxis.platform.iam.domain.UserStatus
 import java.util.UUID
 
 /**
@@ -22,6 +23,9 @@ interface MembershipSelectionLookup {
      * Finds the application user id for a Keycloak subject.
      */
     fun findUserIdByKeycloakSubject(keycloakSubject: String): UUID?
+
+    /** Returns the current global lifecycle status for an application user. */
+    fun userStatus(userId: UUID): UserStatus?
 
     /**
      * Finds the user's membership in an organisation.

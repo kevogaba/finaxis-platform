@@ -3,10 +3,12 @@ package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
+import com.finaxis.platform.common.web.api.boundedPageOffset
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.BRANCH_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
+import com.finaxis.platform.jooq.tables.references.ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_SETTING
 import com.finaxis.platform.jooq.tables.references.PERMISSION
 import com.finaxis.platform.jooq.tables.references.REFERENCE_SEQUENCE
@@ -16,6 +18,7 @@ import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
+import com.finaxis.platform.lifecycle.application.AmendOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.AssignUserToBranchCommand
 import com.finaxis.platform.lifecycle.application.BranchAssignmentStore
 import com.finaxis.platform.lifecycle.application.BranchLifecycleSnapshot
@@ -24,6 +27,7 @@ import com.finaxis.platform.lifecycle.application.CreateBranchCommand
 import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.DeprovisionedAssignment
 import com.finaxis.platform.lifecycle.application.HeadOfficeDraftResult
+import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStatus
 import com.finaxis.platform.lifecycle.application.MembershipLifecycleSnapshot
 import com.finaxis.platform.lifecycle.application.MembershipSnapshot
 import com.finaxis.platform.lifecycle.application.MembershipType
@@ -90,6 +94,24 @@ class JooqOrganisationBranchProvisioningStore(
         return id
     }
 
+    override fun amendDraft(command: AmendOrganisationDraftCommand) {
+        val now = now()
+        dsl
+            .update(ORGANISATION)
+            .set(ORGANISATION.TENANT_CODE, command.tenantCode)
+            .set(ORGANISATION.DISPLAY_NAME, command.displayName)
+            .set(ORGANISATION.LEGAL_NAME, command.legalName)
+            .set(ORGANISATION.REGISTRATION_NUMBER, command.registrationNumber)
+            .set(ORGANISATION.COUNTRY_CODE, command.countryCode)
+            .set(ORGANISATION.BASE_CURRENCY_CODE, command.baseCurrencyCode)
+            .set(ORGANISATION.TIMEZONE, command.timezone)
+            .set(ORGANISATION.UPDATED_AT, now)
+            .set(ORGANISATION.UPDATED_BY, command.actorId)
+            .set(ORGANISATION.ROW_VERSION, ORGANISATION.ROW_VERSION.plus(1))
+            .where(ORGANISATION.ID.eq(command.organisationId))
+            .execute()
+    }
+
     override fun saveSettings(
         organisationId: UUID,
         settings: Map<String, String>,
@@ -128,8 +150,9 @@ class JooqOrganisationBranchProvisioningStore(
         )
 
     /** Finds a compact organisation projection using the stable tenant-code field. */
-    fun findByCode(tenantCode: String): OrganisationSummary? =
-        dsl
+    fun findByCode(tenantCode: String): OrganisationSummary? {
+        val b = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
+        return dsl
             .select(
                 ORGANISATION.ID,
                 ORGANISATION.TENANT_CODE,
@@ -137,14 +160,22 @@ class JooqOrganisationBranchProvisioningStore(
                 ORGANISATION.COUNTRY_CODE,
                 ORGANISATION.STATUS,
                 ORGANISATION.CREATED_AT,
-            ).from(
-                ORGANISATION,
-            ).where(ORGANISATION.TENANT_CODE.eq(tenantCode))
+                b.STATUS,
+                b.ATTEMPTS,
+                b.USER_ID,
+                b.MEMBERSHIP_ID,
+                b.LAST_FAILURE_CODE,
+            ).from(ORGANISATION)
+            .leftJoin(b)
+            .on(b.ORGANISATION_ID.eq(ORGANISATION.ID))
+            .where(ORGANISATION.TENANT_CODE.eq(tenantCode))
             .fetchOne()
             ?.let(::organisationSummary)
+    }
 
     /** Executes the bounded organisation administration query. */
     fun list(filter: OrganisationListFilter): OrganisationPage {
+        val b = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
         var condition: Condition = DSL.trueCondition()
         filter.status?.let { condition = condition.and(ORGANISATION.STATUS.eq(it.name)) }
         filter.countryCode?.let { condition = condition.and(ORGANISATION.COUNTRY_CODE.eq(it)) }
@@ -157,6 +188,9 @@ class JooqOrganisationBranchProvisioningStore(
                 condition.and(ORGANISATION.CREATED_AT.le(it.atOffset(ZoneOffset.UTC)))
         }
         val total = dsl.fetchCount(ORGANISATION, condition).toLong()
+        val offset =
+            boundedPageOffset(filter.page, filter.size, total)
+                ?: return OrganisationPage(emptyList(), total)
         val items =
             dsl
                 .select(
@@ -166,14 +200,18 @@ class JooqOrganisationBranchProvisioningStore(
                     ORGANISATION.COUNTRY_CODE,
                     ORGANISATION.STATUS,
                     ORGANISATION.CREATED_AT,
-                ).from(
-                    ORGANISATION,
-                ).where(
-                    condition,
-                ).orderBy(
-                    ORGANISATION.CREATED_AT.desc(),
-                ).limit(filter.size)
-                .offset(filter.page * filter.size)
+                    b.STATUS,
+                    b.ATTEMPTS,
+                    b.USER_ID,
+                    b.MEMBERSHIP_ID,
+                    b.LAST_FAILURE_CODE,
+                ).from(ORGANISATION)
+                .leftJoin(b)
+                .on(b.ORGANISATION_ID.eq(ORGANISATION.ID))
+                .where(condition)
+                .orderBy(ORGANISATION.CREATED_AT.desc())
+                .limit(filter.size)
+                .offset(offset)
                 .fetch(::organisationSummary)
         return OrganisationPage(items, total)
     }
@@ -290,6 +328,17 @@ class JooqOrganisationBranchProvisioningStore(
             .where(BRANCH.ORGANISATION_ID.eq(organisationId))
             .and(BRANCH.ID.eq(branchId))
             .fetchOne(BRANCH.PARENT_BRANCH_ID)
+
+    override fun createdBy(
+        organisationId: UUID,
+        branchId: UUID,
+    ): UUID? =
+        dsl
+            .select(BRANCH.CREATED_BY)
+            .from(BRANCH)
+            .where(BRANCH.ORGANISATION_ID.eq(organisationId))
+            .and(BRANCH.ID.eq(branchId))
+            .fetchOne(BRANCH.CREATED_BY)
 
     private fun now() = clock.instant().atOffset(ZoneOffset.UTC)
 }
@@ -435,53 +484,117 @@ private object OrganisationBootstrapDefaults {
     val SEQUENCE_CODES = listOf("MEMBER", "TRANSACTION", "JOURNAL")
     private val BASELINE_PERMISSION_CODES =
         setOf(
+            // Tenant lifecycle
             "tenant.create",
             "tenant.submit_for_approval",
             "tenant.approve",
             "tenant.activate",
             "tenant.suspend",
             "tenant.deprovision",
+            // Foundation API – tenant reads/writes
+            "tenant.view",
+            "tenant.update_draft",
+            "tenant.reject",
+            "tenant.reactivate",
+            "tenant.bootstrap_retry",
+            // Branch lifecycle
             "branch.create",
             "branch.approve",
             "branch.activate",
             "branch.suspend",
             "branch.close",
+            // Foundation API – branch
+            "branch.view",
+            "branch.reactivate",
+            // User / membership administration (no global user lifecycle – platform-only)
+            "user.view",
             "user.invite",
             "user.approve",
-            "user.activate",
-            "user.suspend",
-            "user.deactivate",
             "user.assign_branch",
             "user.assign_role",
+            "user.revoke_branch",
+            "user.revoke_role",
+            // Membership
+            "membership.view",
+            "membership.suspend",
+            "membership.reactivate",
+            "membership.revoke",
+            // Branch assignments
+            "branch_assignment.view",
+            // Roles
             "role.create",
             "role.update",
             "role.assign_permission",
+            "role.view",
+            "role.activate",
+            "role.deactivate",
+            "role.remove_permission",
+            // Role assignments
+            "role_assignment.view",
+            // Permissions catalog
+            "permission.view",
+            // Audit & settings
             "audit.view",
+            "settings.view",
             "settings.update",
+            // Business date & COB
             "business_date.view",
             "business_date.advance",
             "business_date.reopen",
             "cob.start",
             "cob.complete",
+            // Auth selection
+            "auth.select_organisation",
+            "auth.select_branch",
+            // Profile
             "iam.profile.read",
         )
     val ROLE_PERMISSIONS =
         mapOf(
             "TENANT_ADMIN" to BASELINE_PERMISSION_CODES,
-            "TENANT_AUDITOR" to setOf("audit.view", "business_date.view", "iam.profile.read"),
+            "TENANT_AUDITOR" to
+                setOf(
+                    "audit.view",
+                    "business_date.view",
+                    "tenant.view",
+                    "branch.view",
+                    "user.view",
+                    "membership.view",
+                    "branch_assignment.view",
+                    "role.view",
+                    "role_assignment.view",
+                    "permission.view",
+                    "settings.view",
+                    "auth.select_organisation",
+                    "auth.select_branch",
+                    "iam.profile.read",
+                ),
             "IAM_ADMIN" to
                 setOf(
+                    "user.view",
                     "user.invite",
                     "user.approve",
-                    "user.activate",
-                    "user.suspend",
-                    "user.deactivate",
                     "user.assign_branch",
                     "user.assign_role",
+                    "user.revoke_branch",
+                    "user.revoke_role",
+                    "membership.view",
+                    "membership.suspend",
+                    "membership.reactivate",
+                    "membership.revoke",
+                    "branch_assignment.view",
                     "role.create",
                     "role.update",
                     "role.assign_permission",
+                    "role.view",
+                    "role.activate",
+                    "role.deactivate",
+                    "role.remove_permission",
+                    "role_assignment.view",
+                    "permission.view",
                     "audit.view",
+                    "auth.select_organisation",
+                    "auth.select_branch",
                     "iam.profile.read",
                 ),
             "BRANCH_MANAGER" to
@@ -491,23 +604,49 @@ private object OrganisationBootstrapDefaults {
                     "branch.activate",
                     "branch.suspend",
                     "branch.close",
+                    "branch.view",
+                    "branch.reactivate",
                     "user.assign_branch",
+                    "branch_assignment.view",
                     "business_date.view",
+                    "auth.select_organisation",
+                    "auth.select_branch",
                     "iam.profile.read",
                 ),
-            "BRANCH_OPERATOR" to setOf("business_date.view", "iam.profile.read"),
+            "BRANCH_OPERATOR" to
+                setOf(
+                    "business_date.view",
+                    "auth.select_organisation",
+                    "auth.select_branch",
+                    "iam.profile.read",
+                ),
         )
 }
 
-private fun organisationSummary(record: org.jooq.Record): OrganisationSummary =
-    OrganisationSummary(
-        requireNotNull(record.get(ORGANISATION.ID)),
-        requireNotNull(record.get(ORGANISATION.TENANT_CODE)),
-        requireNotNull(record.get(ORGANISATION.DISPLAY_NAME)),
-        requireNotNull(record.get(ORGANISATION.COUNTRY_CODE)),
-        OrganisationLifecycleState.valueOf(requireNotNull(record.get(ORGANISATION.STATUS))),
-        requireNotNull(record.get(ORGANISATION.CREATED_AT)).toInstant(),
+private fun organisationSummary(record: org.jooq.Record): OrganisationSummary {
+    val b = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
+    val bootstrapStatusRaw = record.get(b.STATUS)
+    val statusVal =
+        OrganisationLifecycleState.valueOf(
+            requireNotNull(record.get(ORGANISATION.STATUS)),
+        )
+    return OrganisationSummary(
+        organisationId = requireNotNull(record.get(ORGANISATION.ID)),
+        tenantCode = requireNotNull(record.get(ORGANISATION.TENANT_CODE)),
+        displayName = requireNotNull(record.get(ORGANISATION.DISPLAY_NAME)),
+        countryCode = requireNotNull(record.get(ORGANISATION.COUNTRY_CODE)),
+        status = statusVal,
+        createdAt = requireNotNull(record.get(ORGANISATION.CREATED_AT)).toInstant(),
+        bootstrapStatus =
+            bootstrapStatusRaw?.let {
+                InitialAdministratorBootstrapStatus.valueOf(it)
+            },
+        bootstrapAttempts = record.get(b.ATTEMPTS),
+        bootstrapUserId = record.get(b.USER_ID),
+        bootstrapMembershipId = record.get(b.MEMBERSHIP_ID),
+        lastBootstrapFailureCode = record.get(b.LAST_FAILURE_CODE),
     )
+}
 
 private fun DSLContext.grantPermissions(
     organisationId: UUID,

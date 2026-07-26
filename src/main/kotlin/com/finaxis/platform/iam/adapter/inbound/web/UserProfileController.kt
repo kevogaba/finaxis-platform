@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
+import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.profile.UserProfile
@@ -41,7 +42,12 @@ class UserProfileController(
         ApiResponse(
             responseCode = "403",
             description = "Active organisation context or iam.profile.read permission is missing",
-            content = [Content(schema = Schema(implementation = ApiErrorResponse::class))],
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
         ),
     )
     @PreAuthorize("hasAuthority('iam.profile.read')")

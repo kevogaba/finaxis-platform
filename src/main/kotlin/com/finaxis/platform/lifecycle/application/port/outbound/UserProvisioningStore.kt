@@ -65,6 +65,12 @@ interface UserProvisioningMembershipStore {
         membershipId: UUID,
     ): MembershipProvisioningSnapshot?
 
+    /** Resolves the original inviter (maker) of an organisation membership. */
+    fun membershipInvitedBy(
+        organisationId: UUID,
+        membershipId: UUID,
+    ): UUID? = null
+
     /** Returns whether the user already has a membership row (any status) in the organisation. */
     fun membershipExists(
         organisationId: UUID,
@@ -85,6 +91,12 @@ interface UserProvisioningAccessStore {
         organisationId: UUID,
         roleId: UUID,
     ): Boolean
+
+    /** Finds a role ID by its code within the selected organisation. */
+    fun findRoleIdByCode(
+        organisationId: UUID,
+        roleCode: String,
+    ): UUID?
 
     /** Creates an active role assignment idempotently and returns the durable assignment id. */
     fun assignRole(

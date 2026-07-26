@@ -1,12 +1,18 @@
 package com.finaxis.platform.iam.application.selection
 
+import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.iam.application.authorization.AuthorizationService
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
-import com.finaxis.platform.iam.application.context.ActiveOrganisationContextService
+import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
+import com.finaxis.platform.iam.domain.allowsLogin
 import org.springframework.stereotype.Service
 import java.util.UUID
+
+private const val PERM_SELECT_ORG = "auth.select_organisation"
+private const val PERM_SELECT_BRANCH = "auth.select_branch"
 
 /**
  * Result returned after selecting an active organisation.
@@ -14,7 +20,6 @@ import java.util.UUID
 data class SelectOrganisationResult(
     val organisationId: UUID,
     val membershipId: UUID,
-    val contextToken: String,
     val context: ActiveOrganisationContext,
     val branchId: UUID?,
     val requiresBranchSelection: Boolean,
@@ -28,7 +33,6 @@ data class SelectBranchResult(
     val organisationId: UUID,
     val membershipId: UUID,
     val branchId: UUID,
-    val contextToken: String,
     val context: ActiveOrganisationContext,
 )
 
@@ -36,8 +40,8 @@ data class SelectBranchResult(
  * Raised when the authenticated user cannot select the requested organisation or branch.
  */
 class OrganisationSelectionDeniedException(
-    message: String,
-) : RuntimeException(message)
+    @Suppress("UNUSED_PARAMETER") message: String,
+) : ForbiddenOperationException()
 
 /**
  * Coordinates organisation and branch selection for the authenticated user.
@@ -45,18 +49,18 @@ class OrganisationSelectionDeniedException(
 @Service
 class AuthSelectionService(
     private val lookup: MembershipSelectionLookup,
-    private val contextService: ActiveOrganisationContextService,
+    private val authorizationService: AuthorizationService,
 ) {
     /**
      * Selects an active organisation and returns the resulting tenant context.
+     *
+     * Requires the actor to hold [PERM_SELECT_ORG] in the target organisation.
      */
     fun selectOrganisation(
         keycloakSubject: String,
         organisationId: UUID,
     ): SelectOrganisationResult {
-        val userId =
-            lookup.findUserIdByKeycloakSubject(keycloakSubject)
-                ?: denied("Authenticated user is not registered")
+        val userId = eligibleUserId(keycloakSubject)
         val membership =
             lookup.findMembership(userId, organisationId)
                 ?: denied("User is not an active member of the organisation")
@@ -68,6 +72,10 @@ class AuthSelectionService(
             denied("User is not an active member of the organisation")
         }
 
+        if (!authorizationService.hasPermission(userId, organisationId, PERM_SELECT_ORG)) {
+            denied("Missing permission: $PERM_SELECT_ORG")
+        }
+
         val assignedBranchIds = lookup.findAssignedBranchIds(membership.membershipId)
         val branchId = assignedBranchIds.singleOrNull()
         val context =
@@ -76,7 +84,6 @@ class AuthSelectionService(
         return SelectOrganisationResult(
             organisationId = organisationId,
             membershipId = membership.membershipId,
-            contextToken = contextService.issue(context),
             context = context,
             branchId = branchId,
             requiresBranchSelection = assignedBranchIds.size > 1,
@@ -86,6 +93,8 @@ class AuthSelectionService(
 
     /**
      * Selects an assigned branch inside the active organisation context.
+     *
+     * Requires the actor to hold [PERM_SELECT_BRANCH] in the target organisation.
      */
     fun selectBranch(
         keycloakSubject: String,
@@ -95,9 +104,7 @@ class AuthSelectionService(
         val existingContext =
             currentContext
                 ?: denied("Select an active organisation before selecting a branch")
-        val userId =
-            lookup.findUserIdByKeycloakSubject(keycloakSubject)
-                ?: denied("Authenticated user is not registered")
+        val userId = eligibleUserId(keycloakSubject)
         if (existingContext.userId != userId) {
             denied(
                 "Active organisation context does not belong to the authenticated user",
@@ -121,14 +128,99 @@ class AuthSelectionService(
             denied("User is not assigned to the selected branch")
         }
 
+        if (!authorizationService.hasPermission(
+                userId = userId,
+                organisationId = existingContext.organisationId,
+                permissionCode = PERM_SELECT_BRANCH,
+            )
+        ) {
+            denied("Missing permission: $PERM_SELECT_BRANCH")
+        }
+
         val selectedContext = existingContext.copy(branchId = branchId)
         return SelectBranchResult(
             organisationId = selectedContext.organisationId,
             membershipId = selectedContext.membershipId,
             branchId = branchId,
-            contextToken = contextService.issue(selectedContext),
             context = selectedContext,
         )
+    }
+
+    /** Revalidates durable organisation-selection state before a replay restores it. */
+    fun revalidateOrganisationReplay(
+        keycloakSubject: String,
+        context: ActiveOrganisationContext,
+        expectedAssignedBranchIds: List<UUID>,
+    ) {
+        val membership = activeReplayMembership(keycloakSubject, context)
+        if (!authorizationService.hasPermission(
+                userId = membership.userId,
+                organisationId = context.organisationId,
+                permissionCode = PERM_SELECT_ORG,
+            )
+        ) {
+            denied("Missing permission: $PERM_SELECT_ORG")
+        }
+        if (lookup.findAssignedBranchIds(membership.membershipId).toSet() !=
+            expectedAssignedBranchIds.toSet()
+        ) {
+            denied("Organisation branch assignments changed after the original request")
+        }
+        context.branchId?.let { branchId ->
+            if (!lookup.hasAssignedBranch(membership.membershipId, branchId)) {
+                denied("Selected branch is no longer assigned")
+            }
+        }
+    }
+
+    /** Revalidates durable branch-selection state before a replay restores it. */
+    fun revalidateBranchReplay(
+        keycloakSubject: String,
+        context: ActiveOrganisationContext,
+    ) {
+        val membership = activeReplayMembership(keycloakSubject, context)
+        if (!authorizationService.hasPermission(
+                userId = membership.userId,
+                organisationId = context.organisationId,
+                permissionCode = PERM_SELECT_BRANCH,
+            )
+        ) {
+            denied("Missing permission: $PERM_SELECT_BRANCH")
+        }
+        val branchId = context.branchId ?: denied("Durable branch selection is incomplete")
+        if (!lookup.hasAssignedBranch(membership.membershipId, branchId)) {
+            denied("Selected branch is no longer assigned")
+        }
+    }
+
+    private fun activeReplayMembership(
+        keycloakSubject: String,
+        context: ActiveOrganisationContext,
+    ): MembershipSelection {
+        val userId = eligibleUserId(keycloakSubject)
+        if (userId != context.userId) {
+            denied("Durable context does not belong to the authenticated user")
+        }
+        val membership =
+            lookup.findMembership(userId, context.organisationId)
+                ?: denied("User is not an active member of the organisation")
+        if (membership.membershipId != context.membershipId ||
+            membership.status != MembershipStatus.ACTIVE ||
+            lookup.organisationStatus(context.organisationId) != OrganisationStatus.ACTIVE
+        ) {
+            denied("User is not an active member of the organisation")
+        }
+        return membership
+    }
+
+    private fun eligibleUserId(keycloakSubject: String): UUID {
+        val userId =
+            lookup.findUserIdByKeycloakSubject(keycloakSubject)
+                ?: denied("Authenticated user is not registered")
+        if (lookup.userStatus(userId)?.allowsLogin() != true) {
+            denied("Authenticated user is not eligible to access the application")
+        }
+        return userId
     }
 
     private fun denied(message: String): Nothing =

@@ -13,6 +13,7 @@ import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
 import org.hamcrest.Matchers.containsInAnyOrder
 import org.hamcrest.Matchers.hasItem
+import org.hamcrest.Matchers.hasItems
 import org.jooq.DSLContext
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -246,7 +247,7 @@ class AuthFlowIntegrationTests {
             }.andExpect {
                 status { isBadRequest() }
                 jsonPath("$.code") { value("validation_failed") }
-                jsonPath("$.fieldErrors.organisationId[0]") { value("must not be null") }
+                jsonPath("$.violations[0].field") { value("organisation_id") }
             }
     }
 
@@ -260,7 +261,7 @@ class AuthFlowIntegrationTests {
             }.andExpect {
                 status { isBadRequest() }
                 jsonPath("$.code") { value("invalid_json") }
-                jsonPath("$.errors[0].attribute") { value("request_body") }
+                jsonPath("$.violations") { doesNotExist() }
             }
     }
 
@@ -270,7 +271,7 @@ class AuthFlowIntegrationTests {
             .post("/api/v1/auth/select-organisation") {
                 with(localJwt())
                 contentType = MediaType.APPLICATION_JSON
-                content = """{"organisationId":"${uuidV7()}"}"""
+                content = """{"organisation_id":"${uuidV7()}"}"""
             }.andExpect {
                 status { isForbidden() }
                 jsonPath("$.code") { value("forbidden") }
@@ -282,15 +283,15 @@ class AuthFlowIntegrationTests {
             .post("/api/v1/auth/select-organisation") {
                 with(localJwt())
                 contentType = MediaType.APPLICATION_JSON
-                content = """{"organisationId":"$LOCAL_ORGANISATION_ID"}"""
+                content = """{"organisation_id":"$LOCAL_ORGANISATION_ID"}"""
             }.andExpect {
                 status { isOk() }
-                jsonPath("$.organisationId") { value(LOCAL_ORGANISATION_ID) }
-                jsonPath("$.membershipId") { value(LOCAL_MEMBERSHIP_ID) }
-                jsonPath("$.contextHeader") { value(ActiveOrganisationContextService.HEADER) }
-                jsonPath("$.branchId") { doesNotExist() }
-                jsonPath("$.requiresBranchSelection") { value(true) }
-                jsonPath("$.assignedBranchIds") {
+                jsonPath("$.organisation_id") { value(LOCAL_ORGANISATION_ID) }
+                jsonPath("$.membership_id") { value(LOCAL_MEMBERSHIP_ID) }
+                jsonPath("$.context_header") { value(ActiveOrganisationContextService.HEADER) }
+                jsonPath("$.branch_id") { doesNotExist() }
+                jsonPath("$.requires_branch_selection") { value(true) }
+                jsonPath("$.assigned_branch_ids") {
                     value(containsInAnyOrder(HEAD_OFFICE_BRANCH_ID, OPERATIONS_BRANCH_ID))
                 }
             }.andReturn()
@@ -303,13 +304,13 @@ class AuthFlowIntegrationTests {
                 with(localJwt())
                 header(ActiveOrganisationContextService.HEADER, organisationContextToken)
                 contentType = MediaType.APPLICATION_JSON
-                content = """{"branchId":"$HEAD_OFFICE_BRANCH_ID"}"""
+                content = """{"branch_id":"$HEAD_OFFICE_BRANCH_ID"}"""
             }.andExpect {
                 status { isOk() }
-                jsonPath("$.organisationId") { value(LOCAL_ORGANISATION_ID) }
-                jsonPath("$.membershipId") { value(LOCAL_MEMBERSHIP_ID) }
-                jsonPath("$.branchId") { value(HEAD_OFFICE_BRANCH_ID) }
-                jsonPath("$.contextHeader") { value(ActiveOrganisationContextService.HEADER) }
+                jsonPath("$.organisation_id") { value(LOCAL_ORGANISATION_ID) }
+                jsonPath("$.membership_id") { value(LOCAL_MEMBERSHIP_ID) }
+                jsonPath("$.branch_id") { value(HEAD_OFFICE_BRANCH_ID) }
+                jsonPath("$.context_header") { value(ActiveOrganisationContextService.HEADER) }
             }.andReturn()
             .response
             .jsonContextToken()
@@ -321,21 +322,21 @@ class AuthFlowIntegrationTests {
                 header(ActiveOrganisationContextService.HEADER, branchContextToken)
             }.andExpect {
                 status { isOk() }
-                jsonPath("$.userId") { value(LOCAL_USER_SUBJECT) }
-                jsonPath("$.keycloakSubject") { value(LOCAL_USER_SUBJECT) }
+                jsonPath("$.user_id") { value(LOCAL_USER_SUBJECT) }
+                jsonPath("$.keycloak_subject") { value(LOCAL_USER_SUBJECT) }
                 jsonPath("$.email") { value("admin@finaxis.local") }
                 jsonPath("$.organisation.id") { value(LOCAL_ORGANISATION_ID) }
                 jsonPath("$.organisation.code") { value("FINAXIS-LOCAL") }
                 jsonPath("$.membership.id") { value(LOCAL_MEMBERSHIP_ID) }
-                jsonPath("$.selectedBranch.id") { value(HEAD_OFFICE_BRANCH_ID) }
-                jsonPath("$.selectedBranch.code") { value("HQ") }
+                jsonPath("$.selected_branch.id") { value(HEAD_OFFICE_BRANCH_ID) }
+                jsonPath("$.selected_branch.code") { value("HQ") }
                 jsonPath("$.branches[*].id") {
                     value(containsInAnyOrder(HEAD_OFFICE_BRANCH_ID, OPERATIONS_BRANCH_ID))
                 }
                 jsonPath("$.roles[*].code") { value(hasItem("local-admin")) }
                 jsonPath("$.permissions") {
                     value(
-                        containsInAnyOrder(
+                        hasItems(
                             "iam.profile.read",
                             "iam.user.invite",
                             "logistics.shipment.approve",
@@ -398,7 +399,7 @@ class AuthFlowIntegrationTests {
 
     private fun org.springframework.mock.web.MockHttpServletResponse.jsonContextToken(): String =
         com.jayway.jsonpath.JsonPath
-            .read(contentAsString, "$.contextToken")
+            .read(contentAsString, "$.context_token")
 
     private companion object {
         const val ACTIVE = "ACTIVE"

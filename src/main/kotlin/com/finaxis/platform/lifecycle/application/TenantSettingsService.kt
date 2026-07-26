@@ -1,11 +1,14 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.audit.Redacted
 import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
+import com.finaxis.platform.common.web.api.InvalidPageRequestException
+import com.finaxis.platform.common.web.api.boundedPageOffset
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.TenantSettingCatalog
@@ -96,12 +99,12 @@ class TenantSettingsService(
             TenantSettingCatalog.require(query.key)
         }
         if (definition != null) {
-            authorize(definition, query.organisationId, query.actorId)
+            authorize(definition, query.organisationId, query.actorId, isMutation = false)
         } else {
             permissionGuard.requirePermission(
                 query.actorId,
                 query.organisationId,
-                SETTING_PERMISSION,
+                SETTING_READ_PERMISSION,
             )
         }
         return view(query.key, definition, stored, rawValue = stored?.value)
@@ -113,8 +116,19 @@ class TenantSettingsService(
      * their own persisted [StoredSetting] metadata.
      */
     @Transactional(readOnly = true)
-    fun list(query: ListTenantSettingsQuery): List<TenantSettingView> {
-        permissionGuard.requirePermission(query.actorId, query.organisationId, SETTING_PERMISSION)
+    fun list(query: ListTenantSettingsQuery): TenantSettingPage {
+        permissionGuard.requirePermission(
+            query.actorId,
+            query.organisationId,
+            SETTING_READ_PERMISSION,
+        )
+        if (query.page < 0) {
+            throw InvalidPageRequestException()
+        }
+        if (query.size !in MINIMUM_PAGE_SIZE..MAXIMUM_PAGE_SIZE) {
+            throw InvalidPageRequestException()
+        }
+
         val canManagePlatformSettings = canManagePlatformSettings(query.actorId)
         val stored =
             settingsStore
@@ -133,20 +147,30 @@ class TenantSettingsService(
             stored.values
                 .filter { TenantSettingCatalog.definition(it.key) == null }
                 .map { view(it.key, definition = null, stored = it, rawValue = it.value) }
-        return (catalogViews + extraViews).map { setting ->
-            if (setting.platformAdminOnly && !canManagePlatformSettings) {
-                setting.copy(value = MASK)
-            } else {
-                setting
+
+        val sortedList = (catalogViews + extraViews).sortedBy { it.key }
+        val total = sortedList.size.toLong()
+        val fromIndex =
+            boundedPageOffset(query.page, query.size, total)
+                ?: return TenantSettingPage(emptyList(), total)
+        val toIndex =
+            (fromIndex.toLong() + query.size.toLong())
+                .coerceAtMost(total)
+                .toInt()
+        val paginatedItems =
+            sortedList.subList(fromIndex, toIndex).map { setting ->
+                if (setting.platformAdminOnly && !canManagePlatformSettings) {
+                    setting.copy(value = MASK)
+                } else {
+                    setting
+                }
             }
-        }
+        return TenantSettingPage(paginatedItems, total)
     }
 
     private fun requireActive(organisationId: UUID) {
-        require(
-            lifecycleStore.lifecycleState(organisationId) == OrganisationLifecycleState.ACTIVE,
-        ) {
-            "Settings can be changed only for an active organisation."
+        if (lifecycleStore.lifecycleState(organisationId) != OrganisationLifecycleState.ACTIVE) {
+            throw ConflictException()
         }
     }
 
@@ -154,6 +178,7 @@ class TenantSettingsService(
         definition: TenantSettingDefinition,
         organisationId: UUID,
         actorId: UUID,
+        isMutation: Boolean = true,
     ) {
         if (definition.platformAdminOnly) {
             permissionGuard.requirePermission(
@@ -162,7 +187,8 @@ class TenantSettingsService(
                 PLATFORM_SETTING_PERMISSION,
             )
         } else {
-            permissionGuard.requirePermission(actorId, organisationId, SETTING_PERMISSION)
+            val permission = if (isMutation) SETTING_MUTATE_PERMISSION else SETTING_READ_PERMISSION
+            permissionGuard.requirePermission(actorId, organisationId, permission)
         }
     }
 
@@ -252,9 +278,12 @@ class TenantSettingsService(
     private companion object {
         const val SETTINGS_UPDATED_TARGET = "finaxis.lifecycle.organisation.settings-updated"
         const val ORGANISATION_SETTING = "ORGANISATION_SETTING"
-        const val SETTING_PERMISSION = "settings.update"
+        const val SETTING_MUTATE_PERMISSION = "settings.update"
+        const val SETTING_READ_PERMISSION = "settings.view"
         const val PLATFORM_SETTING_PERMISSION = "tenant_setting.manage_platform"
         const val MASK = "***REDACTED***"
         const val UNKNOWN_VALUE_TYPE = "STRING"
+        const val MINIMUM_PAGE_SIZE = 1
+        const val MAXIMUM_PAGE_SIZE = 100
     }
 }

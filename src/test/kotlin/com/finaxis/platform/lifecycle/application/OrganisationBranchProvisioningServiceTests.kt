@@ -1,5 +1,7 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
@@ -11,12 +13,15 @@ import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.common.transitions.TransitionExecutor
 import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogRepository
+import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.LifecycleAggregate
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
+import org.mockito.Mockito.mock
+import org.mockito.Mockito.verify
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
@@ -43,6 +48,9 @@ class OrganisationBranchProvisioningServiceTests {
             AuditService(audits, clock),
         )
     private val store = ProvisioningFake(lifecyclePersistence)
+    private val adminBootstrapStore = FakeInitialAdministratorBootstrapStore()
+    private val bootstrapService = mock(InitialAdministratorBootstrapService::class.java)
+    private val permissionGuard = mock(PermissionGuard::class.java)
     private val organisations =
         OrganisationProvisioningService(
             lifecycle,
@@ -51,10 +59,20 @@ class OrganisationBranchProvisioningServiceTests {
             store,
             store,
             AuditService(audits, clock),
+            adminBootstrapStore,
+            bootstrapService,
+            permissionGuard,
             clock,
         )
     private val branches =
-        BranchProvisioningService(lifecycle, store, store, AuditService(audits, clock), events)
+        BranchProvisioningService(
+            lifecycle,
+            store,
+            store,
+            AuditService(audits, clock),
+            events,
+            permissionGuard,
+        )
 
     @Test
     fun `creates organisation draft with timezone business date and requested settings`() {
@@ -205,6 +223,65 @@ class OrganisationBranchProvisioningServiceTests {
     }
 
     @Test
+    fun `activate branch rejects maker activating their own branch draft`() {
+        val organisationId = uuidV7()
+        val makerId = uuidV7()
+        val checkerId = uuidV7()
+
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        lifecyclePersistence.organisations[organisationId] =
+            aggregate(organisationId, OrganisationLifecycleState.ACTIVE, "ORGANISATION")
+
+        val branchId =
+            branches
+                .createDraft(
+                    CreateBranchCommand(
+                        organisationId = organisationId,
+                        branchCode = "BR-TEST",
+                        branchName = "Test Branch",
+                        branchType = "OPERATIONAL",
+                        timezone = "UTC",
+                        requestedBy = makerId,
+                    ),
+                ).branchId
+
+        lifecyclePersistence.branches[organisationId to branchId] =
+            aggregate(branchId, BranchLifecycleState.PENDING_APPROVAL, "BRANCH")
+
+        // Maker cannot activate
+        assertFailsWith<ForbiddenOperationException> {
+            branches.activate(
+                ActivateBranchCommand(
+                    organisationId = organisationId,
+                    branchId = branchId,
+                    actorId = makerId,
+                    requestId = uuidV7(),
+                ),
+            )
+        }
+
+        // Distinct checker can activate
+        branches.activate(
+            ActivateBranchCommand(
+                organisationId = organisationId,
+                branchId = branchId,
+                actorId = checkerId,
+                requestId = uuidV7(),
+            ),
+        )
+        assertEquals(
+            BranchLifecycleState.ACTIVE,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+        verify(permissionGuard).requireBranchPermission(
+            checkerId,
+            organisationId,
+            branchId,
+            "branch.activate",
+        )
+    }
+
+    @Test
     fun `reactivation rejects every missing mandatory setup prerequisite`() {
         OrganisationSetupRequirement.entries.forEach { missing ->
             val organisationId = uuidV7()
@@ -214,12 +291,9 @@ class OrganisationBranchProvisioningServiceTests {
             store.completeSetup(organisationId)
             store.missingSetup += missing
 
-            val exception =
-                assertFailsWith<IllegalArgumentException> {
-                    organisations.reactivate(ReactivateOrganisationCommand(organisationId))
-                }
-
-            assertTrue(exception.message!!.contains(missing.name))
+            assertFailsWith<ConflictException> {
+                organisations.reactivate(ReactivateOrganisationCommand(organisationId))
+            }
             store.missingSetup -= missing
         }
     }
@@ -280,7 +354,7 @@ class OrganisationBranchProvisioningServiceTests {
         store.organisationStates[organisationId] = OrganisationLifecycleState.SUSPENDED
         store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ConflictException> {
             branches.assignUser(
                 AssignUserToBranchCommand(
                     organisationId,
@@ -305,7 +379,7 @@ class OrganisationBranchProvisioningServiceTests {
             ),
         )
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ConflictException> {
             branches.revokeUserAssignment(
                 RevokeUserBranchAssignmentCommand(
                     organisationId,
@@ -328,7 +402,7 @@ class OrganisationBranchProvisioningServiceTests {
         store.memberships[organisationId to userId] =
             MembershipSnapshot(MembershipLifecycleState.ACTIVE, MembershipType.STAFF)
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ConflictException> {
             branches.assignUser(
                 AssignUserToBranchCommand(
                     organisationId,
@@ -355,7 +429,7 @@ class OrganisationBranchProvisioningServiceTests {
         store.memberships[organisationId to userId] =
             MembershipSnapshot(MembershipLifecycleState.ACTIVE, MembershipType.STAFF)
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ConflictException> {
             branches.assignUser(
                 AssignUserToBranchCommand(
                     organisationId,
@@ -436,23 +510,41 @@ class OrganisationBranchProvisioningServiceTests {
         store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
         store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
 
-        branches.submitForApproval(SubmitBranchForApprovalCommand(organisationId, branchId))
+        branches.submitForApproval(
+            SubmitBranchForApprovalCommand(
+                organisationId = organisationId,
+                branchId = branchId,
+                actorId = uuidV7(),
+                requestId = uuidV7(),
+            ),
+        )
         assertExternalizedTarget("finaxis.lifecycle.branch.approval-requested")
 
         events.events.clear()
-        branches.activate(ActivateBranchCommand(organisationId, branchId))
+        branches.activate(
+            ActivateBranchCommand(
+                organisationId = organisationId,
+                branchId = branchId,
+                actorId = uuidV7(),
+                requestId = uuidV7(),
+            ),
+        )
         assertExternalizedTarget("finaxis.lifecycle.branch.activated")
 
         events.events.clear()
-        branches.suspend(SuspendBranchCommand(organisationId, branchId, "Maintenance"))
+        branches.suspend(SuspendBranchCommand(organisationId, branchId, "Maintenance", uuidV7()))
         assertExternalizedTarget("finaxis.lifecycle.branch.suspended")
 
         events.events.clear()
-        branches.reactivate(ReactivateBranchCommand(organisationId, branchId, "Maintenance done"))
+        branches.reactivate(
+            ReactivateBranchCommand(organisationId, branchId, "Maintenance done", uuidV7()),
+        )
         assertExternalizedTarget("finaxis.lifecycle.branch.reactivated")
 
         events.events.clear()
-        branches.close(CloseBranchCommand(organisationId, branchId, "Branch consolidation"))
+        branches.close(
+            CloseBranchCommand(organisationId, branchId, "Branch consolidation", uuidV7()),
+        )
         assertExternalizedTarget("finaxis.lifecycle.branch.closed")
         assertEquals("Branch consolidation", transitionLogs.logs.last().reason)
     }
@@ -468,8 +560,8 @@ class OrganisationBranchProvisioningServiceTests {
         store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
         lifecyclePersistence.branchesWithActiveChildren += organisationId to branchId
 
-        assertFailsWith<com.finaxis.platform.common.transitions.TransitionGuardException> {
-            branches.close(CloseBranchCommand(organisationId, branchId, "Consolidation"))
+        assertFailsWith<ConflictException> {
+            branches.close(CloseBranchCommand(organisationId, branchId, "Consolidation", uuidV7()))
         }
     }
 
@@ -484,6 +576,18 @@ class OrganisationBranchProvisioningServiceTests {
             aggregate(organisationId, OrganisationLifecycleState.DRAFT, "ORGANISATION")
         store.metadataComplete += organisationId
         store.businessDates[organisationId] = LocalDate.of(2026, 7, 14)
+        adminBootstrapStore.createDraft(
+            organisationId = organisationId,
+            admin =
+                InitialAdministratorDraft(
+                    email = "admin@test.com",
+                    username = "admin",
+                    displayName = "Admin",
+                    phoneE164 = null,
+                    sendApplicationInvite = false,
+                ),
+            requestedBy = UUID.randomUUID(),
+        )
         return organisationId
     }
 }
@@ -594,9 +698,15 @@ private class ProvisioningFake(
         return listResult
     }
 
+    val branchCreators = mutableMapOf<Pair<UUID, UUID>, UUID>()
+
     override fun organisationState(organisationId: UUID) = organisationStates[organisationId]
 
-    override fun createDraft(command: CreateBranchCommand): UUID = uuidV7()
+    override fun createDraft(command: CreateBranchCommand): UUID {
+        val id = uuidV7()
+        branchCreators[command.organisationId to id] = command.requestedBy
+        return id
+    }
 
     override fun branchCodeExists(
         organisationId: UUID,
@@ -626,6 +736,11 @@ private class ProvisioningFake(
         organisationId: UUID,
         branchId: UUID,
     ): UUID? = null
+
+    override fun createdBy(
+        organisationId: UUID,
+        branchId: UUID,
+    ): UUID? = branchCreators[organisationId to branchId]
 
     override fun userExists(userId: UUID) = true
 
@@ -722,6 +837,8 @@ private class LifecycleFake :
         membershipId: UUID,
     ): UUID? = null
 
+    override fun findOrganisationIdsForActiveUserAccess(userId: UUID): Set<UUID> = emptySet()
+
     override fun saveOrganisation(aggregate: LifecycleAggregate<OrganisationLifecycleState>) =
         aggregate
 
@@ -807,3 +924,138 @@ private fun <S : Enum<S>> aggregate(
     state: S,
     type: String,
 ) = LifecycleAggregate(id, state, type, id, 0)
+
+private class FakeInitialAdministratorBootstrapStore : InitialAdministratorBootstrapStore {
+    val records = mutableMapOf<UUID, InitialAdministratorBootstrapRecord>()
+
+    override fun createDraft(
+        organisationId: UUID,
+        admin: InitialAdministratorDraft,
+        requestedBy: UUID,
+    ) {
+        records[organisationId] =
+            InitialAdministratorBootstrapRecord(
+                organisationId = organisationId,
+                adminEmail = admin.email,
+                adminUsername = admin.username,
+                adminDisplayName = admin.displayName,
+                adminPhoneE164 = admin.phoneE164,
+                sendApplicationInvite = admin.sendApplicationInvite,
+                status = InitialAdministratorBootstrapStatus.DRAFT,
+                attempts = 0,
+                requestedBy = requestedBy,
+                submittedBy = null,
+                approvedBy = null,
+                userId = null,
+                membershipId = null,
+                headOfficeId = null,
+                roleId = null,
+                lastFailureCode = null,
+                createdAt = java.time.Instant.now(),
+                submittedAt = null,
+                approvedAt = null,
+                updatedAt = java.time.Instant.now(),
+                rowVersion = 0L,
+            )
+    }
+
+    override fun amendDraft(
+        organisationId: UUID,
+        admin: InitialAdministratorDraft,
+    ) {
+        val record = records[organisationId] ?: error("Not found")
+        records[organisationId] =
+            record.copy(
+                adminEmail = admin.email,
+                adminUsername = admin.username,
+                adminDisplayName = admin.displayName,
+                adminPhoneE164 = admin.phoneE164,
+                sendApplicationInvite = admin.sendApplicationInvite,
+                updatedAt = java.time.Instant.now(),
+                rowVersion = record.rowVersion + 1,
+            )
+    }
+
+    override fun submit(
+        organisationId: UUID,
+        actorId: UUID,
+    ) {
+        val record = records[organisationId] ?: error("Not found")
+        records[organisationId] =
+            record.copy(
+                status = InitialAdministratorBootstrapStatus.PENDING_ACTIVATION,
+                submittedBy = actorId,
+                submittedAt = java.time.Instant.now(),
+                updatedAt = java.time.Instant.now(),
+                rowVersion = record.rowVersion + 1,
+            )
+    }
+
+    override fun approve(
+        organisationId: UUID,
+        actorId: UUID,
+    ) {
+        val record = records[organisationId] ?: error("Not found")
+        records[organisationId] =
+            record.copy(
+                status = InitialAdministratorBootstrapStatus.QUEUED,
+                approvedBy = actorId,
+                approvedAt = java.time.Instant.now(),
+                updatedAt = java.time.Instant.now(),
+                rowVersion = record.rowVersion + 1,
+            )
+    }
+
+    override fun reject(organisationId: UUID) {
+        val record = records[organisationId] ?: error("Not found")
+        records[organisationId] =
+            record.copy(
+                status = InitialAdministratorBootstrapStatus.DRAFT,
+                submittedBy = null,
+                submittedAt = null,
+                approvedBy = null,
+                approvedAt = null,
+                updatedAt = java.time.Instant.now(),
+                rowVersion = record.rowVersion + 1,
+            )
+    }
+
+    override fun find(organisationId: UUID): InitialAdministratorBootstrapRecord? =
+        records[organisationId]
+
+    override fun updateStatus(
+        organisationId: UUID,
+        status: InitialAdministratorBootstrapStatus,
+        lastFailureCode: String?,
+        incrementAttempts: Boolean,
+    ) {
+        val record = records[organisationId] ?: error("Not found")
+        records[organisationId] =
+            record.copy(
+                status = status,
+                lastFailureCode = lastFailureCode,
+                attempts = if (incrementAttempts) record.attempts + 1 else record.attempts,
+                updatedAt = java.time.Instant.now(),
+                rowVersion = record.rowVersion + 1,
+            )
+    }
+
+    override fun linkResolvedEntities(
+        organisationId: UUID,
+        userId: UUID?,
+        membershipId: UUID?,
+        headOfficeId: UUID?,
+        roleId: UUID?,
+    ) {
+        val record = records[organisationId] ?: error("Not found")
+        records[organisationId] =
+            record.copy(
+                userId = userId,
+                membershipId = membershipId,
+                headOfficeId = headOfficeId,
+                roleId = roleId,
+                updatedAt = java.time.Instant.now(),
+                rowVersion = record.rowVersion + 1,
+            )
+    }
+}

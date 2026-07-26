@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.domain
 
+import com.finaxis.platform.common.application.InvalidOperationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -30,7 +31,7 @@ class TenantSettingCatalogTests {
 
     @Test
     fun `require rejects an unknown key`() {
-        assertFailsWith<IllegalArgumentException> { TenantSettingCatalog.require("nope") }
+        assertFailsWith<InvalidOperationException> { TenantSettingCatalog.require("nope") }
     }
 
     @Test
@@ -43,7 +44,7 @@ class TenantSettingCatalogTests {
 
     @Test
     fun `canonicalize rejects a non-IANA timezone`() {
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidOperationException> {
             TenantSettingCatalog.canonicalize("default_timezone", "EST")
         }
     }
@@ -55,7 +56,7 @@ class TenantSettingCatalogTests {
 
     @Test
     fun `canonicalize rejects an unknown currency`() {
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidOperationException> {
             TenantSettingCatalog.canonicalize("base_currency", "XXY")
         }
     }
@@ -67,10 +68,10 @@ class TenantSettingCatalogTests {
             TenantSettingCatalog.canonicalize("business_date_auto_advance_enabled", "TRUE"),
         )
         assertEquals("30", TenantSettingCatalog.canonicalize("audit_retention_days", "30"))
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidOperationException> {
             TenantSettingCatalog.canonicalize("business_date_auto_advance_enabled", "yes")
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidOperationException> {
             TenantSettingCatalog.canonicalize("audit_retention_days", "-1")
         }
     }

@@ -1,5 +1,7 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
@@ -7,6 +9,7 @@ import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
+import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import java.time.Clock
@@ -43,7 +46,7 @@ class BusinessDateServiceTests {
         val organisationId = uuidV7()
         lifecycleStore.states[organisationId] = OrganisationLifecycleState.SUSPENDED
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ConflictException> {
             service.initialize(
                 InitializeBusinessDateCommand(
                     organisationId,
@@ -60,7 +63,7 @@ class BusinessDateServiceTests {
         businessDateStore.snapshots[organisationId] =
             BusinessDateSnapshot(LocalDate.parse("2026-07-15"), "OPEN", 0)
 
-        assertFailsWith<IllegalStateException> {
+        assertFailsWith<ConflictException> {
             service.initialize(
                 InitializeBusinessDateCommand(
                     organisationId,
@@ -76,7 +79,7 @@ class BusinessDateServiceTests {
         val organisationId = uuidV7()
         lifecycleStore.states[organisationId] = OrganisationLifecycleState.SUSPENDED
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ConflictException> {
             service.advance(
                 AdvanceBusinessDateCommand(organisationId, LocalDate.parse("2026-07-16"), uuidV7()),
             )
@@ -104,7 +107,7 @@ class BusinessDateServiceTests {
         businessDateStore.snapshots[organisationId] =
             BusinessDateSnapshot(LocalDate.parse("2026-07-15"), "OPEN", 0)
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidOperationException> {
             service.advance(
                 AdvanceBusinessDateCommand(organisationId, LocalDate.parse("2026-07-15"), uuidV7()),
             )
@@ -118,7 +121,7 @@ class BusinessDateServiceTests {
             BusinessDateSnapshot(LocalDate.parse("2026-07-15"), "OPEN", 0)
         businessDateStore.advanceSucceeds = false
 
-        assertFailsWith<IllegalStateException> {
+        assertFailsWith<ConflictException> {
             service.advance(
                 AdvanceBusinessDateCommand(organisationId, LocalDate.parse("2026-07-16"), uuidV7()),
             )
@@ -166,7 +169,7 @@ class BusinessDateServiceTests {
         businessDateStore.snapshots[organisationId] =
             BusinessDateSnapshot(LocalDate.parse("2026-07-15"), "OPEN", 0)
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ConflictException> {
             service.completeCob(CompleteCobCommand(organisationId, uuidV7()))
         }
     }
@@ -202,7 +205,7 @@ class BusinessDateServiceTests {
         businessDateStore.snapshots[organisationId] =
             BusinessDateSnapshot(LocalDate.parse("2026-07-15"), "OPEN", 0)
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<ConflictException> {
             service.reopen(ReopenBusinessDateCommand(organisationId, uuidV7()))
         }
     }
@@ -273,7 +276,7 @@ class BusinessDateServiceTests {
     fun `list history rejects a negative page`() {
         val organisationId = activeOrganisation()
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidPageRequestException> {
             service.listHistory(ListBusinessDateHistoryQuery(organisationId, uuidV7(), page = -1))
         }
     }
@@ -282,7 +285,7 @@ class BusinessDateServiceTests {
     fun `list history rejects a zero size`() {
         val organisationId = activeOrganisation()
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidPageRequestException> {
             service.listHistory(ListBusinessDateHistoryQuery(organisationId, uuidV7(), size = 0))
         }
     }
@@ -291,7 +294,7 @@ class BusinessDateServiceTests {
     fun `list history rejects a size above the maximum`() {
         val organisationId = activeOrganisation()
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<InvalidPageRequestException> {
             service.listHistory(ListBusinessDateHistoryQuery(organisationId, uuidV7(), size = 101))
         }
     }
@@ -444,6 +447,31 @@ private class FakePermissionGuardForBusinessDate : PermissionGuard {
         if (denied.contains(organisationId to permissionCode)) {
             throw SecurityException("Missing permission: $permissionCode")
         }
+    }
+
+    override fun requireTenantPermission(
+        actorId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ) {
+        requirePermission(actorId, organisationId, permissionCode)
+    }
+
+    override fun requireBranchPermission(
+        actorId: UUID,
+        organisationId: UUID,
+        branchId: UUID,
+        permissionCode: String,
+    ) {
+        requirePermission(actorId, organisationId, permissionCode)
+    }
+
+    override fun requirePlatformPermission(
+        actorId: UUID,
+        permissionCode: String,
+    ) {
+        val platformOrgId = UUID.fromString("00000000-0000-0000-0000-000000000000")
+        requirePermission(actorId, platformOrgId, permissionCode)
     }
 }
 

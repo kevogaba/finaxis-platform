@@ -15,6 +15,9 @@ interface OrganisationLifecycleProvisioningStore {
     /** Persists an organisation draft and returns its identifier. */
     fun createDraft(command: CreateOrganisationDraftCommand): UUID
 
+    /** Amends the organisation draft details. */
+    fun amendDraft(command: AmendOrganisationDraftCommand) {}
+
     /** Stores supplied initial non-sensitive organisation settings. */
     fun saveSettings(
         organisationId: UUID,
@@ -283,6 +286,12 @@ interface BranchLifecycleStore {
 
     /** Resolves an existing branch parent only inside its organisation. */
     fun parentBranchId(
+        organisationId: UUID,
+        branchId: UUID,
+    ): UUID?
+
+    /** Resolves the creator (maker) user ID of a branch. */
+    fun createdBy(
         organisationId: UUID,
         branchId: UUID,
     ): UUID?

@@ -26,10 +26,18 @@ data class GetTenantSettingQuery(
     val actorId: UUID,
 )
 
-/** Lists all currently effective tenant settings for an organisation. */
+/** Lists all currently effective tenant settings for an organisation with pagination. */
 data class ListTenantSettingsQuery(
     val organisationId: UUID,
     val actorId: UUID,
+    val page: Int = 0,
+    val size: Int = 25,
+)
+
+/** A bounded page of tenant settings. */
+data class TenantSettingPage(
+    val items: List<TenantSettingView>,
+    val totalItems: Long,
 )
 
 /** A tenant setting projected for reads; [value] is redacted or null when unset. */

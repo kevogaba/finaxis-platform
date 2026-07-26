@@ -1,15 +1,18 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.common.transitions.TransitionExecutor
 import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogRepository
+import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityDispatchType
 import com.finaxis.platform.lifecycle.application.port.outbound.MembershipProvisioningSnapshot
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
@@ -21,6 +24,7 @@ import com.finaxis.platform.lifecycle.domain.MembershipLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleTransition
+import org.mockito.Mockito.mock
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -37,6 +41,7 @@ class UserProvisioningServiceTests {
     private val events = UserProvisioningEventCapture()
     private val audits = UserProvisioningAuditCapture()
     private val logs = UserProvisioningTransitionLogCapture()
+    private val permissionGuard = mock(PermissionGuard::class.java)
     private val lifecycle =
         FoundationLifecycleService(
             TransitionExecutor(clock, logs, events),
@@ -46,9 +51,16 @@ class UserProvisioningServiceTests {
             AuditService(audits, clock),
         )
     private val branches =
-        BranchProvisioningService(lifecycle, fake, fake, AuditService(audits, clock), events)
+        BranchProvisioningService(
+            lifecycle,
+            fake,
+            fake,
+            AuditService(audits, clock),
+            events,
+            permissionGuard,
+        )
     private val deactivationAssignmentRevoker =
-        UserDeactivationAssignmentRevoker(fake, AuditService(audits, clock), events, clock)
+        UserDeactivationAssignmentRevoker(fake, fake, AuditService(audits, clock), events, clock)
     private val service =
         UserProvisioningService(
             lifecycle,
@@ -131,7 +143,7 @@ class UserProvisioningServiceTests {
 
         val approval =
             service.approveUser(
-                ApproveUserCommand(context.org, invitation.membershipId, context.actor, "req-1"),
+                ApproveUserCommand(context.org, invitation.membershipId, context.checker, "req-1"),
             )
 
         assertTrue(approval.keycloakProvisioningRequested)
@@ -162,7 +174,7 @@ class UserProvisioningServiceTests {
 
         val approval =
             service.approveUser(
-                ApproveUserCommand(context.org, invitation.membershipId, context.actor),
+                ApproveUserCommand(context.org, invitation.membershipId, context.checker),
             )
 
         assertFalse(approval.keycloakProvisioningRequested)
@@ -177,7 +189,7 @@ class UserProvisioningServiceTests {
 
         val approval =
             service.approveUser(
-                ApproveUserCommand(context.org, invitation.membershipId, context.actor),
+                ApproveUserCommand(context.org, invitation.membershipId, context.checker),
             )
 
         assertTrue(approval.applicationInviteRequested)
@@ -195,6 +207,25 @@ class UserProvisioningServiceTests {
                 ),
             ),
         )
+    }
+
+    @Test
+    fun `inviter cannot approve membership but a distinct checker can`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+
+        assertFailsWith<ForbiddenOperationException> {
+            service.approveUser(
+                ApproveUserCommand(context.org, invitation.membershipId, context.actor),
+            )
+        }
+
+        val approval =
+            service.approveUser(
+                ApproveUserCommand(context.org, invitation.membershipId, context.checker),
+            )
+
+        assertTrue(approval.keycloakProvisioningRequested)
     }
 
     @Test
@@ -248,6 +279,37 @@ class UserProvisioningServiceTests {
     }
 
     @Test
+    fun `global deactivation revokes assignments in every tenant organisation`() {
+        val firstTenantId = uuidV7()
+        val secondTenantId = uuidV7()
+        val actor = uuidV7()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        fake.addMembership(firstTenantId, userId, MembershipLifecycleState.ACTIVE)
+        fake.addMembership(secondTenantId, userId, MembershipLifecycleState.ACTIVE)
+        fake.branchAssignments += BranchAssignmentKey(firstTenantId, userId)
+        fake.branchAssignments += BranchAssignmentKey(secondTenantId, userId)
+        fake.roleAssignments += RoleAssignmentKey(firstTenantId, userId, uuidV7(), null)
+        fake.roleAssignments += RoleAssignmentKey(secondTenantId, userId, uuidV7(), null)
+
+        service.deactivateUser(
+            DeactivateUserCommand(PlatformOrganisation.ID, userId, actor, "left"),
+        )
+
+        assertTrue(fake.branchAssignments.isEmpty())
+        assertTrue(fake.roleAssignments.isEmpty())
+        val revocationAudits =
+            audits.events.filter {
+                it.action ==
+                    "user.deactivation_assignment_revoked"
+            }
+        assertEquals(4, revocationAudits.size)
+        assertEquals(
+            setOf(firstTenantId.toString(), secondTenantId.toString()),
+            revocationAudits.map { it.tenantId }.toSet(),
+        )
+    }
+
+    @Test
     fun `membership revocation cascades branch and role revocation`() {
         val context = activeInvitationContext()
         val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
@@ -268,9 +330,49 @@ class UserProvisioningServiceTests {
         assertTrue(audits.events.any { it.action == "membership.revoke" })
     }
 
+    @Test
+    fun `suspend membership transitions active membership and audits`() {
+        val context = activeInvitationContext()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        val membershipId = fake.addMembership(context.org, userId, MembershipLifecycleState.ACTIVE)
+
+        service.suspendMembership(
+            SuspendMembershipCommand(context.org, membershipId, context.actor, "risk"),
+        )
+
+        assertEquals(
+            MembershipLifecycleState.SUSPENDED,
+            fake.memberships.getValue(context.org to membershipId).state,
+        )
+        assertTrue(audits.events.any { it.action == "membership.suspend" })
+    }
+
+    @Test
+    fun `reactivate membership transitions suspended membership and audits`() {
+        val context = activeInvitationContext()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        val membershipId =
+            fake.addMembership(
+                context.org,
+                userId,
+                MembershipLifecycleState.SUSPENDED,
+            )
+
+        service.reactivateMembership(
+            ReactivateMembershipCommand(context.org, membershipId, context.actor, "cleared"),
+        )
+
+        assertEquals(
+            MembershipLifecycleState.ACTIVE,
+            fake.memberships.getValue(context.org to membershipId).state,
+        )
+        assertTrue(audits.events.any { it.action == "membership.reactivate" })
+    }
+
     private fun activeInvitationContext(): InvitationContext {
         val context =
             InvitationContext(
+                uuidV7(),
                 uuidV7(),
                 uuidV7(),
                 uuidV7(),
@@ -319,6 +421,7 @@ private class UserProvisioningFake :
     val memberships = mutableMapOf<Pair<UUID, UUID>, LifecycleAggregate<MembershipLifecycleState>>()
     val membershipUsers = mutableMapOf<Pair<UUID, UUID>, UUID>()
     val membershipTypes = mutableMapOf<Pair<UUID, UUID>, MembershipType>()
+    val membershipInviters = mutableMapOf<Pair<UUID, UUID>, UUID>()
     val preferences = mutableMapOf<Pair<UUID, UUID>, Pair<Boolean, Boolean>>()
     val roles = mutableSetOf<Pair<UUID, UUID>>()
     val identityLinks = mutableSetOf<UUID>()
@@ -382,7 +485,7 @@ private class UserProvisioningFake :
             userId,
             MembershipLifecycleState.PENDING_APPROVAL,
             membershipType,
-        )
+        ).also { membershipInviters[organisationId to it] = actorId }
 
     override fun saveInvitationPreferences(
         organisationId: UUID,
@@ -424,6 +527,11 @@ private class UserProvisioningFake :
             key.first == organisationId && membershipUsers[key] == userId
         }
 
+    override fun membershipInvitedBy(
+        organisationId: UUID,
+        membershipId: UUID,
+    ): UUID? = membershipInviters[organisationId to membershipId]
+
     override fun branchState(
         organisationId: UUID,
         branchId: UUID,
@@ -456,6 +564,11 @@ private class UserProvisioningFake :
         organisationId: UUID,
         roleId: UUID,
     ): Boolean = roles.contains(organisationId to roleId)
+
+    override fun findRoleIdByCode(
+        organisationId: UUID,
+        roleCode: String,
+    ): UUID? = null
 
     override fun hasKeycloakIdentity(userId: UUID): Boolean = identityLinks.contains(userId)
 
@@ -552,6 +665,17 @@ private class UserProvisioningFake :
         organisationId: UUID,
         membershipId: UUID,
     ): UUID? = membershipUsers[organisationId to membershipId]
+
+    override fun findOrganisationIdsForActiveUserAccess(userId: UUID): Set<UUID> =
+        memberships
+            .filter { (key, membership) ->
+                membershipUsers[key] == userId &&
+                    membership.state == MembershipLifecycleState.ACTIVE
+            }.keys
+            .map { it.first }
+            .plus(branchAssignments.filter { it.userId == userId }.map { it.organisationId })
+            .plus(roleAssignments.filter { it.userId == userId }.map { it.organisationId })
+            .toSet()
 
     override fun saveOrganisation(
         aggregate: LifecycleAggregate<OrganisationLifecycleState>,
@@ -652,6 +776,11 @@ private class UserProvisioningFake :
 
     override fun revoke(command: RevokeUserBranchAssignmentCommand): Boolean =
         branchAssignments.remove(BranchAssignmentKey(command.organisationId, command.userId))
+
+    override fun createdBy(
+        organisationId: UUID,
+        branchId: UUID,
+    ): UUID? = null
 }
 
 private class UserProvisioningEventCapture : TransitionEventPublisher {
@@ -686,6 +815,7 @@ private data class InvitationContext(
     val branch: UUID,
     val role: UUID,
     val actor: UUID,
+    val checker: UUID,
 )
 
 private data class BranchAssignmentKey(

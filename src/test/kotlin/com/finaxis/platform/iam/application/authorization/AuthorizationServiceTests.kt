@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.application.authorization
 
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
@@ -8,6 +9,7 @@ import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQu
 import com.finaxis.platform.iam.application.security.RequestPermissionCache
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
+import com.finaxis.platform.iam.domain.UserStatus
 import org.junit.jupiter.api.assertThrows
 import org.springframework.cache.concurrent.ConcurrentMapCacheManager
 import java.util.UUID
@@ -131,6 +133,15 @@ class AuthorizationServiceTests {
     }
 
     @Test
+    fun `system actors bypass tenant and branch permission lookups`() {
+        val service = authorizationService()
+        val branchId = uuidV7()
+
+        assertTrue(service.hasPermission(SystemActor.ID, organisationId, "branch.create"))
+        assertTrue(service.hasPermission(UUID(0L, 0L), organisationId, branchId, "branch.activate"))
+    }
+
+    @Test
     fun `listEffectivePermissions returns empty when organisation is not active`() {
         val service =
             authorizationService(
@@ -230,6 +241,8 @@ private class FakeMembershipSelectionLookup(
     private val organisationStatus: OrganisationStatus = OrganisationStatus.ACTIVE,
 ) : MembershipSelectionLookup {
     override fun findUserIdByKeycloakSubject(keycloakSubject: String): UUID? = null
+
+    override fun userStatus(userId: UUID): UserStatus? = null
 
     override fun findMembership(
         userId: UUID,

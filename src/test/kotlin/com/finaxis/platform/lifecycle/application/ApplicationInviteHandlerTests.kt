@@ -173,6 +173,11 @@ private class ApplicationInviteStoreFake : UserProvisioningStore {
         roleId: UUID,
     ): Boolean = false
 
+    override fun findRoleIdByCode(
+        organisationId: UUID,
+        roleCode: String,
+    ): UUID? = null
+
     override fun assignRole(
         organisationId: UUID,
         userId: UUID,

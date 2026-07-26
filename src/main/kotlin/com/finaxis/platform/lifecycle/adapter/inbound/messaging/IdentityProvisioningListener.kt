@@ -37,6 +37,8 @@ class IdentityProvisioningListener(
     private fun scheduleKeycloakProvisioning(event: ExternalizedTransitionEvent) {
         event.requireMetadata(KEYCLOAK_METADATA)
         val dispatchKey = event.requiredMetadata(DISPATCH_KEY)
+        val bootstrapRequestId = event.metadata["bootstrapRequestId"]?.toString()
+        val bootstrapAttempt = event.metadata["bootstrapAttempt"]?.toString()?.toIntOrNull()
         jobRequestScheduler.enqueue(
             deterministicJobId(dispatchKey),
             KeycloakUserProvisioningJobRequest(
@@ -50,6 +52,8 @@ class IdentityProvisioningListener(
                 sendKeycloakInvite = event.requiredMetadata(SEND_KEYCLOAK_INVITE).toBooleanStrict(),
                 dispatchKey = dispatchKey,
                 actorId = UUID.fromString(event.actor.id),
+                bootstrapRequestId = bootstrapRequestId,
+                bootstrapAttempt = bootstrapAttempt,
             ),
         )
     }

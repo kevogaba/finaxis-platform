@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.context.ActorContext
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.id.uuidV7
@@ -18,6 +19,7 @@ import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
+import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
 import com.finaxis.platform.lifecycle.application.AssignUserToBranchCommand
 import com.finaxis.platform.lifecycle.application.BranchAssignmentType
@@ -34,6 +36,7 @@ import com.finaxis.platform.lifecycle.domain.LifecycleAggregate
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleTransition
+import com.finaxis.platform.lifecycle.withRequestContext
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -60,6 +63,8 @@ class JooqFoundationLifecyclePersistenceTests(
     private val organisationProvisioningService: OrganisationProvisioningService,
     private val branchProvisioningService: BranchProvisioningService,
 ) {
+    private val fixture = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
+
     @Test
     fun `organisation submission durably writes transition log and audit event`() {
         val organisationId = insertOrganisation(OrganisationLifecycleState.DRAFT)
@@ -327,12 +332,11 @@ class JooqFoundationLifecyclePersistenceTests(
 
     @Test
     fun `branch assignment is active once and never crosses organisation boundaries`() {
-        val organisationId = insertOrganisation(OrganisationLifecycleState.ACTIVE)
+        val userId = insertUser()
+        val organisationId = fixture.createActiveOrganisation("branch-assignment", userId)
         val otherOrganisationId = insertOrganisation(OrganisationLifecycleState.ACTIVE)
         val branchId = insertBranch(organisationId, BranchLifecycleState.ACTIVE)
         val otherBranchId = insertBranch(otherOrganisationId, BranchLifecycleState.ACTIVE)
-        val userId = insertUser()
-        insertMembership(organisationId, userId, MembershipLifecycleState.ACTIVE)
         val command =
             AssignUserToBranchCommand(
                 organisationId,
@@ -342,8 +346,10 @@ class JooqFoundationLifecyclePersistenceTests(
                 userId,
             )
 
-        branchProvisioningService.assignUser(command)
-        branchProvisioningService.assignUser(command)
+        withRequestContext {
+            branchProvisioningService.assignUser(command)
+            branchProvisioningService.assignUser(command)
+        }
 
         assertEquals(
             1,
@@ -357,27 +363,31 @@ class JooqFoundationLifecyclePersistenceTests(
                     .and(USER_BRANCH_ASSIGNMENT.STATUS.eq("ACTIVE")),
             ),
         )
-        assertThrows<IllegalArgumentException> {
-            branchProvisioningService.assignUser(command.copy(branchId = otherBranchId))
+        withRequestContext {
+            assertThrows<ConflictException> {
+                branchProvisioningService.assignUser(command.copy(branchId = otherBranchId))
+            }
         }
     }
 
     @Test
     fun `branch draft creation records a lifecycle creation log`() {
-        val organisationId = insertOrganisation(OrganisationLifecycleState.ACTIVE)
         val requestedBy = insertUser()
+        val organisationId = fixture.createActiveOrganisation("branch-creation-log", requestedBy)
 
         val result =
-            branchProvisioningService.createDraft(
-                CreateBranchCommand(
-                    organisationId = organisationId,
-                    branchCode = "NAIROBI",
-                    branchName = "Nairobi Branch",
-                    branchType = "OPERATIONS",
-                    timezone = "Africa/Nairobi",
-                    requestedBy = requestedBy,
-                ),
-            )
+            withRequestContext {
+                branchProvisioningService.createDraft(
+                    CreateBranchCommand(
+                        organisationId = organisationId,
+                        branchCode = "NAIROBI",
+                        branchName = "Nairobi Branch",
+                        branchType = "OPERATIONS",
+                        timezone = "Africa/Nairobi",
+                        requestedBy = requestedBy,
+                    ),
+                )
+            }
 
         assertEquals(
             "CREATE_DRAFT",
@@ -661,17 +671,30 @@ class JooqFoundationLifecyclePersistenceTests(
             )
         val IAM_ADMIN_PERMISSION_CODES =
             setOf(
+                "user.view",
                 "user.invite",
                 "user.approve",
-                "user.activate",
-                "user.suspend",
-                "user.deactivate",
                 "user.assign_branch",
                 "user.assign_role",
+                "user.revoke_branch",
+                "user.revoke_role",
+                "membership.view",
+                "membership.suspend",
+                "membership.reactivate",
+                "membership.revoke",
+                "branch_assignment.view",
                 "role.create",
                 "role.update",
                 "role.assign_permission",
+                "role.view",
+                "role.activate",
+                "role.deactivate",
+                "role.remove_permission",
+                "role_assignment.view",
+                "permission.view",
                 "audit.view",
+                "auth.select_organisation",
+                "auth.select_branch",
                 "iam.profile.read",
             )
         val REQUIRED_PERMISSION_CODES =
@@ -682,28 +705,49 @@ class JooqFoundationLifecyclePersistenceTests(
                 "tenant.activate",
                 "tenant.suspend",
                 "tenant.deprovision",
+                "tenant.view",
+                "tenant.update_draft",
+                "tenant.reject",
+                "tenant.reactivate",
+                "tenant.bootstrap_retry",
                 "branch.create",
                 "branch.approve",
                 "branch.activate",
                 "branch.suspend",
                 "branch.close",
+                "branch.view",
+                "branch.reactivate",
+                "user.view",
                 "user.invite",
                 "user.approve",
-                "user.activate",
-                "user.suspend",
-                "user.deactivate",
                 "user.assign_branch",
                 "user.assign_role",
+                "user.revoke_branch",
+                "user.revoke_role",
+                "membership.view",
+                "membership.suspend",
+                "membership.reactivate",
+                "membership.revoke",
+                "branch_assignment.view",
                 "role.create",
                 "role.update",
                 "role.assign_permission",
+                "role.view",
+                "role.activate",
+                "role.deactivate",
+                "role.remove_permission",
+                "role_assignment.view",
+                "permission.view",
                 "audit.view",
+                "settings.view",
                 "settings.update",
                 "business_date.view",
                 "business_date.advance",
                 "business_date.reopen",
                 "cob.start",
                 "cob.complete",
+                "auth.select_organisation",
+                "auth.select_branch",
                 "iam.profile.read",
             )
     }

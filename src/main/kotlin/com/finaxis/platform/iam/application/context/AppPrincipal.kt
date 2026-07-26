@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.application.context
 
+import com.finaxis.platform.common.web.idempotency.IdempotencyActorPrincipal
 import com.finaxis.platform.common.web.ratelimit.RateLimitPrincipal
 import org.springframework.security.authentication.AbstractAuthenticationToken
 import org.springframework.security.core.authority.SimpleGrantedAuthority
@@ -19,7 +20,10 @@ data class AppPrincipal(
     val fullName: String?,
     val permissions: Set<String>,
 ) : RateLimitPrincipal,
+    IdempotencyActorPrincipal,
     Serializable {
+    override val idempotencySubject: String
+        get() = keycloakSubject
     override val rateLimitUserId: String
         get() = userId.toString()
 

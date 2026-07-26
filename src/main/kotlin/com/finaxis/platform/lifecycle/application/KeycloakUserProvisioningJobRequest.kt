@@ -17,6 +17,8 @@ data class KeycloakUserProvisioningJobRequest
         val sendKeycloakInvite: Boolean = false,
         val dispatchKey: String = "",
         val actorId: UUID = UUID(0, 0),
+        val bootstrapRequestId: String? = null,
+        val bootstrapAttempt: Int? = null,
     ) : JobRequest {
         /** Identifies the Spring-managed handler that processes this background job. */
         override fun getJobRequestHandler(): Class<out JobRequestHandler<*>> =

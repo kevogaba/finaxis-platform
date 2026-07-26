@@ -1,6 +1,6 @@
 package com.finaxis.platform.config
 
-import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.web.api.ApiProblemFactory
 import jakarta.servlet.FilterChain
 import jakarta.servlet.ServletException
 import jakarta.servlet.ServletOutputStream
@@ -29,7 +29,7 @@ class HttpAccessLogFilter : OncePerRequestFilter() {
     ) {
         val startedAt = System.nanoTime()
         val requestId = request.requestId()
-        response.setHeader(REQUEST_ID_HEADER, requestId)
+        response.setHeader(ApiProblemFactory.REQUEST_ID_HEADER, requestId)
         val countingResponse = CountingHttpServletResponse(response)
         var failed = false
 
@@ -239,13 +239,12 @@ class HttpAccessLogFilter : OncePerRequestFilter() {
         private const val BAD_REQUEST_STATUS = 400
         private const val SERVER_ERROR_STATUS = 500
         private const val SINGLE_BYTE = 1
-        private const val REQUEST_ID_HEADER = "X-Request-Id"
         private val accessLogger = LoggerFactory.getLogger("com.finaxis.platform.http.access")
 
         private fun HttpServletRequest.requestId(): String =
-            getHeader(REQUEST_ID_HEADER)
-                ?.takeIf { value -> value.isNotBlank() }
-                ?: uuidV7().toString()
+            ApiProblemFactory.requestId(this).also { requestId ->
+                setAttribute(ApiProblemFactory.REQUEST_ID_ATTRIBUTE, requestId)
+            }
 
         private fun token(value: String): String = value.replace(WHITESPACE_REGEX, "_")
 

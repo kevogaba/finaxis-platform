@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.context.RequestContexts
@@ -11,6 +12,7 @@ import com.finaxis.platform.common.transitions.TransitionExecution
 import com.finaxis.platform.common.transitions.TransitionExecutor
 import com.finaxis.platform.common.transitions.TransitionGraph
 import com.finaxis.platform.common.transitions.TransitionGuardException
+import com.finaxis.platform.common.transitions.TransitionNotAllowedException
 import com.finaxis.platform.common.transitions.TransitionResult
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleTransition
@@ -168,11 +170,48 @@ class FoundationLifecycleService(
                     command,
                     ex,
                 )
-                throw ex
+                throw mapTransitionFailure(ex)
             }
         recordOutcome(result, organisationId)
         return result
     }
+
+    /**
+     * Maps an internal FSM failure to the exception that should reach the caller.
+     *
+     * [TransitionNotAllowedException] (wrong source state) and [TransitionGuardException] (a
+     * guard rejected an otherwise legal transition) are both foreseeable client-facing conflicts,
+     * not server faults - mapped to [ConflictException], the same safe `ApplicationException`
+     * subtype every other lifecycle state-conflict already uses, instead of leaking the internal
+     * FSM exception type to `ApiExceptionHandler`'s generic 500 fallback. Every current guard
+     * message (`domain/FoundationLifecycleDefinitions.kt`) is deliberately written as safe,
+     * actionable, business-level text with no internal identifiers, so it is passed through as the
+     * conflict's safe detail; `TransitionNotAllowedException`'s message names internal FSM
+     * states/transitions, so it is not. [InvalidTransitionException] is deliberately left
+     * unmapped: it can only occur from a transition-graph misconfiguration (an enum member with no
+     * matching `TransitionDefinition`), never from any input a client controls, so it should
+     * surface loudly as a 500 rather than be disguised as a safe 409. The original exception is
+     * always preserved as `cause` so it is never silently discarded.
+     */
+    private fun mapTransitionFailure(ex: TransitionException): RuntimeException =
+        when (ex) {
+            is TransitionNotAllowedException -> {
+                ConflictException(cause = ex)
+            }
+
+            is TransitionGuardException -> {
+                ConflictException(
+                    safeDetail =
+                        ex.message
+                            ?: "The request conflicts with the current resource state.",
+                    cause = ex,
+                )
+            }
+
+            else -> {
+                ex
+            }
+        }
 
     private fun <S : Enum<S>, T : Enum<T>> recordTransitionFailure(
         aggregate: LifecycleAggregate<S>,

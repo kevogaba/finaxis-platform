@@ -29,7 +29,8 @@ Local user:
 - Keycloak subject: `11111111-1111-1111-1111-111111111111`
 
 Flyway seeds the matching application user, organisation, membership, branches, role,
-and permissions. The seeded organisation and branch IDs are intentionally stable so
+and permissions. The local profile additionally seeds the platform membership needed for
+the full smoke path. The seeded organisation and branch IDs are intentionally stable so
 smoke tests can be scripted.
 
 ## Running Locally
@@ -43,7 +44,7 @@ docker compose up -d postgres redis rabbitmq keycloak
 Start the application:
 
 ```bash
-./gradlew bootRun
+SPRING_PROFILES_ACTIVE=local ./gradlew bootRun
 ```
 
 Run the smoke script:

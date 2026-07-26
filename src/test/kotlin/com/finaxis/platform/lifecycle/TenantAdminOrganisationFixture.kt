@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle
 
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.jooq.tables.references.ROLE
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
@@ -59,6 +60,30 @@ class TenantAdminOrganisationFixture(
         organisationId: UUID,
         actorId: UUID,
     ) {
+        grantRole(
+            organisationId = organisationId,
+            actorId = actorId,
+            roleCode = "TENANT_ADMIN",
+            missingRoleMessage = "TENANT_ADMIN role was not provisioned for the organisation.",
+        )
+    }
+
+    /** Grants [actorId] the platform org's PLATFORM_SUPER_ADMIN role. */
+    fun grantPlatformSuperAdmin(actorId: UUID) {
+        grantRole(
+            organisationId = PlatformOrganisation.ID,
+            actorId = actorId,
+            roleCode = "PLATFORM_SUPER_ADMIN",
+            missingRoleMessage = "PLATFORM_SUPER_ADMIN role was not seeded for the platform org.",
+        )
+    }
+
+    private fun grantRole(
+        organisationId: UUID,
+        actorId: UUID,
+        roleCode: String,
+        missingRoleMessage: String,
+    ) {
         val now = OffsetDateTime.now()
         val roleId =
             requireNotNull(
@@ -66,9 +91,9 @@ class TenantAdminOrganisationFixture(
                     .select(ROLE.ID)
                     .from(ROLE)
                     .where(ROLE.ORGANISATION_ID.eq(organisationId))
-                    .and(ROLE.ROLE_CODE.eq("TENANT_ADMIN"))
+                    .and(ROLE.ROLE_CODE.eq(roleCode))
                     .fetchOne(ROLE.ID),
-            ) { "TENANT_ADMIN role was not provisioned for the organisation." }
+            ) { missingRoleMessage }
         dsl
             .insertInto(USER_ORGANISATION_MEMBERSHIP)
             .set(USER_ORGANISATION_MEMBERSHIP.ID, uuidV7())

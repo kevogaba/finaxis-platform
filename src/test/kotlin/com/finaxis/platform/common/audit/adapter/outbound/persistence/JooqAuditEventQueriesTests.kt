@@ -17,6 +17,7 @@ import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -36,6 +37,24 @@ class JooqAuditEventQueriesTests(
         val page = queries.search(AuditEventFilter(organisationId = organisationId))
 
         assertEquals(1, page.items.size)
+        assertEquals(1, page.totalItems)
+    }
+
+    @Test
+    fun `search returns empty page for extreme page offset`() {
+        val organisationId = insertOrganisation()
+        insertAuditEvent(organisationId, actorId = null, action = "organisation.activate")
+
+        val page =
+            queries.search(
+                AuditEventFilter(
+                    organisationId = organisationId,
+                    page = Int.MAX_VALUE,
+                    size = 100,
+                ),
+            )
+
+        assertEquals(emptyList(), page.items)
         assertEquals(1, page.totalItems)
     }
 
@@ -107,6 +126,57 @@ class JooqAuditEventQueriesTests(
         assertEquals(3, firstPage.totalItems)
         assertEquals(1, secondPage.items.size)
         assertEquals(base.plusSeconds(2), firstPage.items.first().occurredAt)
+    }
+
+    @Test
+    fun `findById retrieves a detailed audit event within the organisation scope`() {
+        val organisationId = insertOrganisation()
+        val eventId = uuidV7()
+        dsl
+            .insertInto(AUDIT_EVENT)
+            .set(AUDIT_EVENT.ID, eventId)
+            .set(AUDIT_EVENT.ORGANISATION_ID, organisationId)
+            .set(
+                AUDIT_EVENT.EVENT_TIME,
+                Instant.parse("2026-07-13T10:00:00Z").atOffset(ZoneOffset.UTC),
+            ).set(AUDIT_EVENT.ACTOR_TYPE, "SYSTEM")
+            .set(AUDIT_EVENT.EVENT_TYPE, "ORGANISATION")
+            .set(AUDIT_EVENT.ENTITY_TYPE, "ORGANISATION")
+            .set(AUDIT_EVENT.ACTION, "organisation.activate")
+            .set(AUDIT_EVENT.OUTCOME, "SUCCESS")
+            .set(AUDIT_EVENT.SEVERITY, "INFO")
+            .set(AUDIT_EVENT.METADATA_JSONB, org.jooq.JSONB.jsonb("{}"))
+            .execute()
+
+        val detail = queries.findById(eventId, organisationId)
+        assertNotNull(detail)
+        assertEquals(eventId, detail.id)
+        assertEquals(organisationId, detail.organisationId)
+        assertEquals("organisation.activate", detail.action)
+    }
+
+    @Test
+    fun `findById returns null for cross-tenant request`() {
+        val organisationId = insertOrganisation()
+        val otherOrganisationId = insertOrganisation()
+        val eventId = uuidV7()
+        dsl
+            .insertInto(AUDIT_EVENT)
+            .set(AUDIT_EVENT.ID, eventId)
+            .set(AUDIT_EVENT.ORGANISATION_ID, organisationId)
+            .set(
+                AUDIT_EVENT.EVENT_TIME,
+                Instant.parse("2026-07-13T10:00:00Z").atOffset(ZoneOffset.UTC),
+            ).set(AUDIT_EVENT.ACTOR_TYPE, "SYSTEM")
+            .set(AUDIT_EVENT.EVENT_TYPE, "ORGANISATION")
+            .set(AUDIT_EVENT.ENTITY_TYPE, "ORGANISATION")
+            .set(AUDIT_EVENT.ACTION, "organisation.activate")
+            .set(AUDIT_EVENT.OUTCOME, "SUCCESS")
+            .set(AUDIT_EVENT.SEVERITY, "INFO")
+            .execute()
+
+        val detail = queries.findById(eventId, otherOrganisationId)
+        kotlin.test.assertNull(detail)
     }
 
     private fun insertOrganisation(): UUID {

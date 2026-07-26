@@ -16,6 +16,7 @@ data class CorsProperties(
     val allowedOrigins: List<String> = emptyList(),
     val allowedMethods: List<String> = DEFAULT_ALLOWED_METHODS,
     val allowedHeaders: List<String> = DEFAULT_ALLOWED_HEADERS,
+    val exposedHeaders: List<String> = DEFAULT_EXPOSED_HEADERS,
     val allowCredentials: Boolean = false,
 ) {
     /**
@@ -30,7 +31,10 @@ data class CorsProperties(
                 "Content-Type",
                 "X-Request-Id",
                 "X-Active-Organisation-Context",
+                "Idempotency-Key",
             )
+        private val DEFAULT_EXPOSED_HEADERS =
+            listOf("Idempotency-Key", "Idempotency-Replayed")
     }
 }
 

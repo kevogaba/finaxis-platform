@@ -1,5 +1,7 @@
 package com.finaxis.platform.iam.application.authorization
 
+import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.application.security.RequestPermissionCache
@@ -11,8 +13,8 @@ import java.util.UUID
  * Raised when an application authorization rule denies an action.
  */
 class AccessDeniedException(
-    message: String,
-) : RuntimeException(message)
+    @Suppress("UNUSED_PARAMETER") message: String,
+) : ForbiddenOperationException()
 
 /**
  * Resource metadata used for domain-specific authorization checks.
@@ -130,7 +132,9 @@ class AuthorizationService(
         userId: UUID,
         organisationId: UUID,
         permissionCode: String,
-    ): Boolean = permissionCode in listEffectivePermissions(userId, organisationId)
+    ): Boolean =
+        SystemActor.isSystemActor(userId) ||
+            permissionCode in listEffectivePermissions(userId, organisationId)
 
     /**
      * Returns whether [userId] has [permissionCode] in [organisationId] and [branchId].
@@ -141,7 +145,8 @@ class AuthorizationService(
         branchId: UUID,
         permissionCode: String,
     ): Boolean =
-        permissionCode in
+        SystemActor.isSystemActor(userId) ||
+            permissionCode in
             listEffectiveBranchPermissions(
                 userId = userId,
                 organisationId = organisationId,

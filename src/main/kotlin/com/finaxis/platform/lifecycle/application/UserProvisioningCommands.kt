@@ -19,6 +19,8 @@ data class InviteUserCommand(
     val sendKeycloakInvite: Boolean,
     val sendApplicationInvite: Boolean,
     val requestId: String? = null,
+    val bootstrapRequestId: String? = null,
+    val bootstrapAttempt: Int? = null,
 )
 
 /** Requested user-to-branch assignment created during local invitation intake. */
@@ -46,6 +48,8 @@ data class ApproveUserCommand(
     val membershipId: UUID,
     val approvedBy: UUID,
     val requestId: String? = null,
+    val bootstrapRequestId: String? = null,
+    val bootstrapAttempt: Int? = null,
 )
 
 /** Suspends a global user account from an organisation workflow context. */
@@ -77,6 +81,24 @@ data class DeactivateUserCommand(
 
 /** Revokes a user's tenant membership and local organisation access grants. */
 data class RevokeTenantMembershipCommand(
+    val organisationId: UUID,
+    val membershipId: UUID,
+    val actorId: UUID,
+    val reason: String? = null,
+    val requestId: String? = null,
+)
+
+/** Suspends an active organisation membership without revoking its access grants. */
+data class SuspendMembershipCommand(
+    val organisationId: UUID,
+    val membershipId: UUID,
+    val actorId: UUID,
+    val reason: String? = null,
+    val requestId: String? = null,
+)
+
+/** Reactivates a suspended organisation membership without recreating access grants. */
+data class ReactivateMembershipCommand(
     val organisationId: UUID,
     val membershipId: UUID,
     val actorId: UUID,

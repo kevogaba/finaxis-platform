@@ -15,9 +15,11 @@ preserving security boundaries and testability.
 
 ## Implementation status
 
-Modules (`com.finaxis.platform`): `iam` (the only public REST surface today), `lifecycle`
-(organisation/branch/user/membership FSMs), `notifications` (RabbitMQ listener → JobRunr
-job), `common` (reusable transitions/audit/context/persistence/web infra), `config`.
+Modules (`com.finaxis.platform`): `iam` (identity, authorization, active-organisation context,
+roles, permissions, and user REST adapters), `lifecycle` (organisation/branch/user/membership
+FSMs, tenant setup, business date, audit views, and REST adapters), `notifications` (RabbitMQ
+listener → JobRunr job), `common` (reusable transitions/audit/context/persistence/web infra),
+`config`.
 
 The membership-activation pipeline is the **reference event pattern** — copy it for new
 domain events rather than inventing another mechanism: transition `eventFactory` →
@@ -25,10 +27,9 @@ domain events rather than inventing another mechanism: transition `eventFactory`
 `target`) → thin `@RabbitListener` → application service → JobRunr job. See
 `docs/adr/0004-membership-activation-notification-pipeline.md`.
 
-Known follow-ups (do not treat as bugs): `lifecycle` has no inbound adapter yet (transitions
-are driven internally/by tests); `notifications` email delivery is stubbed (logs only);
-`iam` and `config` still lack explicit `@ApplicationModule` `package-info`; JaCoCo coverage
-verification is scoped to `iam` only.
+Known follow-ups (do not treat as bugs): `notifications` email delivery is stubbed (logs only);
+`config` intentionally does not declare an `@ApplicationModule` because it is infrastructure
+wiring rather than a domain module; JaCoCo coverage verification is scoped to `iam` only.
 
 ## Authorization
 
@@ -84,6 +85,21 @@ verification is scoped to `iam` only.
   request DTOs and typed configuration properties.
 - Update smoke tests, docs, and examples whenever endpoint paths change.
 - See `docs/architecture/api-governance.md` and `docs/architecture/api-versioning.md`.
+
+### Foundation REST contract
+
+- `docs/api/foundation-api.md` is the canonical OpenAPI/REST contract reference for the
+  foundation endpoints.
+- Keep adapters thin and module-owned; inbound web adapters validate and delegate to application
+  services instead of bypassing domain/application boundaries.
+- Every endpoint must have an explicit application-layer permission check. The intentional
+  exceptions are auth organisation/branch selection, checked inside `AuthSelectionService`, and
+  tenant settings, checked per setting key inside `TenantSettingsService.authorize()`.
+- Every collection endpoint is paginated, and every query must stay bounded and tenant-filtered.
+- Every mutation is idempotent with optional/generated UUID `Idempotency-Key` handling.
+- Tenant and branch context must be enforced before returning or mutating tenant data.
+- Public JSON is `snake_case`; business dates use `dd-MM-yyyy`, times use `HH:mm:ss`, and
+  datetimes use ISO-8601 offset format.
 
 ## Security, rate limiting, logging, audit
 

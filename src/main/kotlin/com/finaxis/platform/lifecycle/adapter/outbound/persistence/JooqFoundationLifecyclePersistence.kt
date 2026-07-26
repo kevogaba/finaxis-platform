@@ -133,6 +133,31 @@ class JooqFoundationLifecyclePersistence(
             .and(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
             .fetchOne(USER_ORGANISATION_MEMBERSHIP.USER_ID)
 
+    override fun findOrganisationIdsForActiveUserAccess(userId: UUID): Set<UUID> =
+        setOf(
+            dsl
+                .select(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID)
+                .from(USER_ORGANISATION_MEMBERSHIP)
+                .where(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(userId))
+                .and(
+                    USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS.eq(
+                        MembershipLifecycleState.ACTIVE.name,
+                    ),
+                ).fetch(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID),
+            dsl
+                .select(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID)
+                .from(USER_BRANCH_ASSIGNMENT)
+                .where(USER_BRANCH_ASSIGNMENT.USER_ID.eq(userId))
+                .and(USER_BRANCH_ASSIGNMENT.STATUS.eq(ACTIVE))
+                .fetch(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID),
+            dsl
+                .select(USER_ROLE_ASSIGNMENT.ORGANISATION_ID)
+                .from(USER_ROLE_ASSIGNMENT)
+                .where(USER_ROLE_ASSIGNMENT.USER_ID.eq(userId))
+                .and(USER_ROLE_ASSIGNMENT.STATUS.eq(ACTIVE))
+                .fetch(USER_ROLE_ASSIGNMENT.ORGANISATION_ID),
+        ).flatten().filterNotNull().toSet()
+
     override fun saveOrganisation(
         aggregate: LifecycleAggregate<OrganisationLifecycleState>,
     ): LifecycleAggregate<OrganisationLifecycleState> {

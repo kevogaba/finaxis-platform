@@ -1,5 +1,6 @@
 package com.finaxis.platform.common.web.ratelimit
 
+import com.finaxis.platform.common.web.api.ApiProblemWriter
 import io.github.bucket4j.distributed.ExpirationAfterWriteStrategy
 import io.github.bucket4j.distributed.proxy.ProxyManager
 import io.github.bucket4j.redis.lettuce.Bucket4jLettuce
@@ -100,12 +101,14 @@ class RateLimitConfiguration {
         keyResolver: RateLimitKeyResolver,
         rateLimiter: RateLimiterService,
         clock: Clock,
+        problemWriter: ApiProblemWriter,
     ): RateLimitFilter =
         RateLimitFilter(
             properties = properties,
             keyResolver = keyResolver,
             rateLimiter = rateLimiter,
             clock = clock,
+            problemWriter = problemWriter,
         )
 
     /**

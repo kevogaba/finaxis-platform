@@ -1,6 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
-import com.finaxis.platform.common.transitions.TransitionGuardException
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningException
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningGateway
 import com.finaxis.platform.lifecycle.application.port.outbound.KeycloakUserProvisioningRequest
@@ -21,11 +21,19 @@ class KeycloakUserProvisioningJobRequestHandler(
     private val store: UserProvisioningStore,
     private val lifecycleService: FoundationLifecycleService,
     private val dispatchOutcomeAuditor: DispatchOutcomeAuditor,
-    @Value($$"${finaxis.keycloak.admin.realm:finaxis}") private val realm: String = "finaxis",
+    private val bootstrapService: InitialAdministratorBootstrapService,
+    private val failureRecorder: InitialAdministratorBootstrapFailureRecorder,
+    @Value("\${finaxis.keycloak.admin.realm:finaxis}") private val realm: String = "finaxis",
 ) : JobRequestHandler<KeycloakUserProvisioningJobRequest> {
     /** Runs Keycloak provisioning idempotently and advances the local user and membership FSMs. */
     override fun run(jobRequest: KeycloakUserProvisioningJobRequest) {
-        if (store.dispatchStatus(jobRequest.dispatchKey) == SUCCEEDED) return
+        if (store.dispatchStatus(jobRequest.dispatchKey) == SUCCEEDED) {
+            bootstrapService.completeBootstrapIfCorrelated(
+                jobRequest.organisationId,
+                jobRequest.userId,
+            )
+            return
+        }
         try {
             val keycloakUser =
                 gateway.findOrCreateUser(
@@ -46,6 +54,11 @@ class KeycloakUserProvisioningJobRequestHandler(
             }
             inviteUserIfNeeded(jobRequest)
             activateMembershipIfNeeded(jobRequest)
+            bootstrapService.completeBootstrapIfCorrelated(
+                jobRequest.organisationId,
+                jobRequest.userId,
+            )
+
             dispatchOutcomeAuditor.recordSuccess(
                 dispatchKey = jobRequest.dispatchKey,
                 dispatchRef = keycloakUser.subject,
@@ -58,7 +71,7 @@ class KeycloakUserProvisioningJobRequestHandler(
             )
         } catch (ex: IdentityProvisioningException) {
             recordFailure(jobRequest, ex)
-        } catch (ex: TransitionGuardException) {
+        } catch (ex: ConflictException) {
             recordFailure(jobRequest, ex)
         } catch (ex: IllegalArgumentException) {
             recordFailure(jobRequest, ex)
@@ -83,6 +96,7 @@ class KeycloakUserProvisioningJobRequestHandler(
             reason = ex.message ?: ex.javaClass.name,
             metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
         )
+        failureRecorder.recordFailure(jobRequest.organisationId, ex)
         throw ex
     }
 
