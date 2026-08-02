@@ -10,12 +10,21 @@ Read this with [active organisation context](active-organisation-context.md),
 
 ## Permission catalogue and roles
 
-Flyway seeds a global permission catalogue in `permission`. Each permission has a stable
-`permission_code`, `module_code`, `risk_level`, `system_permission`, and status. Current module
-codes include `tenant`, `branch`, `iam`, `audit`, and `settings`; risk levels are `LOW`,
-`MEDIUM`, `HIGH`, and `CRITICAL`.
+`V2__platform_reference_data.sql` seeds a global catalogue of **54 permission codes** in
+`permission`. Each has a stable `permission_code`, `module_code`, `risk_level`,
+`system_permission`, and status. Module codes are `tenant`, `branch`, `iam`, `audit`, and
+`settings`; risk levels are `LOW`, `MEDIUM`, `HIGH`, and `CRITICAL`.
 
-Organisation approval creates organisation-local system roles from that catalogue:
+The catalogue is the authorization vocabulary and is owned by the platform — organisations cannot
+invent permission codes, only compose them into roles. `FoundationSeedDataTests` asserts the exact
+set, so adding a code is a deliberate, reviewed change.
+
+Two of the roles below are seeded by migration; the other five are created by **application code**
+at organisation-provisioning time (`JooqOrganisationBranchProvisioningStore`) and appear in no
+migration.
+
+Organisation approval creates these organisation-local system roles from the catalogue (in code,
+not in a migration):
 
 - `TENANT_ADMIN`: all baseline permissions;
 - `TENANT_AUDITOR`: `audit.view` and `business_date.view`;
@@ -23,13 +32,15 @@ Organisation approval creates organisation-local system roles from that catalogu
 - `BRANCH_MANAGER`: branch lifecycle, branch assignment, and business-date view permissions;
 - `BRANCH_OPERATOR`: `business_date.view`.
 
-Flyway also creates the reserved platform organisation:
+`V2__platform_reference_data.sql` also creates the reserved platform organisation:
 
 - id `00000000-0000-0000-0000-000000000000`;
 - `tenant_code=PLATFORM`;
 - system roles `PLATFORM_SUPER_ADMIN` and `PLATFORM_SUPPORT`.
 
-`PLATFORM_SUPER_ADMIN` receives every baseline permission. `PLATFORM_SUPPORT` receives
+`PLATFORM_SUPER_ADMIN` is granted every row in `permission` by a set-based
+`INSERT … SELECT … FROM permission`, so the superset role can never drift behind the catalogue as
+it did when permissions were added across several migrations. `PLATFORM_SUPPORT` receives
 `audit.view` and `business_date.view`. These are still modelled as roles in the reserved
 organisation, not as special runtime role-name checks.
 

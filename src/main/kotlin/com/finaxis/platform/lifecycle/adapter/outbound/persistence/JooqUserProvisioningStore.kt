@@ -1,6 +1,5 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
-import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.IDENTITY_DISPATCH_LOG
 import com.finaxis.platform.jooq.tables.references.KEYCLOAK_IDENTITY_LINK
@@ -68,11 +67,9 @@ private class JooqUserProvisioningAccountStore(
         phoneE164: String?,
         actorId: UUID,
     ): UUID {
-        val userId = uuidV7()
         val now = now(clock)
-        dsl
+        return dsl
             .insertInto(USER_ACCOUNT)
-            .set(USER_ACCOUNT.ID, userId)
             .set(USER_ACCOUNT.USERNAME, username)
             .set(USER_ACCOUNT.EMAIL, email)
             .set(USER_ACCOUNT.PHONE_E164, phoneE164)
@@ -82,8 +79,10 @@ private class JooqUserProvisioningAccountStore(
             .set(USER_ACCOUNT.CREATED_BY, actorId)
             .set(USER_ACCOUNT.UPDATED_AT, now)
             .set(USER_ACCOUNT.UPDATED_BY, actorId)
-            .execute()
-        return userId
+            .returning(USER_ACCOUNT.ID)
+            .fetchOne()
+            ?.id
+            ?: error("Insert into user_account returned no generated identifier.")
     }
 
     override fun userStatus(userId: UUID): UserLifecycleState? =
@@ -115,12 +114,10 @@ private class JooqUserProvisioningMembershipStore(
         primaryBranchId: UUID?,
         actorId: UUID,
     ): UUID {
-        val membershipId = uuidV7()
         val now = now(clock)
-        val inserted =
+        val insertedId =
             dsl
                 .insertInto(USER_ORGANISATION_MEMBERSHIP)
-                .set(USER_ORGANISATION_MEMBERSHIP.ID, membershipId)
                 .set(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID, organisationId)
                 .set(USER_ORGANISATION_MEMBERSHIP.USER_ID, userId)
                 .set(
@@ -136,14 +133,13 @@ private class JooqUserProvisioningMembershipStore(
                     USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID,
                     USER_ORGANISATION_MEMBERSHIP.USER_ID,
                 ).doNothing()
-                .execute() > 0
-        return if (inserted) {
-            membershipId
-        } else {
-            requireNotNull(existingMembershipId(organisationId, userId)) {
+                .returning(USER_ORGANISATION_MEMBERSHIP.ID)
+                .fetchOne()
+                ?.id
+        return insertedId
+            ?: requireNotNull(existingMembershipId(organisationId, userId)) {
                 "Membership could not be created."
             }
-        }
     }
 
     override fun saveInvitationPreferences(
@@ -293,12 +289,10 @@ private class JooqUserProvisioningAccessStore(
         branchId: UUID?,
         actorId: UUID,
     ): UUID {
-        val id = uuidV7()
         val now = now(clock)
-        val created =
+        val createdId =
             dsl
                 .insertInto(USER_ROLE_ASSIGNMENT)
-                .set(USER_ROLE_ASSIGNMENT.ID, id)
                 .set(USER_ROLE_ASSIGNMENT.ORGANISATION_ID, organisationId)
                 .set(USER_ROLE_ASSIGNMENT.USER_ID, userId)
                 .set(USER_ROLE_ASSIGNMENT.ROLE_ID, roleId)
@@ -313,14 +307,13 @@ private class JooqUserProvisioningAccessStore(
                 .set(USER_ROLE_ASSIGNMENT.UPDATED_BY, actorId)
                 .onConflict()
                 .doNothing()
-                .execute() > 0
-        return if (created) {
-            id
-        } else {
-            requireNotNull(
+                .returning(USER_ROLE_ASSIGNMENT.ID)
+                .fetchOne()
+                ?.id
+        return createdId
+            ?: requireNotNull(
                 activeRoleAssignment(organisationId, userId, roleId, scopeType, branchId),
             )
-        }
     }
 
     override fun hasActiveBranchAssignment(
@@ -443,7 +436,6 @@ private class JooqUserProvisioningDispatchStore(
         val now = now(clock)
         dsl
             .insertInto(IDENTITY_DISPATCH_LOG)
-            .set(IDENTITY_DISPATCH_LOG.ID, uuidV7())
             .set(IDENTITY_DISPATCH_LOG.ORGANISATION_ID, organisationId)
             .set(IDENTITY_DISPATCH_LOG.USER_ID, userId)
             .set(IDENTITY_DISPATCH_LOG.DISPATCH_TYPE, dispatchType.name)
@@ -468,7 +460,6 @@ private class JooqUserProvisioningDispatchStore(
         val now = now(clock)
         dsl
             .insertInto(KEYCLOAK_IDENTITY_LINK)
-            .set(KEYCLOAK_IDENTITY_LINK.ID, uuidV7())
             .set(KEYCLOAK_IDENTITY_LINK.USER_ID, userId)
             .set(KEYCLOAK_IDENTITY_LINK.PROVIDER, KEYCLOAK)
             .set(KEYCLOAK_IDENTITY_LINK.SUBJECT, subject)

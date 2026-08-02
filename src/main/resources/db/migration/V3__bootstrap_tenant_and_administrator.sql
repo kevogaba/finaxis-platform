@@ -1,3 +1,5 @@
+-- First-deployment bootstrap tenant. Keycloak credentials live in Keycloak and never in this
+-- database; operators must rotate the local.admin identity before exposing the deployment.
 INSERT INTO user_account (
     id, username, email, display_name, status, created_at, updated_at
 ) VALUES (
@@ -111,44 +113,6 @@ INSERT INTO user_branch_assignment (
     '2026-07-04T00:00:00Z'
 );
 
-INSERT INTO permission (
-    id, permission_code, permission_name, module_code, description, risk_level, status,
-    created_at, updated_at
-) VALUES
-(
-    '66666666-6666-6666-6666-666666666601',
-    'iam.profile.read',
-    'Read authenticated profile',
-    'iam',
-    'Read the authenticated user profile and active organisation context.',
-    'LOW',
-    'ACTIVE',
-    '2026-07-04T00:00:00Z',
-    '2026-07-04T00:00:00Z'
-),
-(
-    '66666666-6666-6666-6666-666666666602',
-    'iam.user.invite',
-    'Invite users',
-    'iam',
-    'Invite users into the active organisation.',
-    'MEDIUM',
-    'ACTIVE',
-    '2026-07-04T00:00:00Z',
-    '2026-07-04T00:00:00Z'
-),
-(
-    '66666666-6666-6666-6666-666666666603',
-    'logistics.shipment.approve',
-    'Approve shipment',
-    'logistics',
-    'Approve shipments in the active organisation.',
-    'HIGH',
-    'ACTIVE',
-    '2026-07-04T00:00:00Z',
-    '2026-07-04T00:00:00Z'
-);
-
 INSERT INTO role (
     id, organisation_id, role_code, role_name, description, system_role, status, created_at,
     updated_at
@@ -177,19 +141,10 @@ INSERT INTO role_permission (
     '2026-07-04T00:00:00Z'
 ),
 (
-    '88888888-8888-8888-8888-888888888802',
-    '22222222-2222-2222-2222-222222222222',
-    '77777777-7777-7777-7777-777777777777',
-    '66666666-6666-6666-6666-666666666602',
-    '2026-07-04T00:00:00Z',
-    '2026-07-04T00:00:00Z',
-    '2026-07-04T00:00:00Z'
-),
-(
     '88888888-8888-8888-8888-888888888803',
     '22222222-2222-2222-2222-222222222222',
     '77777777-7777-7777-7777-777777777777',
-    '66666666-6666-6666-6666-666666666603',
+    '40000000-0000-0000-0000-000000000040',
     '2026-07-04T00:00:00Z',
     '2026-07-04T00:00:00Z',
     '2026-07-04T00:00:00Z'
@@ -230,4 +185,36 @@ INSERT INTO business_date (
     '22222222-2222-2222-2222-222222222222',
     '2026-07-04',
     'OPEN'
+);
+
+INSERT INTO role_permission (
+    organisation_id, role_id, permission_id, granted_at, created_at, updated_at
+)
+SELECT
+    '22222222-2222-2222-2222-222222222222',
+    '77777777-7777-7777-7777-777777777777',
+    p.id,
+    NOW(),
+    NOW(),
+    NOW()
+FROM permission p
+WHERE p.permission_code IN (
+    'auth.select_branch',
+    'branch.reactivate',
+    'branch.view',
+    'branch_assignment.view',
+    'membership.reactivate',
+    'membership.revoke',
+    'membership.suspend',
+    'membership.view',
+    'permission.view',
+    'role.activate',
+    'role.deactivate',
+    'role.remove_permission',
+    'role.view',
+    'role_assignment.view',
+    'settings.view',
+    'user.revoke_branch',
+    'user.revoke_role',
+    'user.view'
 );

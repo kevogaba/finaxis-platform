@@ -1,5 +1,10 @@
 # Foundation REST API Design
 
+> **Archived historical artifact.** This records work that has since shipped. It is kept for
+> the design rationale it contains, not as a description of current behaviour. For current
+> state see the ADRs in `docs/adr/` and the reference docs under `docs/architecture/`,
+> `docs/security/`, `docs/operations/`, and `docs/database/`.
+
 - **Date:** 2026-07-18
 - **Status:** Approved in brainstorming; pending written-spec review
 - **Scope:** Versioned REST adapters and missing application/query support for the existing

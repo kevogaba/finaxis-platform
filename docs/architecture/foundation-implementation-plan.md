@@ -1,7 +1,10 @@
 # Foundation Implementation Plan
 
-**Status:** implemented and verified on 2026-07-13. This document retains the audit decision and
-records the completed foundation outcome.
+**Status:** implemented and verified on 2026-07-13; amended 2026-08-02 for the greenfield
+migration reset. This document retains the original audit decision and records the completed
+foundation outcome. It is a historical record of *why* the foundation was built this way, not a
+description of the current schema — for that see
+[Foundation schema](../database/foundation-schema.md) and the ADRs in `docs/adr/`.
 
 ## Scope and decision
 
@@ -10,7 +13,8 @@ role-based permissions, lifecycle persistence, durable audit storage, the transa
 settings, business date, JDBC auditing, and request context. It deliberately excludes controllers
 and banking-product modules.
 
-The recommended approach is to **replace Flyway V1 and V2 while the project is greenfield**. The
+The recommended approach was to **replace the then-current Flyway migrations while the project is
+greenfield**. The
 current migrations were created for the local IAM smoke path, but cannot safely evolve into the
 required schema without temporary compatibility columns, placeholder branch scopes, nullable role
 ownership, and a second migration wave. A single coherent baseline is safer and more maintainable.
@@ -58,9 +62,14 @@ replace this greenfield decision with forward-only V3+ migrations.
 - Request IDs are logged through `HttpAccessLogFilter`; the filter does not establish tenant,
   branch, actor, or correlation context for the whole request lifecycle.
 
-### Flyway V1/V2
+### Flyway baseline (as audited in July 2026, before the rewrite)
 
-`V1__create_iam_schema.sql` is intentionally minimal: `app_user`, `organisation`, membership,
+The migration names in this subsection describe the **pre-rewrite** baseline this plan set out to
+replace. None of them exist today; see
+[ADR 0010](../adr/0010-greenfield-migration-reset-and-schema-rewrite.md) for the current
+three-file layout.
+
+`V1__create_iam_schema.sql` was intentionally minimal: `app_user`, `organisation`, membership,
 permissions, roles, role assignments, placeholder branch/warehouse scopes, and branch. It lacks
 the requested organisation fields, tenant-safe relationships, identity-link separation,
 optimistic-lock columns, lifecycle/audit/outbox/settings/business-date tables, lifecycle checks,
@@ -82,51 +91,42 @@ check. It will not preserve the old physical schema.
 | Events/outbox | Transport dependencies/config exist but no lifecycle event contracts or durable business outbox records exist. | Explicit Modulith events selected for Namastack/Rabbit externalization and integration tests. |
 | Documentation | FSM and context ADRs exist; no foundation ERD, auditing/context guide, lifecycle diagrams, or final boundary map. | Schema ERD, auditing/context guide, lifecycle FSM diagrams, updated local-reset instructions. |
 
-## Target module boundaries and dependency direction
+## Module boundaries as shipped
+
+The original plan targeted eight Spring Modulith modules — `shared/kernel`, `tenancy`, `identity`,
+`iam`, `lifecycle`, `audit`, `integration`, and `settings`. **That decomposition was not adopted.**
+Five modules shipped instead, and the simpler structure is the one to build on:
 
 ```text
-shared/kernel  <- lifecycle
-shared/kernel  <- tenancy
-shared/kernel  <- identity
-shared/kernel  <- iam
-shared/kernel  <- audit
-shared/kernel  <- integration
-shared/kernel  <- settings
-
-tenancy        <- identity (stable tenancy API only when required)
-tenancy        <- iam      (stable tenancy API only)
-identity       <- iam      (identity and membership APIs only)
-lifecycle      <- none of tenancy, identity, iam, audit, integration, settings
-audit          <- domain events or its write-only application API
-integration    <- public domain events only; never module internals
-settings       <- tenancy API only
+common          <- iam, lifecycle, notifications
+iam             <- lifecycle (via explicit allowed dependencies)
+lifecycle       <- notifications (only through externalized events, never internals)
+config          infrastructure wiring; deliberately not an @ApplicationModule
 ```
 
-- `shared.kernel`: IDs, audit-column value objects, safe JSON metadata types, context contracts,
-  domain-event conventions, and no business ownership.
-- `tenancy`: organisation, branch, organisation settings, business date, and organisation/branch
-  lifecycle APIs.
-- `identity`: global `user_account`, Keycloak identity links, user lifecycle, and identity lookup
-  API. It contains no tenant membership ownership.
-- `iam`: memberships, branch assignments, roles, permissions, role permissions, user role
-  assignments, permission evaluation, and authorization APIs.
-- `lifecycle`: reusable existing FSM infrastructure only. It has no dependency on tenant, user,
-  security, or persistence modules.
-- `audit`: append-only audit API and JDBC adapter. Other modules write through its API or publish
-  events; they never write its repository directly.
-- `integration`: Modulith event selection, Namastack/Rabbit routing, outbox worker concerns, and
-  thin inbound consumers. It depends on event contracts, not aggregate internals.
-- `settings`: organisation-scoped configuration and business date. It may consume only tenancy's
-  stable public API.
+| Module | Owns |
+| --- | --- |
+| `common` | Reusable transitions, audit, request context, persistence conventions, web infrastructure (pagination, idempotency, rate limiting, versioning, error handling) |
+| `iam` | Identity, authorization, active-organisation context, roles, permissions, user REST adapters |
+| `lifecycle` | Organisation, branch, user, and membership FSMs; tenant setup; business date; tenant settings; audit views; REST adapters |
+| `notifications` | RabbitMQ listener and JobRunr welcome-email job |
+| `config` | Application configuration and infrastructure wiring |
 
-Each module exposes contracts from its root or `api` package and keeps repositories/adapters under
-`internal` or `adapter.outbound`. Spring Modulith `package-info.kt` declarations and tests will
-enforce this direction.
+The eight-module split was abandoned because it would have separated `tenancy`, `identity`, and
+`settings` into modules that share the same aggregates and transaction boundaries, forcing
+cross-module calls for operations that belong in one transaction. Splitting further is a decision
+to revisit only when a module genuinely needs an independent deployment or release cadence.
+
+Each module declares its boundary in `package-info.java` with `@ApplicationModule` and explicit
+`allowedDependencies`. `ModulithArchitectureTest` and `ModuleDependencyRuleTests` enforce the
+direction.
 
 ## Implementation sequence
 
-1. Replace V1/V2, write a Testcontainers Flyway migration test first, add the complete foundation
-   schema plus updated local seed, and document the ERD in `docs/database/foundation-schema.md`.
+1. Replace the original migrations, write a Testcontainers Flyway migration test first, add the
+   complete foundation schema plus seed, and document the ERD in
+   `docs/database/foundation-schema.md`. (Superseded by the 2026-08-02 three-file reset —
+   see [ADR 0010](../adr/0010-greenfield-migration-reset-and-schema-rewrite.md).)
 2. Split persistence records into their owning modules. Add explicit JDBC column mappings,
    `@Version`/`row_version`, tenant-scoped repository APIs, and test cross-organisation rejection.
 3. Enable Spring Data JDBC auditing. Supply the current actor through an `AuditorAware<UUID>`, UTC
@@ -175,7 +175,7 @@ enforce this direction.
 
 ## Implementation and verification result
 
-The greenfield V1/V2 baseline, Spring Data JDBC auditing/context, tenant-safe jOOQ persistence
+The greenfield schema baseline, Spring Data JDBC auditing/context, tenant-safe jOOQ persistence
 adapters, durable audit records, and the four lifecycle services are implemented. The existing FSM
 executor is reused for all status mutation; each transition writes its log and audit event, then
 publishes events through transition `eventFactories` for Modulith/Namastack externalization.
@@ -188,7 +188,7 @@ present in `build/test-results/test` after the run.
 
 ## Next steps
 
-- [x] Confirm the greenfield/no-production-data assumption before replacing V1/V2.
+- [x] Confirm the greenfield/no-production-data assumption before replacing the migrations.
 - [x] Implement and verify the schema baseline, auditing/context, tenant-safe persistence, and
   lifecycle foundation.
 - [x] Run the full quality gate, including architecture and JaCoCo verification.

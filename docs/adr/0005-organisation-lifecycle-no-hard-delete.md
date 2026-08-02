@@ -81,4 +81,6 @@ Hard-code platform role names in runtime checks:
 - `BranchProvisioningService` close and assignment guards
 - `UserProvisioningService` membership revocation and user deactivation paths
 - `FoundationLifecycleDefinitions` organisation, branch, user, and membership FSM graphs
-- Flyway migrations `V1`, `V4`, and `V5`
+- Flyway migration `V1__foundation_schema.sql` (schema) and
+  `V2__platform_reference_data.sql` (permission catalogue and platform roles). These were
+  originally `V1`, `V4`, and `V5`; see [ADR 0010](0010-greenfield-migration-reset-and-schema-rewrite.md).

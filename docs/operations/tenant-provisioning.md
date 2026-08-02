@@ -100,8 +100,10 @@ anonymisation, encryption-key destruction, and any separately approved physical 
 
 ## Query API
 
-There is an application-level query/list API, not a documented public REST endpoint in this
-branch. `OrganisationProvisioningService` exposes:
+`PlatformTenantController` exposes tenant administration over REST under
+`/api/v1/platform/tenants` — see the
+[foundation API contract](../api/foundation-api.md) for the route table and permissions.
+It delegates to `OrganisationProvisioningService`, which exposes:
 
 - `getByCode(tenantCode)` for lookup by the stable external code;
 - `statusByCode(tenantCode)` for lifecycle status only;

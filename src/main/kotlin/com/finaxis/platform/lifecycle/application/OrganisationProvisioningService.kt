@@ -206,6 +206,25 @@ class OrganisationProvisioningService(
             }
         }
         bootstrapService.bootstrap(command.organisationId)
+        // Re-read after bootstrapping: `record` was loaded before the retry and the precondition
+        // above guarantees it was FAILED, so reporting it here would describe the retry's input
+        // rather than its outcome.
+        val resultingStatus =
+            adminBootstrapStore
+                .find(command.organisationId)
+                ?.status
+                ?.name
+                ?: "UNKNOWN"
+        audit(
+            organisationId = command.organisationId,
+            action = "tenant.bootstrap_retry",
+            actorId = command.caller.actorId,
+            metadata =
+                mapOf(
+                    "previousBootstrapStatus" to record.status.name,
+                    "bootstrapStatus" to resultingStatus,
+                ),
+        )
     }
 
     /** Suspends an active organisation without deleting data. */

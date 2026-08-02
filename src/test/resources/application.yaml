@@ -16,3 +16,15 @@ jobrunr:
     enabled: false
   background-job-server:
     enabled: false
+
+namastack:
+  outbox:
+    polling:
+      fixed:
+        # Production polls every 2s, which is the right cadence for a running service but a poor
+        # one for tests: a dozen integration classes share a single cached Spring context and one
+        # database, so their outbox records queue up behind each other and every `await` has to
+        # absorb the backlog at production pace. Polling faster here drains that queue promptly and
+        # removes the timing cliff without weakening a single assertion — the tests still require a
+        # real publish to RabbitMQ and a COMPLETED record.
+        interval: 200ms

@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
@@ -145,7 +146,7 @@ class TenantUserController(
                     invitedBy = caller.actorId,
                     sendKeycloakInvite = request.sendKeycloakInvite,
                     sendApplicationInvite = request.sendApplicationInvite,
-                    requestId = UUID.randomUUID().toString(),
+                    requestId = uuidV7().toString(),
                 ),
             )
         val response =

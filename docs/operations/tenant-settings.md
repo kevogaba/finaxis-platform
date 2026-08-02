@@ -4,8 +4,12 @@ Tenant settings are setup-level organisation configuration. `Organisation` remai
 boundary; this feature adds a catalog-backed command/query layer over the existing
 effective-dated `organisation_setting` table.
 
-This is a foundation only. There is no public REST controller in `lifecycle` yet, and this
-document describes the application service surface implemented by `TenantSettingsService`.
+This document describes the application service surface implemented by `TenantSettingsService`.
+`TenantSettingsController` exposes it over REST at `/api/v1/tenant/settings` — see the
+[foundation API contract](../api/foundation-api.md#tenant-settings). Authorization is enforced
+per setting key inside `TenantSettingsService.authorize()` rather than by a controller-level
+permission gate, which is one of the two documented exceptions to the blanket endpoint-permission
+rule.
 
 Read this with [organisation provisioning](tenant-provisioning.md),
 [audit logging](../architecture/audit-logging.md), and
@@ -91,8 +95,18 @@ That fallback keeps historical rows readable after a catalog change.
 - `GetTenantSetting`: return one current setting view, masking sensitive values.
 - `ListTenantSettings`: return all catalog settings plus stored-only current settings.
 
-There is no REST endpoint yet. Any future inbound adapter must follow the API governance rules,
-add bounded reads where needed, and preserve service-level authorization.
+These are exposed by `TenantSettingsController` under `/api/v1/tenant/settings`:
+
+| Method | Path | Authorization |
+| --- | --- | --- |
+| GET | `/` | per-key, inside the service |
+| GET | `/{key}` | per-key, inside the service |
+| PUT | `/{key}` | per-key, inside the service |
+| DELETE | `/{key}` | per-key, inside the service |
+
+Listing is paginated and tenant-filtered. The controller performs no authorization of its own —
+`TenantSettingsService.authorize()` resolves the required permission from the setting key, so a
+platform-only key is refused to a tenant administrator.
 
 ## Audit and outbox
 

@@ -5,7 +5,9 @@ close-of-business (COB) status foundation. It is deliberately status-only: it do
 financial end-of-day processing, day-close posting, accounting, interest accrual, or settlement.
 
 This document describes the application service surface implemented by `BusinessDateService`.
-There is no public REST controller in `lifecycle` yet.
+`BusinessDateController` exposes it over REST at `/api/v1/tenant/business-date` — see the
+[foundation API contract](../api/foundation-api.md#business-date) for the route table, request
+shapes, and per-route permissions.
 
 Read this with [organisation provisioning](tenant-provisioning.md),
 [branch provisioning](branch-provisioning.md), and
@@ -115,15 +117,25 @@ status-oriented event state.
 - `GetBusinessDate`
 - `ListBusinessDateHistory`
 
-There is no REST endpoint yet. Any future inbound adapter must preserve the service-level
-permission checks and keep history listing bounded.
+These are exposed by `BusinessDateController` under `/api/v1/tenant/business-date`:
+
+| Method | Path | Permission |
+| --- | --- | --- |
+| GET | `/` | `business_date.view` |
+| GET | `/history` | `business_date.view` |
+| POST | `/advance` | `business_date.advance` |
+| POST | `/cob/start` | `cob.start` |
+| POST | `/cob/complete` | `cob.complete` |
+| POST | `/reopen` | `business_date.reopen` |
+
+The controller is a thin inbound adapter: it validates transport concerns and delegates to
+`BusinessDateService`, which performs the authorization. History listing stays paginated and
+tenant-filtered.
 
 ## Out of scope
 
 This feature does not implement financial EOD, day-close, accounting posting, or downstream
 ledger behavior.
-
-There is no REST controller yet.
 
 There is no RabbitMQ consumer for these events yet. Outbox emission is sufficient at this stage.
 

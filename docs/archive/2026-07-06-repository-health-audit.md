@@ -1,5 +1,9 @@
 # Repository Health Audit
 
+> **Archived point-in-time audit, 2026-07-06.** Several findings here have since been
+> resolved (for example F-009, durable audit persistence, which shipped afterwards).
+> Do not read this as current state.
+
 Date: 2026-07-06
 
 ## Scope

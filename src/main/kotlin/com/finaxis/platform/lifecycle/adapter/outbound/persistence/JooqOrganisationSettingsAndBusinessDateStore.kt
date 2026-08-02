@@ -1,7 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.boundedPageOffset
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE_HISTORY
@@ -111,7 +110,6 @@ class JooqOrganisationSettingsStore(
         closeCurrentSetting(organisationId, key, actorId, now)
         dsl
             .insertInto(ORGANISATION_SETTING)
-            .set(ORGANISATION_SETTING.ID, uuidV7())
             .set(ORGANISATION_SETTING.ORGANISATION_ID, organisationId)
             .set(ORGANISATION_SETTING.SETTING_KEY, key)
             .set(
@@ -197,7 +195,6 @@ class JooqOrganisationSettingsStore(
     ) {
         dsl
             .insertInto(ORGANISATION_SETTING)
-            .set(ORGANISATION_SETTING.ID, uuidV7())
             .set(ORGANISATION_SETTING.ORGANISATION_ID, organisationId)
             .set(ORGANISATION_SETTING.SETTING_KEY, key)
             .set(
@@ -265,7 +262,6 @@ class JooqBusinessDateStore(
         if (exists) return false
         dsl
             .insertInto(BUSINESS_DATE)
-            .set(BUSINESS_DATE.ID, uuidV7())
             .set(BUSINESS_DATE.ORGANISATION_ID, organisationId)
             .set(BUSINESS_DATE.CURRENT_BUSINESS_DATE, initialDate)
             .set(BUSINESS_DATE.STATUS, "OPEN")
@@ -325,7 +321,6 @@ class JooqBusinessDateHistoryStore(
         val now = clock.instant().atOffset(ZoneOffset.UTC)
         dsl
             .insertInto(BUSINESS_DATE_HISTORY)
-            .set(BUSINESS_DATE_HISTORY.ID, uuidV7())
             .set(BUSINESS_DATE_HISTORY.ORGANISATION_ID, entry.organisationId)
             .set(BUSINESS_DATE_HISTORY.EVENT_TYPE, entry.eventType)
             .set(BUSINESS_DATE_HISTORY.FROM_STATUS, entry.fromStatus)

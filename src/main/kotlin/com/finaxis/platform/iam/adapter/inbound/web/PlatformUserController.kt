@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
@@ -197,7 +198,7 @@ class PlatformUserLifecycleController(
                 userId = userId,
                 actorId = caller.actorId,
                 reason = request.reason,
-                requestId = UUID.randomUUID().toString(),
+                requestId = uuidV7().toString(),
             ),
         )
         return ResponseEntity.ok(UserLifecycleResultResponse(userId, "SUSPENDED"))
@@ -243,7 +244,7 @@ class PlatformUserLifecycleController(
                 userId = userId,
                 actorId = caller.actorId,
                 reason = request.reason,
-                requestId = UUID.randomUUID().toString(),
+                requestId = uuidV7().toString(),
             ),
         )
         return ResponseEntity.ok(UserLifecycleResultResponse(userId, "ACTIVE"))
@@ -288,7 +289,7 @@ class PlatformUserLifecycleController(
                 userId = userId,
                 actorId = caller.actorId,
                 reason = request.reason,
-                requestId = UUID.randomUUID().toString(),
+                requestId = uuidV7().toString(),
             ),
         )
         return ResponseEntity.ok(UserLifecycleResultResponse(userId, "DEACTIVATED"))

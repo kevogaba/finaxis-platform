@@ -101,6 +101,17 @@ class AuditQueryServiceTests {
     }
 
     @Test
+    fun `listByTenant rejects an over max page size`() {
+        assertFailsWith<InvalidPageRequestException> {
+            service.listByTenant(
+                organisationId = UUID.randomUUID(),
+                actorId = UUID.randomUUID(),
+                size = 101,
+            )
+        }
+    }
+
+    @Test
     fun `get throws ForbiddenOperationException when permission is denied`() {
         val organisationId = UUID.randomUUID()
         val actorId = UUID.randomUUID()

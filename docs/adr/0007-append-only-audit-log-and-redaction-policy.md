@@ -8,7 +8,9 @@ Date: 2026-07-15
 
 ## Context
 
-`audit_event` already existed (Flyway `V1`, extended by `V4`) with a durable `AuditService` /
+`audit_event` already existed (then Flyway `V1`, extended by `V4`; now consolidated into
+`V1__foundation_schema.sql` by [ADR 0010](0010-greenfield-migration-reset-and-schema-rewrite.md))
+with a durable `AuditService` /
 `JooqAuditEventRepository` adapter, but three things were missing before it could be called
 production-grade: a consistent way for callers to record specific kinds of events without
 duplicating `AuditCommand` boilerplate, a structural guarantee that sensitive values never reach
@@ -36,6 +38,13 @@ funnels through. `SensitiveDataRedactor` masks values by a normalized key-name h
 `taxid`, `bankaccount`, `phone`, `email`) and by an explicit `Redacted(value)` wrapper for
 anything the heuristic can't predict. Masking replaces the value rather than dropping the key, so
 the audit trail still shows that a sensitive field changed.
+
+> **Amended 2026-08-02.** `@AuditedAction`, `AuditedActionAspect`, and their tests have been
+> **removed**. Both original call sites were later refactored to explicit `auditService` calls,
+> leaving the annotation with zero production usage — dead code that still read like a live
+> mechanism. Explicit service-level auditing is now the single mechanism, and
+> `HighRiskOperationAuditCoverageTests` enforces that every `HIGH`/`CRITICAL` permission maps to an
+> audited action. The paragraph below records the original decision.
 
 `@AuditedAction` + `AuditedActionAspect` exist, but are used in exactly two places:
 `OrganisationSettingsService.updateSettings` and `BusinessDateService.advance`. Both are simple,
@@ -97,8 +106,9 @@ Use Spring's `Pageable`/`Page<T>` for the query service:
 - `JooqAuditEventRepositoryTests`
 - `JooqAuditEventQueriesTests`
 - `AuditQueryServiceTests`
-- `AuditedActionAspectTests`
+- `HighRiskOperationAuditCoverageTests` (added 2026-08-02)
 - `FoundationLifecycleServiceTests`
 - `KeycloakUserProvisioningHandlerTests`
 - `ApplicationInviteHandlerTests`
-- Flyway migration `V1`, `V4`
+- Flyway migration `V1__foundation_schema.sql` (the `audit_event` table and its `reason`
+  column, originally split across `V1` and `V4`)

@@ -3,9 +3,11 @@ You are working on our Greenfield Spring Boot modular monolith SACCO/core bankin
 Important architectural constraints:
 - The application uses Spring Boot and Spring Modulith.
 - Persistence is JDBC-first, using Spring Data JDBC where appropriate.
-- Database migrations currently exist as Flyway migration 1 and 2, but this is still Greenfield.
-  You may discard/rewrite them if that produces a cleaner long-term schema. If you do, document
-  clearly why this is safe and what migration reset is required.
+- Database migrations are exactly three Flyway files after the greenfield reset:
+  `V1__foundation_schema.sql`, `V2__platform_reference_data.sql`, and
+  `V3__bootstrap_tenant_and_administrator.sql`. The greenfield window is now **closed** — every
+  further schema change is a forward-only `V4+` migration. See
+  [ADR 0010](../adr/0010-greenfield-migration-reset-and-schema-rewrite.md).
 - We are implementing only foundational platform concerns in this sequence:
   - identity
   - multi-tenancy

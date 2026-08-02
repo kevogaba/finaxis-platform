@@ -85,5 +85,7 @@ Implement Keycloak calls directly with Spring `RestClient` now:
 - `KeycloakUserProvisioningJobRequestHandler`
 - `KeycloakAdminGateway`
 - `KeycloakAdminProperties`
-- Flyway migrations `V5` and `V6`
+- Flyway migration `V1__foundation_schema.sql` (`identity_dispatch_log`, membership invite
+  columns). These were originally `V5` and `V6`; see
+  [ADR 0010](0010-greenfield-migration-reset-and-schema-rewrite.md).
 - [ADR 0004](0004-membership-activation-notification-pipeline.md)

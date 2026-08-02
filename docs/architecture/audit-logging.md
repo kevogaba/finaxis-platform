@@ -1,5 +1,9 @@
 # Audit Logging
 
+> **Architecture overview.** This document covers *what* to audit and how the pieces fit together.
+> For the implementation reference — redaction mechanics, the `AuditService` API, and the query
+> service — see [audit logging](../security/audit-logging.md).
+
 Audit trails are for security-sensitive and business-critical actions. They are not a replacement
 for access logs, metrics, traces, or event logs.
 
@@ -37,16 +41,15 @@ Redaction is enforced structurally, not by convention: `AuditService.record(...)
 metadata, before, and after before an event reaches its repository. Do not store passwords,
 bearer tokens, session cookies, API keys, raw authorization headers, or sensitive PII in audit
 metadata regardless — see [audit logging](../security/audit-logging.md) for the full redaction
-policy, the seven `AuditService` methods, the query service, and the narrowly-scoped
-`@AuditedAction` annotation.
+policy, the seven `AuditService` methods, and the query service.
 
 ## Current Adapter
 
 `AuditService` writes to an `AuditEventRepository` port. `JooqAuditEventRepository` is the durable
 adapter, backed by the append-only `audit_event` table; the logging-only repository in
 `AuditConfiguration` is a `@ConditionalOnMissingBean` fallback used only if no durable adapter is
-registered. Domain modules call the application-level audit service directly, or (for the two
-simple non-FSM mutations that use it) rely on `@AuditedAction`.
+registered. Domain modules call the application-level audit service directly — that is the only
+mechanism; there is no annotation-driven alternative.
 
 ## Request Correlation
 

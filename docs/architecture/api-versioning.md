@@ -10,13 +10,11 @@ The first public API namespace is:
 /api/v1
 ```
 
-Current auth context endpoints are:
-
-```text
-POST /api/v1/auth/select-organisation
-POST /api/v1/auth/select-branch
-GET  /api/v1/auth/me
-```
+The implemented route surface spans auth/profile selection, platform tenant administration,
+branches, users, memberships, branch assignments, roles, role assignments, permissions, audit
+events, business date, and tenant settings. This document does not duplicate that inventory —
+[Foundation REST API](../api/foundation-api.md) is the canonical route reference, and keeping a
+second list here would only let the two drift apart.
 
 Do not add public endpoints outside `/api/v1`, `/api/v2`, and future explicit versions. Actuator,
 OpenAPI docs, Scalar docs, and static docs are operational/documentation endpoints, not public

@@ -1,5 +1,10 @@
 # Tenant Settings & Business Date / COB Foundation Implementation Plan
 
+> **Archived historical artifact.** This records work that has since shipped. It is kept for
+> the design rationale it contains, not as a description of current behaviour. For current
+> state see the ADRs in `docs/adr/` and the reference docs under `docs/architecture/`,
+> `docs/security/`, `docs/operations/`, and `docs/database/`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add setup-level tenant settings (catalog-validated, effective-dated, permission-gated, redaction-aware) and a business-date / COB status foundation (initialize, advance, start/complete COB, reopen) with audit + outbox integration, all inside the existing `lifecycle` module — no accounting/day-close.

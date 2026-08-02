@@ -11,6 +11,35 @@ import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
 
+/*
+ * Typed Kotlin row models for the foundation schema.
+ *
+ * These serve two purposes, and it is worth being explicit about which is which.
+ *
+ * 1. READABLE SCHEMA REFERENCE. Every mutable table in `V1__foundation_schema.sql` appears here as
+ *    a Kotlin data class with typed, nullable-accurate columns. That is far easier to read than
+ *    700 lines of DDL when you need to know what a table holds, and it is checked by the compiler.
+ *
+ * 2. SPRING DATA JDBC MAPPING. `@EnableJdbcAuditing` (see `JdbcAuditingConfiguration`) populates
+ *    the audit columns declaratively for anything persisted through these entities.
+ *
+ * WHAT THEY ARE NOT: the production write path. Every production write today goes through a jOOQ
+ * adapter, which sets the same audit columns explicitly from the same request actor. Only
+ * `OrganisationJdbcEntity` is currently persisted through — by `JdbcAuditingIntegrationTests`,
+ * which proves the auditing wiring actually fires. Do not assume a repository exists for these;
+ * none does.
+ *
+ * `id` and `guid` are deliberately absent or unmapped as appropriate. Both are database-generated
+ * (`DEFAULT uuidv7()`); Spring Data JDBC omits unmapped columns from its generated `INSERT`, so the
+ * defaults apply. Mapping `guid` would force a `null` into a `NOT NULL` column. See
+ * `docs/adr/0015-client-suppliable-guid-alternate-key.md`.
+ *
+ * KEEPING THEM HONEST: `FoundationJdbcEntitySchemaTests` reflects over every `@Table` class here
+ * and asserts the table exists and every mapped property resolves to a real column, so these
+ * cannot silently drift from the migrations. If you add a column to `V1`, add it here too.
+ * See `docs/adr/0014-spring-data-jdbc-auditing.md`.
+ */
+
 /** Explicit audit-field convention for mutable Spring Data JDBC aggregates. */
 interface AuditedJdbcAggregate {
     val createdAt: Instant?

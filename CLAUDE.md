@@ -29,7 +29,39 @@ domain events rather than inventing another mechanism: transition `eventFactory`
 
 Known follow-ups (do not treat as bugs): `notifications` email delivery is stubbed (logs only);
 `config` intentionally does not declare an `@ApplicationModule` because it is infrastructure
-wiring rather than a domain module; JaCoCo coverage verification is scoped to `iam` only.
+wiring rather than a domain module; JaCoCo coverage verification is scoped to `iam` only; the 18
+Spring Data JDBC entities in `FoundationJdbcEntities.kt` are convention scaffolding, not live
+write paths (all production writes use jOOQ) — see `docs/adr/0014-spring-data-jdbc-auditing.md`.
+
+## Database and identifiers
+
+The schema is exactly three Flyway migrations and the greenfield window is **closed** — every
+further change is a forward-only `V4+` migration. Never edit `V1`–`V3`.
+
+- `V1__foundation_schema.sql` — all 23 application tables, constraints, indexes, comments
+- `V2__platform_reference_data.sql` — 54-code permission catalogue, `PLATFORM` organisation, the
+  two platform roles and their grants
+- `V3__bootstrap_tenant_and_administrator.sql` — bootstrap tenant and first administrator
+
+Identifier rules, enforced by `IdentifierGenerationRuleTests`:
+
+- `id` is the primary key, `UUID PRIMARY KEY DEFAULT uuidv7()`. **The application owns generation;
+  clients never supply it.** Prefer the database default and read it back with
+  `.returning(TABLE.ID).fetchOne()?.id`. Where an id is genuinely needed before the insert, use
+  `uuidV7()` from `common.id` and say why in a comment.
+- **Not every table has an `id`.** `api_idempotency_record` keys on
+  `(scope_organisation_id, idempotency_key)` and `organisation_initial_administrator_bootstrap`
+  keys on `organisation_id`. Neither has a `TABLE.ID` field to return; both still carry `guid`.
+- `guid` is a unique alternate key, `UUID NOT NULL DEFAULT uuidv7()`, present on every application
+  table. Clients **may** supply it; the default fills it when omitted. No API accepts one yet.
+- **`UUID.randomUUID()` is banned in production code** — it is v4 and scatters index writes. Use
+  `uuidV7()`.
+- Never add an `id` field to a `*Request` DTO.
+- jOOQ sources are generated from the migrations at build time; never hand-edit generated code.
+- `outbox_record`, `event_publication`, and JobRunr tables are starter-managed, outside Flyway,
+  and get no `guid`.
+
+See `docs/database/foundation-schema.md`, `docs/adr/0010-...`, and `docs/adr/0015-...`.
 
 ## Authorization
 

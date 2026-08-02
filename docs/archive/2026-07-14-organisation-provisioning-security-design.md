@@ -1,5 +1,10 @@
 # Organisation Provisioning, IAM, and Runtime Access Design
 
+> **Archived historical artifact.** This records work that has since shipped. It is kept for
+> the design rationale it contains, not as a description of current behaviour. For current
+> state see the ADRs in `docs/adr/` and the reference docs under `docs/architecture/`,
+> `docs/security/`, `docs/operations/`, and `docs/database/`.
+
 ## Decision
 
 Finaxis uses **organisation** as the primary domain term and database boundary. `tenant_code`
