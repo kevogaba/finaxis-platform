@@ -98,16 +98,41 @@ echo
 
 echo "== Selecting platform organisation context for tenant onboarding =="
 
-SELECT_PLATFORM_RESPONSE="$(
-  curl -fsS \
+PLATFORM_SELECTION_RESPONSE_FILE="$(mktemp)"
+PLATFORM_SELECTION_STATUS="$(
+  curl -sS \
+    -o "$PLATFORM_SELECTION_RESPONSE_FILE" \
+    -w '%{http_code}' \
     -X POST "$APP_URL/api/v1/auth/select-organisation" \
     -H "Authorization: Bearer $ACCESS_TOKEN" \
     -H "Idempotency-Key: $(new_uuid)" \
     -H 'Content-Type: application/json' \
     -d "{\"organisation_id\":\"$PLATFORM_ORGANISATION_ID\"}"
 )"
+SELECT_PLATFORM_RESPONSE="$(<"$PLATFORM_SELECTION_RESPONSE_FILE")"
+rm -f "$PLATFORM_SELECTION_RESPONSE_FILE"
+
+if [[ "$PLATFORM_SELECTION_STATUS" != 2* ]]; then
+  echo "Platform organisation selection failed with HTTP $PLATFORM_SELECTION_STATUS." >&2
+  echo "$SELECT_PLATFORM_RESPONSE" >&2
+  if [[ "$PLATFORM_SELECTION_STATUS" == "403" ]]; then
+    cat >&2 <<'EOF'
+
+The platform smoke identity is seeded only when the application runs with the local
+profile. Restart the application with:
+
+  SPRING_PROFILES_ACTIVE=local ./gradlew bootRun
+
+Then rerun this script. Do not add the platform membership manually or enable this
+local seeder in production.
+EOF
+  fi
+  exit 1
+fi
 
 PLATFORM_CONTEXT_TOKEN="$(json_field context_token <<<"$SELECT_PLATFORM_RESPONSE")"
+
+echo "== Platform organisation context selected, token: $PLATFORM_CONTEXT_TOKEN =="
 
 echo "== Creating a tenant draft with a mandatory initial administrator =="
 

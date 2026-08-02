@@ -7,6 +7,7 @@ import com.finaxis.platform.iam.application.authorization.EffectivePermissionRes
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
+import com.finaxis.platform.iam.application.port.outbound.OrganisationSelection
 import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
 import com.finaxis.platform.iam.application.security.RequestPermissionCache
@@ -21,6 +22,33 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class AuthSelectionServiceTests {
+    @Test
+    fun `available organisations returns only selectable active memberships`() {
+        val userId = uuidV7()
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val lookup =
+            FakeMembershipLookup(
+                userId = userId,
+                organisationSelections =
+                    listOf(
+                        OrganisationSelection(
+                            membershipId = membershipId,
+                            organisationId = organisationId,
+                            tenantCode = "acme-corp",
+                            displayName = "Acme Financial Services",
+                            organisationStatus = OrganisationStatus.ACTIVE,
+                            membershipStatus = MembershipStatus.ACTIVE,
+                        ),
+                    ),
+            )
+
+        val response = serviceWith(lookup).availableOrganisations("keycloak-subject", 0, 25)
+
+        assertEquals(listOf(organisationId), response.items.map { it.organisationId })
+        assertEquals(1, response.totalItems)
+    }
+
     @Test
     fun `select organisation returns active context for active membership`() {
         val userId = uuidV7()
@@ -744,7 +772,17 @@ private class FakeMembershipLookup(
     private val membership: MembershipSelection? = null,
     private val branchIds: List<UUID> = emptyList(),
     private val organisationStatus: OrganisationStatus? = OrganisationStatus.ACTIVE,
+    private val organisationSelections: List<OrganisationSelection> = emptyList(),
 ) : MembershipSelectionLookup {
+    override fun findOrganisationSelections(
+        userId: UUID,
+        page: Int,
+        size: Int,
+    ) = com.finaxis.platform.iam.application.port.outbound.OrganisationSelectionPage(
+        organisationSelections,
+        organisationSelections.size.toLong(),
+    )
+
     override fun findUserIdByKeycloakSubject(keycloakSubject: String): UUID? = userId
 
     override fun userStatus(userId: UUID): UserStatus? = userStatus
@@ -752,7 +790,18 @@ private class FakeMembershipLookup(
     override fun findMembership(
         userId: UUID,
         organisationId: UUID,
-    ): MembershipSelection? = membership
+    ): MembershipSelection? =
+        membership
+            ?: organisationSelections
+                .firstOrNull { it.organisationId == organisationId }
+                ?.let {
+                    MembershipSelection(
+                        membershipId = it.membershipId,
+                        userId = userId,
+                        organisationId = it.organisationId,
+                        status = it.membershipStatus,
+                    )
+                }
 
     override fun organisationStatus(organisationId: UUID): OrganisationStatus? = organisationStatus
 

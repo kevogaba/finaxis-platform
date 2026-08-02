@@ -15,10 +15,54 @@ data class MembershipSelection(
     val status: MembershipStatus,
 )
 
+/** Organisation membership summary available during pre-context organisation discovery. */
+data class OrganisationSelection(
+    val membershipId: UUID,
+    val organisationId: UUID,
+    val tenantCode: String,
+    val displayName: String,
+    val organisationStatus: OrganisationStatus,
+    val membershipStatus: MembershipStatus,
+)
+
+/** A bounded page of organisation memberships for an authenticated user. */
+data class OrganisationSelectionPage(
+    val items: List<OrganisationSelection>,
+    val totalItems: Long,
+)
+
+/** Branch assignment summary available after selecting an organisation. */
+data class BranchSelection(
+    val branchId: UUID,
+    val branchCode: String,
+    val branchName: String,
+    val branchStatus: String,
+)
+
+/** A bounded page of active branch assignments for a selected membership. */
+data class BranchSelectionPage(
+    val items: List<BranchSelection>,
+    val totalItems: Long,
+)
+
 /**
  * Outbound application port for membership and branch assignment lookups.
  */
 interface MembershipSelectionLookup {
+    /** Lists active organisation memberships for an authenticated user in tenant-code order. */
+    fun findOrganisationSelections(
+        userId: UUID,
+        page: Int,
+        size: Int,
+    ): OrganisationSelectionPage = OrganisationSelectionPage(emptyList(), 0)
+
+    /** Lists active branch assignments for a selected membership in branch-code order. */
+    fun findBranchSelections(
+        membershipId: UUID,
+        page: Int,
+        size: Int,
+    ): BranchSelectionPage = BranchSelectionPage(emptyList(), 0)
+
     /**
      * Finds the application user id for a Keycloak subject.
      */

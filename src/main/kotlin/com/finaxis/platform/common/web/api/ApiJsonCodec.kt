@@ -20,7 +20,7 @@ import java.time.format.DateTimeParseException
 @Component
 class ApiJsonCodec {
     /** Mapper used by the MVC converter and servlet-filter API problem writer. */
-    val mapper =
+    val mapper: JsonMapper =
         JsonMapper
             .builder()
             .findAndAddModules()

@@ -42,3 +42,6 @@ out/
 ### Superpowers ###
 .superpowers
 .worktrees
+
+### Codex ###
+.codex
