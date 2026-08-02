@@ -1,5 +1,10 @@
 # Multi-Tenant Identity And Authorization Design
 
+> **Archived historical artifact.** This records work that has since shipped. It is kept for
+> the design rationale it contains, not as a description of current behaviour. For current
+> state see the ADRs in `docs/adr/` and the reference docs under `docs/architecture/`,
+> `docs/security/`, `docs/operations/`, and `docs/database/`.
+
 ## Context
 
 Finaxis Platform is a Kotlin Spring Boot 4.1 Web MVC application on Java 25. The project already includes OAuth2 Resource Server, Spring Security, Spring Data JDBC, Flyway, Redis, jOOQ, and Spring Boot AOT dependencies, but has no existing domain model or security configuration.

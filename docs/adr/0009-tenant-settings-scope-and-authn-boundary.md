@@ -58,8 +58,11 @@ The application will not grow tenant settings such as `keycloak_invite_enabled`,
 The settings catalog is intentionally small and explicit. Adding a new key requires code review,
 validation rules, permission scope, redaction classification, and operational documentation.
 
-There is no REST controller yet for tenant settings or business date. Current integration tests
-call these permission-gated services directly.
+**Amended 2026-08-02:** when this ADR was written there was no REST controller for tenant
+settings or business date, and integration tests called the permission-gated services
+directly. `TenantSettingsController` and `BusinessDateController` now exist and are documented
+in [foundation-api.md](../api/foundation-api.md). The permission model below is unchanged; the
+controllers delegate to the same services.
 
 Those direct service tests must bind a mock Spring request context when they use the real
 permission-check chain, because `AuthorizationService` reaches a `@RequestScope` bean while

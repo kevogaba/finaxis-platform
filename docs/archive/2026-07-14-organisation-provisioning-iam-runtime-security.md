@@ -1,5 +1,10 @@
 # Organisation Provisioning, IAM, and Runtime Security Implementation Plan
 
+> **Archived historical artifact.** This records work that has since shipped. It is kept for
+> the design rationale it contains, not as a description of current behaviour. For current
+> state see the ADRs in `docs/adr/` and the reference docs under `docs/architecture/`,
+> `docs/security/`, `docs/operations/`, and `docs/database/`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development.
 > Steps use checkbox (`- [ ]`) syntax for tracking.
 

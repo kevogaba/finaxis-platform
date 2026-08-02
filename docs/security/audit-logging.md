@@ -1,8 +1,11 @@
 # Audit Logging
 
+> **Implementation reference.** This document covers *how* auditing works. For the "what to audit"
+> list and how the pieces fit together, see
+> [audit architecture](../architecture/audit-logging.md).
+
 This is the production-grade audit-logging reference: the event shape, redaction policy,
-append-only guarantee, `AuditService` API, the query service, and the narrow `@AuditedAction`
-annotation. Read it with [audit architecture](../architecture/audit-logging.md),
+append-only guarantee, the `AuditService` API, and the query service. Read it with [audit architecture](../architecture/audit-logging.md),
 [ADR 0007](../adr/0007-append-only-audit-log-and-redaction-policy.md), and
 [JDBC auditing and context](../architecture/jdbc-auditing-and-context.md).
 
@@ -80,24 +83,26 @@ Every method accepts `actorId: UUID?` and derives `actorType` (`"USER"` vs `"SYS
 `SystemActor.isSystemActor(actorId)` unless the caller overrides it explicitly — services no
 longer need to duplicate that check at every call site.
 
-## `@AuditedAction` (narrow scope, by design)
+## Auditing is explicit, by design
 
-`@AuditedAction` + `AuditedActionAspect` wrap a method call with SpEL-evaluated `tenantId`,
-`resourceId`, `actorId`, `before` (evaluated before the call), `after` (evaluated after, with
-`#result` bound), and `reason`. It records one `recordSuccess`/`recordFailure` call per
-invocation.
+There is exactly **one** mechanism: application services call `AuditService` directly at the point
+of the decision.
 
-It is used in exactly two places today: `OrganisationSettingsService.updateSettings` and
-`BusinessDateService.advance` — both simple, non-FSM mutations with a clean before/after
-snapshot and no meaningful "reason for rejection" concept beyond a thrown exception.
+A `@AuditedAction` AOP annotation existed until 2026-08-02, wrapping a method with SpEL-evaluated
+`tenantId`, `resourceId`, `before`, and `after`. It was applied to two non-FSM mutations; both were
+subsequently refactored to explicit `auditService` calls, leaving the annotation, its aspect, and
+its tests as dead code that a reader could easily mistake for a live mechanism. It has been
+removed.
 
-It is **not** used anywhere near `common.transitions` or the lifecycle FSM services. Lifecycle
-transitions keep recording audit events explicitly through `recordLifecycleTransition`, because a
-transition needs an explicit reason and from/to state a generic method wrapper cannot infer, and
-because wrapping the FSM's generic types in a second AOP proxy risks resurrecting the Spring
-Modulith 2.1.0 observability-proxy recursion already documented in `TransitionModuleConfiguration`.
-Existing manual audit call sites (`RoleManagementService`, the lifecycle services) are left
-alone — they already work and are already tested; converting them would be unrelated churn.
+Explicit calls are the standard because an audit record's `action`, `reason`, and before/after
+state are decisions the service is making, not metadata a generic wrapper can infer. That is
+especially true of lifecycle transitions, which need an explicit reason and from/to state and use
+`recordLifecycleTransition`. Wrapping the FSM's generic types in a second AOP proxy also risked the
+Spring Modulith observability-proxy recursion documented in `TransitionModuleConfiguration`.
+
+`HighRiskOperationAuditCoverageTests` enforces the resulting contract: every permission with
+`risk_level` `HIGH` or `CRITICAL` must map to an audited application action, so a new high-risk
+operation that forgets to audit fails the build.
 
 ## Query service
 

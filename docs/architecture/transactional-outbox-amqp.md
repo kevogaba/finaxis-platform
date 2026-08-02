@@ -11,7 +11,7 @@ RabbitMQ -> thin listener` pipeline this document assumes.
 
 ## Transactional guarantee
 
-A lifecycle service (or, for the two non-FSM mutations below, `@AuditedAction`-audited service)
+A lifecycle service (or, for the two non-FSM mutations below, an ordinary audited service)
 persists its aggregate and publishes a Spring application event inside the same `@Transactional`
 boundary. Spring Modulith's `EventExternalizationConfiguration` (`TransitionModuleConfiguration`)
 selects `ExternalizedTransitionEvent` instances for externalization; Namastack's outbox
@@ -69,6 +69,20 @@ this key, since that would mean editing already-stable, already-tested FSM defin
 purely cosmetic addition — this table is the source of truth for the existing mapping instead.
 
 ## Outbox mechanics (verified against the actual Namastack 1.7.1 jars)
+
+### Schema ownership: deliberately outside Flyway
+
+`outbox_record`, its companion `outbox_partition` / `outbox_instance` tables, Spring Modulith's
+`event_publication`, and the JobRunr tables are **created by their own starters at runtime**. They
+are not in the three Flyway migrations, they do not carry the `guid` alternate key that every
+application table has (see
+[ADR 0015](../adr/0015-client-suppliable-guid-alternate-key.md)), and their schema is owned by the
+library version, not by this repository.
+
+That is a deliberate choice: hand-maintaining a copy of a starter's DDL means it silently diverges
+on the next dependency bump. The trade-off is that the application does not control those indexes.
+`OutboxSchemaAndRetryIntegrationTests` asserts the columns and indexes the application actually
+depends on, so a starter upgrade that changes the contract fails a test rather than production.
 
 Namastack's `outbox_record` status model has exactly three values: `NEW`, `COMPLETED`, `FAILED`.
 There is no separate `PUBLISHING`/`DEAD_LETTERED` state — `FAILED` is reached once

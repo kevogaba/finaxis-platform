@@ -1,5 +1,10 @@
 # Finaxis Platform — event pipeline, production security profile, docs refresh
 
+> **Archived historical artifact.** This records work that has since shipped. It is kept for
+> the design rationale it contains, not as a description of current behaviour. For current
+> state see the ADRs in `docs/adr/` and the reference docs under `docs/architecture/`,
+> `docs/security/`, `docs/operations/`, and `docs/database/`.
+
 Validated 2026-07-13 against the codebase by three independent exploration passes.
 
 ## Global Constraints

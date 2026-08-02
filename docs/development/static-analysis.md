@@ -7,7 +7,7 @@ The build is Kotlin-first, but the toolchain is ready for future Java source.
 
 - Gradle is a single-project Kotlin DSL build.
 - Java toolchain is Java 25.
-- Kotlin is 2.4.0.
+- Kotlin is 2.4.10.
 - Spring Boot is 4.1.0.
 - Spring Modulith is managed by the existing Spring Modulith BOM.
 
@@ -126,7 +126,7 @@ module boundary before depending on internals from another module.
 
 ## Compatibility Notes
 
-Detekt uses the `dev.detekt` 2.x alpha line because Kotlin 2.4.0 is newer than
+Detekt uses the `dev.detekt` 2.x alpha line because Kotlin 2.4.10 is newer than
 Detekt 1.23.x support.
 
 Error Prone is configured only for `JavaCompile` tasks. Current Error Prone versions
