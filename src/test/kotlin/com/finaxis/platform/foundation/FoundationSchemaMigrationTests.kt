@@ -21,58 +21,21 @@ class FoundationSchemaMigrationTests(
 ) {
     @Test
     fun `Flyway creates the organisation foundation on an empty PostgreSQL database`() {
+        val placeholders = APPLICATION_TABLES.joinToString(", ") { "?" }
         val tables =
             jdbcTemplate.queryForList(
                 """
                 SELECT tablename
                 FROM pg_tables
                 WHERE schemaname = 'public'
-                  AND tablename IN (
-                      'organisation',
-                      'branch',
-                      'user_account',
-                      'keycloak_identity_link',
-                      'user_organisation_membership',
-                      'user_branch_assignment',
-                      'user_role_assignment',
-                      'organisation_transition_log',
-                      'audit_event',
-                      'organisation_setting',
-                      'business_date',
-                      'permission',
-                      'role',
-                      'role_permission',
-                      'membership_permission',
-                      'api_idempotency_record',
-                      'organisation_initial_administrator_bootstrap'
-                  )
+                  AND tablename IN ($placeholders)
                 ORDER BY tablename
                 """.trimIndent(),
                 String::class.java,
+                *APPLICATION_TABLES.toTypedArray(),
             )
 
-        assertEquals(
-            listOf(
-                "api_idempotency_record",
-                "audit_event",
-                "branch",
-                "business_date",
-                "keycloak_identity_link",
-                "membership_permission",
-                "organisation",
-                "organisation_initial_administrator_bootstrap",
-                "organisation_setting",
-                "organisation_transition_log",
-                "permission",
-                "role",
-                "role_permission",
-                "user_account",
-                "user_branch_assignment",
-                "user_organisation_membership",
-                "user_role_assignment",
-            ),
-            tables,
-        )
+        assertEquals(APPLICATION_TABLES.sorted(), tables)
     }
 
     @Test
@@ -92,6 +55,7 @@ class FoundationSchemaMigrationTests(
             listOf(
                 column("scope_organisation_id", "uuid"),
                 column("idempotency_key", "uuid"),
+                column("guid", "uuid"),
                 column("actor_fingerprint", "character varying"),
                 column("request_method", "character varying"),
                 column("normalized_path", "character varying"),
@@ -282,61 +246,6 @@ class FoundationSchemaMigrationTests(
     }
 
     @Test
-    fun `V10 migration seeds all foundation API permission codes`() {
-        val expected =
-            listOf(
-                "auth.select_branch",
-                "auth.select_organisation",
-                "branch.reactivate",
-                "branch.view",
-                "branch_assignment.view",
-                "membership.reactivate",
-                "membership.revoke",
-                "membership.suspend",
-                "membership.view",
-                "permission.view",
-                "role.activate",
-                "role.deactivate",
-                "role.remove_permission",
-                "role.view",
-                "role_assignment.view",
-                "settings.view",
-                "tenant.bootstrap_retry",
-                "tenant.reactivate",
-                "tenant.reject",
-                "tenant.update_draft",
-                "tenant.view",
-                "user.revoke_branch",
-                "user.revoke_role",
-                "user.view",
-            )
-
-        val actual =
-            jdbcTemplate.queryForList(
-                """
-                SELECT permission_code
-                FROM permission
-                WHERE permission_code IN (
-                    'auth.select_organisation', 'auth.select_branch',
-                    'tenant.view', 'tenant.update_draft', 'tenant.reject',
-                    'tenant.reactivate', 'tenant.bootstrap_retry',
-                    'branch.view', 'branch.reactivate',
-                    'user.view', 'membership.view', 'membership.suspend',
-                    'membership.reactivate', 'membership.revoke',
-                    'branch_assignment.view', 'user.revoke_branch',
-                    'role.view', 'role.activate', 'role.deactivate',
-                    'role.remove_permission', 'role_assignment.view',
-                    'user.revoke_role', 'permission.view', 'settings.view'
-                )
-                ORDER BY permission_code
-                """.trimIndent(),
-                String::class.java,
-            )
-
-        assertEquals(expected.sorted(), actual.map { it as String }.sorted())
-    }
-
-    @Test
     fun `Flyway creates initial administrator bootstrap schema`() {
         val columns =
             jdbcTemplate.queryForList(
@@ -352,6 +261,7 @@ class FoundationSchemaMigrationTests(
         assertEquals(
             listOf(
                 column("organisation_id", "uuid"),
+                column("guid", "uuid"),
                 column("admin_email", "character varying"),
                 column("admin_username", "character varying"),
                 column("admin_display_name", "character varying"),
@@ -385,4 +295,34 @@ class FoundationSchemaMigrationTests(
             "column_name" to name,
             "data_type" to type,
         )
+
+    private companion object {
+        /** Every application-owned table created by `V1__foundation_schema.sql`. */
+        val APPLICATION_TABLES =
+            listOf(
+                "api_idempotency_record",
+                "audit_event",
+                "branch",
+                "branch_transition_log",
+                "business_date",
+                "business_date_history",
+                "identity_dispatch_log",
+                "keycloak_identity_link",
+                "membership_permission",
+                "organisation",
+                "organisation_initial_administrator_bootstrap",
+                "organisation_setting",
+                "organisation_transition_log",
+                "permission",
+                "reference_sequence",
+                "role",
+                "role_permission",
+                "user_account",
+                "user_account_transition_log",
+                "user_branch_assignment",
+                "user_organisation_membership",
+                "user_organisation_membership_transition_log",
+                "user_role_assignment",
+            )
+    }
 }

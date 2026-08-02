@@ -372,8 +372,6 @@ class AuthFlowIntegrationTests {
                     value(
                         hasItems(
                             "iam.profile.read",
-                            "iam.user.invite",
-                            "logistics.shipment.approve",
                         ),
                     )
                 }

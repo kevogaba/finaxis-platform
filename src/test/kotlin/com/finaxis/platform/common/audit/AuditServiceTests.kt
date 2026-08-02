@@ -79,6 +79,26 @@ class AuditServiceTests {
     }
 
     @Test
+    fun `record masks bearer token metadata`() {
+        val service = service()
+
+        service.record(
+            AuditCommand(
+                actorType = "SYSTEM",
+                actorId = null,
+                tenantId = "tenant-1",
+                action = "auth.token_seen",
+                resourceType = "SESSION",
+                resourceId = "session-1",
+                outcome = AuditOutcome.SUCCESS,
+                metadata = mapOf("bearerToken" to "Bearer secret-token-value"),
+            ),
+        )
+
+        assertEquals("***REDACTED***", repository.events.single().metadata["bearerToken"])
+    }
+
+    @Test
     fun `record masks values explicitly wrapped in Redacted regardless of key name`() {
         val service = service()
 

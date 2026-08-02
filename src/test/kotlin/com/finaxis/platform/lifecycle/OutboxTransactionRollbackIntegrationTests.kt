@@ -5,6 +5,7 @@ import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.SpringTransitionEventPublisher
 import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
+import com.finaxis.platform.jooq.tables.references.ORGANISATION_SETTING
 import com.finaxis.platform.lifecycle.application.CreateOrUpdateTenantSettingCommand
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.application.TenantSettingsService
@@ -18,6 +19,7 @@ import org.springframework.context.annotation.Import
 import org.springframework.context.annotation.Primary
 import org.springframework.test.context.TestConstructor
 import java.util.UUID
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 
@@ -28,12 +30,8 @@ import kotlin.test.assertFalse
  * [TransitionEventPublisher] test double that throws only for this test's target so setup
  * (organisation creation, submission, approval) still publishes normally.
  *
- * This does not (yet) assert that the settings write itself rolled back: doing so surfaced that no
- * test in this codebase has ever verified real `@Transactional` rollback-on-exception against the
- * actual database, and three different mechanisms (a `@Transactional` harness, a programmatic
- * `TransactionTemplate`, and this real service) all showed the write surviving. That is a
- * pre-existing question about this project's transaction wiring, out of scope for this change -
- * see the tracking issue referenced in `docs/architecture/transactional-outbox-amqp.md`.
+ * Verifies both sides of the atomicity contract: the business setting write and the outbox event
+ * must roll back together when publication fails inside the transaction.
  */
 @Import(TestcontainersConfiguration::class, ThrowingSettingsEventPublisherConfiguration::class)
 @SpringBootTest
@@ -49,6 +47,7 @@ class OutboxTransactionRollbackIntegrationTests(
     @Test
     fun `a failed transaction does not persist its outbox event`() {
         val organisationId = fixture.createActiveOrganisation("rollback", LOCAL_USER_ID)
+        val settingsBefore = countSettings(organisationId)
 
         withRequestContext {
             assertFailsWith<IllegalStateException> {
@@ -74,7 +73,16 @@ class OutboxTransactionRollbackIntegrationTests(
                     it.target == ROLLBACK_TARGET && it.aggregateId == organisationId.toString()
                 },
         )
+        assertEquals(settingsBefore, countSettings(organisationId))
     }
+
+    private fun countSettings(organisationId: UUID): Int =
+        dsl
+            .selectCount()
+            .from(ORGANISATION_SETTING)
+            .where(ORGANISATION_SETTING.ORGANISATION_ID.eq(organisationId))
+            .and(ORGANISATION_SETTING.SETTING_KEY.eq("base_currency"))
+            .fetchOne(0, Int::class.java) ?: 0
 
     private companion object {
         val LOCAL_USER_ID: UUID = UUID.fromString("11111111-1111-1111-1111-111111111111")
