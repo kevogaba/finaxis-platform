@@ -7,6 +7,7 @@ import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.audit.toAuditFailureReason
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.TransitionCommand
 import com.finaxis.platform.common.web.api.InvalidPageRequestException
@@ -183,6 +184,7 @@ class OrganisationProvisioningService(
 
     /** Retries a failed initial administrator bootstrap process. */
     @Transactional
+    @Suppress("TooGenericExceptionCaught")
     fun retryBootstrap(command: RetryInitialAdministratorBootstrapCommand) {
         val record =
             adminBootstrapStore
@@ -205,7 +207,28 @@ class OrganisationProvisioningService(
                 )
             }
         }
-        bootstrapService.bootstrap(command.organisationId)
+        try {
+            bootstrapService.bootstrap(command.organisationId)
+        } catch (ex: Exception) {
+            // Recorded in a new transaction (recordIndependently) because this method's caller
+            // rethrows ex, which rolls back this @Transactional retryBootstrap call - without that
+            // isolation this HIGH-risk audit row would be rolled back along with it.
+            auditService.recordIndependently(
+                AuditCommand(
+                    actorType =
+                        if (SystemActor.isSystemActor(command.caller.actorId)) SYSTEM else USER,
+                    actorId = command.caller.actorId.toString(),
+                    tenantId = command.organisationId.toString(),
+                    action = "tenant.bootstrap_retry",
+                    resourceType = ORGANISATION,
+                    resourceId = command.organisationId.toString(),
+                    outcome = AuditOutcome.FAILURE,
+                    reason = ex.toAuditFailureReason(),
+                    metadata = mapOf("previousBootstrapStatus" to record.status.name),
+                ),
+            )
+            throw ex
+        }
         // Re-read after bootstrapping: `record` was loaded before the retry and the precondition
         // above guarantees it was FAILED, so reporting it here would describe the retry's input
         // rather than its outcome.

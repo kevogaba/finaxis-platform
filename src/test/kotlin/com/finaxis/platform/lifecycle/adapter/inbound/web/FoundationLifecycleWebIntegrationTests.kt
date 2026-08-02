@@ -1,6 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
-import com.finaxis.platform.TestcontainersConfiguration
+import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.persistence.SystemActor
@@ -34,7 +34,7 @@ import org.springframework.test.web.servlet.post
 import java.time.OffsetDateTime
 import java.util.UUID
 
-@Import(TestcontainersConfiguration::class)
+@Import(PostgresTestConfiguration::class)
 @SpringBootTest
 @AutoConfigureMockMvc
 class FoundationLifecycleWebIntegrationTests

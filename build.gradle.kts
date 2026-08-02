@@ -1,11 +1,11 @@
 import com.github.spotbugs.snom.Confidence
 import com.github.spotbugs.snom.Effort
 import com.github.spotbugs.snom.SpotBugsTask
-import io.sentry.android.gradle.extensions.InstrumentationFeature
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
 import net.ltgt.gradle.errorprone.errorprone
 import org.flywaydb.core.Flyway
-import java.util.EnumSet
+import org.springframework.boot.gradle.tasks.bundling.BootBuildImage
+import org.springframework.boot.gradle.tasks.bundling.BootJar
 
 // Versions pinned here only for jOOQ codegen bootstrapping; keep aligned with the versions
 // resolved for the application's own Flyway/PostgreSQL dependencies below.
@@ -56,14 +56,6 @@ java {
 
 repositories {
     mavenCentral()
-}
-
-configurations.matching { it.name == "detekt" }.configureEach {
-    resolutionStrategy.eachDependency {
-        if (requested.group == "org.jetbrains.kotlin") {
-            useVersion("2.4.0")
-        }
-    }
 }
 
 dependencies {
@@ -410,12 +402,34 @@ tasks.withType<JavaExec> {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
 
+tasks.named<BootJar>("bootJar") {
+    layered {
+        enabled.set(System.getenv("ENABLE_LAYERED_JAR")?.toBoolean() ?: false)
+    }
+}
+
+tasks.named<BootBuildImage>("bootBuildImage") {
+    imageName = "ghcr.io/finaxis/platform:${project.version}"
+    environment.set(
+        mapOf(
+            "BP_JVM_VERSION" to "25.*",
+            "BP_NATIVE_IMAGE" to (System.getenv("BP_NATIVE_IMAGE") ?: "false"),
+            "BP_SPRING_AOT_ENABLED" to "true",
+            "BP_JVM_AOTCACHE_ENABLED" to "true",
+            "BP_GRADLE_ADDITIONAL_BUILD_ARGUMENTS" to "-x test",
+            "BP_NATIVE_IMAGE_BUILD_ARGUMENTS" to "--enable-native-access=ALL-UNNAMED",
+            "BPE_APPEND_JAVA_TOOL_OPTIONS" to
+                "-XX:+HeapDumpOnOutOfMemoryError,-XX:InitialRAMPercentage=25,-XX:MaxRAMPercentage=75,-XX:+ExitOnOutOfMemoryError",
+        ),
+    )
+}
+
 tasks.test {
     finalizedBy(tasks.jacocoTestReport)
 }
 
 jacoco {
-    toolVersion = "0.8.14"
+    toolVersion = "0.8.15"
 }
 
 val coverageExclusions =

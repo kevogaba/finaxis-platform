@@ -39,7 +39,7 @@ class IdentifierGenerationRuleTests {
         val offenders =
             productionClasses
                 .asSequence()
-                .filter { it.packageName.contains(".adapter.inbound.web.dto") }
+                .filter { it.packageName.contains(".adapter.inbound.web") }
                 .filter { it.simpleName.endsWith("Request") }
                 .filter { candidate -> candidate.fields.any { it.name == "id" } }
                 .map { it.simpleName }

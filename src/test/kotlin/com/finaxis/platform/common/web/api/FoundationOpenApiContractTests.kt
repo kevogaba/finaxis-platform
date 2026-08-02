@@ -1,6 +1,6 @@
 package com.finaxis.platform.common.web.api
 
-import com.finaxis.platform.TestcontainersConfiguration
+import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.scanRestControllers
 import com.finaxis.platform.common.web.versioning.ApiPaths
@@ -19,7 +19,7 @@ import org.springframework.web.method.HandlerMethod
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping
 import tools.jackson.databind.JsonNode
 
-@Import(TestcontainersConfiguration::class)
+@Import(PostgresTestConfiguration::class)
 @SpringBootTest
 @AutoConfigureMockMvc
 class FoundationOpenApiContractTests

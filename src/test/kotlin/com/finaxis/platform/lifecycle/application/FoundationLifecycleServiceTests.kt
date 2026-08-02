@@ -205,16 +205,15 @@ class FoundationLifecycleServiceTests {
             LifecycleAggregate(membershipId, MembershipLifecycleState.PENDING_APPROVAL, MEMBERSHIP)
         persistence.userStates[userId] = UserLifecycleState.ACTIVE
 
-        val exception =
-            assertThrows<ConflictException> {
-                service.transition(
-                    MembershipTransitionCommand(
-                        organisationId,
-                        membershipId,
-                        transition = MembershipLifecycleTransition.ACTIVATE,
-                    ),
-                )
-            }
+        assertThrows<ConflictException> {
+            service.transition(
+                MembershipTransitionCommand(
+                    organisationId,
+                    membershipId,
+                    transition = MembershipLifecycleTransition.ACTIVATE,
+                ),
+            )
+        }
 
         assertEquals(
             MembershipLifecycleState.PENDING_APPROVAL,
@@ -223,7 +222,7 @@ class FoundationLifecycleServiceTests {
         val audit = audits.items.single()
         assertEquals("membership.activate", audit.action)
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.DENIED, audit.outcome)
-        assertEquals(exception.message, audit.reason)
+        assertEquals("TransitionGuardException", audit.reason)
         assertEquals("N/A", audit.metadata["to"])
         assertEquals("PENDING_APPROVAL", audit.metadata["from"])
     }

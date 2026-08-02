@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.audit.toAuditFailureReason
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
 import org.jobrunr.jobs.lambdas.JobRequestHandler
@@ -51,7 +52,8 @@ class ApplicationInviteJobRequestHandler(
             tenantId = jobRequest.organisationId,
             action = APPLICATION_INVITE_ACTION,
             resourceId = jobRequest.userId.toString(),
-            reason = ex.message ?: ex.javaClass.name,
+            reason = ex.toAuditFailureReason(),
+            detail = ex.message ?: ex.javaClass.name,
             metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
         )
         throw ex

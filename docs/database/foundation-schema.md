@@ -1,6 +1,6 @@
 # Foundation Schema
 
-The schema is defined by exactly three Flyway migrations. `V1__foundation_schema.sql` is the single
+The schema's frozen base is three Flyway migrations. `V1__foundation_schema.sql` is the single
 source of DDL truth — every table, constraint, index, and comment lives there. See
 [ADR 0010](../adr/0010-greenfield-migration-reset-and-schema-rewrite.md) for why the original
 fourteen migrations were collapsed and why that reset was safe.
@@ -10,8 +10,9 @@ fourteen migrations were collapsed and why that reset was safe.
 | `V1__foundation_schema.sql` | All 23 application tables, constraints, indexes, comments |
 | `V2__platform_reference_data.sql` | 54-code permission catalogue, `PLATFORM` organisation, `PLATFORM_SUPER_ADMIN` and `PLATFORM_SUPPORT` roles and grants |
 | `V3__bootstrap_tenant_and_administrator.sql` | First-deployment bootstrap tenant, branches, first administrator, Keycloak identity link, membership, assignments, business date |
+| `V4__grant_local_admin_invite_approve_and_seed_checker.sql` | Grants `user.invite`/`user.approve`/`user.assign_branch` to the bootstrapped `local-admin` role, missing from `V3`, and seeds a second bootstrap actor (`local.checker`) holding the same role, since `local.admin` cannot approve its own invitations |
 
-Every future change is a forward-only `V4+` migration. There will not be another reset.
+`V1`–`V3` will never be edited again. Every future change is a forward-only `V4+` migration.
 
 States are stored as text with `CHECK` constraints rather than PostgreSQL enums, so adding a state
 is an ordinary forward-only migration instead of an enum rewrite.

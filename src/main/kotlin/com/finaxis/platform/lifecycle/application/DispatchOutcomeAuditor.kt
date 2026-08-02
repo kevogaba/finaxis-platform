@@ -43,7 +43,12 @@ class DispatchOutcomeAuditor(
         )
     }
 
-    /** Marks the dispatch failed and records its audit event atomically. */
+    /**
+     * Marks the dispatch failed and records its audit event atomically. [detail] is the raw
+     * failure detail, kept only in the operational dispatch-tracking table for support/ops
+     * debugging; [reason] is the bounded, content-free value persisted to the audit trail, which
+     * `AuditEventController` returns to audit API callers verbatim.
+     */
     @Transactional
     fun recordFailure(
         dispatchKey: String,
@@ -53,9 +58,10 @@ class DispatchOutcomeAuditor(
         action: String,
         resourceId: String,
         reason: String,
+        detail: String = reason,
         metadata: Map<String, Any?> = emptyMap(),
     ) {
-        store.markDispatchFailed(dispatchKey, reason)
+        store.markDispatchFailed(dispatchKey, detail)
         auditService.recordExternalDispatch(
             actorId = actorId,
             tenantId = tenantId,

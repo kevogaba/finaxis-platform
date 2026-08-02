@@ -92,6 +92,22 @@
           "temporary": false
         }
       ]
+    },
+    {
+      "id": "dddddddd-dddd-dddd-dddd-dddddddddd01",
+      "username": "local.checker",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "checker@finaxis.local",
+      "firstName": "Local",
+      "lastName": "Checker",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "local-checker",
+          "temporary": false
+        }
+      ]
     }
   ]
 }
