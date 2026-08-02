@@ -77,6 +77,8 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-jooq")
     implementation(libs.jooq.kotlin)
     implementation(libs.jooq.meta.extensions)
+    implementation("org.springframework.boot:spring-boot-starter-mail")
+    implementation("org.springframework.boot:spring-boot-starter-freemarker")
     jooqCodegen("org.postgresql:postgresql")
     implementation("org.springframework.boot:spring-boot-starter-opentelemetry")
     implementation("org.springframework.boot:spring-boot-starter-security-oauth2-resource-server")
