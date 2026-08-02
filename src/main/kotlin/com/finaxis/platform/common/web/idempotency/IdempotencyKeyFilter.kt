@@ -1,6 +1,7 @@
 package com.finaxis.platform.common.web.idempotency
 
 import com.finaxis.platform.common.application.RequestTooLargeException
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiProblemWriter
 import jakarta.servlet.FilterChain
 import jakarta.servlet.ReadListener
@@ -50,7 +51,7 @@ class IdempotencyKeyFilter(
         val suppliedValues = Collections.list(request.getHeaders(IDEMPOTENCY_KEY_HEADER))
         val supplied = suppliedValues.singleOrNull()
         val parsed = supplied?.let(::parseKey)
-        val effectiveKey = parsed ?: UUID.randomUUID()
+        val effectiveKey = parsed ?: uuidV7()
         response.setHeader(IDEMPOTENCY_KEY_HEADER, effectiveKey.toString())
         request.setAttribute(IDEMPOTENCY_KEY_ATTRIBUTE, effectiveKey)
         if (suppliedValues.size > 1 || (supplied != null && parsed == null)) {

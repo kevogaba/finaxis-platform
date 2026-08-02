@@ -32,10 +32,26 @@ services:
       - './docker/keycloak/import:/opt/keycloak/data/import:ro'
     labels:
       org.springframework.boot.ignore: true
+  # postgres, rabbitmq, and redis are deliberately NOT labelled
+  # `org.springframework.boot.ignore`. Spring Boot's Docker Compose support detects them and
+  # derives the local datasource, AMQP, and Redis connection details from the running containers,
+  # which keeps local development in step with whatever this file declares.
+  #
+  # Consequence, worth knowing before you debug it: while these containers are running, the
+  # compose-derived details take precedence over `spring.datasource.url`, `spring.rabbitmq.*`, and
+  # `spring.data.redis.*`, so the FINAXIS_* environment variables are effectively no-ops LOCALLY.
+  # They are authoritative in staging and production, where `spring-boot-docker-compose` is a
+  # `developmentOnly` dependency and is not on the classpath at all.
+  #
+  # This is why POSTGRES_DB below must match the database name in FINAXIS_DATASOURCE_URL: the two
+  # paths have to agree, or local development and deployed environments target different databases.
   postgres:
     image: 'postgres:18.4'
     environment:
-      POSTGRES_DB: postgres
+      # The application database, created by the image at first start. Must stay in step with the
+      # database name in FINAXIS_DATASOURCE_URL (see src/main/resources/application.yaml).
+      # docker/postgres/initdb only adds the extra Keycloak database.
+      POSTGRES_DB: platform
       POSTGRES_PASSWORD: finaxis
       POSTGRES_USER: finaxis
     ports:
@@ -44,7 +60,7 @@ services:
       - 'postgres-data:/var/lib/postgresql'
       - './docker/postgres/initdb:/docker-entrypoint-initdb.d:ro'
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U finaxis -d postgres']
+      test: ['CMD-SHELL', 'pg_isready -U finaxis -d platform']
       interval: 5s
       timeout: 5s
       retries: 20

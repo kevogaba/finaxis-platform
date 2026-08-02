@@ -44,8 +44,20 @@ spring:
       enabled: true
   docker:
     compose:
+      # LOCAL DEVELOPMENT ONLY. `spring-boot-docker-compose` is a developmentOnly dependency, so
+      # this block does nothing in staging or production.
+      #
+      # While compose.yaml's postgres/rabbitmq/redis containers are running, Spring Boot derives
+      # connection details from them and those DERIVED VALUES WIN over the datasource, rabbitmq,
+      # and redis properties below. The FINAXIS_* variables are therefore effectively no-ops
+      # locally, and fully authoritative everywhere else. compose.yaml's POSTGRES_DB is kept equal
+      # to the database in FINAXIS_DATASOURCE_URL so both paths resolve to the same database.
+      #
+      # To point local development somewhere else, change compose.yaml (or stop the container and
+      # set the FINAXIS_* variable).
       enabled: true
   datasource:
+    # Authoritative in staging and production; see the docker.compose note above for local.
     url: ${FINAXIS_DATASOURCE_URL:jdbc:postgresql://localhost:5433/platform}
     username: ${FINAXIS_DATASOURCE_USERNAME:finaxis}
     password: ${FINAXIS_DATASOURCE_PASSWORD:finaxis}

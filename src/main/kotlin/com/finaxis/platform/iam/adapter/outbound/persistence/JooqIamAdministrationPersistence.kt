@@ -1,6 +1,5 @@
 package com.finaxis.platform.iam.adapter.outbound.persistence
 
-import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.port.outbound.IamAdministrationPersistence
 import com.finaxis.platform.iam.application.port.outbound.MembershipSnapshot
 import com.finaxis.platform.iam.application.port.outbound.RoleSnapshot
@@ -66,11 +65,9 @@ class JooqIamAdministrationPersistence(
         description: String?,
         actorId: UUID,
     ): UUID {
-        val id = uuidV7()
         val now = now()
-        dsl
+        return dsl
             .insertInto(ROLE)
-            .set(ROLE.ID, id)
             .set(ROLE.ORGANISATION_ID, organisationId)
             .set(ROLE.ROLE_CODE, roleCode)
             .set(ROLE.ROLE_NAME, roleName)
@@ -81,8 +78,10 @@ class JooqIamAdministrationPersistence(
             .set(ROLE.CREATED_BY, actorId)
             .set(ROLE.UPDATED_AT, now)
             .set(ROLE.UPDATED_BY, actorId)
-            .execute()
-        return id
+            .returning(ROLE.ID)
+            .fetchOne()
+            ?.id
+            ?: error("Insert into role returned no generated identifier.")
     }
 
     override fun updateRole(
@@ -154,7 +153,6 @@ class JooqIamAdministrationPersistence(
         val now = now()
         return dsl
             .insertInto(ROLE_PERMISSION)
-            .set(ROLE_PERMISSION.ID, uuidV7())
             .set(ROLE_PERMISSION.ORGANISATION_ID, organisationId)
             .set(ROLE_PERMISSION.ROLE_ID, roleId)
             .set(ROLE_PERMISSION.PERMISSION_ID, permissionId)
@@ -256,12 +254,10 @@ class JooqIamAdministrationPersistence(
         branchId: UUID?,
         actorId: UUID,
     ): UUID {
-        val id = uuidV7()
         val now = now()
-        val created =
+        val createdId =
             dsl
                 .insertInto(USER_ROLE_ASSIGNMENT)
-                .set(USER_ROLE_ASSIGNMENT.ID, id)
                 .set(USER_ROLE_ASSIGNMENT.ORGANISATION_ID, organisationId)
                 .set(USER_ROLE_ASSIGNMENT.USER_ID, userId)
                 .set(USER_ROLE_ASSIGNMENT.ROLE_ID, roleId)
@@ -276,9 +272,11 @@ class JooqIamAdministrationPersistence(
                 .set(USER_ROLE_ASSIGNMENT.UPDATED_BY, actorId)
                 .onConflict()
                 .doNothing()
-                .execute() > 0
-        return if (created) {
-            id
+                .returning(USER_ROLE_ASSIGNMENT.ID)
+                .fetchOne()
+                ?.id
+        return if (createdId != null) {
+            createdId
         } else {
             requireNotNull(
                 activeRoleAssignment(organisationId, userId, roleId, scopeType, branchId),

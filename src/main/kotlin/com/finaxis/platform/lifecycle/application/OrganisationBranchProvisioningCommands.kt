@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.lifecycle.FoundationCaller
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
@@ -51,24 +52,24 @@ data class AmendOrganisationDraftCommand(
 data class SubmitOrganisationForApprovalCommand(
     val organisationId: UUID,
     val reason: String? = null,
-    val actorId: UUID = UUID.randomUUID(),
-    val requestId: UUID = UUID.randomUUID(),
+    val actorId: UUID = uuidV7(),
+    val requestId: UUID = uuidV7(),
 )
 
 /** Approves a submitted organisation and performs its durable local setup. */
 data class ApproveOrganisationProvisioningCommand(
     val organisationId: UUID,
     val reason: String? = null,
-    val actorId: UUID = UUID.randomUUID(),
-    val requestId: UUID = UUID.randomUUID(),
+    val actorId: UUID = uuidV7(),
+    val requestId: UUID = uuidV7(),
 )
 
 /** Rejects an organisation approval request without deleting the draft data. */
 data class RejectOrganisationProvisioningCommand(
     val organisationId: UUID,
     val reason: String,
-    val actorId: UUID = UUID.randomUUID(),
-    val requestId: UUID = UUID.randomUUID(),
+    val actorId: UUID = uuidV7(),
+    val requestId: UUID = uuidV7(),
 )
 
 /** Suspends an active organisation while retaining all of its data. */

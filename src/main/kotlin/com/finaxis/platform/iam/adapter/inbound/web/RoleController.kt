@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
 import com.finaxis.platform.common.application.ResourceNotFoundException
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
@@ -177,7 +178,7 @@ class RoleController(
                     request.roleName,
                     request.description,
                     caller.actorId,
-                    UUID.randomUUID().toString(),
+                    uuidV7().toString(),
                 ),
             )
         val response =
@@ -296,7 +297,7 @@ class RoleController(
                 request.roleName,
                 request.description,
                 caller.actorId,
-                UUID.randomUUID().toString(),
+                uuidV7().toString(),
             ),
         )
         return iamQueryService.getRole(caller.activeOrganisationId, roleId, caller).toResponse()
@@ -509,7 +510,7 @@ class RoleController(
                 roleId,
                 request.permissionCode,
                 caller.actorId,
-                UUID.randomUUID().toString(),
+                uuidV7().toString(),
             ),
         )
         val grant =
@@ -605,7 +606,7 @@ class RoleController(
                 roleId,
                 grant.permissionCode,
                 caller.actorId,
-                UUID.randomUUID().toString(),
+                uuidV7().toString(),
             ),
         )
         return rolePermissions(roleId, 0, MAXIMUM_PAGE_SIZE.toInt())
@@ -628,7 +629,7 @@ class RoleController(
                     caller.activeOrganisationId,
                     roleId,
                     caller.actorId,
-                    UUID.randomUUID().toString(),
+                    uuidV7().toString(),
                 ),
             )
         } else {
@@ -637,7 +638,7 @@ class RoleController(
                     caller.activeOrganisationId,
                     roleId,
                     caller.actorId,
-                    UUID.randomUUID().toString(),
+                    uuidV7().toString(),
                 ),
             )
         }

@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
@@ -282,7 +283,7 @@ class MembershipController(
                     organisationId = caller.activeOrganisationId,
                     membershipId = membershipId,
                     approvedBy = caller.actorId,
-                    requestId = UUID.randomUUID().toString(),
+                    requestId = uuidV7().toString(),
                 ),
             )
         val response =
@@ -388,7 +389,7 @@ class MembershipController(
                 membershipId = membershipId,
                 actorId = caller.actorId,
                 reason = request.reason,
-                requestId = UUID.randomUUID().toString(),
+                requestId = uuidV7().toString(),
             ),
         )
         return lifecycleIamReadService
@@ -488,7 +489,7 @@ class MembershipController(
                 membershipId = membershipId,
                 actorId = caller.actorId,
                 reason = request?.reason,
-                requestId = UUID.randomUUID().toString(),
+                requestId = uuidV7().toString(),
             ),
         )
         return lifecycleIamReadService
@@ -588,7 +589,7 @@ class MembershipController(
                 membershipId = membershipId,
                 actorId = caller.actorId,
                 reason = request.reason,
-                requestId = UUID.randomUUID().toString(),
+                requestId = uuidV7().toString(),
             ),
         )
         return lifecycleIamReadService

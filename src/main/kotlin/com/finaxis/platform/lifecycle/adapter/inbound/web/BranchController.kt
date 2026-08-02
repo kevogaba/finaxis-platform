@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
 import com.finaxis.platform.common.application.ResourceNotFoundException
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
@@ -393,7 +394,7 @@ class BranchController(
                 branchId = branchId,
                 reason = request?.reason,
                 actorId = caller.actorId,
-                requestId = UUID.randomUUID(),
+                requestId = uuidV7(),
             )
         branchProvisioningService.submitForApproval(command)
         val updated =
@@ -499,7 +500,7 @@ class BranchController(
                 branchId = branchId,
                 reason = request?.reason,
                 actorId = caller.actorId,
-                requestId = UUID.randomUUID(),
+                requestId = uuidV7(),
             )
         branchProvisioningService.activate(command)
         val updated =

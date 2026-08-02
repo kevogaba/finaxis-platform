@@ -1,7 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.web.api.boundedPageOffset
 import com.finaxis.platform.jooq.tables.references.BRANCH
@@ -73,11 +72,9 @@ class JooqOrganisationBranchProvisioningStore(
             ?.let(OrganisationLifecycleState::valueOf)
 
     override fun createDraft(command: CreateOrganisationDraftCommand): UUID {
-        val id = uuidV7()
         val now = now()
-        dsl
+        return dsl
             .insertInto(ORGANISATION)
-            .set(ORGANISATION.ID, id)
             .set(ORGANISATION.TENANT_CODE, command.tenantCode)
             .set(ORGANISATION.DISPLAY_NAME, command.displayName)
             .set(ORGANISATION.LEGAL_NAME, command.legalName)
@@ -90,8 +87,10 @@ class JooqOrganisationBranchProvisioningStore(
             .set(ORGANISATION.CREATED_BY, command.requestedBy)
             .set(ORGANISATION.UPDATED_AT, now)
             .set(ORGANISATION.UPDATED_BY, command.requestedBy)
-            .execute()
-        return id
+            .returning(ORGANISATION.ID)
+            .fetchOne()
+            ?.id
+            ?: error("Insert into organisation returned no generated identifier.")
     }
 
     override fun amendDraft(command: AmendOrganisationDraftCommand) {
@@ -120,7 +119,6 @@ class JooqOrganisationBranchProvisioningStore(
         settings.forEach { (key, value) ->
             dsl
                 .insertInto(ORGANISATION_SETTING)
-                .set(ORGANISATION_SETTING.ID, uuidV7())
                 .set(ORGANISATION_SETTING.ORGANISATION_ID, organisationId)
                 .set(ORGANISATION_SETTING.SETTING_KEY, key)
                 .set(
@@ -220,33 +218,34 @@ class JooqOrganisationBranchProvisioningStore(
         lifecycleState(organisationId)
 
     override fun createDraft(command: CreateBranchCommand): UUID {
-        val id = uuidV7()
-        dsl
-            .insertInto(
-                BRANCH,
-            ).set(BRANCH.ID, id)
-            .set(BRANCH.ORGANISATION_ID, command.organisationId)
-            .set(BRANCH.BRANCH_CODE, command.branchCode)
-            .set(BRANCH.BRANCH_NAME, command.branchName)
-            .set(
-                BRANCH.BRANCH_TYPE,
-                command.branchType,
-            ).set(BRANCH.PARENT_BRANCH_ID, command.parentBranchId)
-            .set(
-                BRANCH.STATUS,
-                BranchLifecycleState.DRAFT.name,
-            ).set(BRANCH.TIMEZONE, command.timezone)
-            .set(
-                BRANCH.ADDRESS_JSONB,
-                JSONB.jsonb(objectMapper.writeValueAsString(command.address)),
-            ).set(BRANCH.CREATED_AT, now())
-            .set(BRANCH.CREATED_BY, command.requestedBy)
-            .set(BRANCH.UPDATED_AT, now())
-            .set(BRANCH.UPDATED_BY, command.requestedBy)
-            .execute()
+        val id =
+            dsl
+                .insertInto(
+                    BRANCH,
+                ).set(BRANCH.ORGANISATION_ID, command.organisationId)
+                .set(BRANCH.BRANCH_CODE, command.branchCode)
+                .set(BRANCH.BRANCH_NAME, command.branchName)
+                .set(
+                    BRANCH.BRANCH_TYPE,
+                    command.branchType,
+                ).set(BRANCH.PARENT_BRANCH_ID, command.parentBranchId)
+                .set(
+                    BRANCH.STATUS,
+                    BranchLifecycleState.DRAFT.name,
+                ).set(BRANCH.TIMEZONE, command.timezone)
+                .set(
+                    BRANCH.ADDRESS_JSONB,
+                    JSONB.jsonb(objectMapper.writeValueAsString(command.address)),
+                ).set(BRANCH.CREATED_AT, now())
+                .set(BRANCH.CREATED_BY, command.requestedBy)
+                .set(BRANCH.UPDATED_AT, now())
+                .set(BRANCH.UPDATED_BY, command.requestedBy)
+                .returning(BRANCH.ID)
+                .fetchOne()
+                ?.id
+                ?: error("Insert into branch returned no generated identifier.")
         dsl
             .insertInto(BRANCH_TRANSITION_LOG)
-            .set(BRANCH_TRANSITION_LOG.ID, uuidV7())
             .set(BRANCH_TRANSITION_LOG.ORGANISATION_ID, command.organisationId)
             .set(BRANCH_TRANSITION_LOG.BRANCH_ID, id)
             .set(BRANCH_TRANSITION_LOG.ENTITY_ID, id)
@@ -356,7 +355,6 @@ class JooqOrganisationBootstrapStore(
         if (hasBusinessDate(organisationId)) return
         dsl
             .insertInto(BUSINESS_DATE)
-            .set(BUSINESS_DATE.ID, uuidV7())
             .set(BUSINESS_DATE.ORGANISATION_ID, organisationId)
             .set(BUSINESS_DATE.CURRENT_BUSINESS_DATE, date)
             .set(BUSINESS_DATE.STATUS, "OPEN")
@@ -380,25 +378,26 @@ class JooqOrganisationBootstrapStore(
             .and(BRANCH.BRANCH_CODE.eq(OrganisationBootstrapDefaults.HEAD_OFFICE_CODE))
             .fetchOne(BRANCH.ID)
             ?.let { return HeadOfficeDraftResult(it, false) }
-        val branchId = uuidV7()
         val now = now()
-        dsl
-            .insertInto(BRANCH)
-            .set(BRANCH.ID, branchId)
-            .set(BRANCH.ORGANISATION_ID, organisationId)
-            .set(BRANCH.BRANCH_CODE, OrganisationBootstrapDefaults.HEAD_OFFICE_CODE)
-            .set(BRANCH.BRANCH_NAME, "Head Office")
-            .set(BRANCH.BRANCH_TYPE, "HEAD_OFFICE")
-            .set(BRANCH.STATUS, BranchLifecycleState.DRAFT.name)
-            .set(BRANCH.TIMEZONE, timezone(organisationId))
-            .set(BRANCH.CREATED_AT, now)
-            .set(BRANCH.CREATED_BY, SystemActor.ID)
-            .set(BRANCH.UPDATED_AT, now)
-            .set(BRANCH.UPDATED_BY, SystemActor.ID)
-            .execute()
+        val branchId =
+            dsl
+                .insertInto(BRANCH)
+                .set(BRANCH.ORGANISATION_ID, organisationId)
+                .set(BRANCH.BRANCH_CODE, OrganisationBootstrapDefaults.HEAD_OFFICE_CODE)
+                .set(BRANCH.BRANCH_NAME, "Head Office")
+                .set(BRANCH.BRANCH_TYPE, "HEAD_OFFICE")
+                .set(BRANCH.STATUS, BranchLifecycleState.DRAFT.name)
+                .set(BRANCH.TIMEZONE, timezone(organisationId))
+                .set(BRANCH.CREATED_AT, now)
+                .set(BRANCH.CREATED_BY, SystemActor.ID)
+                .set(BRANCH.UPDATED_AT, now)
+                .set(BRANCH.UPDATED_BY, SystemActor.ID)
+                .returning(BRANCH.ID)
+                .fetchOne()
+                ?.id
+                ?: error("Insert into branch returned no generated identifier.")
         dsl
             .insertInto(BRANCH_TRANSITION_LOG)
-            .set(BRANCH_TRANSITION_LOG.ID, uuidV7())
             .set(BRANCH_TRANSITION_LOG.ORGANISATION_ID, organisationId)
             .set(BRANCH_TRANSITION_LOG.BRANCH_ID, branchId)
             .set(BRANCH_TRANSITION_LOG.ENTITY_ID, branchId)
@@ -418,7 +417,6 @@ class JooqOrganisationBootstrapStore(
         OrganisationBootstrapDefaults.SEQUENCE_CODES.forEach { code ->
             dsl
                 .insertInto(REFERENCE_SEQUENCE)
-                .set(REFERENCE_SEQUENCE.ID, uuidV7())
                 .set(REFERENCE_SEQUENCE.ORGANISATION_ID, organisationId)
                 .set(REFERENCE_SEQUENCE.SEQUENCE_CODE, code)
                 .set(REFERENCE_SEQUENCE.NEXT_VALUE, 1)
@@ -436,7 +434,6 @@ class JooqOrganisationBootstrapStore(
         OrganisationBootstrapDefaults.ROLE_PERMISSIONS.forEach { (roleCode, permissions) ->
             dsl
                 .insertInto(ROLE)
-                .set(ROLE.ID, uuidV7())
                 .set(ROLE.ORGANISATION_ID, organisationId)
                 .set(ROLE.ROLE_CODE, roleCode)
                 .set(ROLE.ROLE_NAME, roleCode.toDisplayName())
@@ -669,7 +666,6 @@ private fun DSLContext.grantPermissions(
         .forEach { permissionId ->
             val now = clock.instant().atOffset(ZoneOffset.UTC)
             insertInto(ROLE_PERMISSION)
-                .set(ROLE_PERMISSION.ID, uuidV7())
                 .set(ROLE_PERMISSION.ORGANISATION_ID, organisationId)
                 .set(ROLE_PERMISSION.ROLE_ID, roleId)
                 .set(ROLE_PERMISSION.PERMISSION_ID, permissionId)
@@ -753,7 +749,6 @@ class JooqBranchAssignmentStore(
         val now = clock.instant().atOffset(ZoneOffset.UTC)
         dsl
             .insertInto(USER_BRANCH_ASSIGNMENT)
-            .set(USER_BRANCH_ASSIGNMENT.ID, uuidV7())
             .set(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID, command.organisationId)
             .set(USER_BRANCH_ASSIGNMENT.USER_ID, command.userId)
             .set(USER_BRANCH_ASSIGNMENT.BRANCH_ID, command.branchId)

@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
@@ -403,7 +404,7 @@ class PlatformTenantController(
                 initialSettings = request.initialSettings,
                 businessDate = request.businessDate,
                 actorId = caller.actorId,
-                requestId = UUID.randomUUID(),
+                requestId = uuidV7(),
                 admin = request.admin.toDomain(),
             )
         organisationProvisioningService.amendDraft(command)
@@ -500,7 +501,7 @@ class PlatformTenantController(
             SubmitOrganisationForApprovalCommand(
                 organisationId = tenantId,
                 actorId = caller.actorId,
-                requestId = UUID.randomUUID(),
+                requestId = uuidV7(),
             )
         organisationProvisioningService.submitForApproval(command)
         val updated = foundationQueryService.getTenant(tenantId, caller)
@@ -597,7 +598,7 @@ class PlatformTenantController(
             ApproveOrganisationProvisioningCommand(
                 organisationId = tenantId,
                 actorId = caller.actorId,
-                requestId = UUID.randomUUID(),
+                requestId = uuidV7(),
             )
         organisationProvisioningService.approveProvisioning(command)
         val updated = foundationQueryService.getTenant(tenantId, caller)
@@ -695,7 +696,7 @@ class PlatformTenantController(
                 organisationId = tenantId,
                 reason = request.reason,
                 actorId = caller.actorId,
-                requestId = UUID.randomUUID(),
+                requestId = uuidV7(),
             )
         organisationProvisioningService.rejectProvisioning(command)
         val updated = foundationQueryService.getTenant(tenantId, caller)

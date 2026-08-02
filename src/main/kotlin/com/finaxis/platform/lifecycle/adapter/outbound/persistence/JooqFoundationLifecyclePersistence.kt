@@ -2,7 +2,6 @@ package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.common.context.RequestContexts
-import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogRepository
@@ -456,7 +455,6 @@ private fun saveOrganisationLog(
     val now = clock.instant().atOffset(ZoneOffset.UTC)
     dsl
         .insertInto(ORGANISATION_TRANSITION_LOG)
-        .set(ORGANISATION_TRANSITION_LOG.ID, uuidV7())
         .set(ORGANISATION_TRANSITION_LOG.ORGANISATION_ID, organisationId)
         .set(ORGANISATION_TRANSITION_LOG.ENTITY_ID, UUID.fromString(log.aggregateId))
         .set(ORGANISATION_TRANSITION_LOG.TRANSITION_NAME, log.transition)
@@ -486,7 +484,6 @@ private fun saveBranchLog(
     val now = clock.instant().atOffset(ZoneOffset.UTC)
     dsl
         .insertInto(BRANCH_TRANSITION_LOG)
-        .set(BRANCH_TRANSITION_LOG.ID, uuidV7())
         .set(BRANCH_TRANSITION_LOG.ORGANISATION_ID, organisationId)
         .set(BRANCH_TRANSITION_LOG.BRANCH_ID, branchId)
         .set(BRANCH_TRANSITION_LOG.ENTITY_ID, UUID.fromString(log.aggregateId))
@@ -517,7 +514,6 @@ private fun saveUserLog(
     val now = clock.instant().atOffset(ZoneOffset.UTC)
     dsl
         .insertInto(USER_ACCOUNT_TRANSITION_LOG)
-        .set(USER_ACCOUNT_TRANSITION_LOG.ID, uuidV7())
         .set(USER_ACCOUNT_TRANSITION_LOG.ORGANISATION_ID, organisationId)
         .set(USER_ACCOUNT_TRANSITION_LOG.BRANCH_ID, branchId)
         .set(USER_ACCOUNT_TRANSITION_LOG.ENTITY_ID, UUID.fromString(log.aggregateId))
@@ -548,7 +544,6 @@ private fun saveMembershipLog(
     val now = clock.instant().atOffset(ZoneOffset.UTC)
     dsl
         .insertInto(USER_ORGANISATION_MEMBERSHIP_TRANSITION_LOG)
-        .set(USER_ORGANISATION_MEMBERSHIP_TRANSITION_LOG.ID, uuidV7())
         .set(USER_ORGANISATION_MEMBERSHIP_TRANSITION_LOG.ORGANISATION_ID, organisationId)
         .set(USER_ORGANISATION_MEMBERSHIP_TRANSITION_LOG.BRANCH_ID, branchId)
         .set(
