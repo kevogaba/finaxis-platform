@@ -3,8 +3,10 @@ package com.finaxis.platform.iam.application.selection
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.iam.application.authorization.AuthorizationService
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
+import com.finaxis.platform.iam.application.port.outbound.BranchSelectionPage
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
+import com.finaxis.platform.iam.application.port.outbound.OrganisationSelectionPage
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
 import com.finaxis.platform.iam.domain.allowsLogin
@@ -51,6 +53,68 @@ class AuthSelectionService(
     private val lookup: MembershipSelectionLookup,
     private val authorizationService: AuthorizationService,
 ) {
+    /** Lists active branches available for the authenticated user's selected organisation. */
+    fun availableBranches(
+        keycloakSubject: String,
+        currentContext: ActiveOrganisationContext?,
+        page: Int,
+        size: Int,
+    ): BranchSelectionPage {
+        require(page >= 0) { "Page must not be negative" }
+        require(size in MINIMUM_PAGE_SIZE..MAXIMUM_PAGE_SIZE) {
+            "Page size must be between $MINIMUM_PAGE_SIZE and $MAXIMUM_PAGE_SIZE"
+        }
+        val existingContext = currentContext ?: denied("Select an organisation first")
+        val userId = eligibleUserId(keycloakSubject)
+        if (existingContext.userId != userId) {
+            denied("Active organisation context does not belong to the authenticated user")
+        }
+        val membership =
+            lookup.findMembership(userId, existingContext.organisationId)
+                ?: denied("User is not an active member of the organisation")
+        if (membership.status != MembershipStatus.ACTIVE ||
+            membership.membershipId != existingContext.membershipId ||
+            lookup.organisationStatus(existingContext.organisationId) != OrganisationStatus.ACTIVE
+        ) {
+            denied("User is not an active member of the organisation")
+        }
+        if (!authorizationService.hasPermission(
+                userId,
+                existingContext.organisationId,
+                PERM_SELECT_BRANCH,
+            )
+        ) {
+            denied("Missing permission: $PERM_SELECT_BRANCH")
+        }
+        return lookup.findBranchSelections(membership.membershipId, page, size)
+    }
+
+    /** Lists organisations the authenticated user can select before an active context exists. */
+    fun availableOrganisations(
+        keycloakSubject: String,
+        page: Int,
+        size: Int,
+    ): OrganisationSelectionPage {
+        require(page >= 0) { "Page must not be negative" }
+        require(size in MINIMUM_PAGE_SIZE..MAXIMUM_PAGE_SIZE) {
+            "Page size must be between $MINIMUM_PAGE_SIZE and $MAXIMUM_PAGE_SIZE"
+        }
+        val userId = eligibleUserId(keycloakSubject)
+        val result = lookup.findOrganisationSelections(userId, page, size)
+        return result.copy(
+            items =
+                result.items.filter { selection ->
+                    selection.membershipStatus == MembershipStatus.ACTIVE &&
+                        selection.organisationStatus == OrganisationStatus.ACTIVE &&
+                        authorizationService.hasPermission(
+                            userId,
+                            selection.organisationId,
+                            PERM_SELECT_ORG,
+                        )
+                },
+        )
+    }
+
     /**
      * Selects an active organisation and returns the resulting tenant context.
      *
@@ -225,4 +289,9 @@ class AuthSelectionService(
 
     private fun denied(message: String): Nothing =
         throw OrganisationSelectionDeniedException(message)
+
+    private companion object {
+        const val MINIMUM_PAGE_SIZE = 1
+        const val MAXIMUM_PAGE_SIZE = 100
+    }
 }

@@ -1,7 +1,10 @@
 package com.finaxis.platform.common.web.api
 
 import com.finaxis.platform.TestcontainersConfiguration
+import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.scanRestControllers
+import com.finaxis.platform.common.web.versioning.ApiPaths
+import com.finaxis.platform.iam.application.context.ActiveOrganisationContextService
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -103,9 +106,34 @@ class FoundationOpenApiContractTests
             handler: HandlerMethod,
         ) {
             if (method in MUTATION_METHODS) {
+                assertThat(handler.hasMethodAnnotation(IdempotentMutation::class.java))
+                    .withFailMessage("%s %s IdempotentMutation annotation", method, path)
+                    .isTrue
                 assertThat(operation.hasHeaderParameter(pathItem, components, "Idempotency-Key"))
                     .withFailMessage("%s %s Idempotency-Key parameter", method, path)
                     .isTrue
+            }
+            if (requiresActiveOrganisationContext(path, method)) {
+                assertThat(
+                    operation.hasHeaderParameter(
+                        pathItem,
+                        components,
+                        ActiveOrganisationContextService.HEADER,
+                    ),
+                ).withFailMessage("%s %s active organisation context parameter", method, path)
+                    .isTrue
+                assertThat(
+                    operation.hasRequiredHeaderParameter(
+                        pathItem,
+                        components,
+                        ActiveOrganisationContextService.HEADER,
+                    ),
+                ).withFailMessage(
+                    "%s %s active organisation context must stay optional because an " +
+                        "established session also satisfies it",
+                    method,
+                    path,
+                ).isFalse
             }
             if (method == HttpMethod.GET && handler.method.returnType == ApiPage::class.java) {
                 assertThat(operation.hasPaginationResponse(components))
@@ -169,6 +197,24 @@ class FoundationOpenApiContractTests
                 }
             }
 
+        private fun JsonNode.hasRequiredHeaderParameter(
+            pathItem: JsonNode,
+            components: JsonNode,
+            headerName: String,
+        ): Boolean =
+            (path("parameters").toList() + pathItem.path("parameters").toList()).any { parameter ->
+                parameter.resolveParameter(components).let { resolved ->
+                    resolved.path("name").asString() == headerName &&
+                        resolved.path("in").asString() == "header" &&
+                        resolved.path("required").asBoolean()
+                }
+            }
+
+        private fun requiresActiveOrganisationContext(
+            path: String,
+            method: HttpMethod,
+        ): Boolean = OperationRoute(path, method) !in CONTEXT_FREE_OPERATIONS
+
         private fun JsonNode.resolveParameter(components: JsonNode): JsonNode =
             path("\$ref")
                 .asString()
@@ -215,5 +261,14 @@ class FoundationOpenApiContractTests
                     HttpMethod.DELETE,
                 )
             val MUTATION_METHODS = HTTP_METHODS - HttpMethod.GET
+
+            // The only operations that run before an active organisation context exists.
+            // Every other documented operation, including platform-administration routes and
+            // branch selection, must document the header (see FoundationOpenApiConfiguration).
+            val CONTEXT_FREE_OPERATIONS =
+                setOf(
+                    OperationRoute("${ApiPaths.AUTH}/organisations", HttpMethod.GET),
+                    OperationRoute("${ApiPaths.AUTH}/select-organisation", HttpMethod.POST),
+                )
         }
     }

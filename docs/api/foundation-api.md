@@ -13,7 +13,13 @@ Every request authenticates with an OAuth2 bearer JWT issued by Keycloak:
 
 ```http
 Authorization: Bearer <token>
+X-Active-Organisation-Context: <context-token>
 ```
+
+The `X-Active-Organisation-Context` header is required for active-tenant endpoints unless the
+caller already has an established active-organisation session. Browser clients may rely on the
+Redis-backed session instead of sending the header; headless clients must send it. The
+selection endpoints establish that context and therefore do not require it themselves.
 
 Keycloak authenticates the user. This application owns users, organisations, memberships,
 roles, permissions, scopes, tenant context, branch context, and authorization. It never stores
@@ -28,9 +34,11 @@ context.
 
 Clients establish context in this order:
 
-1. Authenticate with Keycloak and call `POST /api/v1/auth/select-organisation`.
-2. If the response requires branch selection, call `POST /api/v1/auth/select-branch`.
-3. Send subsequent tenant requests with either the browser session or the
+1. Authenticate with Keycloak and call `GET /api/v1/auth/organisations` to discover selectable
+   organisations.
+2. Call `POST /api/v1/auth/select-organisation` with the selected `organisation_id`.
+3. If the response requires branch selection, call `POST /api/v1/auth/select-branch`.
+4. Send subsequent tenant requests with either the browser session or the
    `X-Active-Organisation-Context` token returned by the selection call.
 
 Browser clients use the Redis-backed HTTP session for active organisation state. Headless
@@ -139,14 +147,14 @@ Errors use RFC 9457 `application/problem+json` with Finaxis extensions:
 
 Application exception mappings:
 
-| Exception | HTTP status |
-| --- | --- |
-| `ResourceNotFoundException` | 404 |
-| `ConflictException` | 409 |
-| `ForbiddenOperationException` | 403 |
-| `InvalidOperationException` | 422 |
-| `InvalidRequestException` | 400 |
-| `RequestTooLargeException` | 413 |
+| Exception                     | HTTP status |
+|-------------------------------|-------------|
+| `ResourceNotFoundException`   | 404         |
+| `ConflictException`           | 409         |
+| `ForbiddenOperationException` | 403         |
+| `InvalidOperationException`   | 422         |
+| `InvalidRequestException`     | 400         |
+| `RequestTooLargeException`    | 413         |
 
 Framework-level errors include `authentication_required`, `access_denied`,
 `invalid_active_tenant_context`, `rate_limit_exceeded`, `rate_limit_policy_unavailable`, and
@@ -171,11 +179,11 @@ Idempotency-Replayed: true
 
 Scopes are server-owned:
 
-| Scope | Used by |
-| --- | --- |
-| `PLATFORM` | Platform mutations under `/api/v1/platform/**` |
-| `TENANT` | Tenant mutations after active organisation selection |
-| `ORGANISATION_SELECTION` | `POST /api/v1/auth/select-organisation` |
+| Scope                    | Used by                                              |
+|--------------------------|------------------------------------------------------|
+| `PLATFORM`               | Platform mutations under `/api/v1/platform/**`       |
+| `TENANT`                 | Tenant mutations after active organisation selection |
+| `ORGANISATION_SELECTION` | `POST /api/v1/auth/select-organisation`              |
 
 Ordinary mutations use `EXACT_RESPONSE` replay. Organisation and branch selection use
 `REISSUE_CONTEXT_TOKEN`, because context tokens are sensitive and time-bound. Durable replay
@@ -209,11 +217,58 @@ The `Shape` column uses `page` for an `ApiPage<T>` collection, `item` for a sing
 
 Base path: `/api/v1/auth`.
 
-| Method | Path | Summary | Permission | Shape |
-| --- | --- | --- | --- | --- |
-| GET | `/me` | Current user profile and effective access | `iam.profile.read` | item |
-| POST | `/select-organisation` | Select organisation | `auth.select_organisation` | mutation |
-| POST | `/select-branch` | Select active branch | service: `auth.select_branch` | mutation |
+| Method | Path                   | Summary                                           | Permission                    | Shape    |
+|--------|------------------------|---------------------------------------------------|-------------------------------|----------|
+| GET    | `/me`                  | Current user profile and effective access         | `iam.profile.read`            | item     |
+| GET    | `/organisations`       | List available organisations                      | `auth.select_organisation`    | page     |
+| GET    | `/branches`            | List available branches for selected organisation | `auth.select_branch`          | page     |
+| POST   | `/select-organisation` | Select organisation                               | `auth.select_organisation`    | mutation |
+| POST   | `/select-branch`       | Select active branch                              | service: `auth.select_branch` | mutation |
+
+Available organisation discovery is context-free and requires only the bearer JWT:
+
+```http
+GET /api/v1/auth/organisations?page=0&size=25
+Authorization: Bearer <token>
+```
+
+The response includes only active organisations where the authenticated user has an active
+membership and `auth.select_organisation` permission:
+
+```json
+{
+  "items": [
+    {
+      "organisation_id": "11111111-1111-7111-8111-111111111111",
+      "membership_id": "22222222-2222-7222-8222-222222222222",
+      "tenant_code": "acme-corp",
+      "display_name": "Acme Financial Services",
+      "organisation_status": "ACTIVE",
+      "membership_status": "ACTIVE"
+    }
+  ],
+  "page": {
+    "number": 0,
+    "size": 25,
+    "total_items": 1,
+    "total_pages": 1,
+    "has_next": false,
+    "has_previous": false
+  }
+}
+```
+
+After selecting an organisation, clients can discover assigned active branches before calling
+the branch-selection mutation:
+
+```http
+GET /api/v1/auth/branches?page=0&size=25
+Authorization: Bearer <token>
+X-Active-Organisation-Context: <context-token>
+```
+
+This endpoint requires the active organisation context and `auth.select_branch` permission. Its
+paginated items contain `branch_id`, `branch_code`, `branch_name`, and `branch_status`.
 
 Selection request and response:
 
@@ -270,16 +325,16 @@ Profile response example:
 Base path: `/api/v1/branches`. List filters: `q`, `status`, `type`, `sort_by`, `sort_dir`,
 `page`, `size`.
 
-| Method | Path | Summary | Permission | Shape |
-| --- | --- | --- | --- | --- |
-| GET | `/` | Search branches in the active tenant | `branch.view` | page |
-| POST | `/` | Create branch draft | `branch.create` | mutation |
-| GET | `/{branch_id}` | Get branch | `branch.view` | item |
-| POST | `/{branch_id}/submit` | Submit branch draft | `branch.create` | mutation |
-| POST | `/{branch_id}/activate` | Activate branch | `branch.activate` | mutation |
-| POST | `/{branch_id}/suspend` | Suspend branch | `branch.suspend` | mutation |
-| POST | `/{branch_id}/reactivate` | Reactivate branch | `branch.reactivate` | mutation |
-| POST | `/{branch_id}/close` | Close branch | `branch.close` | mutation |
+| Method | Path                      | Summary                              | Permission          | Shape    |
+|--------|---------------------------|--------------------------------------|---------------------|----------|
+| GET    | `/`                       | Search branches in the active tenant | `branch.view`       | page     |
+| POST   | `/`                       | Create branch draft                  | `branch.create`     | mutation |
+| GET    | `/{branch_id}`            | Get branch                           | `branch.view`       | item     |
+| POST   | `/{branch_id}/submit`     | Submit branch draft                  | `branch.create`     | mutation |
+| POST   | `/{branch_id}/activate`   | Activate branch                      | `branch.activate`   | mutation |
+| POST   | `/{branch_id}/suspend`    | Suspend branch                       | `branch.suspend`    | mutation |
+| POST   | `/{branch_id}/reactivate` | Reactivate branch                    | `branch.reactivate` | mutation |
+| POST   | `/{branch_id}/close`      | Close branch                         | `branch.close`      | mutation |
 
 Create branch request and detail response:
 
@@ -324,19 +379,19 @@ Create branch request and detail response:
 Base path: `/api/v1/platform/tenants`. List filters: `q`, `status`, `country`,
 `created_from`, `created_to`, `sort_by`, `sort_dir`, `page`, `size`.
 
-| Method | Path | Summary | Permission | Shape |
-| --- | --- | --- | --- | --- |
-| POST | `/` | Create tenant draft | `tenant.create` | mutation |
-| GET | `/` | Search tenants | `tenant.view` | page |
-| GET | `/{tenant_id}` | Get tenant | `tenant.view` | item |
-| PATCH | `/{tenant_id}` | Amend tenant draft | `tenant.update_draft` | mutation |
-| POST | `/{tenant_id}/submit` | Submit tenant draft | `tenant.submit_for_approval` | mutation |
-| POST | `/{tenant_id}/approve` | Approve tenant | `tenant.approve` | mutation, 202 |
-| POST | `/{tenant_id}/reject` | Reject tenant draft | `tenant.reject` | mutation |
-| POST | `/{tenant_id}/suspend` | Suspend tenant | `tenant.suspend` | mutation |
-| POST | `/{tenant_id}/reactivate` | Reactivate tenant | `tenant.reactivate` | mutation |
-| POST | `/{tenant_id}/deprovision` | Deprovision tenant | `tenant.deprovision` | mutation |
-| POST | `/{tenant_id}/bootstrap/retry` | Retry bootstrap | `tenant.bootstrap_retry` | mutation |
+| Method | Path                           | Summary             | Permission                   | Shape         |
+|--------|--------------------------------|---------------------|------------------------------|---------------|
+| POST   | `/`                            | Create tenant draft | `tenant.create`              | mutation      |
+| GET    | `/`                            | Search tenants      | `tenant.view`                | page          |
+| GET    | `/{tenant_id}`                 | Get tenant          | `tenant.view`                | item          |
+| PATCH  | `/{tenant_id}`                 | Amend tenant draft  | `tenant.update_draft`        | mutation      |
+| POST   | `/{tenant_id}/submit`          | Submit tenant draft | `tenant.submit_for_approval` | mutation      |
+| POST   | `/{tenant_id}/approve`         | Approve tenant      | `tenant.approve`             | mutation, 202 |
+| POST   | `/{tenant_id}/reject`          | Reject tenant draft | `tenant.reject`              | mutation      |
+| POST   | `/{tenant_id}/suspend`         | Suspend tenant      | `tenant.suspend`             | mutation      |
+| POST   | `/{tenant_id}/reactivate`      | Reactivate tenant   | `tenant.reactivate`          | mutation      |
+| POST   | `/{tenant_id}/deprovision`     | Deprovision tenant  | `tenant.deprovision`         | mutation      |
+| POST   | `/{tenant_id}/bootstrap/retry` | Retry bootstrap     | `tenant.bootstrap_retry`     | mutation      |
 
 Tenant draft request and response:
 
@@ -393,11 +448,11 @@ Tenant detail response:
 Base path: `/api/v1/platform/tenants/{tenant_id}/branches`. List filters: `q`, `status`,
 `type`, `sort_by`, `sort_dir`, `page`, `size`.
 
-| Method | Path | Summary | Permission | Shape |
-| --- | --- | --- | --- | --- |
-| GET | `/` | Search branches for a platform-selected tenant | `branch.view` | page |
-| POST | `/` | Create branch draft for a platform-selected tenant | `branch.create` | mutation |
-| GET | `/{branch_id}` | Get tenant branch | `branch.view` | item |
+| Method | Path           | Summary                                            | Permission      | Shape    |
+|--------|----------------|----------------------------------------------------|-----------------|----------|
+| GET    | `/`            | Search branches for a platform-selected tenant     | `branch.view`   | page     |
+| POST   | `/`            | Create branch draft for a platform-selected tenant | `branch.create` | mutation |
+| GET    | `/{branch_id}` | Get tenant branch                                  | `branch.view`   | item     |
 
 The create request and branch responses use the same fields as tenant-facing branches.
 
@@ -406,10 +461,10 @@ The create request and branch responses use the same fields as tenant-facing bra
 Base path: `/api/v1/platform/tenants/{tenant_id}/users`. List filters: `q`, `user_status`,
 `membership_status`, `page`, `size`.
 
-| Method | Path | Summary | Permission | Shape |
-| --- | --- | --- | --- | --- |
-| GET | `/` | Search users in a platform-selected tenant | `user.view` | page |
-| GET | `/{user_id}` | Get user in a platform-selected tenant | `user.view` | item |
+| Method | Path         | Summary                                    | Permission  | Shape |
+|--------|--------------|--------------------------------------------|-------------|-------|
+| GET    | `/`          | Search users in a platform-selected tenant | `user.view` | page  |
+| GET    | `/{user_id}` | Get user in a platform-selected tenant     | `user.view` | item  |
 
 User response:
 
@@ -428,11 +483,11 @@ User response:
 
 Base path: `/api/v1/platform/users`.
 
-| Method | Path | Summary | Permission | Shape |
-| --- | --- | --- | --- | --- |
-| POST | `/{user_id}/suspend` | Suspend global user account | `user.suspend` | mutation |
-| POST | `/{user_id}/reactivate` | Reactivate global user account | `user.activate` | mutation |
-| POST | `/{user_id}/deactivate` | Deactivate global user account | `user.deactivate` | mutation |
+| Method | Path                    | Summary                        | Permission        | Shape    |
+|--------|-------------------------|--------------------------------|-------------------|----------|
+| POST   | `/{user_id}/suspend`    | Suspend global user account    | `user.suspend`    | mutation |
+| POST   | `/{user_id}/reactivate` | Reactivate global user account | `user.activate`   | mutation |
+| POST   | `/{user_id}/deactivate` | Deactivate global user account | `user.deactivate` | mutation |
 
 Lifecycle request and response:
 
@@ -453,9 +508,9 @@ Lifecycle request and response:
 
 Base path: `/api/v1/tenant`.
 
-| Method | Path | Summary | Permission | Shape |
-| --- | --- | --- | --- | --- |
-| GET | `/` | Get current tenant from active context | `tenant.view` | item |
+| Method | Path | Summary                                | Permission    | Shape |
+|--------|------|----------------------------------------|---------------|-------|
+| GET    | `/`  | Get current tenant from active context | `tenant.view` | item  |
 
 The response uses `TenantDetailResponse`, including `bootstrap_status` and
 `bootstrap_failure_code`.
@@ -465,11 +520,11 @@ The response uses `TenantDetailResponse`, including `bootstrap_status` and
 Base path: `/api/v1/tenant/users`. List filters: `q`, `user_status`, `membership_status`,
 `page`, `size`.
 
-| Method | Path | Summary | Permission | Shape |
-| --- | --- | --- | --- | --- |
-| GET | `/` | Search users in the active tenant | `user.view` | page |
-| POST | `/` | Invite tenant user | `user.invite` | mutation |
-| GET | `/{user_id}` | Get tenant user | `user.view` | item |
+| Method | Path         | Summary                           | Permission    | Shape    |
+|--------|--------------|-----------------------------------|---------------|----------|
+| GET    | `/`          | Search users in the active tenant | `user.view`   | page     |
+| POST   | `/`          | Invite tenant user                | `user.invite` | mutation |
+| GET    | `/{user_id}` | Get tenant user                   | `user.view`   | item     |
 
 Invite request and response:
 
@@ -513,14 +568,14 @@ Invite request and response:
 Base path: `/api/v1/tenant/memberships`. List filters: `q`, `membership_status`,
 `membership_type`, `sort_by`, `sort_dir`, `page`, `size`.
 
-| Method | Path | Summary | Permission | Shape |
-| --- | --- | --- | --- | --- |
-| GET | `/` | Search tenant memberships | `membership.view` | page |
-| GET | `/{membership_id}` | Get membership | `membership.view` | item |
-| POST | `/{membership_id}/activate` | Approve and activate membership | `user.approve` | mutation |
-| POST | `/{membership_id}/suspend` | Suspend membership | `membership.suspend` | mutation |
-| POST | `/{membership_id}/reactivate` | Reactivate | `membership.reactivate` | mutation |
-| POST | `/{membership_id}/revoke` | Revoke membership | `membership.revoke` | mutation |
+| Method | Path                          | Summary                         | Permission              | Shape    |
+|--------|-------------------------------|---------------------------------|-------------------------|----------|
+| GET    | `/`                           | Search tenant memberships       | `membership.view`       | page     |
+| GET    | `/{membership_id}`            | Get membership                  | `membership.view`       | item     |
+| POST   | `/{membership_id}/activate`   | Approve and activate membership | `user.approve`          | mutation |
+| POST   | `/{membership_id}/suspend`    | Suspend membership              | `membership.suspend`    | mutation |
+| POST   | `/{membership_id}/reactivate` | Reactivate                      | `membership.reactivate` | mutation |
+| POST   | `/{membership_id}/revoke`     | Revoke membership               | `membership.revoke`     | mutation |
 
 Membership response and revoke request:
 
@@ -552,12 +607,12 @@ Membership response and revoke request:
 Base path: `/api/v1/tenant/branch-assignments`. List filters: `branch_id`,
 `assignment_type`, `status`, `sort_by`, `sort_dir`, `page`, `size`.
 
-| Method | Path | Summary | Permission | Shape |
-| --- | --- | --- | --- | --- |
-| GET | `/` | Search branch assignments | `branch_assignment.view` | page |
-| GET | `/{assignment_id}` | Get branch assignment | `branch_assignment.view` | item |
-| POST | `/` | Assign user to branch | `user.assign_branch` | mutation |
-| DELETE | `/{assignment_id}` | Revoke branch assignment | `user.revoke_branch` | mutation |
+| Method | Path               | Summary                   | Permission               | Shape    |
+|--------|--------------------|---------------------------|--------------------------|----------|
+| GET    | `/`                | Search branch assignments | `branch_assignment.view` | page     |
+| GET    | `/{assignment_id}` | Get branch assignment     | `branch_assignment.view` | item     |
+| POST   | `/`                | Assign user to branch     | `user.assign_branch`     | mutation |
+| DELETE | `/{assignment_id}` | Revoke branch assignment  | `user.revoke_branch`     | mutation |
 
 Assign request and response:
 
@@ -637,12 +692,12 @@ Role detail response:
 Base path: `/api/v1/tenant/role-assignments`. List filters: `user_id`, `role_id`,
 `branch_id`, `scope_type`, `status`, `page`, `size`.
 
-| Method | Path | Summary | Permission | Shape |
-| --- | --- | --- | --- | --- |
-| GET | `/` | Search role assignments | `role_assignment.view` | page |
-| GET | `/{assignment_id}` | Get role assignment | `role_assignment.view` | item |
-| POST | `/` | Assign role to user | `user.assign_role` | mutation |
-| DELETE | `/{assignment_id}` | Revoke role assignment | `user.revoke_role` | mutation |
+| Method | Path               | Summary                 | Permission             | Shape    |
+|--------|--------------------|-------------------------|------------------------|----------|
+| GET    | `/`                | Search role assignments | `role_assignment.view` | page     |
+| GET    | `/{assignment_id}` | Get role assignment     | `role_assignment.view` | item     |
+| POST   | `/`                | Assign role to user     | `user.assign_role`     | mutation |
+| DELETE | `/{assignment_id}` | Revoke role assignment  | `user.revoke_role`     | mutation |
 
 Assign role request and response:
 
@@ -671,10 +726,10 @@ Assign role request and response:
 Base path: `/api/v1/tenant/permissions`. List filters: `q`, `risk_level`, `status`,
 `sort_by`, `sort_dir`, `page`, `size`.
 
-| Method | Path | Summary | Permission | Shape |
-| --- | --- | --- | --- | --- |
-| GET | `/` | Search permission catalogue | `permission.view` | page |
-| GET | `/{permission_id}` | Get permission catalogue entry | `permission.view` | item |
+| Method | Path               | Summary                        | Permission        | Shape |
+|--------|--------------------|--------------------------------|-------------------|-------|
+| GET    | `/`                | Search permission catalogue    | `permission.view` | page  |
+| GET    | `/{permission_id}` | Get permission catalogue entry | `permission.view` | item  |
 
 Permission response:
 
@@ -697,10 +752,10 @@ Permission response:
 Base path: `/api/v1/tenant/audit-events`. List filters: `entity_type`, `entity_id`,
 `actor_id`, `action`, `occurred_from`, `occurred_to`, `page`, `size`.
 
-| Method | Path | Summary | Permission | Shape |
-| --- | --- | --- | --- | --- |
-| GET | `/` | Search tenant audit events | `audit.view` | page |
-| GET | `/{event_id}` | Get tenant audit event | `audit.view` | item |
+| Method | Path          | Summary                    | Permission   | Shape |
+|--------|---------------|----------------------------|--------------|-------|
+| GET    | `/`           | Search tenant audit events | `audit.view` | page  |
+| GET    | `/{event_id}` | Get tenant audit event     | `audit.view` | item  |
 
 Audit detail response:
 
@@ -734,14 +789,14 @@ Audit detail response:
 
 Base path: `/api/v1/tenant/business-date`.
 
-| Method | Path | Summary | Permission | Shape |
-| --- | --- | --- | --- | --- |
-| GET | `/` | Get current business date | `business_date.view` | item |
-| GET | `/history` | List business date history | `business_date.view` | page |
-| POST | `/advance` | Advance business date | `business_date.advance` | mutation |
-| POST | `/cob/start` | Start close of business | `cob.start` | mutation |
-| POST | `/cob/complete` | Complete close of business | `cob.complete` | mutation |
-| POST | `/reopen` | Reopen business date | `business_date.reopen` | mutation |
+| Method | Path            | Summary                    | Permission              | Shape    |
+|--------|-----------------|----------------------------|-------------------------|----------|
+| GET    | `/`             | Get current business date  | `business_date.view`    | item     |
+| GET    | `/history`      | List business date history | `business_date.view`    | page     |
+| POST   | `/advance`      | Advance business date      | `business_date.advance` | mutation |
+| POST   | `/cob/start`    | Start close of business    | `cob.start`             | mutation |
+| POST   | `/cob/complete` | Complete close of business | `cob.complete`          | mutation |
+| POST   | `/reopen`       | Reopen business date       | `business_date.reopen`  | mutation |
 
 Advance request and response:
 
@@ -764,12 +819,12 @@ Advance request and response:
 
 Base path: `/api/v1/tenant/settings`. List filters: `page`, `size`.
 
-| Method | Path | Summary | Permission | Shape |
-| --- | --- | --- | --- | --- |
-| GET | `/` | List tenant settings | per-key service authorization | page |
-| GET | `/{key}` | Get tenant setting | per-key service authorization | item |
-| PUT | `/{key}` | Create or update tenant setting | per-key service authorization | mutation |
-| DELETE | `/{key}` | Deactivate tenant setting | per-key service authorization | mutation |
+| Method | Path     | Summary                         | Permission                    | Shape    |
+|--------|----------|---------------------------------|-------------------------------|----------|
+| GET    | `/`      | List tenant settings            | per-key service authorization | page     |
+| GET    | `/{key}` | Get tenant setting              | per-key service authorization | item     |
+| PUT    | `/{key}` | Create or update tenant setting | per-key service authorization | mutation |
+| DELETE | `/{key}` | Deactivate tenant setting       | per-key service authorization | mutation |
 
 Setting update request and response:
 

@@ -17,7 +17,7 @@ class IdempotencyCleanupJob(
     @Job(name = "Cleanup expired API idempotency records")
     @Recurring(
         id = "api-idempotency-cleanup",
-        cron = "\${finaxis.api.idempotency.cleanup-schedule}",
+        cron = $$"""${finaxis.api.idempotency.cleanup-schedule}""",
     )
     @Transactional
     fun cleanup() {

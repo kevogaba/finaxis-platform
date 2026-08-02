@@ -217,6 +217,40 @@ class AuthFlowIntegrationTests {
     }
 
     @Test
+    fun `organisation discovery lists selectable organisations before context selection`() {
+        mockMvc
+            .get("/api/v1/auth/organisations") {
+                with(localJwt())
+            }.andExpect {
+                status { isOk() }
+                jsonPath("$.items[0].organisation_id") { value(LOCAL_ORGANISATION_ID) }
+                jsonPath("$.items[0].membership_id") { value(LOCAL_MEMBERSHIP_ID) }
+                jsonPath("$.items[0].tenant_code") { value("FINAXIS-LOCAL") }
+                jsonPath("$.items[0].organisation_status") { value("ACTIVE") }
+                jsonPath("$.items[0].membership_status") { value("ACTIVE") }
+                jsonPath("$.page.total_items") { value(1) }
+            }
+    }
+
+    @Test
+    fun `branch discovery lists assigned branches after organisation selection`() {
+        val organisationContextToken = selectOrganisation()
+
+        mockMvc
+            .get("/api/v1/auth/branches") {
+                with(localJwt())
+                header(ActiveOrganisationContextService.HEADER, organisationContextToken)
+            }.andExpect {
+                status { isOk() }
+                jsonPath("$.items[*].branch_id") {
+                    value(containsInAnyOrder(HEAD_OFFICE_BRANCH_ID, OPERATIONS_BRANCH_ID))
+                }
+                jsonPath("$.items[*].branch_code") { value(containsInAnyOrder("HQ", "OPS")) }
+                jsonPath("$.page.total_items") { value(2) }
+            }
+    }
+
+    @Test
     fun `profile endpoint requires active organisation context`() {
         mockMvc
             .get("/api/v1/auth/me") {

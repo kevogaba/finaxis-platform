@@ -23,7 +23,7 @@ class KeycloakUserProvisioningJobRequestHandler(
     private val dispatchOutcomeAuditor: DispatchOutcomeAuditor,
     private val bootstrapService: InitialAdministratorBootstrapService,
     private val failureRecorder: InitialAdministratorBootstrapFailureRecorder,
-    @Value("\${finaxis.keycloak.admin.realm:finaxis}") private val realm: String = "finaxis",
+    @Value($$"""${finaxis.keycloak.admin.realm:finaxis}""") private val realm: String = "finaxis",
 ) : JobRequestHandler<KeycloakUserProvisioningJobRequest> {
     /** Runs Keycloak provisioning idempotently and advances the local user and membership FSMs. */
     override fun run(jobRequest: KeycloakUserProvisioningJobRequest) {

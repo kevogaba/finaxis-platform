@@ -11,8 +11,10 @@ import io.swagger.v3.oas.models.media.Schema
 import io.swagger.v3.oas.models.media.StringSchema
 import io.swagger.v3.oas.models.parameters.Parameter
 import io.swagger.v3.oas.models.security.SecurityScheme
+import org.springdoc.core.customizers.GlobalOperationCustomizer
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.web.method.HandlerMethod
 
 /** Configures the shared public OpenAPI contract for every versioned REST endpoint. */
 @Configuration(proxyBeanMethods = false)
@@ -23,6 +25,27 @@ class FoundationOpenApiConfiguration {
         OpenAPI()
             .info(apiInfo())
             .components(components())
+
+    /**
+     * Documents the active organisation transport on every operation except the two that
+     * establish it: organisation discovery and organisation selection. Every other operation,
+     * including platform-administration routes and branch selection, resolves its caller from
+     * the active organisation context and therefore needs it documented.
+     */
+    @Bean
+    fun activeOrganisationContextOperationCustomizer(): GlobalOperationCustomizer =
+        GlobalOperationCustomizer { operation, handlerMethod ->
+            if (handlerMethod.requiresActiveOrganisationContext()) {
+                val parameters = operation.parameters ?: mutableListOf()
+                if (parameters.none { it.`$ref` == ACTIVE_ORGANISATION_CONTEXT_PARAMETER_REF }) {
+                    parameters.add(
+                        Parameter().`$ref`(ACTIVE_ORGANISATION_CONTEXT_PARAMETER_REF),
+                    )
+                    operation.parameters = parameters
+                }
+            }
+            operation
+        }
 
     private fun apiInfo(): Info =
         Info()
@@ -70,8 +93,12 @@ class FoundationOpenApiConfiguration {
         ).addParameters(
             "ActiveOrganisationContext",
             headerParameter(
-                ActiveOrganisationContextService.HEADER,
-                "Signed active organisation context token.",
+                name = ActiveOrganisationContextService.HEADER,
+                description =
+                    "Signed active organisation context token. Required unless the caller " +
+                        "already has an established active-organisation session, for " +
+                        "example a browser client that completed selection earlier in the " +
+                        "same session.",
             ),
         ).addParameters(
             "RateLimitLimit",
@@ -117,4 +144,18 @@ class FoundationOpenApiConfiguration {
             .description(description)
             .`in`("header")
             .schema(Schema<Any>().type(type).format(format))
+
+    private fun HandlerMethod.requiresActiveOrganisationContext(): Boolean =
+        !(beanType.simpleName == "AuthController" && method.name in CONTEXT_FREE_AUTH_OPERATIONS)
+
+    private companion object {
+        const val ACTIVE_ORGANISATION_CONTEXT_PARAMETER_REF =
+            "#/components/parameters/ActiveOrganisationContext"
+
+        // AuthController.availableOrganisations() and .selectOrganisation() are the only
+        // operations that run before an active organisation context exists. Every other
+        // operation, including AuthController.selectBranch()/.availableBranches() and every
+        // platform-administration controller, resolves its caller from that context.
+        val CONTEXT_FREE_AUTH_OPERATIONS = setOf("availableOrganisations", "selectOrganisation")
+    }
 }

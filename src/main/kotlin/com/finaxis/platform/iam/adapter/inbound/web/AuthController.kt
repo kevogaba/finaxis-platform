@@ -1,7 +1,9 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
 import com.finaxis.platform.common.web.api.ApiJsonCodec
+import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
+import com.finaxis.platform.common.web.api.apiPageOf
 import com.finaxis.platform.common.web.idempotency.IdempotencyReplayHandler
 import com.finaxis.platform.common.web.idempotency.IdempotencyReplayMode
 import com.finaxis.platform.common.web.idempotency.IdempotencyReplayResponse
@@ -24,15 +26,19 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement
 import io.swagger.v3.oas.annotations.tags.Tag
 import jakarta.servlet.http.HttpSession
 import jakarta.validation.Valid
+import jakarta.validation.constraints.Max
+import jakarta.validation.constraints.Min
 import jakarta.validation.constraints.NotNull
 import org.springframework.http.HttpStatus
 import org.springframework.security.core.Authentication
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.stereotype.Component
+import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.ResponseStatus
 import org.springframework.web.bind.annotation.RestController
 import java.util.UUID
@@ -44,6 +50,34 @@ data class SelectOrganisationRequest(
     @field:NotNull
     @field:Schema(name = "organisation_id")
     val organisationId: UUID?,
+)
+
+/** Organisation membership visible to an authenticated user before context selection. */
+data class AvailableOrganisationResponse(
+    @field:Schema(name = "organisation_id")
+    val organisationId: UUID,
+    @field:Schema(name = "membership_id")
+    val membershipId: UUID,
+    @field:Schema(name = "tenant_code")
+    val tenantCode: String,
+    @field:Schema(name = "display_name")
+    val displayName: String,
+    @field:Schema(name = "organisation_status")
+    val organisationStatus: String,
+    @field:Schema(name = "membership_status")
+    val membershipStatus: String,
+)
+
+/** Branch assignment visible after an authenticated user selects an organisation. */
+data class AvailableBranchResponse(
+    @field:Schema(name = "branch_id")
+    val branchId: UUID,
+    @field:Schema(name = "branch_code")
+    val branchCode: String,
+    @field:Schema(name = "branch_name")
+    val branchName: String,
+    @field:Schema(name = "branch_status")
+    val branchStatus: String,
 )
 
 /**
@@ -191,6 +225,108 @@ class AuthSelectionReplayHandler(
 class AuthController(
     private val service: AuthSelectionService,
 ) {
+    /** Lists active branches available after organisation selection. */
+    @GetMapping("/branches")
+    @Operation(
+        summary = "List available branches",
+        description =
+            "Lists active branches assigned to the authenticated user's active organisation " +
+                "membership. This endpoint requires the active organisation context and " +
+                "auth.select_branch permission.",
+        security = [SecurityRequirement(name = "bearer-key")],
+    )
+    @ApiResponses(
+        ApiResponse(
+            responseCode = "200",
+            description = "Available branch page",
+            content = [Content(schema = Schema(implementation = ApiPage::class))],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Active organisation context or branch-selection permission is missing",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+    )
+    fun availableBranches(
+        authentication: Authentication,
+        @RequestParam(defaultValue = "0") @Min(0) page: Int,
+        @RequestParam(defaultValue = "25") @Min(1) @Max(MAXIMUM_PAGE_SIZE) size: Int,
+        session: HttpSession,
+    ): ApiPage<AvailableBranchResponse> {
+        val result =
+            service.availableBranches(
+                keycloakSubject(authentication),
+                activeContext(authentication, session),
+                page,
+                size,
+            )
+        return apiPageOf(
+            items =
+                result.items.map { branch ->
+                    AvailableBranchResponse(
+                        branchId = branch.branchId,
+                        branchCode = branch.branchCode,
+                        branchName = branch.branchName,
+                        branchStatus = branch.branchStatus,
+                    )
+                },
+            number = page,
+            size = size,
+            totalItems = result.totalItems,
+        )
+    }
+
+    /** Lists active organisations that the authenticated user can select. */
+    @GetMapping("/organisations")
+    @Operation(
+        summary = "List available organisations",
+        description =
+            "Lists active organisations where the authenticated user has an active membership " +
+                "and the auth.select_organisation permission. This endpoint does not require " +
+                "an active organisation context.",
+        security = [SecurityRequirement(name = "bearer-key")],
+    )
+    @ApiResponses(
+        ApiResponse(
+            responseCode = "200",
+            description = "Available organisation page",
+            content = [Content(schema = Schema(implementation = ApiPage::class))],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+    )
+    fun availableOrganisations(
+        authentication: Authentication,
+        @RequestParam(defaultValue = "0") @Min(0) page: Int,
+        @RequestParam(defaultValue = "25") @Min(1) @Max(MAXIMUM_PAGE_SIZE) size: Int,
+    ): ApiPage<AvailableOrganisationResponse> {
+        val result = service.availableOrganisations(keycloakSubject(authentication), page, size)
+        return apiPageOf(
+            items =
+                result.items.map { selection ->
+                    AvailableOrganisationResponse(
+                        organisationId = selection.organisationId,
+                        membershipId = selection.membershipId,
+                        tenantCode = selection.tenantCode,
+                        displayName = selection.displayName,
+                        organisationStatus = selection.organisationStatus.name,
+                        membershipStatus = selection.membershipStatus.name,
+                    )
+                },
+            number = page,
+            size = size,
+            totalItems = result.totalItems,
+        )
+    }
+
     /**
      * Selects an active organisation and stores the resulting context in the browser session.
      */
@@ -382,6 +518,10 @@ class AuthController(
             ?: session.getAttribute(
                 SessionActiveOrganisationContextResolver.ATTRIBUTE,
             ) as? ActiveOrganisationContext
+
+    private companion object {
+        const val MAXIMUM_PAGE_SIZE = 100L
+    }
 }
 
 private fun keycloakSubject(authentication: Authentication): String {

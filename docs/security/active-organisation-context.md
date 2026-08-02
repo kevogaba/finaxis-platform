@@ -7,6 +7,18 @@ All tenant-scoped requests require two pieces of information:
 
 ## Browser Flow
 
+After authenticating with Keycloak, clients discover selectable organisations without an active
+context:
+
+```http
+GET /api/v1/auth/organisations?page=0&size=25
+Authorization: Bearer <keycloak-jwt>
+```
+
+The response is paginated and contains only active organisations where the user has an active
+membership and `auth.select_organisation` permission. Clients pass the selected
+`organisation_id` to the selection call.
+
 Browser clients call:
 
 ```http
@@ -27,7 +39,19 @@ currently assigned to an ACTIVE branch in the selected organisation.
 
 If the membership has exactly one assigned branch, the branch is auto-selected and the returned context includes `branchId`.
 
-If the membership has more than one assigned branch, the response sets `requiresBranchSelection` to `true` and includes `assignedBranchIds`. The browser then calls:
+If the membership has more than one assigned branch, the response sets `requiresBranchSelection` to `true` and includes `assignedBranchIds`.
+
+Before selecting, clients may discover the assigned branches:
+
+```http
+GET /api/v1/auth/branches?page=0&size=25
+Authorization: Bearer <keycloak-jwt>
+```
+
+This request uses the active organisation context stored in the browser session. Headless clients
+also send `X-Active-Organisation-Context`.
+
+The browser then calls:
 
 ```http
 POST /api/v1/auth/select-branch
