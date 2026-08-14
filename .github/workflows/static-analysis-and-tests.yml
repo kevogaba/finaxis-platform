@@ -1,12 +1,9 @@
 name: Static Analysis, Qodana, and Jacoco Verification
 
 on:
-  pull_request:
   push:
     branches-ignore:
       - "main"
-      - "dependabot*"
-      - "dependabot/**"
   workflow_dispatch:
 
 permissions:

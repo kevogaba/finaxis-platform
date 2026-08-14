@@ -3,6 +3,7 @@ package com.finaxis.platform.lifecycle.application
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.audit.toAuditFailureReason
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.TransitionActor
@@ -239,7 +240,7 @@ class FoundationLifecycleService(
                     } else {
                         AuditOutcome.FAILURE
                     },
-                reason = ex.message,
+                reason = ex.toAuditFailureReason(),
                 requestId = command.requestId,
             ),
         )

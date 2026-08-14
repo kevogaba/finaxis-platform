@@ -1,6 +1,6 @@
 package com.finaxis.platform.lifecycle
 
-import com.finaxis.platform.TestcontainersConfiguration
+import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.lifecycle.application.CreateOrUpdateTenantSettingCommand
 import com.finaxis.platform.lifecycle.application.GetTenantSettingQuery
 import com.finaxis.platform.lifecycle.application.ListTenantSettingsQuery
@@ -17,7 +17,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 
-@Import(TestcontainersConfiguration::class)
+@Import(PostgresTestConfiguration::class)
 @SpringBootTest
 @TestConstructor(autowireMode = TestConstructor.AutowireMode.ALL)
 class TenantSettingQueryIntegrationTests(

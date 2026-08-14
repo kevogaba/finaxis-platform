@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.application
 
 import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.audit.toAuditFailureReason
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningException
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningGateway
 import com.finaxis.platform.lifecycle.application.port.outbound.KeycloakUserProvisioningRequest
@@ -93,7 +94,8 @@ class KeycloakUserProvisioningJobRequestHandler(
             tenantId = jobRequest.organisationId,
             action = KEYCLOAK_PROVISIONING_ACTION,
             resourceId = jobRequest.userId.toString(),
-            reason = ex.message ?: ex.javaClass.name,
+            reason = ex.toAuditFailureReason(),
+            detail = ex.message ?: ex.javaClass.name,
             metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
         )
         failureRecorder.recordFailure(jobRequest.organisationId, ex)

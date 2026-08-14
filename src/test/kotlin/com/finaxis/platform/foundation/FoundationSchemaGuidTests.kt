@@ -15,33 +15,6 @@ import kotlin.test.assertTrue
 class FoundationSchemaGuidTests(
     private val jdbcTemplate: JdbcTemplate,
 ) {
-    private val applicationTables =
-        listOf(
-            "api_idempotency_record",
-            "audit_event",
-            "branch",
-            "branch_transition_log",
-            "business_date",
-            "business_date_history",
-            "identity_dispatch_log",
-            "keycloak_identity_link",
-            "membership_permission",
-            "organisation",
-            "organisation_initial_administrator_bootstrap",
-            "organisation_setting",
-            "organisation_transition_log",
-            "permission",
-            "reference_sequence",
-            "role",
-            "role_permission",
-            "user_account",
-            "user_account_transition_log",
-            "user_branch_assignment",
-            "user_organisation_membership",
-            "user_organisation_membership_transition_log",
-            "user_role_assignment",
-        )
-
     @Test
     fun `every application table declares a non-null uuidv7 guid column`() {
         val rows =
@@ -54,7 +27,7 @@ class FoundationSchemaGuidTests(
                 """.trimIndent(),
             )
 
-        assertEquals(applicationTables, rows.map { it["table_name"] as String })
+        assertEquals(APPLICATION_TABLES, rows.map { it["table_name"] as String })
         rows.forEach { row ->
             assertEquals("uuid", row["data_type"], "guid type on ${row["table_name"]}")
             assertEquals("NO", row["is_nullable"], "guid nullability on ${row["table_name"]}")
@@ -84,7 +57,7 @@ class FoundationSchemaGuidTests(
                 String::class.java,
             )
 
-        assertEquals(applicationTables, indexed)
+        assertEquals(APPLICATION_TABLES, indexed)
     }
 
     @Test

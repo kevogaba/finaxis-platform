@@ -350,6 +350,37 @@ class OrganisationInitialAdministratorBootstrapServiceTests {
             .bootstrap(organisationId)
     }
 
+    @Test
+    fun `retryBootstrap audits a repeat failure instead of staying silent`() {
+        val organisationId = activeDraft()
+        adminBootstrapStore.updateStatus(
+            organisationId,
+            InitialAdministratorBootstrapStatus.FAILED,
+            lastFailureCode = "Keycloak unavailable",
+        )
+        val failure = IllegalStateException("Keycloak unavailable")
+        org.mockito.Mockito
+            .doThrow(failure)
+            .`when`(bootstrapService)
+            .bootstrap(organisationId)
+
+        assertFailsWith<IllegalStateException> {
+            organisations.retryBootstrap(
+                RetryInitialAdministratorBootstrapCommand(
+                    organisationId,
+                    PlatformCaller(uuidV7(), uuidV7()),
+                ),
+            )
+        }
+
+        val recorded = audits.events.single { it.action == "tenant.bootstrap_retry" }
+        assertEquals(
+            com.finaxis.platform.common.audit.AuditOutcome.FAILURE,
+            recorded.outcome,
+        )
+        assertEquals(organisationId.toString(), recorded.resourceId)
+    }
+
     private fun activeDraft(): UUID {
         val organisationId = uuidV7()
         lifecyclePersistence.organisations[organisationId] =

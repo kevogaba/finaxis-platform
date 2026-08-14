@@ -69,7 +69,7 @@ class ApplicationInviteHandlerTests {
         assertEquals("FAILED", dispatch.status)
         val dispatchAudit = audits.items.single { it.action == "user.application_invite" }
         assertEquals(AuditOutcome.FAILURE, dispatchAudit.outcome)
-        assertEquals("provider unavailable", dispatchAudit.reason)
+        assertEquals("IllegalStateException", dispatchAudit.reason)
         assertEquals(SystemActor.ID.toString(), dispatchAudit.actorId)
     }
 

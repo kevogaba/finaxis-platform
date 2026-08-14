@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestConstructor
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 @Import(PostgresTestConfiguration::class)
@@ -112,8 +113,83 @@ class FoundationSeedDataTests(
         assertTrue((row["perm_count"] as Long) > 0)
     }
 
+    @Test
+    fun `bootstrap administrator can invite and approve tenant users`() {
+        val actual =
+            jdbcTemplate
+                .queryForList(
+                    """
+                    SELECT p.permission_code
+                    FROM role_permission rp
+                    JOIN permission p ON p.id = rp.permission_id
+                    WHERE rp.role_id = '77777777-7777-7777-7777-777777777777'
+                    """.trimIndent(),
+                    String::class.java,
+                ).filterNotNull()
+
+        assertEquals(expectedLocalAdminPermissionCodes.sorted(), actual.sorted())
+    }
+
+    @Test
+    fun `a distinct bootstrap checker exists to approve the administrator's first invitation`() {
+        val row =
+            jdbcTemplate.queryForMap(
+                """
+                SELECT u.status AS user_status,
+                       m.membership_status,
+                       r.status AS role_status,
+                       r.role_id,
+                       (SELECT COUNT(*) FROM keycloak_identity_link k
+                         WHERE k.user_id = u.id AND k.unlinked_at IS NULL) AS identity_count
+                FROM user_account u
+                JOIN user_organisation_membership m ON m.user_id = u.id
+                JOIN user_role_assignment r ON r.user_id = u.id AND r.status = 'ACTIVE'
+                WHERE u.id = '$CHECKER_USER_ID'
+                  AND m.organisation_id = '$BOOTSTRAP_ORGANISATION_ID'
+                """.trimIndent(),
+            )
+
+        assertEquals("ACTIVE", row["user_status"])
+        assertEquals("ACTIVE", row["membership_status"])
+        assertEquals("ACTIVE", row["role_status"])
+        assertEquals(LOCAL_ADMIN_ROLE_ID, row["role_id"].toString())
+        assertEquals(1L, row["identity_count"])
+        assertNotEquals(BOOTSTRAP_ADMINISTRATOR_ID, CHECKER_USER_ID)
+    }
+
     private companion object {
+        const val BOOTSTRAP_ORGANISATION_ID = "22222222-2222-2222-2222-222222222222"
+        const val BOOTSTRAP_ADMINISTRATOR_ID = "11111111-1111-1111-1111-111111111111"
+        const val LOCAL_ADMIN_ROLE_ID = "77777777-7777-7777-7777-777777777777"
+        const val CHECKER_USER_ID = "dddddddd-dddd-dddd-dddd-dddddddddd01"
         const val EXPECTED_CATALOGUE_SIZE = 54
+
+        val expectedLocalAdminPermissionCodes =
+            listOf(
+                "auth.select_branch",
+                "auth.select_organisation",
+                "branch.reactivate",
+                "branch.view",
+                "branch_assignment.view",
+                "iam.profile.read",
+                "membership.reactivate",
+                "membership.revoke",
+                "membership.suspend",
+                "membership.view",
+                "permission.view",
+                "role.activate",
+                "role.deactivate",
+                "role.remove_permission",
+                "role.view",
+                "role_assignment.view",
+                "settings.view",
+                "user.approve",
+                "user.assign_branch",
+                "user.invite",
+                "user.revoke_branch",
+                "user.revoke_role",
+                "user.view",
+            )
 
         val expectedPermissionCodes =
             listOf(

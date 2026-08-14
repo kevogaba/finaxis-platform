@@ -35,13 +35,17 @@ write paths (all production writes use jOOQ) — see `docs/adr/0014-spring-data-
 
 ## Database and identifiers
 
-The schema is exactly three Flyway migrations and the greenfield window is **closed** — every
-further change is a forward-only `V4+` migration. Never edit `V1`–`V3`.
+The greenfield window is **closed** — `V1`–`V3` are the frozen base and every further change is a
+forward-only `V4+` migration. Never edit `V1`–`V3`.
 
 - `V1__foundation_schema.sql` — all 23 application tables, constraints, indexes, comments
 - `V2__platform_reference_data.sql` — 54-code permission catalogue, `PLATFORM` organisation, the
   two platform roles and their grants
 - `V3__bootstrap_tenant_and_administrator.sql` — bootstrap tenant and first administrator
+- `V4__grant_local_admin_invite_approve_and_seed_checker.sql` — grants `user.invite`/
+  `user.approve`/`user.assign_branch` to the bootstrapped `local-admin` role, missing from `V3`,
+  and seeds a second bootstrap actor (`local.checker`) holding the same role, since `local.admin`
+  cannot approve its own invitations
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 

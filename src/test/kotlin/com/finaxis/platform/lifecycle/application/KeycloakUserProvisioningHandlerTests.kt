@@ -233,7 +233,7 @@ class KeycloakUserProvisioningHandlerTests {
         )
         val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
-        assertEquals("keycloak unavailable", dispatchAudit.reason)
+        assertEquals("IllegalStateException", dispatchAudit.reason)
     }
 
     @Test
@@ -264,10 +264,7 @@ class KeycloakUserProvisioningHandlerTests {
         )
         val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
-        assertEquals(
-            "Membership requires an active branch assignment.",
-            dispatchAudit.reason,
-        )
+        assertEquals("ConflictException", dispatchAudit.reason)
     }
 
     private fun keycloakRequest(

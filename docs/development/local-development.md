@@ -22,16 +22,21 @@ Postgres contains two local databases:
 
 Keycloak imports `docker/keycloak/import/finaxis-realm.json` on first startup.
 
-Local user:
+Local users:
 
 - username: `local.admin`
 - password: `local-admin`
 - Keycloak subject: `11111111-1111-1111-1111-111111111111`
 
-Flyway seeds the matching application user, organisation, membership, branches, role,
-and permissions. The local profile additionally seeds the platform membership needed for
-the full smoke path. The seeded organisation and branch IDs are intentionally stable so
-smoke tests can be scripted.
+- username: `local.checker`
+- password: `local-checker`
+- Keycloak subject: `dddddddd-dddd-dddd-dddd-dddddddddd01`
+
+Flyway seeds the matching application users, organisation, membership, branches, role,
+and permissions. `local.checker` holds the same `local-admin` role so it can approve
+`local.admin`'s invitations - `local.admin` cannot approve its own. The local profile
+additionally seeds the platform membership needed for the full smoke path. The seeded
+organisation and branch IDs are intentionally stable so smoke tests can be scripted.
 
 ## Running Locally
 
