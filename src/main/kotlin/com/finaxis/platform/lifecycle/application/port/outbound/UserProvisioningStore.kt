@@ -20,6 +20,9 @@ interface UserProvisioningAccountStore {
     /** Resolves the current organisation state within the local lifecycle boundary. */
     fun organisationState(organisationId: UUID): OrganisationLifecycleState?
 
+    /** Resolves the organisation's display name for outbound communications. */
+    fun organisationDisplayName(organisationId: UUID): String? = null
+
     /** Finds an application user by case-insensitive email address. */
     fun findUserIdByEmail(email: String): UUID?
 

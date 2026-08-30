@@ -201,6 +201,18 @@ class JooqUserProvisioningStoreTests(
     }
 
     @Test
+    fun `resolves organisation display name`() {
+        val organisationId = insertOrganisation(displayName = "Acme Bank")
+
+        assertEquals("Acme Bank", store.organisationDisplayName(organisationId))
+    }
+
+    @Test
+    fun `returns null organisation display name for an unknown organisation`() {
+        assertNull(store.organisationDisplayName(uuidV7()))
+    }
+
+    @Test
     fun `resolves role ID by code`() {
         val organisationId = insertOrganisation()
         val roleId = insertRole(organisationId)
@@ -217,6 +229,7 @@ class JooqUserProvisioningStoreTests(
 
     private fun insertOrganisation(
         status: OrganisationLifecycleState = OrganisationLifecycleState.ACTIVE,
+        displayName: String = "Test Organisation",
     ): UUID {
         val id = uuidV7()
         val now = OffsetDateTime.now()
@@ -224,7 +237,7 @@ class JooqUserProvisioningStoreTests(
             .insertInto(ORGANISATION)
             .set(ORGANISATION.ID, id)
             .set(ORGANISATION.TENANT_CODE, "tenant-$id")
-            .set(ORGANISATION.DISPLAY_NAME, "Test Organisation")
+            .set(ORGANISATION.DISPLAY_NAME, displayName)
             .set(ORGANISATION.COUNTRY_CODE, "KE")
             .set(ORGANISATION.BASE_CURRENCY_CODE, "KES")
             .set(ORGANISATION.TIMEZONE, "Africa/Nairobi")

@@ -53,6 +53,13 @@ private class JooqUserProvisioningAccountStore(
             .fetchOne(ORGANISATION.STATUS)
             ?.let(OrganisationLifecycleState::valueOf)
 
+    override fun organisationDisplayName(organisationId: UUID): String? =
+        dsl
+            .select(ORGANISATION.DISPLAY_NAME)
+            .from(ORGANISATION)
+            .where(ORGANISATION.ID.eq(organisationId))
+            .fetchOne(ORGANISATION.DISPLAY_NAME)
+
     override fun findUserIdByEmail(email: String): UUID? =
         dsl
             .select(USER_ACCOUNT.ID)

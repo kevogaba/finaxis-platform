@@ -6,10 +6,12 @@
       "common::audit",
       "common::context",
       "common::id",
+      "common::jobs",
       "common::persistence",
       "common::transitions",
       "common::web-api",
       "common::web-idempotency",
+      "notifications::email",
       "jooq"
     })
 package com.finaxis.platform.lifecycle;

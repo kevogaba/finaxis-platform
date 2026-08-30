@@ -13,6 +13,13 @@ import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
+import com.finaxis.platform.notifications.application.port.outbound.email.EmailCategory
+import com.finaxis.platform.notifications.application.port.outbound.email.EmailDeliveryReceipt
+import com.finaxis.platform.notifications.application.port.outbound.email.EmailGateway
+import com.finaxis.platform.notifications.application.port.outbound.email.EmailMessage
+import com.finaxis.platform.notifications.application.port.outbound.email.PermanentEmailDeliveryException
+import com.finaxis.platform.notifications.application.port.outbound.email.RetryableEmailDeliveryException
+import org.jobrunr.JobRunrException
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -27,7 +34,12 @@ class ApplicationInviteHandlerTests {
     private val clock = Clock.fixed(Instant.parse("2026-07-14T12:00:00Z"), ZoneOffset.UTC)
     private val auditService = AuditService(audits, clock)
     private val handler =
-        ApplicationInviteJobRequestHandler(store, DispatchOutcomeAuditor(store, auditService))
+        ApplicationInviteJobRequestHandler(
+            store,
+            EmailGateway { EmailDeliveryReceipt("msg-1") },
+            InMemoryJobStepGuard(),
+            DispatchOutcomeAuditor(store, auditService),
+        )
 
     @Test
     fun `application invite marks dispatch succeeded`() {
@@ -73,6 +85,107 @@ class ApplicationInviteHandlerTests {
         assertEquals(SystemActor.ID.toString(), dispatchAudit.actorId)
     }
 
+    @Test
+    fun `application invite sends the email before marking dispatch succeeded`() {
+        val dispatchKey = "user-1:org-1:APPLICATION_INVITE"
+        store.dispatches[dispatchKey] = InviteDispatchState("PENDING")
+        val sentMessages = mutableListOf<EmailMessage>()
+        val gateway =
+            EmailGateway { message ->
+                sentMessages.add(message)
+                EmailDeliveryReceipt("msg-1")
+            }
+        val handler =
+            ApplicationInviteJobRequestHandler(
+                store,
+                gateway,
+                InMemoryJobStepGuard(),
+                DispatchOutcomeAuditor(store, auditService),
+            )
+
+        handler.run(applicationInviteRequest(dispatchKey))
+
+        assertEquals(1, sentMessages.size)
+        val sent = sentMessages.single()
+        assertEquals(EmailCategory.ORGANISATION_INVITE, sent.category)
+        assertEquals("Ada Lovelace", sent.recipientDisplayName)
+        assertEquals("Acme Bank", sent.organisationDisplayName)
+        assertEquals("SUCCEEDED", store.dispatches.getValue(dispatchKey).status)
+    }
+
+    @Test
+    fun `permanent email failure marks dispatch failed and throws a do-not-retry exception`() {
+        val dispatchKey = "user-1:org-1:APPLICATION_INVITE"
+        store.dispatches[dispatchKey] = InviteDispatchState("PENDING")
+        val gateway = EmailGateway { throw PermanentEmailDeliveryException("bad address") }
+        val handler =
+            ApplicationInviteJobRequestHandler(
+                store,
+                gateway,
+                InMemoryJobStepGuard(),
+                DispatchOutcomeAuditor(store, auditService),
+            )
+
+        val exception =
+            assertFailsWith<JobRunrException> { handler.run(applicationInviteRequest(dispatchKey)) }
+
+        assertEquals(true, exception.isProblematicAndDoNotRetry())
+        assertEquals("FAILED", store.dispatches.getValue(dispatchKey).status)
+    }
+
+    @Test
+    fun `retryable email failure marks dispatch failed and rethrows`() {
+        val dispatchKey = "user-1:org-1:APPLICATION_INVITE"
+        store.dispatches[dispatchKey] = InviteDispatchState("PENDING")
+        val gateway = EmailGateway { throw RetryableEmailDeliveryException("timeout") }
+        val handler =
+            ApplicationInviteJobRequestHandler(
+                store,
+                gateway,
+                InMemoryJobStepGuard(),
+                DispatchOutcomeAuditor(store, auditService),
+            )
+
+        assertFailsWith<RetryableEmailDeliveryException> {
+            handler.run(applicationInviteRequest(dispatchKey))
+        }
+
+        assertEquals("FAILED", store.dispatches.getValue(dispatchKey).status)
+    }
+
+    @Test
+    fun `retrying an already-completed step does not send a second email`() {
+        val dispatchKey = "user-1:org-1:APPLICATION_INVITE"
+        store.dispatches[dispatchKey] = InviteDispatchState("PENDING")
+        val sentMessages = mutableListOf<EmailMessage>()
+        val gateway =
+            EmailGateway { message ->
+                sentMessages.add(message)
+                EmailDeliveryReceipt("msg-1")
+            }
+        val stepGuard = InMemoryJobStepGuard()
+        // Simulate a retry after a later failure by re-invoking run() against the same guard,
+        // without resetting dispatch status to PENDING in between.
+        val handler =
+            ApplicationInviteJobRequestHandler(
+                store,
+                gateway,
+                stepGuard,
+                DispatchOutcomeAuditor(store, auditService),
+            )
+        store.failure = IllegalStateException("boom")
+        assertFailsWith<IllegalStateException> {
+            handler.run(
+                applicationInviteRequest(dispatchKey),
+            )
+        }
+        store.failure = null
+
+        handler.run(applicationInviteRequest(dispatchKey))
+
+        assertEquals(1, sentMessages.size)
+    }
+
     private fun applicationInviteRequest(dispatchKey: String): ApplicationInviteJobRequest =
         ApplicationInviteJobRequest(
             organisationId = uuidV7(),
@@ -87,6 +200,20 @@ private class ApplicationInviteStoreFake : UserProvisioningStore {
     val dispatches = mutableMapOf<String, InviteDispatchState>()
     var succeededCalls = 0
     var failure: RuntimeException? = null
+    var snapshot: MembershipProvisioningSnapshot? =
+        MembershipProvisioningSnapshot(
+            id = uuidV7(),
+            userId = uuidV7(),
+            status = MembershipLifecycleState.PENDING_APPROVAL,
+            type = MembershipType.STAFF,
+            email = "member@example.test",
+            username = "member",
+            displayName = "Ada Lovelace",
+            userStatus = UserLifecycleState.INVITED,
+            sendKeycloakInvite = true,
+            sendApplicationInvite = true,
+        )
+    var organisationName: String? = "Acme Bank"
 
     override fun dispatchStatus(dispatchKey: String): String? = dispatches[dispatchKey]?.status
 
@@ -156,7 +283,9 @@ private class ApplicationInviteStoreFake : UserProvisioningStore {
     override fun membershipSnapshot(
         organisationId: UUID,
         membershipId: UUID,
-    ): MembershipProvisioningSnapshot? = null
+    ): MembershipProvisioningSnapshot? = snapshot
+
+    override fun organisationDisplayName(organisationId: UUID): String? = organisationName
 
     override fun membershipExists(
         organisationId: UUID,
@@ -230,5 +359,16 @@ private class ApplicationInviteAuditCapture : AuditEventRepository {
 
     override fun save(event: AuditEvent) {
         items.add(event)
+    }
+}
+
+private class InMemoryJobStepGuard : com.finaxis.platform.common.jobs.JobStepGuard {
+    private val completedSteps = mutableSetOf<String>()
+
+    override fun runOnce(
+        step: String,
+        action: () -> Unit,
+    ) {
+        if (completedSteps.add(step)) action()
     }
 }
