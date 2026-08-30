@@ -76,6 +76,13 @@ services:
     image: 'redis:8.8.0'
     ports:
       - '6379:6379'
+  mailpit:
+    image: 'axllent/mailpit:v1.27.5'
+    ports:
+      - '1025:1025'
+      - '8025:8025'
+    labels:
+      org.springframework.boot.ignore: true
 
 volumes:
   postgres-data:

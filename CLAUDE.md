@@ -27,11 +27,14 @@ domain events rather than inventing another mechanism: transition `eventFactory`
 `target`) → thin `@RabbitListener` → application service → JobRunr job. See
 `docs/adr/0004-membership-activation-notification-pipeline.md`.
 
-Known follow-ups (do not treat as bugs): `notifications` email delivery is stubbed (logs only);
-`config` intentionally does not declare an `@ApplicationModule` because it is infrastructure
-wiring rather than a domain module; JaCoCo coverage verification is scoped to `iam` only; the 18
-Spring Data JDBC entities in `FoundationJdbcEntities.kt` are convention scaffolding, not live
-write paths (all production writes use jOOQ) — see `docs/adr/0014-spring-data-jdbc-auditing.md`.
+Known follow-ups (do not treat as bugs): `config` intentionally does not declare an
+`@ApplicationModule` because it is infrastructure wiring rather than a domain module; JaCoCo
+coverage verification is scoped to `iam` only; the 18 Spring Data JDBC entities in
+`FoundationJdbcEntities.kt` are convention scaffolding, not live write paths (all production
+writes use jOOQ) — see `docs/adr/0014-spring-data-jdbc-auditing.md`. `notifications` sends real
+welcome and organisation-invite emails over SMTP; see
+`docs/adr/0016-email-delivery-transport-and-retry-classification.md` and
+`docs/architecture/email-delivery.md`.
 
 ## Database and identifiers
 

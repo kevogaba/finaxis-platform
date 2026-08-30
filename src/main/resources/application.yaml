@@ -98,6 +98,20 @@ spring:
     publisher-returns: true
     template:
       mandatory: true
+  mail:
+    host: ${FINAXIS_SMTP_HOST:localhost}
+    port: ${FINAXIS_SMTP_PORT:1025}
+    username: ${FINAXIS_SMTP_USERNAME:}
+    password: ${FINAXIS_SMTP_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: ${FINAXIS_SMTP_AUTH:false}
+          starttls:
+            enable: ${FINAXIS_SMTP_STARTTLS:false}
+          connectiontimeout: 5000
+          timeout: 10000
+          writetimeout: 10000
   security:
     oauth2:
       resourceserver:
@@ -333,6 +347,11 @@ finaxis:
         - method: DELETE
           path: /api/v1/**
           policy: tenant-command
+  email:
+    enabled: ${FINAXIS_EMAIL_ENABLED:false}
+    from-address: ${FINAXIS_EMAIL_FROM_ADDRESS:no-reply@finaxis.local}
+    from-display-name: ${FINAXIS_EMAIL_FROM_DISPLAY_NAME:Finaxis}
+    app-base-url: ${FINAXIS_EMAIL_APP_BASE_URL:http://localhost:5173}
   iam:
     active-organisation-context:
       secret: ${FINAXIS_ACTIVE_ORGANISATION_CONTEXT_SECRET:local-development-change-me-active-organisation-context-secret}

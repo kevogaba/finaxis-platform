@@ -46,7 +46,9 @@ durable background work.
 - Externalized events need an explicit target and a matching Namastack Rabbit routing rule.
 - Consumers must validate payloads, delegate to application services, and make their downstream
   work idempotent.
-- The notification handler intentionally does not integrate with an email provider yet.
+- The notification handler sends a real welcome email over SMTP; see
+  [ADR 0016](0016-email-delivery-transport-and-retry-classification.md) for the transport, its
+  retry/permanent failure classification, and per-job send-once idempotency.
 
 ## Alternatives Considered
 
@@ -70,4 +72,5 @@ Rely on Modulith's `RoutingTarget` for the RabbitMQ exchange:
 - `NotificationServiceTests`
 - `MembershipActivatedNotificationListenerTests`
 - `SendWelcomeEmailJobRequestHandlerTests`
-- Membership activation pipeline Spring integration coverage
+- `MembershipActivationPipelineIntegrationTests` — including real welcome-email delivery over
+  GreenMail (see [ADR 0016](0016-email-delivery-transport-and-retry-classification.md))

@@ -48,6 +48,7 @@ jooq-codegen = { id = "org.jooq.jooq-codegen-gradle", version.ref = "jooqVersion
 
 [libraries]
 jobrunr-spring-boot = { module = "org.jobrunr:jobrunr-spring-boot-4-starter", version.ref = "jobrunrVersion" }
+jobrunr-core = { module = "org.jobrunr:jobrunr", version.ref = "jobrunrVersion" }
 jooq-kotlin = { module = "org.jooq:jooq-kotlin", version.ref = "jooqVersion" }
 jooq-meta-extensions = { module = "org.jooq:jooq-meta-extensions", version.ref = "jooqVersion" }
 keycloak-admin-client = { module = "org.keycloak:keycloak-admin-client", version.ref = "keycloakAdminClientVersion" }

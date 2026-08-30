@@ -75,7 +75,14 @@ Idempotency is implemented at several layers:
 - local identity linking stores the Keycloak subject in `keycloak_identity_link`.
 
 Failures mark the dispatch `FAILED`, increment attempts in persistence, and rethrow so JobRunr or
-the broker can retry according to their runtime configuration.
+the broker can retry according to their runtime configuration. As of the real email transport (see
+[email-delivery.md](../architecture/email-delivery.md)), a *permanent* email-delivery failure for
+the organisation-invite email short-circuits that retry instead:
+`ApplicationInviteJobRequestHandler` catches `PermanentEmailDeliveryException` and rethrows it
+wrapped in `JobRunrException(reason, doNotRetry = true, cause)`, so JobRunr stops retrying
+immediately rather than exhausting its default retry policy against an address that will never
+succeed. A retryable delivery failure, a missing membership/organisation, or a persistence
+failure all still rethrow plainly and retry as before.
 
 ## Keycloak admin gateway
 

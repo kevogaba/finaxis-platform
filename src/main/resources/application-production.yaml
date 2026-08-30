@@ -12,6 +12,17 @@ spring:
   docker:
     compose:
       enabled: false
+  mail:
+    host: ${FINAXIS_SMTP_HOST}
+    port: ${FINAXIS_SMTP_PORT}
+    username: ${FINAXIS_SMTP_USERNAME}
+    password: ${FINAXIS_SMTP_PASSWORD}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
 
 springdoc:
   api-docs:
@@ -25,6 +36,10 @@ jobrunr:
     enabled: false
 
 finaxis:
+  email:
+    enabled: true
+    from-address: ${FINAXIS_EMAIL_FROM_ADDRESS}
+    app-base-url: ${FINAXIS_EMAIL_APP_BASE_URL}
   iam:
     active-organisation-context:
       secret: ${FINAXIS_ACTIVE_ORGANISATION_CONTEXT_SECRET}

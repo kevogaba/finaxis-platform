@@ -131,6 +131,11 @@ dependencies {
     testImplementation("org.springframework.modulith:spring-modulith-starter-test")
     testImplementation(libs.archunit.junit5)
     testImplementation(libs.mockito.kotlin)
+    testImplementation(libs.jobrunr.core) {
+        capabilities {
+            requireCapability("org.jobrunr:core-test-fixtures")
+        }
+    }
     testImplementation("org.testcontainers:testcontainers-grafana")
     testImplementation("org.testcontainers:testcontainers-junit-jupiter")
     testImplementation("org.testcontainers:testcontainers-postgresql")
