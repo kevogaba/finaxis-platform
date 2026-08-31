@@ -546,9 +546,86 @@ private object OrganisationBootstrapDefaults {
             // Profile
             "iam.profile.read",
         )
+
+    /**
+     * Accounting configuration and oversight, granted to TENANT_ADMIN. Deliberately excludes the
+     * operational and break-glass codes - manual journal preparation, approval, reversal,
+     * prior-period posting, reconciliation resolution and period reopening - so the default
+     * administrator is not also the default poster. TENANT_ADMIN holds role.assign_permission and
+     * can grant itself more, so this is safe-by-default posture rather than a security boundary.
+     */
+    private val ACCOUNTING_ADMINISTRATION_CODES =
+        setOf(
+            "gl_account.view",
+            "gl_account.create",
+            "gl_account.update",
+            "gl_account.submit",
+            "gl_account.approve",
+            "gl_account.deactivate",
+            "fiscal_period.view",
+            "fiscal_period.open",
+            "fiscal_period.close",
+            "journal.view",
+            "posting_rule.view",
+            "posting_rule.create",
+            "posting_rule.update",
+            "posting_rule.submit",
+            "posting_rule.approve",
+            "reconciliation.view",
+            "reconciliation.run",
+            "accounting_report.view",
+            "accounting_report.export",
+        )
+
+    /** Accounting maker: prepares and submits, never approves. */
+    private val ACCOUNTING_OPERATOR_CODES =
+        setOf(
+            "gl_account.view",
+            "gl_account.create",
+            "gl_account.update",
+            "gl_account.submit",
+            "fiscal_period.view",
+            "journal.view",
+            "journal.create_manual",
+            "journal.submit",
+            "posting_rule.view",
+            "posting_rule.create",
+            "posting_rule.update",
+            "posting_rule.submit",
+            "reconciliation.view",
+            "reconciliation.run",
+            "accounting_report.view",
+            "accounting_report.export",
+            "auth.select_organisation",
+            "auth.select_branch",
+            "iam.profile.read",
+        )
+
+    /** Accounting checker: approves and posts, never prepares. */
+    private val ACCOUNTING_APPROVER_CODES =
+        setOf(
+            "gl_account.view",
+            "gl_account.approve",
+            "gl_account.deactivate",
+            "fiscal_period.view",
+            "fiscal_period.open",
+            "fiscal_period.close",
+            "journal.view",
+            "journal.approve",
+            "journal.reverse",
+            "posting_rule.view",
+            "posting_rule.approve",
+            "reconciliation.view",
+            "reconciliation.resolve",
+            "accounting_report.view",
+            "auth.select_organisation",
+            "auth.select_branch",
+            "iam.profile.read",
+        )
+
     val ROLE_PERMISSIONS =
         mapOf(
-            "TENANT_ADMIN" to BASELINE_PERMISSION_CODES,
+            "TENANT_ADMIN" to BASELINE_PERMISSION_CODES + ACCOUNTING_ADMINISTRATION_CODES,
             "TENANT_AUDITOR" to
                 setOf(
                     "audit.view",
@@ -562,6 +639,12 @@ private object OrganisationBootstrapDefaults {
                     "role_assignment.view",
                     "permission.view",
                     "settings.view",
+                    "gl_account.view",
+                    "fiscal_period.view",
+                    "journal.view",
+                    "posting_rule.view",
+                    "reconciliation.view",
+                    "accounting_report.view",
                     "auth.select_organisation",
                     "auth.select_branch",
                     "iam.profile.read",
@@ -606,6 +689,7 @@ private object OrganisationBootstrapDefaults {
                     "user.assign_branch",
                     "branch_assignment.view",
                     "business_date.view",
+                    "accounting_report.view",
                     "auth.select_organisation",
                     "auth.select_branch",
                     "iam.profile.read",
@@ -617,6 +701,8 @@ private object OrganisationBootstrapDefaults {
                     "auth.select_branch",
                     "iam.profile.read",
                 ),
+            "ACCOUNTING_OPERATOR" to ACCOUNTING_OPERATOR_CODES,
+            "ACCOUNTING_APPROVER" to ACCOUNTING_APPROVER_CODES,
         )
 }
 

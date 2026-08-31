@@ -668,6 +668,10 @@ class JooqFoundationLifecyclePersistenceTests(
                 "IAM_ADMIN",
                 "BRANCH_MANAGER",
                 "BRANCH_OPERATOR",
+                // Accounting maker and checker, added with the accounting permission catalogue.
+                // These are composable bundles; runtime authorization never evaluates a role name.
+                "ACCOUNTING_OPERATOR",
+                "ACCOUNTING_APPROVER",
             )
         val IAM_ADMIN_PERMISSION_CODES =
             setOf(
