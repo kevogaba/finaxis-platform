@@ -178,6 +178,7 @@ Qodana job in `.github/workflows/static-analysis-and-tests.yml`.
 | Architecture | [Lifecycle FSM](docs/architecture/lifecycle-fsm.md) |
 | Architecture | [Rate limiting](docs/architecture/rate-limiting.md) |
 | Architecture | [Transactional outbox and AMQP](docs/architecture/transactional-outbox-amqp.md) |
+| Database | [Accounting schema](docs/database/accounting-erd.md) |
 | Database | [Foundation schema](docs/database/foundation-schema.md) |
 | Operations | [Branch provisioning](docs/operations/branch-provisioning.md) |
 | Operations | [Business date and COB](docs/operations/business-date.md) |
@@ -215,5 +216,7 @@ Qodana job in `.github/workflows/static-analysis-and-tests.yml`.
 | [0016](docs/adr/0016-email-delivery-transport-and-retry-classification.md) | Email delivery transport and retry classification |
 | [0017](docs/adr/0017-bian-semantic-reference-architecture.md) | BIAN as semantic reference architecture |
 | [0018](docs/adr/0018-financial-transaction-atomicity-invariant.md) | Financial transaction atomicity invariant |
+| [0019](docs/adr/0019-accounting-money-representation-and-rounding.md) | Accounting money representation and rounding |
+| [0020](docs/adr/0020-immutable-ledger-and-reversal-only-correction.md) | Immutable ledger and reversal-only correction |
 
 Historical planning, specification, and audit artifacts are archived under `docs/archive/`.

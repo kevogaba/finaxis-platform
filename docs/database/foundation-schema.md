@@ -17,6 +17,9 @@ fourteen migrations were collapsed and why that reset was safe.
 States are stored as text with `CHECK` constraints rather than PostgreSQL enums, so adding a state
 is an ordinary forward-only migration instead of an enum rewrite.
 
+> Accounting tables are designed separately and do not exist yet. See
+> [the accounting schema](accounting-erd.md).
+
 ## Entity relationships
 
 ```mermaid
