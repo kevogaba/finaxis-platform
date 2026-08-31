@@ -96,6 +96,7 @@ class SecurityAdapterTests {
     private fun authorizationService(): AuthorizationService =
         AuthorizationService(
             mock(MembershipSelectionLookup::class.java),
+            mock(EffectivePermissionResolver::class.java),
             mock(RequestPermissionCache::class.java),
         )
 

@@ -206,20 +206,21 @@ class AuthorizationServiceTests {
         memberships: Map<UUID, MembershipSelection> = emptyMap(),
         permissions: Map<PermissionKey, Set<String>> = emptyMap(),
         organisationStatus: OrganisationStatus = OrganisationStatus.ACTIVE,
-    ): AuthorizationService =
-        AuthorizationService(
+    ): AuthorizationService {
+        val resolver = effectivePermissionResolver(permissions)
+        return AuthorizationService(
             FakeMembershipSelectionLookup(memberships, organisationStatus),
-            requestPermissionCache(permissions),
+            resolver,
+            RequestPermissionCache(resolver),
         )
+    }
 
-    private fun requestPermissionCache(
+    private fun effectivePermissionResolver(
         permissions: Map<PermissionKey, Set<String>>,
-    ): RequestPermissionCache =
-        RequestPermissionCache(
-            EffectivePermissionResolver(
-                FakePermissionResolutionQueries(permissions),
-                ConcurrentMapCacheManager(EffectivePermissionResolver.CACHE_NAME),
-            ),
+    ): EffectivePermissionResolver =
+        EffectivePermissionResolver(
+            FakePermissionResolutionQueries(permissions),
+            ConcurrentMapCacheManager(EffectivePermissionResolver.CACHE_NAME),
         )
 
     private fun selection(): MembershipSelection =

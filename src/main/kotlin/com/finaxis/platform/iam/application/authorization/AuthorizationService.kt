@@ -34,6 +34,7 @@ data class ResourceRef(
 @Service
 class AuthorizationService(
     private val membershipSelectionLookup: MembershipSelectionLookup,
+    private val effectivePermissionResolver: EffectivePermissionResolver,
     private val requestPermissionCache: RequestPermissionCache,
 ) {
     /**
@@ -123,6 +124,49 @@ class AuthorizationService(
                 organisationId = organisationId,
             ) ?: return emptySet()
         return requestPermissionCache.effectivePermissions(membership.membershipId, branchId)
+    }
+
+    /**
+     * Requires [userId] to hold a break-glass [permissionCode] in [organisationId], with **no**
+     * system-actor exemption and **no** dependency on an active web request.
+     *
+     * Two deliberate differences from [requirePermission]:
+     *
+     * Unlike [hasPermission], this does not short-circuit for the system-actor sentinels. That
+     * exemption is right for background provisioning and wrong for a ledger control - a batch job
+     * would otherwise exercise authority no principal holds.
+     *
+     * And it resolves through [EffectivePermissionResolver] rather than `RequestPermissionCache`,
+     * which is `@RequestScope`. Dereferencing that proxy outside a web request raises
+     * `ScopeNotActiveException`, so routing a background caller through the cached path would fail
+     * with a scope error rather than evaluating its grant - defeating the point of denying the
+     * system-actor bypass in the first place, since the documented alternative is precisely a
+     * background job running under a real service identity.
+     */
+    fun requireBreakGlassPermission(
+        userId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ) {
+        if (permissionCode in breakGlassPermissions(userId, organisationId)) {
+            return
+        }
+        throw AccessDeniedException("Missing break-glass permission: $permissionCode")
+    }
+
+    private fun breakGlassPermissions(
+        userId: UUID,
+        organisationId: UUID,
+    ): Set<String> {
+        if (!isOrganisationActive(organisationId)) {
+            return emptySet()
+        }
+        val membership =
+            membershipSelectionLookup.findMembership(
+                userId = userId,
+                organisationId = organisationId,
+            ) ?: return emptySet()
+        return effectivePermissionResolver.effectivePermissions(membership.membershipId, null)
     }
 
     /**

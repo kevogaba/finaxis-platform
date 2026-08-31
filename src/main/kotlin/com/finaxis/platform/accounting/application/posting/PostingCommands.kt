@@ -3,22 +3,32 @@ package com.finaxis.platform.accounting.application.posting
 import com.finaxis.platform.accounting.domain.AccountingContext
 import com.finaxis.platform.accounting.domain.AccountingSourceReference
 import com.finaxis.platform.accounting.domain.MonetaryAmount
+import com.finaxis.platform.accounting.domain.PostingDateRequest
 import com.finaxis.platform.accounting.domain.PostingSide
 import java.time.LocalDate
 import java.util.UUID
 
 /**
- * A request to record the accounting effect of one business transaction. [businessDate] is resolved
- * from the tenant's controlled business date when null; [valueDate] is the economic date the caller
- * is asserting. Only the posting date selects a fiscal period - see
- * `docs/architecture/accounting-foundation.md`.
+ * A request to record the accounting effect of one business transaction.
+ *
+ * [dates] carries the caller-supplied dates, each defaulting to the tenant business date when
+ * omitted, so an ordinary same-day posting supplies none of them. Only the posting date selects a
+ * fiscal period, and a posting date earlier than the business date is a backdated posting that
+ * requires `journal.post_prior_period` - see `docs/architecture/accounting-dates-and-periods.md`.
+ *
+ * The business date is deliberately **not** a field here. It is read from the tenant's controlled
+ * `business_date` table inside the posting transaction and can never be asserted by a caller; an
+ * earlier revision of this command accepted one, which `PostingDatePolicy` would then have
+ * silently ignored.
+ *
+ * [context] is likewise not a trust boundary: the implementation must reconcile it against
+ * `AccountingContextLookup` and reject a mismatch, or a caller could name another tenant.
  */
 data class PostFinancialFactsCommand(
     val context: AccountingContext,
     val source: AccountingSourceReference,
     val intent: PostingIntent,
-    val valueDate: LocalDate,
-    val businessDate: LocalDate? = null,
+    val dates: PostingDateRequest = PostingDateRequest(),
     val narrative: String? = null,
 )
 

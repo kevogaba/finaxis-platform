@@ -167,6 +167,7 @@ Qodana job in `.github/workflows/static-analysis-and-tests.yml`.
 | --- | --- |
 | API | [Foundation REST API](docs/api/foundation-api.md) |
 | Architecture | [Accounting foundation](docs/architecture/accounting-foundation.md) |
+| Architecture | [Accounting dates and periods](docs/architecture/accounting-dates-and-periods.md) |
 | Architecture | [Accounting module boundary](docs/architecture/accounting-module-boundary.md) |
 | Architecture | [API governance](docs/architecture/api-governance.md) |
 | Architecture | [API versioning](docs/architecture/api-versioning.md) |
@@ -222,5 +223,6 @@ Qodana job in `.github/workflows/static-analysis-and-tests.yml`.
 | [0019](docs/adr/0019-accounting-money-representation-and-rounding.md) | Accounting money representation and rounding |
 | [0020](docs/adr/0020-immutable-ledger-and-reversal-only-correction.md) | Immutable ledger and reversal-only correction |
 | [0021](docs/adr/0021-accounting-permission-catalogue-and-privileged-operations.md) | Accounting permission catalogue and privileged operations |
+| [0022](docs/adr/0022-accounting-date-and-fiscal-period-concurrency.md) | Accounting date semantics and fiscal-period concurrency |
 
 Historical planning, specification, and audit artifacts are archived under `docs/archive/`.

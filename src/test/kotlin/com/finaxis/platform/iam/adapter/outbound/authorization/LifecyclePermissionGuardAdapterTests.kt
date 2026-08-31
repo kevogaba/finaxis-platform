@@ -89,7 +89,7 @@ class LifecyclePermissionGuardAdapterTests {
     private fun adapterWith(lookup: MembershipSelectionLookup): LifecyclePermissionGuardAdapter {
         val resolver = EffectivePermissionResolver(NoPermissions, ConcurrentMapCacheManager())
         val cache = RequestPermissionCache(resolver)
-        val authorizationService = AuthorizationService(lookup, cache)
+        val authorizationService = AuthorizationService(lookup, resolver, cache)
         return LifecyclePermissionGuardAdapter(authorizationService)
     }
 

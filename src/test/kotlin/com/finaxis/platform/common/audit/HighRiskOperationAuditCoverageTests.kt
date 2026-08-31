@@ -260,7 +260,6 @@ class HighRiskOperationAuditCoverageTests(
                 "journal.create_manual" to "#48",
                 "journal.approve" to "#48",
                 "journal.reverse" to "#43",
-                "journal.post_prior_period" to "#41",
                 "posting_rule.create" to "#45",
                 "posting_rule.create_version" to "#45",
                 "posting_rule.approve" to "#45",
@@ -272,7 +271,7 @@ class HighRiskOperationAuditCoverageTests(
          * no audit at all could be waved through by *adding* an entry here, which is the opposite
          * of what this map is for. Lower it as entries are discharged; never raise it.
          */
-        const val MAXIMUM_PENDING_ENFORCEMENT = 13
+        const val MAXIMUM_PENDING_ENFORCEMENT = 12
 
         /** A wired action the scan must always find; its absence means the scan is broken. */
         const val CALL_SITE_CANARY = "settings.update"

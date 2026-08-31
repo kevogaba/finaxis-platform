@@ -245,6 +245,12 @@ role rather than have one silently folded into theirs.
 
 ## Break-Glass Permissions
 
+Break-glass codes are enforced through a separate port method,
+`AccountingPermissionGuard.requireBreakGlassPermission`, which does **not** honour the platform's
+system-actor short-circuit. Their use is audited at the point of enforcement, and a build rule
+fails if enforcement and audit are ever separated. See
+`docs/architecture/accounting-dates-and-periods.md` for the reasoning.
+
 Two codes are classified break-glass and appear in **no default tenant role bundle** (`PLATFORM_SUPER_ADMIN` holds the whole catalogue, as described below):
 
 - `fiscal_period.reopen` — reopening a closed accounting period.

@@ -9,6 +9,7 @@
     displayName = "Lifecycle",
     allowedDependencies = {
       "accounting",
+      "accounting::domain",
       "common::application",
       "common::audit",
       "common::context",

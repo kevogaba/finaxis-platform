@@ -23,8 +23,29 @@ interface AccountingPermissionGuard {
     )
 
     /**
+     * Requires [actorId] to hold a **break-glass** [permissionCode] in the tenant scope of
+     * [organisationId], with no system-actor exemption.
+     *
+     * Distinct from [requireTenantPermission] because the platform's ordinary permission check
+     * short-circuits to allow for the system-actor sentinels, which is deliberate for background
+     * provisioning but wrong for a ledger control: a batch job would exercise prior-period posting
+     * authority that no principal holds, and a tenant administrator who revoked that permission
+     * could neither observe nor prevent it. Accounting therefore fails closed here, and a batch
+     * that legitimately needs the authority is given a real service identity holding the code.
+     */
+    fun requireBreakGlassPermission(
+        actorId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    )
+
+    /**
      * Requires [actorId] to hold [permissionCode] for [branchId] within [organisationId], throwing
      * a forbidden-operation failure when the permission is absent.
+     *
+     * Note that a tenant-scoped grant satisfies this check for any [branchId]: the underlying
+     * scope condition is `TENANT OR (BRANCH AND branch_id = ?)`, and nothing yet validates that
+     * the branch belongs to the organisation. Tightening that is tracked for issue #52.
      */
     fun requireBranchPermission(
         actorId: UUID,

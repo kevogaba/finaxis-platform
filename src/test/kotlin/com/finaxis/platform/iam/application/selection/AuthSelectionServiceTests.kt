@@ -646,7 +646,7 @@ private fun serviceWith(
         }
     val resolver = EffectivePermissionResolver(perms, ConcurrentMapCacheManager())
     val cache = RequestPermissionCache(resolver)
-    val authorizationService = AuthorizationService(lookup, cache)
+    val authorizationService = AuthorizationService(lookup, resolver, cache)
     return AuthSelectionService(lookup, authorizationService)
 }
 

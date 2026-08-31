@@ -15,5 +15,5 @@
  */
 @org.springframework.modulith.ApplicationModule(
     displayName = "Accounting",
-    allowedDependencies = {"common::application", "common::context"})
+    allowedDependencies = {"common::application", "common::audit", "common::context"})
 package com.finaxis.platform.accounting;
