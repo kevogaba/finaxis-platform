@@ -39,20 +39,44 @@ from reality.
 
 ## Delivery
 
-One PR per issue, in dependency order, each from its own branch cut from `main`:
+One PR per issue, in dependency order, **stacked**: only #28 branches from `main`, and each
+subsequent branch is cut from the one below it, with its PR targeting that branch rather than
+`main`. Reviewing a PR therefore shows only its own issue's work.
 
-| Order | Issue | Branch | ADR(s) | Migration |
-| --- | --- | --- | --- | --- |
-| 1 | #28 | `claude/accounting-gate-phase-a-lgrbse-28` | 0017 | none |
-| 2 | #29 | `claude/accounting-gate-phase-a-lgrbse-29` | 0018 | none |
-| 3 | #30 | `claude/accounting-gate-phase-a-lgrbse-30` | 0019 (+0020 if split) | none |
-| 4 | #31 | `claude/accounting-gate-phase-a-lgrbse-31` | none | none |
-| 5 | #34 | `claude/accounting-gate-phase-a-lgrbse-34` | 0021 | **V5 (the only one)** |
-| 6 | #35 | `claude/accounting-gate-phase-a-lgrbse-35` | 0022 | none |
+| Order | Issue | Branch | Base | ADR(s) | Migration |
+| --- | --- | --- | --- | --- | --- |
+| 1 | #28 | `claude/accounting-gate-phase-a-lgrbse-28` | `main` | 0017 | none |
+| 2 | #29 | `claude/accounting-gate-phase-a-lgrbse-29` | `…-28` | 0018 | none |
+| 3 | #30 | `claude/accounting-gate-phase-a-lgrbse-30` | `…-29` | 0019, 0020 | none |
+| 4 | #31 | `claude/accounting-gate-phase-a-lgrbse-31` | `…-30` | none | none |
+| 5 | #34 | `claude/accounting-gate-phase-a-lgrbse-34` | `…-31` | 0021 | **V5 (the only one)** |
+| 6 | #35 | `claude/accounting-gate-phase-a-lgrbse-35` | `…-34` | 0022 | none |
+
+Because the chain is stacked, they merge bottom-up: merging out of order leaves a later PR
+targeting a branch that no longer exists, and a broken commit anywhere in the chain propagates
+upward. Each branch's quality gate must therefore be green before the next is cut from it.
+
+As delivered, the chain is [#60][pr-60] (#28) → [#61][pr-61] (#29) → [#62][pr-62] (#30) →
+[#63][pr-63] (#31) → [#64][pr-64] (#34) → [#65][pr-65] (#35).
 
 **ADR numbers are allocated here, once.** Independent designs for #28 and #29 both proposed 0017;
 the table above is authoritative. If a PR merges out of order, renumber before merging rather than
 colliding. Confirm the next free number against `docs/adr/` at the start of each issue.
+
+## Environment prerequisites
+
+Two things must be true of the machine before `./gradlew qualityGate` can run at all. Neither is
+obvious from a clean checkout, and both were discovered the hard way.
+
+- **A JDK 25 must be installed.** `build.gradle.kts` pins `JavaLanguageVersion.of(25)` and
+  `settings.gradle.kts` declares no toolchain resolver, so Gradle cannot provision one and the
+  build fails at *configuration* time, not at compile time. `.sdkmanrc` pins `25.0.2-graalce`,
+  which CI installs by pointing `actions/setup-java` at that file.
+- **A Docker daemon must be running.** Without one, roughly 198 integration tests fail with
+  `Previous attempts to find a Docker environment failed` — a message that looks like a code defect
+  and is not. Pre-pulling the five pinned images (`postgres:18.4`, `redis:8.8.0`,
+  `rabbitmq:4.3.2-management`, `greenmail/standalone:2.1.13`, `grafana/otel-lgtm:0.28.0`) avoids a
+  slow first run.
 
 ## Global Constraints
 
@@ -1096,3 +1120,10 @@ close/reopen use cases with their FSM, audit and events (#39); seeding the permi
 - [ ] `ApplicationModules.of(PlatformApplication::class.java).verify()` and all ArchUnit classes in
   `src/test/kotlin/com/finaxis/platform/architecture/` must pass on every branch.
 - [ ] Confirm no branch adds a second Flyway migration and that only #34 adds one at all.
+
+[pr-60]: https://github.com/kevogaba/finaxis-platform/pull/60
+[pr-61]: https://github.com/kevogaba/finaxis-platform/pull/61
+[pr-62]: https://github.com/kevogaba/finaxis-platform/pull/62
+[pr-63]: https://github.com/kevogaba/finaxis-platform/pull/63
+[pr-64]: https://github.com/kevogaba/finaxis-platform/pull/64
+[pr-65]: https://github.com/kevogaba/finaxis-platform/pull/65
