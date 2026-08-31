@@ -169,6 +169,8 @@ Qodana job in `.github/workflows/static-analysis-and-tests.yml`.
 | Architecture | [API governance](docs/architecture/api-governance.md) |
 | Architecture | [API versioning](docs/architecture/api-versioning.md) |
 | Architecture | [Audit logging](docs/architecture/audit-logging.md) |
+| Architecture | [BIAN service landscape](docs/architecture/bian-service-landscape.md) |
+| Architecture | [Email delivery](docs/architecture/email-delivery.md) |
 | Architecture | [Foundation plan](docs/architecture/foundation-implementation-plan.md) |
 | Architecture | [FSM transitions](docs/architecture/fsm-transitions.md) |
 | Architecture | [JDBC auditing and context](docs/architecture/jdbc-auditing-and-context.md) |
@@ -209,5 +211,7 @@ Qodana job in `.github/workflows/static-analysis-and-tests.yml`.
 | [0013](docs/adr/0013-foundation-lifecycle-state-machines.md) | Explicit state machines for tenant, branch, user, membership |
 | [0014](docs/adr/0014-spring-data-jdbc-auditing.md) | Spring Data JDBC auditing alongside jOOQ write paths |
 | [0015](docs/adr/0015-client-suppliable-guid-alternate-key.md) | Application-owned UUIDv7 keys and a client-suppliable `guid` |
+| [0016](docs/adr/0016-email-delivery-transport-and-retry-classification.md) | Email delivery transport and retry classification |
+| [0017](docs/adr/0017-bian-semantic-reference-architecture.md) | BIAN as semantic reference architecture |
 
 Historical planning, specification, and audit artifacts are archived under `docs/archive/`.

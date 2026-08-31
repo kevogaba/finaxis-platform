@@ -2,6 +2,10 @@
  * Identity and Access Management: authentication context, membership selection, authorization, and
  * user profile services. Exports a named {@code authorization} interface for cross-module
  * permission checks performed by the lifecycle module adapter.
+ *
+ * <p>BIAN: Party Authentication, Party Lifecycle Management, Party Reference Data Directory
+ * (adapted) — Keycloak authenticates; Finaxis owns permission-code authorization and multi-tenant
+ * membership, which BIAN does not model. See docs/architecture/bian-service-landscape.md.
  */
 @org.springframework.modulith.ApplicationModule(
     displayName = "IAM",

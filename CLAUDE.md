@@ -113,6 +113,11 @@ See `docs/database/foundation-schema.md`, `docs/adr/0010-...`, and `docs/adr/001
   and explicit `allowedDependencies`. New modules without it will fail Modulith verification.
 - Spring Modulith `verify()` and ArchUnit hexagonal boundaries are first-class quality gates,
   equal to the static-analysis tools.
+- Every `@ApplicationModule` `package-info.java` must carry a `BIAN:` line in its Javadoc, naming
+  the BIAN Service Domain(s) it maps to with `(adopted)`/`(adapted)`, or `BIAN: none —` plus why
+  the boundary is platform-specific. Enforced by `BianModuleMappingTests`. See
+  `docs/architecture/bian-service-landscape.md` and
+  `docs/adr/0017-bian-semantic-reference-architecture.md`.
 
 ## API governance
 
@@ -165,6 +170,25 @@ See `docs/database/foundation-schema.md`, `docs/adr/0010-...`, and `docs/adr/001
 - Because the architecture is hexagonal, every module's public interfaces (inbound adapters
   and cross-boundary application ports) need regression-focused integration coverage. Prefer
   tests of stable external behavior over tests coupled to private implementation.
+
+## Pull requests and commits
+
+**One pull request carries exactly one conventional commit over its base.** Squash before pushing;
+do not stack fix-ups, review responses or merge commits on top. A reviewer reads one commit message
+that describes the whole change, and `main` keeps one commit per unit of work.
+
+Consequences worth stating, because they are where this rule is usually broken:
+
+- Review feedback is folded into the existing commit by amending, not added as a follow-up commit.
+  The history of *how* the change evolved belongs in the pull request conversation, not in `main`.
+- A stacked pull request rebases onto its base rather than merging it, so the chain stays linear
+  and each pull request's diff shows only its own work.
+- Because rebasing rewrites history, push with `--force-with-lease`, never a bare `--force`: a
+  concurrent change is then rejected rather than silently discarded.
+- Every branch in a stack must compile and pass `./gradlew qualityGate` **on its own base**. Green
+  at the top of a stack says nothing about the branches below it, and a branch can pass while
+  asserting something that is not yet true of itself — a module listed as current before its
+  descriptor exists, or a constant sized for a later branch.
 
 ## Static analysis & quality gates
 
