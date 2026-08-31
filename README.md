@@ -171,6 +171,7 @@ Qodana job in `.github/workflows/static-analysis-and-tests.yml`.
 | Architecture | [Audit logging](docs/architecture/audit-logging.md) |
 | Architecture | [BIAN service landscape](docs/architecture/bian-service-landscape.md) |
 | Architecture | [Email delivery](docs/architecture/email-delivery.md) |
+| Architecture | [Financial transaction atomicity](docs/architecture/financial-transaction-atomicity.md) |
 | Architecture | [Foundation plan](docs/architecture/foundation-implementation-plan.md) |
 | Architecture | [FSM transitions](docs/architecture/fsm-transitions.md) |
 | Architecture | [JDBC auditing and context](docs/architecture/jdbc-auditing-and-context.md) |
@@ -213,5 +214,6 @@ Qodana job in `.github/workflows/static-analysis-and-tests.yml`.
 | [0015](docs/adr/0015-client-suppliable-guid-alternate-key.md) | Application-owned UUIDv7 keys and a client-suppliable `guid` |
 | [0016](docs/adr/0016-email-delivery-transport-and-retry-classification.md) | Email delivery transport and retry classification |
 | [0017](docs/adr/0017-bian-semantic-reference-architecture.md) | BIAN as semantic reference architecture |
+| [0018](docs/adr/0018-financial-transaction-atomicity-invariant.md) | Financial transaction atomicity invariant |
 
 Historical planning, specification, and audit artifacts are archived under `docs/archive/`.

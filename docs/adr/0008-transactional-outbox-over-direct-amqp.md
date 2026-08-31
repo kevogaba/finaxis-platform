@@ -85,7 +85,7 @@ Wire externalized events for the entire ~20-name catalogue now:
 
 ## Verification
 
-- `OrganisationSettingsServiceTests`, `BusinessDateServiceTests`
+- `TenantSettingsServiceTests`, `BusinessDateServiceTests`
 - `OrganisationSettingsUpdatedOutboxIntegrationTests`, `BusinessDateAdvancedOutboxIntegrationTests`
 - `TransitionModuleConfigurationTests`
 - Existing `OrganisationActivationOutboxIntegrationTests`, `BranchActivationOutboxIntegrationTests`,

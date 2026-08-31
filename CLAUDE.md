@@ -170,6 +170,10 @@ See `docs/database/foundation-schema.md`, `docs/adr/0010-...`, and `docs/adr/001
 - Because the architecture is hexagonal, every module's public interfaces (inbound adapters
   and cross-boundary application ports) need regression-focused integration coverage. Prefer
   tests of stable external behavior over tests coupled to private implementation.
+- Every new financial write path must register its durable effects as probes in
+  `FinancialTransactionAtomicityFixture` and prove they commit or roll back together. See
+  `docs/architecture/financial-transaction-atomicity.md` and
+  `docs/adr/0018-financial-transaction-atomicity-invariant.md`.
 
 ## Pull requests and commits
 
