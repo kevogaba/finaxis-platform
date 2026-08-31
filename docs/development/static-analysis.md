@@ -93,6 +93,10 @@ misrepresented as unit-testable business behavior. The current IAM suite measure
 Kotlin/JVM line map. New business modules should add similarly explicit, narrow coverage rules as
 they become stable public contracts.
 
+The `accounting` module deliberately has **no** coverage rule yet. At issue #31 it is contracts
+plus two adapters, so a ratio over that set would be either vacuous or misleading — a `0/0` line
+counter proves nothing. Its rule is added with the first real behaviour, in issue #40 or #41.
+
 ## Suppressions
 
 Prefer fixing code over suppressing rules.

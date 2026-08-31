@@ -38,8 +38,11 @@ invites it to be summed.
 
 **Binary floating point is banned in accounting schema and code.** No `double precision`, no `real`
 column in an accounting table; no `Double` or `Float` under `com.finaxis.platform.accounting`. Both
-halves are enforced — an ArchUnit rule for the code, a schema test for the columns — rather than
-left to review.
+halves are enforced rather than left to review:
+`AccountingBoundaryRuleTests.accounting code never uses binary floating point` for the code, and
+`FoundationSchemaNumericTypeTests` for the columns. The schema test covers every application
+table rather than only accounting's, so that it is meaningful now rather than passing vacuously
+until issue #36 creates the first accounting table.
 
 **Rounding is `HALF_EVEN` at the currency's minor unit** for any amount presented or settled;
 intermediate computation stays at scale 6. `BigDecimal.divide` without an explicit scale and

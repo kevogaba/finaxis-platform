@@ -17,7 +17,9 @@ preserving security boundaries and testability.
 
 Modules (`com.finaxis.platform`): `iam` (identity, authorization, active-organisation context,
 roles, permissions, and user REST adapters), `lifecycle` (organisation/branch/user/membership
-FSMs, tenant setup, business date, audit views, and REST adapters), `notifications` (RabbitMQ
+FSMs, tenant setup, business date, audit views, and REST adapters), `accounting`
+(general-ledger boundary and posting contracts only - no schema and no posting engine yet;
+see `docs/architecture/accounting-module-boundary.md`), `notifications` (RabbitMQ
 listener → JobRunr job), `common` (reusable transitions/audit/context/persistence/web infra),
 `config`.
 
