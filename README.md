@@ -87,10 +87,13 @@ tests and production.
 
 ## Database and identifiers
 
-The schema is three Flyway migrations: `V1__foundation_schema.sql` (all 23 tables),
+The schema is six Flyway migrations: `V1__foundation_schema.sql` (23 foundation tables),
 `V2__platform_reference_data.sql` (54-code permission catalogue, `PLATFORM` organisation and
-roles), and `V3__bootstrap_tenant_and_administrator.sql` (bootstrap tenant and first
-administrator). Every future change is forward-only.
+roles), `V3__bootstrap_tenant_and_administrator.sql` (bootstrap tenant and first administrator),
+`V4` (grants the bootstrap role its invite and approve permissions and seeds a checker), `V5`
+(26-code accounting permission catalogue), and
+`V6__accounting_fiscal_calendar_and_chart_of_accounts.sql` (the fiscal calendar, the chart of
+accounts and their two transition logs). Every future change is forward-only.
 
 Every table carries a unique `guid`, a client-suppliable alternate key defaulting to `uuidv7()`
 when omitted. Every table that has an `id` uses `id UUID PRIMARY KEY DEFAULT uuidv7()` — generated

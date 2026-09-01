@@ -5,14 +5,16 @@
 > [ADR 0020](../adr/0020-immutable-ledger-and-reversal-only-correction.md) and
 > [the accounting foundation](accounting-foundation.md).
 
-At this stage the module is **contracts plus two adapters**. There is no accounting schema (issue
-#36 and #40), and no posting engine (issue #41). The boundary exists first, deliberately, so later
-work cannot accidentally couple a product module to ledger persistence.
+At this stage the module is **contracts, the fiscal calendar and chart-of-accounts schema, and
+its adapters**. There is no journal schema yet (issue #40) and no posting engine (issue #41). The
+boundary existed before any table, deliberately, so later work cannot accidentally couple a product
+module to ledger persistence.
 
 ## What this module owns
 
 - The general ledger: chart of accounts, fiscal calendar, posting requests, journals and journal
-  lines — all designed in [the accounting schema](../database/accounting-erd.md), none created yet.
+  lines — all designed in [the accounting schema](../database/accounting-erd.md). The chart of
+  accounts and the fiscal calendar exist; the journal tables do not yet.
 - The public posting API product modules consume.
 - The narrow ports foundation modules implement on accounting's behalf.
 

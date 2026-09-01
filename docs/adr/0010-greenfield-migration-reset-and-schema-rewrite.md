@@ -97,7 +97,7 @@ Preserve `logistics.shipment.approve` for compatibility:
 
 ## Verification
 
-- `FoundationSchemaMigrationTests` — all 23 tables created on an empty PostgreSQL via
+- `FoundationSchemaMigrationTests` — all 28 application tables created on an empty PostgreSQL via
   Testcontainers
 - `FoundationSeedDataTests` — the exact catalogue size seeded by the migrations present, superset role coverage, support-role
   scope, and bootstrap-administrator login pre-checks

@@ -16,18 +16,17 @@ Read it with [the accounting foundation](../architecture/accounting-foundation.m
 invariants and the benchmark reasoning, and with
 [the foundation schema](foundation-schema.md), whose conventions every table below inherits.
 
-The application schema is `V1`–`V5`; `V5` seeds the accounting permission catalogue and creates no
-tables. Accounting migrations take the next free versions
-**at implementation time** — never assume the numbers below, and check `db/migration` rather than
-this sentence.
+`V6` is the first accounting migration. The later ones take the next free version **at
+implementation time** — never assume the numbers below, and check `db/migration` rather than this
+sentence.
 
-| Planned migration | Contents | Issue |
+| Migration | Contents | Issue |
 | --- | --- | --- |
-| First accounting migration | `accounting_fiscal_year`, `accounting_fiscal_period`, `gl_account`, two transition logs | #36 |
-| Second | `posting_request`, `journal_entry`, `journal_line` | #40 |
-| Third | `posting_rule`, `posting_rule_version`, `posting_rule_leg`, one transition log | #44 |
-| Fourth | `control_account_reconciliation_run` | #46 |
-| Fifth | `gl_account_daily_balance` | #47 |
+| `V6` | `accounting_fiscal_year`, `accounting_fiscal_period`, `gl_account`, two transition logs | #36 |
+| Next | `posting_request`, `journal_entry`, `journal_line` | #40 |
+| Then | `posting_rule`, `posting_rule_version`, `posting_rule_leg`, one transition log | #44 |
+| Then | `control_account_reconciliation_run` | #46 |
+| Then | `gl_account_daily_balance` | #47 |
 
 Issue #34's permission migration carries no accounting tables — only reference data.
 
