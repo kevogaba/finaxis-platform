@@ -25,6 +25,23 @@ services:
       KC_HEALTH_ENABLED: 'true'
       KC_HOSTNAME_STRICT: 'false'
       KC_HTTP_ENABLED: 'true'
+    # Readiness, not liveness: `start-dev --import-realm` accepts connections on 8080 well before
+    # the realm import finishes, and the resource server resolves the issuer during startup, so a
+    # dependent that waits only for the process exits before the realm exists.
+    #
+    # Spoken over bash's /dev/tcp rather than curl because the Keycloak image does not ship one.
+    # The management interface serves /health/ready on 9000, which KC_HEALTH_ENABLED above turns on.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '"status": "UP"' <&3
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
     ports:
       - '8080:8080'
       - '9000:9000'
@@ -81,6 +98,48 @@ services:
     ports:
       - '1025:1025'
       - '8025:8025'
+    labels:
+      org.springframework.boot.ignore: true
+  # Either image built by `./gradlew bootBuildImage`, wired to the services above so the container
+  # can be smoke-tested against the same local infrastructure `bootRun` uses. It sits behind the
+  # `image` profile so `docker compose up` still starts infrastructure only:
+  #
+  #   docker compose --profile image up platform                                  # native
+  #   FINAXIS_IMAGE=ghcr.io/finaxis/platform:0.0.1-SNAPSHOT-jvm \
+  #     docker compose --profile image up platform                                # JVM
+  #   ./scripts/local-smoke.sh
+  #
+  # It joins the host network rather than the compose network, which is what makes the smoke script
+  # work unchanged: Keycloak stamps each token with the URL the caller used, so a token minted
+  # through the published port carries `localhost:8080` and only an application that resolves that
+  # same URL can validate it. Sharing the host network gives the container exactly the view
+  # `bootRun` has, so every FINAXIS_* default in application.yaml already points at the right
+  # published port and no overrides are needed. `server.port` still publishes the API on 8081.
+  #
+  # Host networking is native on Linux; Docker Desktop needs it enabled under Resources > Network.
+  #
+  # `spring-boot-docker-compose` is a developmentOnly dependency and is not in the native image, so
+  # unlike `bootRun` this container derives nothing from compose - the FINAXIS_* variables are the
+  # only configuration it has. See docs/operations/native-image-deployment.md.
+  platform:
+    image: '${FINAXIS_IMAGE:-ghcr.io/finaxis/platform:0.0.1-SNAPSHOT}'
+    profiles:
+      - image
+    network_mode: host
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # Everything the application resolves at startup: Redis for sessions, RabbitMQ for the
+      # outbox publisher, Keycloak for OIDC issuer discovery, and an SMTP endpoint because
+      # `spring-boot-starter-mail` contributes a health indicator that dials the mail host.
+      keycloak:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+      redis:
+        condition: service_started
     labels:
       org.springframework.boot.ignore: true
 

@@ -5,6 +5,7 @@ import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.cache.annotation.EnableCaching
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.context.annotation.ImportRuntimeHints
 import org.springframework.core.Ordered
 import java.time.Clock
 
@@ -13,6 +14,14 @@ import java.time.Clock
  */
 @Configuration
 @EnableCaching
+@ImportRuntimeHints(
+    HibernateValidatorHints::class,
+    JBossLoggingHints::class,
+    JooqNativeHints::class,
+    NamastackOutboxHints::class,
+    NativeImageResourceHints::class,
+    RedisSerializationHints::class,
+)
 class ApplicationConfiguration {
     /**
      * JSONB persistence and Namastack outbox events use the camel-case Jackson 2 contract
