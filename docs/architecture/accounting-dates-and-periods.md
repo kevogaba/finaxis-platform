@@ -187,6 +187,11 @@ Issue #36 discharged every obligation this section used to list as pending:
   of the protocol had never run. `JooqFiscalPeriodStateStoreIntegrationTests` covers it, including
   both inclusive boundary days, and deleting the predicate fails that test.
 
+Issue #39 then made the period lifecycle real: an FSM over the four states with `open`, `close`,
+`reopen` and `lock` transitions, each writing a `fiscal_period_transition_log` row through the
+shared transition executor. `LOCKED` became reachable for the first time — until then it was a
+state the enum carried, the guard refused transitions out of, and nothing could produce.
+
 What still must not change:
 
 - The posting date remains the only period selector.

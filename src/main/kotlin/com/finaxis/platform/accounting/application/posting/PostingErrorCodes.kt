@@ -27,4 +27,30 @@ object PostingErrorCodes {
 
     /** The same durable source reference was already posted. */
     const val DUPLICATE_SOURCE_REFERENCE = "accounting.duplicate_source_reference"
+
+    /** The fiscal period is already in the state the caller asked for. */
+    const val PERIOD_ALREADY_IN_STATE = "accounting.fiscal_period_already_in_state"
+
+    /** The fiscal period is locked and can no longer change state. */
+    const val PERIOD_LOCKED = "accounting.fiscal_period_locked"
+
+    /**
+     * A fiscal-period state change matched no row.
+     *
+     * Not "another operation moved it first": the caller holds `FOR UPDATE` over the row, so no
+     * concurrent change is possible. Defensive rather than provokable.
+     */
+    const val PERIOD_STATE_CHANGE_FAILED = "accounting.fiscal_period_state_change_failed"
+
+    /** The actor reopening a period is the one who closed it. */
+    const val PERIOD_SELF_APPROVAL = "accounting.fiscal_period_self_approval"
+
+    /** Reopening a period requires a reason, and the reason cannot be blank. */
+    const val PERIOD_REASON_REQUIRED = "accounting.fiscal_period_reason_required"
+
+    /** The close could not take its exclusive lock within the configured bound. */
+    const val PERIOD_LOCK_TIMEOUT = "accounting.fiscal_period_lock_timeout"
+
+    /** The requested state change is not a legal transition from the period's current state. */
+    const val PERIOD_TRANSITION_NOT_ALLOWED = "accounting.fiscal_period_transition_not_allowed"
 }

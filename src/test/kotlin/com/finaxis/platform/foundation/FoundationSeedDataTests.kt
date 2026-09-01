@@ -144,6 +144,7 @@ class FoundationSeedDataTests(
                 FROM user_account u
                 JOIN user_organisation_membership m ON m.user_id = u.id
                 JOIN user_role_assignment r ON r.user_id = u.id AND r.status = 'ACTIVE'
+                  AND r.organisation_id = '$BOOTSTRAP_ORGANISATION_ID'
                 WHERE u.id = '$CHECKER_USER_ID'
                   AND m.organisation_id = '$BOOTSTRAP_ORGANISATION_ID'
                 """.trimIndent(),

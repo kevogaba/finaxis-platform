@@ -1,9 +1,9 @@
 package com.finaxis.platform.accounting.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
-import com.finaxis.platform.accounting.application.FiscalPeriodKey
 import com.finaxis.platform.accounting.application.FiscalPeriodStateStore
-import com.finaxis.platform.accounting.application.FiscalPeriodStatus
+import com.finaxis.platform.accounting.domain.FiscalPeriodKey
+import com.finaxis.platform.accounting.domain.FiscalPeriodStatus
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import org.jooq.DSLContext
@@ -120,7 +120,7 @@ class JooqFiscalPeriodStateStoreIntegrationTests(
         val moved =
             transactions.execute {
                 periods.lockForStateChange(key)
-                periods.updateStatus(key, FiscalPeriodStatus.CLOSED, ACTOR_ID)
+                periods.updateStatus(key, FiscalPeriodStatus.CLOSED, ACTOR_ID, null)
             }
 
         assertEquals(true, moved)
@@ -151,7 +151,7 @@ class JooqFiscalPeriodStateStoreIntegrationTests(
 
         val moved =
             transactions.execute {
-                periods.updateStatus(forged, FiscalPeriodStatus.CLOSED, ACTOR_ID)
+                periods.updateStatus(forged, FiscalPeriodStatus.CLOSED, ACTOR_ID, null)
             }
 
         assertEquals(false, moved, "a forged tenant key must move nothing")

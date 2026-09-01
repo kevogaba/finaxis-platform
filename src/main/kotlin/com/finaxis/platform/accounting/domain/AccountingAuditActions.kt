@@ -30,6 +30,15 @@ object AccountingAuditActions {
     /** A closed fiscal period was reopened. */
     const val FISCAL_PERIOD_REOPEN = "fiscal_period.reopen"
 
+    /**
+     * A fiscal period was locked, which is permanent.
+     *
+     * Distinct from [FISCAL_PERIOD_CLOSE] even though the same permission gates both: a close can
+     * be undone by an audited reopen and a lock cannot, so an auditor has to be able to tell the
+     * two apart in `audit_event` without joining the transition log.
+     */
+    const val FISCAL_PERIOD_LOCK = "fiscal_period.lock"
+
     /** A manual journal was prepared. */
     const val JOURNAL_CREATE_MANUAL = "journal.create_manual"
 

@@ -6,6 +6,8 @@ import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.domain.AccountingAuditActions
 import com.finaxis.platform.accounting.domain.AccountingDates
 import com.finaxis.platform.accounting.domain.AccountingPermissions
+import com.finaxis.platform.accounting.domain.FiscalPeriodSnapshot
+import com.finaxis.platform.accounting.domain.FiscalPeriodStatus
 import com.finaxis.platform.accounting.domain.PostingDateClassification
 import com.finaxis.platform.accounting.domain.PostingDatePolicy
 import com.finaxis.platform.accounting.domain.PostingDateRequest

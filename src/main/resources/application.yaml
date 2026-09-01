@@ -258,6 +258,8 @@ finaxis:
       max-response-body-bytes: ${FINAXIS_API_IDEMPOTENCY_MAX_RESPONSE_BODY_BYTES:1048576}
       safe-domain-headers:
         - X-Domain-Reference
+  accounting:
+    fiscal-period-close-lock-timeout: ${FINAXIS_ACCOUNTING_CLOSE_LOCK_TIMEOUT:10s}
   pagination:
     default-page-size: ${FINAXIS_PAGINATION_DEFAULT_PAGE_SIZE:25}
     max-page-size: ${FINAXIS_PAGINATION_MAX_PAGE_SIZE:100}
