@@ -1,0 +1,162 @@
+package com.finaxis.platform.accounting.support
+
+import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
+import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
+import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE_HISTORY
+import com.finaxis.platform.jooq.tables.references.ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
+import com.finaxis.platform.jooq.tables.references.ORGANISATION_SETTING
+import com.finaxis.platform.jooq.tables.references.ORGANISATION_TRANSITION_LOG
+import org.jooq.DSLContext
+import java.time.LocalDate
+import java.util.UUID
+
+/**
+ * Probes for the durable effects that exist today.
+ *
+ * Issues #36 and #40 add `accountingFiscalPeriodRows`, `postingRequestRows`, `journalEntryRows` and
+ * `journalLineRows` here; nothing else in the harness changes.
+ *
+ * `outbox_record` and `event_publication` are created by their starters outside Flyway and so have
+ * no generated jOOQ metadata - those two probes use raw SQL deliberately.
+ */
+object FoundationAtomicityProbes {
+    /** All rows for one organisation setting key, whether currently effective or closed. */
+    fun organisationSettingRows(
+        organisationId: UUID,
+        key: String,
+    ): AtomicityProbe =
+        AtomicityProbe("organisation_setting[$key]") { dsl ->
+            dsl
+                .fetchCount(
+                    ORGANISATION_SETTING,
+                    ORGANISATION_SETTING.ORGANISATION_ID
+                        .eq(organisationId)
+                        .and(ORGANISATION_SETTING.SETTING_KEY.eq(key)),
+                ).toLong()
+        }
+
+    /**
+     * Only the currently effective row for one setting key. Distinct from
+     * [organisationSettingRows] because a settings update closes the previous row and inserts a
+     * replacement: counting all rows cannot see the UPDATE half of that pair rolling back.
+     */
+    fun openOrganisationSettingRows(
+        organisationId: UUID,
+        key: String,
+    ): AtomicityProbe =
+        AtomicityProbe("organisation_setting[$key, effective]") { dsl ->
+            dsl
+                .fetchCount(
+                    ORGANISATION_SETTING,
+                    ORGANISATION_SETTING.ORGANISATION_ID
+                        .eq(organisationId)
+                        .and(ORGANISATION_SETTING.SETTING_KEY.eq(key))
+                        .and(ORGANISATION_SETTING.EFFECTIVE_TO.isNull),
+                ).toLong()
+        }
+
+    /** Append-only business-date history rows for one organisation. */
+    fun businessDateHistoryRows(organisationId: UUID): AtomicityProbe =
+        AtomicityProbe("business_date_history") { dsl ->
+            dsl
+                .fetchCount(
+                    BUSINESS_DATE_HISTORY,
+                    BUSINESS_DATE_HISTORY.ORGANISATION_ID.eq(organisationId),
+                ).toLong()
+        }
+
+    /**
+     * Whether the tenant's `business_date` row already carries [expected] — 0 before, 1 after.
+     *
+     * The other business-date probes count *appended* rows. This one watches the UPDATE to the
+     * existing row, which is the advance's primary durable effect. Without it, a visibility test
+     * proves only that the appended history, audit and outbox rows stay hidden until commit: if
+     * the update itself were committed on an independent transaction, all three would still be
+     * invisible and the test would pass.
+     */
+    fun advancedBusinessDateRows(
+        organisationId: UUID,
+        expected: LocalDate,
+    ): AtomicityProbe =
+        AtomicityProbe("business_date[current = $expected]") { dsl ->
+            dsl
+                .fetchCount(
+                    BUSINESS_DATE,
+                    BUSINESS_DATE.ORGANISATION_ID
+                        .eq(organisationId)
+                        .and(BUSINESS_DATE.CURRENT_BUSINESS_DATE.eq(expected)),
+                ).toLong()
+        }
+
+    /** Audit rows for one organisation, action and outcome. */
+    fun auditEventRows(
+        organisationId: UUID,
+        action: String,
+        outcome: String,
+    ): AtomicityProbe =
+        AtomicityProbe("audit_event[$action, $outcome]") { dsl ->
+            dsl
+                .fetchCount(
+                    AUDIT_EVENT,
+                    AUDIT_EVENT.ORGANISATION_ID
+                        .eq(organisationId)
+                        .and(AUDIT_EVENT.ACTION.eq(action))
+                        .and(AUDIT_EVENT.OUTCOME.eq(outcome)),
+                ).toLong()
+        }
+
+    /**
+     * Bootstrap-record submission attempts for one organisation.
+     *
+     * `submitForApproval` writes this row *before* delegating to the transition executor, so it is
+     * the only durable effect of that method that a nested transition rejection can leave behind.
+     * A rollback test that checks only the transition log and the outbox cannot see it: the
+     * rejected transition never wrote either of those, so both assertions hold whether or not the
+     * outer write rolled back.
+     */
+    fun bootstrapSubmissionAttempts(organisationId: UUID): AtomicityProbe =
+        AtomicityProbe("organisation_initial_administrator_bootstrap[attempts]") { dsl ->
+            dsl
+                .select(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ATTEMPTS)
+                .from(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP)
+                .where(
+                    ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ORGANISATION_ID.eq(organisationId),
+                ).fetchOne()
+                ?.value1()
+                ?.toLong() ?: 0L
+        }
+
+    /** Append-only organisation lifecycle transition log rows for one aggregate. */
+    fun organisationTransitionLogRows(entityId: UUID): AtomicityProbe =
+        AtomicityProbe("organisation_transition_log") { dsl ->
+            dsl
+                .fetchCount(
+                    ORGANISATION_TRANSITION_LOG,
+                    ORGANISATION_TRANSITION_LOG.ENTITY_ID.eq(entityId),
+                ).toLong()
+        }
+
+    /**
+     * Namastack outbox rows whose serialized payload mentions [aggregateId]. Raw SQL because
+     * `outbox_record` is starter-created outside Flyway and has no generated jOOQ metadata.
+     */
+    fun outboxRecordRows(aggregateId: String): AtomicityProbe =
+        AtomicityProbe("outbox_record[$aggregateId]") { dsl ->
+            dsl
+                .fetchValue(
+                    "SELECT COUNT(*) FROM outbox_record WHERE payload LIKE '%' || ? || '%'",
+                    aggregateId,
+                )?.toString()
+                ?.toLong() ?: 0L
+        }
+
+    /**
+     * Spring Modulith event-publication rows. Expected to stay at zero while no
+     * `@ApplicationModuleListener` exists; the probe's job is to fail loudly the day one is added
+     * without considering its transaction boundary.
+     */
+    fun eventPublicationRows(): AtomicityProbe =
+        AtomicityProbe("event_publication") { dsl ->
+            dsl.fetchValue("SELECT COUNT(*) FROM event_publication")?.toString()?.toLong() ?: 0L
+        }
+}

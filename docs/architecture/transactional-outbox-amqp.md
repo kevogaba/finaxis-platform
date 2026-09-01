@@ -64,7 +64,7 @@ This change deliberately closes only the gaps needed for the two new audited mut
 every lifecycle FSM definition for no current consumer. Existing `target` strings are exchange
 names real consumers and tests already depend on — they are not renamed to match the catalogue.
 New events add a `metadata["eventType"]` entry with the catalogue name (see
-`OrganisationSettingsService`/`BusinessDateService`); existing events are not retrofitted with
+`TenantSettingsService`/`BusinessDateService`); existing events are not retrofitted with
 this key, since that would mean editing already-stable, already-tested FSM definition code for a
 purely cosmetic addition — this table is the source of truth for the existing mapping instead.
 
@@ -181,13 +181,18 @@ what the library already emits would be redundant.
 - `OrganisationSettingsUpdatedOutboxIntegrationTests`,
   `BusinessDateAdvancedOutboxIntegrationTests` — the same proof for the two new events, plus an
   assertion that exactly one `COMPLETED` record exists for the mutation, not more than one.
-- `OutboxTransactionRollbackIntegrationTests` — reuses the real `OrganisationSettingsService`,
+- `OutboxTransactionRollbackIntegrationTests` — reuses the real `TenantSettingsService`,
   injecting a failure after publish via a `TransitionEventPublisher` test double, and asserts the
-  outbox row does not survive. It does not (yet) assert the settings write itself rolled back —
-  see [issue #12](https://github.com/kevogaba/finaxis-platform/issues/12): no test in this codebase
-  has verified `@Transactional` rollback-on-exception against the real database, and three
-  different mechanisms all showed a jOOQ write surviving despite the triggering exception
-  correctly propagating.
+  outbox row does not survive. It now also proves that the closing `UPDATE` of the previously
+  time-effective settings row rolls back — leaving exactly one effective row, still holding its
+  original value — and that the `settings.update` audit row written in the same transaction rolls
+  back with it. The underlying `@Transactional` rollback-on-exception guarantee is proven directly
+  against the real database by `JooqSpringTransactionWiringTests`,
+  `FinancialTransactionAtomicityIntegrationTests` and `RollbackObservationArtifactIntegrationTests`
+  (the earlier contrary observation was an artifact of asserting on the same connection that still
+  held the open transaction); see
+  [financial transaction atomicity](financial-transaction-atomicity.md) and
+  [ADR 0018](../adr/0018-financial-transaction-atomicity-invariant.md).
 - `TransitionModuleConfigurationTests` — parses `application.yaml` and asserts the exact
   `namastack.outbox.*` values above.
 

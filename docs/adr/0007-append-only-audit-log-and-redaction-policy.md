@@ -47,7 +47,7 @@ the audit trail still shows that a sensitive field changed.
 > audited action. The paragraph below records the original decision.
 
 `@AuditedAction` + `AuditedActionAspect` exist, but are used in exactly two places:
-`OrganisationSettingsService.updateSettings` and `BusinessDateService.advance`. Both are simple,
+`TenantSettingsService.createOrUpdate` and `BusinessDateService.advance`. Both are simple,
 non-FSM mutations with a clean before/after snapshot. Lifecycle transitions keep recording audit
 events explicitly through `recordLifecycleTransition`, unchanged in spirit from the existing FSM
 design, because a transition needs an explicit reason and from/to state a generic method wrapper
