@@ -18,12 +18,25 @@ import java.time.Clock
 @Configuration
 class TransitionModuleConfiguration {
     /**
+     * Routes each transition log to the module that owns its aggregate type.
+     *
+     * Conditional on a [TransitionLogWriter] rather than unconditional so a slice test that wires
+     * no module gets no executor, exactly as the previous condition on the repository did — and so
+     * neither condition names a bean declared in this same configuration class.
+     */
+    @Bean
+    @Role(BeanDefinition.ROLE_INFRASTRUCTURE)
+    @ConditionalOnBean(TransitionLogWriter::class)
+    fun transitionLogRepository(writers: List<TransitionLogWriter>): TransitionLogRepository =
+        DispatchingTransitionLogRepository(writers)
+
+    /**
      * Reusable FSM infrastructure excluded from Modulith proxying: in 2.1.0, rendering this
      * executor's F-bounded generic signature recurses indefinitely.
      */
     @Bean
     @Role(BeanDefinition.ROLE_INFRASTRUCTURE)
-    @ConditionalOnBean(TransitionLogRepository::class)
+    @ConditionalOnBean(TransitionLogWriter::class)
     fun transitionExecutor(
         clock: Clock,
         transitionLogRepository: TransitionLogRepository,

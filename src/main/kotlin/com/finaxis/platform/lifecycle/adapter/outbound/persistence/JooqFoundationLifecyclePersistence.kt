@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.TransitionLog
-import com.finaxis.platform.common.transitions.TransitionLogRepository
+import com.finaxis.platform.common.transitions.TransitionLogWriter
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.BRANCH_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.KEYCLOAK_IDENTITY_LINK
@@ -47,7 +47,7 @@ class JooqFoundationLifecyclePersistence(
 ) : FoundationLifecycleReader,
     FoundationLifecycleWriter,
     LifecyclePrerequisites by JooqLifecyclePrerequisites(dsl),
-    TransitionLogRepository {
+    TransitionLogWriter {
     override fun findOrganisation(id: UUID): LifecycleAggregate<OrganisationLifecycleState>? =
         dsl
             .select(ORGANISATION.STATUS, ORGANISATION.ROW_VERSION)
@@ -288,6 +288,8 @@ class JooqFoundationLifecyclePersistence(
             roleAssignmentIds.map { DeprovisionedAssignment(it, "USER_ROLE_ASSIGNMENT") }
     }
 
+    override fun supports(aggregateType: String): Boolean = aggregateType in FOUNDATION_TYPES
+
     override fun save(log: TransitionLog) {
         val organisationId =
             UUID.fromString(
@@ -319,7 +321,13 @@ class JooqFoundationLifecyclePersistence(
             }
 
             else -> {
-                error("Unsupported lifecycle aggregate type: ${log.aggregateType}")
+                // Unreachable through DispatchingTransitionLogRepository, which routes only to a
+                // writer whose `supports` returned true. Reaching it means FOUNDATION_TYPES claims
+                // a type this `when` has no branch for.
+                error(
+                    "Lifecycle claims transition-log ownership of ${log.aggregateType} but has " +
+                        "no branch to persist it; FOUNDATION_TYPES and this dispatch disagree.",
+                )
             }
         }
     }
@@ -337,6 +345,20 @@ class JooqFoundationLifecyclePersistence(
         const val BRANCH_TYPE = "BRANCH"
         const val USER_TYPE = "USER_ACCOUNT"
         const val MEMBERSHIP_TYPE = "MEMBERSHIP"
+
+        /**
+         * The aggregate types this module owns a transition-log table for.
+         *
+         * Private on purpose: it answers `supports` and nothing outside needs it, and exposing it
+         * would invite another module to branch on lifecycle's ownership instead of contributing
+         * its own [TransitionLogWriter].
+         *
+         * It is listed here rather than derived from the `when` in `save`, so the two can disagree.
+         * The `else` branch there is the backstop for that: a type added to this set without a
+         * branch fails the transition loudly instead of writing nothing.
+         */
+        private val FOUNDATION_TYPES =
+            setOf(ORGANISATION_TYPE, BRANCH_TYPE, USER_TYPE, MEMBERSHIP_TYPE)
     }
 }
 
