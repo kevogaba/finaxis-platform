@@ -3,6 +3,7 @@ package com.finaxis.platform.accounting.application
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.common.application.ConflictException
 import org.springframework.transaction.support.TransactionSynchronizationManager
+import java.util.UUID
 
 /**
  * Serialization point for fiscal-period close and reopen.
@@ -11,9 +12,9 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * from a stale read. Because the lock conflicts with the shared lock every posting holds, a close
  * waits for in-flight postings to finish rather than racing them.
  *
- * Deliberately **not** a Spring bean yet, for the same reason as
- * [PostingPeriodResolver]: its [FiscalPeriodStateStore] dependency has no adapter until issue #36,
- * and registering it early would break context startup platform-wide.
+ * Registered as a bean in
+ * [com.finaxis.platform.accounting.config.AccountingModuleConfiguration] now that
+ * `accounting_fiscal_period` and its store adapter exist.
  *
  * The close and reopen use cases themselves belong to issue #39; this guard is the concurrency
  * contract they must go through.
@@ -34,18 +35,25 @@ class FiscalPeriodStateChangeGuard(
      * Applies a status change under the already-held exclusive lock.
      *
      * [current] must be the snapshot returned by [beginStateChange]; passing an earlier read would
-     * defeat the point of the lock. A false return from the store means another transaction moved
-     * the row first, which is reported as a conflict rather than silently ignored.
+     * defeat the point of the lock.
+     *
+     * A false return from the store means the write matched no row **for that tenant**. It cannot
+     * mean a concurrent status change: the caller holds `FOR UPDATE`, so nothing else can move the
+     * row - or delete it - until this transaction commits, and [current] carries the same key the
+     * lock was taken on. The branch is therefore defensive rather than a race that can be
+     * provoked, and it is reported as a conflict rather than ignored because a state change that
+     * matched no row has not happened and the caller must not proceed as though it had.
      */
     fun applyStatus(
         current: FiscalPeriodSnapshot,
         target: FiscalPeriodStatus,
+        actorId: UUID,
     ) {
         requireChangeable(current, target)
-        if (!periods.updateStatus(current.key, target)) {
+        if (!periods.updateStatus(current.key, target, actorId)) {
             throw ConflictException(
-                code = CONCURRENT_STATE_CHANGE,
-                safeDetail = "The fiscal period was changed by another operation.",
+                code = STATE_CHANGE_MATCHED_NO_ROW,
+                safeDetail = "The fiscal period is no longer available for a state change.",
             )
         }
     }
@@ -81,6 +89,6 @@ class FiscalPeriodStateChangeGuard(
         const val PERIOD_NOT_FOUND = PostingErrorCodes.PERIOD_NOT_FOUND
         const val ALREADY_IN_STATE = "accounting.fiscal_period_already_in_state"
         const val PERIOD_LOCKED = "accounting.fiscal_period_locked"
-        const val CONCURRENT_STATE_CHANGE = "accounting.fiscal_period_concurrent_change"
+        const val STATE_CHANGE_MATCHED_NO_ROW = "accounting.fiscal_period_state_change_failed"
     }
 }
