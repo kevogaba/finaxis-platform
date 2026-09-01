@@ -269,6 +269,7 @@ class PostingPeriodResolverTests {
         override fun updateStatus(
             key: FiscalPeriodKey,
             newStatus: FiscalPeriodStatus,
+            actorId: UUID,
         ) = true
     }
 

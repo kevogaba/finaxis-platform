@@ -25,10 +25,11 @@ import java.util.UUID
  * an OPEN period for the rest of its transaction, or it fails. Never both, and never a journal
  * committed into a period the same transaction observed as closed.
  *
- * Deliberately **not** a Spring bean yet. It depends on [FiscalPeriodStateStore], whose adapter
- * arrives with `accounting_fiscal_period` in issue #36; registering it as a `@Service` before then
- * would fail application context startup for the whole platform, not merely for accounting. Issue
- * #36 adds the store adapter and the wiring together.
+ * Registered as a bean in
+ * [com.finaxis.platform.accounting.config.AccountingModuleConfiguration]. It was deliberately not
+ * one until `accounting_fiscal_period` existed: with no [FiscalPeriodStateStore] adapter behind it,
+ * a `@Service` here failed application context startup for the whole platform rather than merely
+ * for accounting. The store adapter and this wiring therefore landed together.
  *
  * The order matters and is the whole design. An unlocked lookup finds the covering period cheaply;
  * the lock is then taken; and **the decision uses the status returned by the locking read**, never

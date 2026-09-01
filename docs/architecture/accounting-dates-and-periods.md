@@ -172,16 +172,30 @@ verified empirically rather than assumed, so a new domain cannot collide with ei
 Within one class, a 32-bit `objid` collision causes false sharing: two unrelated keys serialise.
 That costs throughput, never correctness.
 
-## What issue #36 must not change
+## What issue #36 did, and what must not change now
+
+Issue #36 discharged every obligation this section used to list as pending:
+
+- `FiscalPeriodStandIn` is **deleted**, and every scenario runs against `accounting_fiscal_period`
+  through the production `JooqFiscalPeriodStateStore`. Deleting the file is what forced the
+  repointing: the compiler, not a checklist, is what stopped the proof quietly narrowing.
+- The store, `PostingPeriodResolver` and `FiscalPeriodStateChangeGuard` became beans in **one**
+  change, and a test now asserts all three exist — the inverse of the assertion that pinned their
+  absence.
+- `findCovering` executes its date predicate against a database for the first time. The stand-in
+  ignored its `postingDate` parameter and returned hardcoded bounds, so the period-selection half
+  of the protocol had never run. `JooqFiscalPeriodStateStoreIntegrationTests` covers it, including
+  both inclusive boundary days, and deleting the predicate fails that test.
+
+What still must not change:
 
 - The posting date remains the only period selector.
 - The decision must keep using the post-lock read.
 - `FOR SHARE`/`FOR UPDATE` strengths stay as they are.
 - The isolation assertion stays.
-- **Delete `FiscalPeriodStandIn` and repoint the concurrency tests at the real table.** Leaving the
-  stand-in in place would let the proof quietly stop covering what it claims to.
-- Wire `PostingPeriodResolver` and `FiscalPeriodStateChangeGuard` as beans **together with** the
-  store adapter — not before, or context startup fails platform-wide.
+- The snapshot's organisation id is read from the **row**, never echoed back from the caller's key.
+  Echoing it labels another tenant's period with the caller's organisation, which is how a
+  cross-tenant write passes a downstream tenant check.
 
 ## Related documents
 

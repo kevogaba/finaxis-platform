@@ -109,20 +109,26 @@ idempotency still share one space, so a settings key that happened to be a UUID 
 principle collide with an idempotency key. Migrating them is deliberately out of scope here; it is
 recorded so it is a known gap rather than an unexamined one.
 
-**`SOFT_CLOSED` is deliberately absent** from `FiscalPeriodStatus`. The canonical design record
-(#30) does not adopt it, and adding a state the schema will not carry would be inventing design
-ahead of the authority that owns it.
+**`SOFT_CLOSED` is deliberately absent** from `FiscalPeriodStatus`. The distinction it would draw
+— postings blocked for ordinary users but open to a privileged few — is already expressed by
+`CLOSED` plus `journal.post_prior_period`, so it adds a state without adding a capability. The
+four states the enum does carry are the set
+[the accounting schema](../database/accounting-erd.md) adopts and
+`chk_accounting_fiscal_period_status` enforces.
 
-**`PostingPeriodResolver` and `FiscalPeriodStateChangeGuard` are not Spring beans yet.** Their
-`FiscalPeriodStateStore` dependency has no adapter until #36, and registering them early fails
-application-context startup for the whole platform rather than only for accounting — which is how
-this was discovered. Issue #36 adds the adapter and the wiring together; a test pins the absence of
-the bean until then.
+**`PostingPeriodResolver` and `FiscalPeriodStateChangeGuard` became Spring beans in issue #36**,
+in the same change as `JooqFiscalPeriodStateStore`. They could not be beans before it: with no
+`FiscalPeriodStateStore` adapter behind them, registering either failed application-context
+startup for the whole platform rather than only for accounting — which is how this was discovered.
+A test pinned their absence until the adapter existed and now asserts their presence.
 
-**The concurrency proof currently runs against a stand-in table.** Because
-`accounting_fiscal_period` does not exist yet, the production `PostgresRowLock` is bound to an
-existing tenant-scoped table. Only the location of the status byte is substituted: the lock
-statements, their strengths, the protocol order, the READ COMMITTED re-read, the transaction
-manager, the pool and the database are all production. Issue #36 must delete the stand-in and
-repoint these tests at the real table — if it does not, the proof quietly stops covering the thing
-it claims to.
+**The concurrency proof ran against a stand-in table until issue #36**, because
+`accounting_fiscal_period` did not exist. Only the location of the status byte was substituted; the
+lock statements, their strengths, the protocol order, the READ COMMITTED re-read, the transaction
+manager, the pool and the database were always production. `V6` created the table, the stand-in was
+deleted, and the compiler is what forced every scenario onto the real adapter.
+
+**`updateStatus` carries the actor.** It populates `accounting_fiscal_period.updated_by` so the row
+says who last moved it. That is a mirror for convenience: the authoritative record of a transition,
+and the one issue #39's reopen actor-identity check reads, is
+`fiscal_period_transition_log.created_by`.

@@ -2,14 +2,15 @@ package com.finaxis.platform.accounting.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.accounting.application.FiscalPeriodKey
+import com.finaxis.platform.accounting.application.FiscalPeriodStateChangeGuard
 import com.finaxis.platform.accounting.application.FiscalPeriodStateStore
 import com.finaxis.platform.accounting.application.FiscalPeriodStatus
-import com.finaxis.platform.common.id.uuidV7
-import com.finaxis.platform.jooq.tables.references.ORGANISATION_SETTING
+import com.finaxis.platform.accounting.application.PostingPeriodResolver
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
+import org.springframework.aop.support.AopUtils
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestConstructor
@@ -44,13 +45,13 @@ import kotlin.test.assertTrue
 class FiscalPeriodConcurrencyIntegrationTests(
     private val applicationContext: org.springframework.context.ApplicationContext,
     private val dsl: DSLContext,
-    private val rowLock: PostgresRowLock,
+    private val periods: FiscalPeriodStateStore,
     organisationProvisioningService: OrganisationProvisioningService,
     transactionManager: PlatformTransactionManager,
 ) {
     private val fixture = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
     private val transactions = TransactionTemplate(transactionManager)
-    private val periods = FiscalPeriodStandIn(dsl, rowLock)
+    private val calendar = FiscalCalendarFixture(dsl)
 
     @Test
     fun `S1 a posting in flight delays a close until it commits`() {
@@ -64,7 +65,7 @@ class FiscalPeriodConcurrencyIntegrationTests(
                 executor.submit {
                     transactions.execute {
                         periods.lockForPosting(key)
-                        periods.recordJournal(key)
+                        calendar.recordJournal(key)
                         postingLocked.countDown()
                         assertTrue(releasePosting.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
                     }
@@ -76,7 +77,7 @@ class FiscalPeriodConcurrencyIntegrationTests(
                     transactions.execute {
                         periods.lockForStateChange(key)
                         closeAcquiredAt.set(System.nanoTime())
-                        periods.updateStatus(key, FiscalPeriodStatus.CLOSED)
+                        periods.updateStatus(key, FiscalPeriodStatus.CLOSED, ACTOR_ID)
                     }
                 }
             // The barrier that gives this test its teeth. Without it the release below fires
@@ -102,7 +103,7 @@ class FiscalPeriodConcurrencyIntegrationTests(
         }
 
         assertTrue(closeAcquiredAt.get() > 0L, "the close must proceed once the posting commits")
-        assertEquals(1, periods.journalCount(key.organisationId))
+        assertEquals(1, calendar.journalCount(key.organisationId))
     }
 
     @Test
@@ -138,7 +139,7 @@ class FiscalPeriodConcurrencyIntegrationTests(
                 }
 
             assertTrue(postingRead.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
-            transactions.execute { periods.updateStatus(key, FiscalPeriodStatus.CLOSED) }
+            transactions.execute { periods.updateStatus(key, FiscalPeriodStatus.CLOSED, ACTOR_ID) }
             closeCommitted.countDown()
             posting.get(TIMEOUT_SECONDS, TimeUnit.SECONDS)
         }
@@ -149,7 +150,7 @@ class FiscalPeriodConcurrencyIntegrationTests(
             underLock.get(),
             "the locking read must observe the committed close, not the transaction's earlier read",
         )
-        assertEquals(0, periods.journalCount(key.organisationId), "no journal may have committed")
+        assertEquals(0, calendar.journalCount(key.organisationId), "no journal may have committed")
     }
 
     @Test
@@ -191,7 +192,7 @@ class FiscalPeriodConcurrencyIntegrationTests(
                 executor.submit {
                     transactions.execute {
                         periods.lockForStateChange(key)
-                        periods.updateStatus(key, FiscalPeriodStatus.CLOSED)
+                        periods.updateStatus(key, FiscalPeriodStatus.CLOSED, ACTOR_ID)
                         firstLocked.countDown()
                         assertTrue(releaseFirst.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
                     }
@@ -240,7 +241,7 @@ class FiscalPeriodConcurrencyIntegrationTests(
             val update =
                 executor.submit {
                     transactions.execute {
-                        periods.updateStatusWithoutLocking(key, FiscalPeriodStatus.CLOSED)
+                        calendar.updateStatusWithoutLocking(key, FiscalPeriodStatus.CLOSED)
                         updateCompletedAt.set(System.nanoTime())
                     }
                 }
@@ -266,7 +267,7 @@ class FiscalPeriodConcurrencyIntegrationTests(
     @Test
     fun `S6 a reopen after a rejected posting resurrects nothing`() {
         val key = openPeriod("s6")
-        transactions.execute { periods.updateStatus(key, FiscalPeriodStatus.CLOSED) }
+        transactions.execute { periods.updateStatus(key, FiscalPeriodStatus.CLOSED, ACTOR_ID) }
 
         transactions.execute {
             assertEquals(
@@ -274,20 +275,20 @@ class FiscalPeriodConcurrencyIntegrationTests(
                 requireNotNull(periods.lockForPosting(key)).status,
             )
         }
-        assertEquals(0, periods.journalCount(key.organisationId))
+        assertEquals(0, calendar.journalCount(key.organisationId))
 
-        transactions.execute { periods.updateStatus(key, FiscalPeriodStatus.OPEN) }
+        transactions.execute { periods.updateStatus(key, FiscalPeriodStatus.OPEN, ACTOR_ID) }
         transactions.execute {
             assertEquals(
                 FiscalPeriodStatus.OPEN,
                 requireNotNull(periods.lockForPosting(key)).status,
             )
-            periods.recordJournal(key)
+            calendar.recordJournal(key)
         }
 
         assertEquals(
             1,
-            periods.journalCount(key.organisationId),
+            calendar.journalCount(key.organisationId),
             "only the posting made after the reopen may exist",
         )
     }
@@ -314,7 +315,12 @@ class FiscalPeriodConcurrencyIntegrationTests(
 
             val unrelated =
                 executor.submit {
-                    transactions.execute { periods.createPeriod(key.organisationId, OPEN_STATUS) }
+                    // Next year's calendar, so it neither overlaps the locked period nor trips
+                    // ex_accounting_fiscal_period_no_overlap - a conflicting insert would fail on
+                    // the constraint rather than testing anything about locking.
+                    transactions.execute {
+                        calendar.createPeriod(key.organisationId, OPEN_STATUS, yearOffset = 1)
+                    }
                     unrelatedCompleted.countDown()
                 }
 
@@ -330,17 +336,13 @@ class FiscalPeriodConcurrencyIntegrationTests(
 
     @Test
     fun `S8 taking a period lock outside a transaction fails loudly`() {
+        // Asserted through the store rather than through PostgresRowLock directly: a row lock on
+        // an autocommit connection is released before the caller can rely on it, and the path a
+        // caller actually uses is the one that has to refuse.
         val key = openPeriod("s8")
 
-        assertFailsWith<IllegalStateException> {
-            rowLock.lockForShare(
-                ORGANISATION_SETTING,
-                ORGANISATION_SETTING.ID,
-                ORGANISATION_SETTING.ORGANISATION_ID,
-                key.fiscalPeriodId,
-                key.organisationId,
-            )
-        }
+        assertFailsWith<IllegalStateException> { periods.lockForPosting(key) }
+        assertFailsWith<IllegalStateException> { periods.lockForStateChange(key) }
     }
 
     @Test
@@ -364,14 +366,29 @@ class FiscalPeriodConcurrencyIntegrationTests(
     }
 
     @Test
-    fun `no fiscal period store bean exists yet`() {
-        // Deliberate, and the reason PostingPeriodResolver and FiscalPeriodStateChangeGuard are
-        // not @Service beans: their FiscalPeriodStateStore dependency has no adapter until issue
-        // #36. Annotating them early broke application context startup platform-wide, which this
-        // suite caught. Asserting the absence keeps that decision visible.
-        assertTrue(
-            applicationContext.getBeanNamesForType(FiscalPeriodStateStore::class.java).isEmpty(),
-            "the store adapter arrives with accounting_fiscal_period in issue #36",
+    fun `the store, the resolver and the guard are all wired`() {
+        // The inverse of the assertion this test used to make. Until `V6` there was no
+        // accounting_fiscal_period, so PostgresRowLock had no table to bind to and a @Service on
+        // either consumer broke application context startup platform-wide - which this suite
+        // caught. All three had to become beans in one change, and asserting all three keeps a
+        // future revision from wiring the store while leaving its consumers unreachable.
+        listOf(
+            FiscalPeriodStateStore::class.java,
+            PostingPeriodResolver::class.java,
+            FiscalPeriodStateChangeGuard::class.java,
+        ).forEach {
+            assertTrue(
+                applicationContext.getBeanNamesForType(it).isNotEmpty(),
+                "expected a bean of ${'$'}{it.simpleName}",
+            )
+        }
+        // AopUtils.getTargetClass, not ::class.java: the moment the store gains @Transactional or
+        // any other advice, Spring hands back a proxy and a direct class comparison starts failing
+        // for a reason that has nothing to do with what this assertion is about.
+        assertEquals(
+            JooqFiscalPeriodStateStore::class.java,
+            AopUtils.getTargetClass(applicationContext.getBean(FiscalPeriodStateStore::class.java)),
+            "the concurrency scenarios must exercise the production adapter, not a test double",
         )
     }
 
@@ -430,14 +447,14 @@ class FiscalPeriodConcurrencyIntegrationTests(
 
     private fun openPeriod(label: String): FiscalPeriodKey {
         val organisationId = fixture.createActiveOrganisation("period-$label", ACTOR_ID)
-        return periods.createPeriod(organisationId, OPEN_STATUS)
+        return calendar.createPeriod(organisationId, OPEN_STATUS)
     }
 
     private companion object {
         /** The V3 bootstrap administrator: `audit_event.actor_user_id` is a real foreign key. */
         val ACTOR_ID: UUID = UUID.fromString("11111111-1111-1111-1111-111111111111")
         val OPEN_STATUS = FiscalPeriodStatus.OPEN
-        val PERIOD_DAY: java.time.LocalDate = java.time.LocalDate.of(2026, 8, 15)
+        val PERIOD_DAY: java.time.LocalDate = FiscalCalendarFixture.PERIOD_DAY
         const val TIMEOUT_SECONDS = 20L
         const val UNBLOCKED_SECONDS = 5L
     }

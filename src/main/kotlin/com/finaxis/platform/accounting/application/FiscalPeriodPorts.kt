@@ -12,9 +12,12 @@ data class FiscalPeriodKey(
 /**
  * Fiscal-period lifecycle status.
  *
- * `SOFT_CLOSED` is deliberately absent: the canonical design record (issue #30) does not adopt it,
- * and adding a state here that the schema will not carry would be inventing design ahead of the
- * authority.
+ * These four are the set `docs/database/accounting-erd.md` adopts and
+ * `chk_accounting_fiscal_period_status` enforces, so the enum and the column cannot drift.
+ *
+ * `SOFT_CLOSED` is deliberately absent: the distinction it would draw — postings blocked for
+ * ordinary users but open to a privileged few — is already expressed by [CLOSED] plus
+ * `journal.post_prior_period`, so it would add a state without adding a capability.
  */
 enum class FiscalPeriodStatus {
     /** Provisioned but not yet open for posting. */
@@ -60,7 +63,8 @@ data class FiscalPeriodSnapshot(
  * still decide from the unlocked read. Deciding from the snapshot these methods return is a
  * convention, and reviewers of a new caller must check it.
  *
- * The production adapter arrives with `accounting_fiscal_period` in issue #36.
+ * The production adapter is
+ * [com.finaxis.platform.accounting.adapter.outbound.persistence.JooqFiscalPeriodStateStore].
  */
 interface FiscalPeriodStateStore {
     /** Finds the period covering [postingDate] without locking; its status may be stale. */
@@ -75,9 +79,16 @@ interface FiscalPeriodStateStore {
     /** Takes an exclusive row lock and returns the period as read under that lock. */
     fun lockForStateChange(key: FiscalPeriodKey): FiscalPeriodSnapshot?
 
-    /** Sets the status while the caller holds the exclusive lock; false when the row is stale. */
+    /**
+     * Sets the status while the caller holds the exclusive lock; false when the row is gone.
+     *
+     * [actorId] populates `updated_by` so the period row itself says who last moved it. The
+     * authoritative record of a transition, and the one issue #39's reopen actor-identity check
+     * reads, is `fiscal_period_transition_log.created_by`.
+     */
     fun updateStatus(
         key: FiscalPeriodKey,
         newStatus: FiscalPeriodStatus,
+        actorId: UUID,
     ): Boolean
 }

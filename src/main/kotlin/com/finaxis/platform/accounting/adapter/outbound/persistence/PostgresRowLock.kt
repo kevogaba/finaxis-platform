@@ -43,7 +43,7 @@ class PostgresRowLock(
         id: UUID,
         organisationId: UUID,
     ): Boolean {
-        requireActiveTransaction()
+        requireActiveTransaction("A row lock")
         return dsl
             .select(DSL.one())
             .from(table)
@@ -64,7 +64,7 @@ class PostgresRowLock(
         id: UUID,
         organisationId: UUID,
     ): Boolean {
-        requireActiveTransaction()
+        requireActiveTransaction("A row lock")
         return dsl
             .select(DSL.one())
             .from(table)
@@ -73,11 +73,22 @@ class PostgresRowLock(
             .fetch()
             .isNotEmpty()
     }
+}
 
-    private fun requireActiveTransaction() {
-        check(TransactionSynchronizationManager.isActualTransactionActive()) {
-            "A row lock requires an active transaction; on an autocommit connection it would be " +
-                "released before the caller could rely on it."
-        }
+/**
+ * Fails fast when no Spring transaction is active.
+ *
+ * A row lock on an autocommit connection is released the moment the statement returns, so a caller
+ * that believes it holds the row until commit holds nothing. The same applies to a write that only
+ * makes sense under such a lock: [JooqFiscalPeriodStateStore.updateStatus] documents that the
+ * caller is holding `FOR UPDATE`, and outside a transaction that claim is false. Shared rather than
+ * duplicated, because the linearizability guarantee is only as strong as its weakest participant.
+ *
+ * @param operation named in the failure message so the caller can tell which contract it broke.
+ */
+internal fun requireActiveTransaction(operation: String) {
+    check(TransactionSynchronizationManager.isActualTransactionActive()) {
+        "$operation requires an active transaction; on an autocommit connection the row lock it " +
+            "relies on is released before the caller can act on it."
     }
 }
