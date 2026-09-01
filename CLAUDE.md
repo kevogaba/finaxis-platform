@@ -18,8 +18,9 @@ preserving security boundaries and testability.
 Modules (`com.finaxis.platform`): `iam` (identity, authorization, active-organisation context,
 roles, permissions, and user REST adapters), `lifecycle` (organisation/branch/user/membership
 FSMs, tenant setup, business date, audit views, and REST adapters), `accounting`
-(general-ledger boundary and posting contracts only - no schema and no posting engine yet;
-see `docs/architecture/accounting-module-boundary.md`), `notifications` (RabbitMQ
+(general-ledger boundary, posting contracts, and the fiscal-calendar and chart-of-accounts
+schema; no journals and no posting engine yet - see
+`docs/architecture/accounting-module-boundary.md`), `notifications` (RabbitMQ
 listener → JobRunr job), `common` (reusable transitions/audit/context/persistence/web infra),
 `config`.
 
@@ -55,6 +56,11 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   under a new `accounting` module code in the `41000000-…` identifier block, grants them to
   `PLATFORM_SUPER_ADMIN`, and gives the bootstrap `local-admin` the tenant-configuration subset.
   Reference data only; see `docs/security/accounting-authorization.md`
+- `V6__accounting_fiscal_calendar_and_chart_of_accounts.sql` — the first accounting schema:
+  `accounting_fiscal_year`, `accounting_fiscal_period`, `gl_account` and the two transition logs,
+  transcribed from `docs/database/accounting-erd.md`. Installs `btree_gist` into a dedicated
+  `extensions` schema, because jOOQ codegen reads `inputSchema = "public"` and an extension there
+  would be generated into `com.finaxis.platform.jooq` on every build
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -75,10 +81,11 @@ Identifier rules, enforced by `IdentifierGenerationRuleTests`:
   and get no `guid`.
 
 See `docs/database/foundation-schema.md`, `docs/adr/0010-...`, and `docs/adr/0015-...`.
-Accounting schema is designed but not yet created: `docs/database/accounting-erd.md` is the
-design authority every accounting migration implements, and
-`docs/architecture/accounting-foundation.md` holds the invariants. Do not invent accounting
-tables or columns outside those documents.
+`docs/database/accounting-erd.md` is the design authority every accounting migration implements,
+and `docs/architecture/accounting-foundation.md` holds the invariants. `V6` created the fiscal
+calendar and the chart of accounts from it; the journal, posting-rule, reconciliation and
+projection tables are still design-only. Do not invent accounting tables or columns outside those
+documents.
 
 ## Authorization
 

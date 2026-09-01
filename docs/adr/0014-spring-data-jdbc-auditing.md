@@ -81,7 +81,7 @@ schema-level `DEFAULT` or trigger, or moving the aggregate to Spring Data JDBC.
 
 The entities cannot silently drift from the migrations. `FoundationJdbcEntitySchemaTests` reflects
 over every `@Table` class, asserts the table exists, asserts every mapped property resolves to a
-real column, and asserts every mutable application table has an entity. Adding a column to `V1`
+real column, and asserts every mutable foundation table has an entity. Adding a column to `V1`
 without adding it here is still allowed; renaming or removing one, or adding an entity property
 with no column behind it, fails the build. That converts the entities from documentation that
 *claims* to match the schema into documentation that is *checked* against it.
@@ -124,7 +124,7 @@ Return `Optional.empty()` from `AuditorAware` when there is no request actor:
 - `JdbcAuditingIntegrationTests` — timestamps and `SystemActor.ID` written without a request
   context; the authenticated actor written when one is present
 - `FoundationJdbcEntitySchemaTests` — every `@Table` entity matches a real table and real columns,
-  and every mutable application table has an entity
+  and every mutable foundation table has an entity
 - `ContextAuditorAwareTests` — actor resolution and system fallback
 - `JooqFoundationLifecyclePersistenceTests`, `JooqIamAdministrationPersistenceTests` — audit
   columns populated on the jOOQ write paths

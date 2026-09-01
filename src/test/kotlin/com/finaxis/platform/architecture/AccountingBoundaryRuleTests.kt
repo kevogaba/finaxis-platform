@@ -84,16 +84,44 @@ class AccountingBoundaryRuleTests {
 
     @Test
     fun `only accounting persistence adapters touch generated accounting tables`() {
+        // The generated package is excluded from the *subject* of the rule, not from its target.
+        // jOOQ emits each table's nested `…Path`, its `Record`, `Keys`, `Public` and every other
+        // table that holds an implicit join path to it, so the generator inevitably references its
+        // own output - 222 such references the moment `V6` created the first five accounting
+        // tables. Those are one code generator's internal wiring, not a module consuming the
+        // ledger. What the rule is about is application code, and that is what remains in scope.
         noClasses()
             .that()
             .resideOutsideOfPackage(
                 "com.finaxis.platform.accounting.adapter.outbound.persistence..",
-            ).should()
+            ).and()
+            .resideOutsideOfPackage("com.finaxis.platform.jooq..")
+            .should()
             .dependOnClassesThat(accountingJooqTables)
             .because(
                 "product modules must never read or write the general ledger directly; they post " +
                     "through PostingService",
             ).check(productionClasses)
+    }
+
+    @Test
+    fun `the accounting table rule guards tables that are actually generated`() {
+        // Before `V6` the rule above had nothing to find, so it reported success while proving
+        // nothing - the failure mode this suite exists to catch. This is what stops it going
+        // quiet again: rename or drop one of the five tables and the rule silently returns to
+        // vacuous, but this fails. Mutation-checked by adding a name no migration creates, which
+        // fails here as intended.
+        val generated =
+            productionClasses
+                .filter { it.packageName == "com.finaxis.platform.jooq.tables" }
+                .map { it.simpleName }
+                .toSet()
+
+        assertEquals(
+            emptySet(),
+            SHIPPED_ACCOUNTING_TABLE_TYPES - generated,
+            "the boundary rule can only guard a table that code generation actually emits",
+        )
     }
 
     @Test
@@ -158,10 +186,27 @@ class AccountingBoundaryRuleTests {
             Regex("""\b(:\s*(Double|Float)\b|(Double|Float)\s*\(|\.to(Double|Float)\s*\()""")
 
         /**
+         * The subset of [ACCOUNTING_TABLE_TYPES] that a migration has actually created. Later
+         * issues move their own names into this set as their migrations land.
+         */
+        val SHIPPED_ACCOUNTING_TABLE_TYPES =
+            setOf(
+                "AccountingFiscalYear",
+                "AccountingFiscalPeriod",
+                "GlAccount",
+                "GlAccountTransitionLog",
+                "FiscalPeriodTransitionLog",
+            )
+
+        /**
          * Generated jOOQ table types reserved for the accounting schema. jOOQ emits every table
          * into one package, so ownership is asserted by type name. Keep in sync with the canonical
-         * ERD in `docs/database/accounting-erd.md`; none of these exist yet, which is why the rule
-         * is written now — it starts guarding the moment issue #36 creates the first one.
+         * ERD in `docs/database/accounting-erd.md`.
+         *
+         * The five in [SHIPPED_ACCOUNTING_TABLE_TYPES] exist as of `V6`; the rest are created by
+         * issues #40, #44, #46 and #47. Naming a type before its table exists is deliberate — the
+         * rule then guards from the moment the table appears rather than from the moment someone
+         * remembers to add it here.
          */
         val ACCOUNTING_TABLE_TYPES =
             setOf(

@@ -52,13 +52,13 @@ class FoundationJdbcEntitySchemaTests(
     }
 
     @Test
-    fun `entities cover every mutable application table`() {
+    fun `entities cover every mutable foundation table`() {
         val mapped = MAPPED_ENTITIES.map { it.table }.toSet()
-        val unmapped = (MUTABLE_APPLICATION_TABLES - mapped).sorted()
+        val unmapped = (MUTABLE_FOUNDATION_TABLES - mapped).sorted()
 
         assertTrue(
             unmapped.isEmpty(),
-            "mutable tables with no readable entity reference: $unmapped",
+            "mutable foundation tables with no readable entity reference: $unmapped",
         )
     }
 
@@ -94,10 +94,17 @@ class FoundationJdbcEntitySchemaTests(
 
     private companion object {
         /**
-         * Tables that hold mutable state and therefore deserve a typed reference. Append-only logs
-         * and framework-owned tables are intentionally excluded from the coverage requirement.
+         * Foundation tables that hold mutable state and therefore deserve a typed reference.
+         * Append-only logs and framework-owned tables are intentionally excluded.
+         *
+         * Scoped to the **foundation** rather than to every application table, and the accounting
+         * tables `V6` adds are deliberately absent. Per
+         * `docs/adr/0014-spring-data-jdbc-auditing.md` these entities are convention scaffolding
+         * rather than live write paths — every production write goes through jOOQ — and accounting
+         * ships no Spring Data JDBC entity at all. Listing its tables here would demand
+         * scaffolding for a module that has deliberately declined it.
          */
-        val MUTABLE_APPLICATION_TABLES =
+        val MUTABLE_FOUNDATION_TABLES =
             setOf(
                 "organisation",
                 "branch",
