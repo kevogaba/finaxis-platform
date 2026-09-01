@@ -141,3 +141,21 @@ There is no RabbitMQ consumer for these events yet. Outbox emission is sufficien
 
 COB status remains a plain `business_date.status` column. It is not promoted into the reusable FSM
 transition engine.
+
+## Accounting reads the business date
+
+Since the accounting module landed, the business date is read cross-module through
+`AccountingBusinessDateLookup`, implemented by this module's
+`LifecycleAccountingBusinessDateAdapter`. Accounting sees a single `postingAllowed` boolean rather
+than the status string, so a new business-date status cannot silently change posting behaviour.
+
+Two consequences worth knowing when operating close-of-business:
+
+- While the business date is not `OPEN`, a **current-dated** posting is rejected, but a
+  **backdated** posting into a still-open prior period is still allowed. Close-of-business
+  deliberately does not deadlock corrections.
+- The business date is read **without a lock** and captured once per posting, so it is never the
+  ledger's serialisation point. A posting that began before an advance still commits with the date
+  it captured, which is correct: the prior period stays open until it is closed.
+
+See [accounting dates and periods](../architecture/accounting-dates-and-periods.md).

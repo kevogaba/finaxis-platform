@@ -21,6 +21,18 @@ class AccountingPermissionGuardAdapter(
         authorizationService.requirePermission(actorId, organisationId, permissionCode)
     }
 
+    override fun requireBreakGlassPermission(
+        actorId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ) {
+        // Deliberately NOT requirePermission, which returns true for the system-actor sentinels
+        // before consulting any grant; and deliberately not listEffectivePermissions either, which
+        // resolves through the @RequestScope permission cache and would raise a scope error for
+        // exactly the background service identity this path exists to serve.
+        authorizationService.requireBreakGlassPermission(actorId, organisationId, permissionCode)
+    }
+
     override fun requireBranchPermission(
         actorId: UUID,
         organisationId: UUID,

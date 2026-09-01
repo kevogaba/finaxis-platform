@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestConstructor
+import java.nio.file.Path
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -98,6 +99,39 @@ class AccountingSeparationOfDutiesPolicyTests(
     }
 
     @Test
+    fun `every break-glass enforcement site also records an audit event`() {
+        // A break-glass control whose exercise leaves no record is the finding a bank auditor
+        // leads with. Enforcement and audit were split across issues once already - #35 shipped
+        // the prior-period permission check while the audit was deferred to the issue that
+        // shipped it - so this binds them: any production file that enforces a break-glass code
+        // must also call the audit service.
+        //
+        // Deliberately a source scan rather than a runtime assertion, because the classes
+        // involved have no beans until issue #36 wires them.
+        val offenders =
+            Path
+                .of(PRODUCTION_SOURCE_ROOT)
+                .toFile()
+                .walkTopDown()
+                .filter { it.isFile && it.extension == "kt" }
+                .filter { file ->
+                    val text = file.readText()
+                    AccountingPermissions.BREAK_GLASS.any { code ->
+                        ENFORCEMENT_MARKER.containsMatchIn(text) &&
+                            (text.contains("\"$code\"") || text.contains(constantName(code)))
+                    } &&
+                        !AUDIT_MARKER.containsMatchIn(text)
+                }.map { it.name }
+                .toList()
+
+        assertEquals(
+            emptyList(),
+            offenders,
+            "these files enforce a break-glass permission without recording its use: $offenders",
+        )
+    }
+
+    @Test
     fun `the maker role can actually make and the checker cannot`() {
         // Every other assertion in this class is negative - no role holds both sides, no bundle
         // holds break-glass. All of them pass for an ACCOUNTING_OPERATOR that holds nothing at
@@ -169,7 +203,24 @@ class AccountingSeparationOfDutiesPolicyTests(
             .groupBy({ it.value1()!! }, { it.value2()!! })
             .mapValues { (_, codes) -> codes.toSet() }
 
+    private fun constantName(code: String): String =
+        "AccountingPermissions." + code.uppercase().replace('.', '_')
+
     private companion object {
+        const val PRODUCTION_SOURCE_ROOT = "src/main/kotlin"
+
+        /** A call that actually enforces a permission, as opposed to merely naming a code. */
+        val ENFORCEMENT_MARKER = Regex("""require(BreakGlass|Tenant|Branch)Permission\s*\(""")
+
+        /**
+         * An actual audit **call**, not merely an injected dependency.
+         *
+         * Matching the bare identifier was the first attempt, and mutation testing showed it
+         * passes for a class that injects `AuditService` and never calls it - the constructor
+         * property satisfies the match. That is the same false-negative this suite exists to
+         * catch elsewhere.
+         */
+        val AUDIT_MARKER = Regex("""auditService\.record\w*\s*\(""")
         val ACTOR_ID: UUID = UUID.fromString("11111111-1111-1111-1111-111111111111")
 
         /**
