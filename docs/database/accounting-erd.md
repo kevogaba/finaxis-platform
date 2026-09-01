@@ -537,9 +537,32 @@ one account can carry balances in several currencies and the functional-amount i
 across all of them.
 
 There is **no delete path and no soft-delete flag.** `INACTIVE` is deactivation, and issue #54's
-`REVOKE DELETE` covers the physical guarantee. Issue #37 enforces that an account with financial
-use cannot have its code, class or parent changed; the schema supports that rule but cannot state
-it, because *"has financial use"* is a read of `journal_line`, which issue #40 creates.
+`REVOKE DELETE` covers the physical guarantee.
+
+**Identity is frozen; position is not.** Once an account has structure beneath it, its
+`account_code`, `account_class` and `account_usage` cannot change: every posted line was recorded
+against that code, under that class, on an account that was postable. Its **parent** deliberately
+can change, for two reasons. A posted journal line references its account, not the account's place
+in the chart, so a move reinterprets no history — reorganising a chart is ordinary work. And
+blocking it would make the cycle rule unreachable: a cycle requires descendants, so a rule that
+froze the parent of any account with children would leave `ChartHierarchyPolicy`'s cycle branch
+unable to fire for any caller.
+
+Both halves are enforced by `ChartHierarchyPolicy` (#37) against the accounts an account already
+has beneath it. That is the knowable half of *"has been used"*: the full rule also freezes identity
+once a journal line references the account, and `journal_line` is issue #40's.
+
+**And a position change is serialised per tenant, because the cycle rule is not a row constraint.**
+Validating a re-parenting means reading the ancestry and then writing the parent, and at the
+repository's READ COMMITTED isolation those are two snapshots. Two moves can each validate against
+a chart that predates the other's write — reparent A under B while reparenting B under A — and
+both commit, because `chk_gl_account_not_own_parent` sees only the one-hop case. Issue #37 therefore
+takes a tenant-scoped advisory lock (`AdvisoryLockNamespace.ACCOUNTING_CHART_HIERARCHY`) before the
+read that validation depends on, and holds it for the transaction. It is keyed on the organisation
+rather than on an account, because a cycle is a property of a *pair* of moves and locking the two
+accounts a caller names would not exclude the move that closes the cycle from the other end. Chart
+edits are rare administrative operations, not the posting path, so serialising them per tenant
+costs nothing measurable — this is the one place in accounting where a coarse lock is right.
 
 Two columns are specified here but **created by issue #46**, following this document's convention
 for later-issue additions: `is_control_account BOOLEAN NOT NULL DEFAULT FALSE` and

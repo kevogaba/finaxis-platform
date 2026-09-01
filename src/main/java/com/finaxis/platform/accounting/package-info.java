@@ -19,7 +19,9 @@
       "common::application",
       "common::audit",
       "common::context",
+      "common::persistence",
       "common::transitions",
+      "common::web-pagination",
       "jooq"
     })
 package com.finaxis.platform.accounting;

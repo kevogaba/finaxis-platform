@@ -36,6 +36,15 @@ object AdvisoryLockNamespace {
     const val ACCOUNTING_FISCAL_YEAR: Int = 2
 
     /**
+     * Changing the structure of a tenant's chart of accounts.
+     *
+     * Keyed on the organisation alone, not on an account: a cycle is a property of a *pair* of
+     * moves, so locking the two accounts a caller happens to name would not exclude the move that
+     * completes the cycle from the other end.
+     */
+    const val ACCOUNTING_CHART_HIERARCHY: Int = 3
+
+    /**
      * The `objid` for a two-int advisory lock, derived in the JVM so a caller never has to
      * round-trip to the database for a lock key.
      *
