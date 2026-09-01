@@ -5,6 +5,9 @@ import com.finaxis.platform.accounting.AccountingBusinessDateLookup
 import com.finaxis.platform.accounting.AccountingPermissionGuard
 import com.finaxis.platform.accounting.domain.AccountingAuditActions
 import com.finaxis.platform.accounting.domain.AccountingPermissions
+import com.finaxis.platform.accounting.domain.FiscalPeriodKey
+import com.finaxis.platform.accounting.domain.FiscalPeriodSnapshot
+import com.finaxis.platform.accounting.domain.FiscalPeriodStatus
 import com.finaxis.platform.accounting.domain.PostingDateClassification
 import com.finaxis.platform.accounting.domain.PostingDateRequest
 import com.finaxis.platform.common.application.ConflictException
@@ -257,6 +260,8 @@ class PostingPeriodResolverTests {
         var covering: FiscalPeriodSnapshot? = null
         var locked: FiscalPeriodSnapshot? = null
 
+        override fun findById(key: FiscalPeriodKey) = covering
+
         override fun findCovering(
             organisationId: UUID,
             postingDate: LocalDate,
@@ -270,6 +275,7 @@ class PostingPeriodResolverTests {
             key: FiscalPeriodKey,
             newStatus: FiscalPeriodStatus,
             actorId: UUID,
+            reason: String?,
         ) = true
     }
 

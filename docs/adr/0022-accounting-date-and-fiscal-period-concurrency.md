@@ -130,5 +130,69 @@ deleted, and the compiler is what forced every scenario onto the real adapter.
 
 **`updateStatus` carries the actor.** It populates `accounting_fiscal_period.updated_by` so the row
 says who last moved it. That is a mirror for convenience: the authoritative record of a transition,
-and the one issue #39's reopen actor-identity check reads, is
-`fiscal_period_transition_log.created_by`.
+and the one the reopen actor-identity check reads, is `fiscal_period_transition_log.created_by`.
+
+**The bound is reached through an application-owned port.** `TransactionLockBound` is declared in
+`accounting/application` and implemented by the jOOQ `TransactionLockTimeout` component. An earlier
+revision had `FiscalPeriodLifecycleService` import the adapter class directly, which pointed the
+dependency the wrong way — an application service does not get to know that the bound is a
+PostgreSQL `SET LOCAL`, any more than it knows a period lives in a jOOQ table. It already takes its
+period storage and maker resolution as ports; this is the third.
+
+**The close path is bounded by a transaction-scoped `lock_timeout`**, shipped by issue #39 and
+configured by `finaxis.accounting.fiscal-period-close-lock-timeout` (10 seconds by default). A
+close queues behind every in-flight posting into its period, which is the correct outcome;
+unbounded, a long posting transaction delays it forever and the caller simply hangs. `SET LOCAL`
+scopes the bound to the transaction, so it reverts at commit and no other statement on the pooled
+connection inherits it. A close that cannot acquire in time fails with
+`accounting.fiscal_period_lock_timeout` rather than hanging.
+
+That translation is from **`CannotAcquireLockException`**, not `QueryTimeoutException`. PostgreSQL
+raises `SQLSTATE 55P03` when `lock_timeout` expires, and Spring's PostgreSQL error codes list
+`55P03` under `cannotAcquireLockCodes`; `QueryTimeoutException` is a *sibling* under
+`TransientDataAccessException`, never a supertype. An earlier revision caught the wrong one, so the
+catch was unreachable and the published code could not be raised by any path. The mapping is now
+pinned by a test that holds a real shared lock and lets a real `lock_timeout` expire against it.
+
+**Maker-checker on reopen is an actor-identity check, not a second permission.** The catalogue `V5`
+seeded gives fiscal periods four codes — `view`, `open`, `close`, `reopen` — with no
+`submit`/`approve` pair. `INV-10` asks for *"a checker whose identity is persisted and who is not
+the maker"*, and both halves already exist: `fiscal_period.close` and `fiscal_period.reopen` are
+separate `CRITICAL` codes, and `fiscal_period_transition_log` persists the actor of every
+transition. So reopening requires the break-glass code, a mandatory reason, an audit record, and an
+actor who is not the one who closed. `fiscal_period.reopen` is deliberately absent from every
+default role bundle, so a tenant that wants it grants it to a named actor.
+
+**Locking carries the same different-actor control, for a stronger reason.** Nothing transitions
+out of `LOCKED`, so one actor closing and then locking would permanently freeze a tenant's books
+with no second pair of eyes and no recovery short of hand-written SQL. Gating the reversible
+operation three ways and the irreversible one only by permission had it backwards.
+
+**And locking goes through the break-glass check, not the ordinary tenant one.** There is no
+`fiscal_period.lock` code, so the transition is authorised by `fiscal_period.close` — but
+`requireTenantPermission` authorises the system-actor sentinels *before* consulting any grant, which
+is right for background provisioning and wrong here: a batch path would otherwise permanently
+finalise a tenant's books with no principal holding the `CRITICAL` authority. `reopen` was already
+checked this way and a lock is not the weaker act. Reusing `close` is a compromise the catalogue
+freeze forces, not a claim the two are equivalent; a dedicated `fiscal_period.lock` code is the
+recommended follow-up, and until it exists no role should hold `fiscal_period.close` unless it is
+also trusted to lock.
+
+**The different-actor lookup runs under the period's row lock, not before it.** This is the one
+ordering detail easy to get wrong, because the check reads the *transition log* rather than the
+period row, so it looks independent of the lock. It is not. Resolved before the lock, the answer
+can go stale between check and write: an actor B that passes against closer A can have the period
+reopened and re-closed by B in the interim, and the original request then completes against a period
+whose latest closer is B — self-approval reached through the front door. Holding the lock closes the
+window for the log too, because every state change goes through `FiscalPeriodStateChangeGuard`, so a
+log row for this period can only be written by a transaction that first took the same lock. The
+service therefore runs permission and request-shape checks first, then takes the lock, then
+evaluates every state- or history-dependent control against what it read under it.
+
+**Every transition audits, in the same transaction as the state change.** `record`, not
+`recordIndependently`: an independent audit commits immediately, so a transition whose enclosing
+transaction later rolled back would leave a permanent `SUCCESS` row for something that did not
+happen. The prior-period posting audit uses the independent form for a different reason — there
+the audited fact is *authority was exercised*, and the journal's own outcome is audited
+elsewhere — but where the audited fact **is** the transition, the two must stand or fall
+together.

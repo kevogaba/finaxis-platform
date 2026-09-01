@@ -1,7 +1,7 @@
 package com.finaxis.platform.accounting.adapter.outbound.persistence
 
-import com.finaxis.platform.accounting.application.FiscalPeriodKey
-import com.finaxis.platform.accounting.application.FiscalPeriodStatus
+import com.finaxis.platform.accounting.domain.FiscalPeriodKey
+import com.finaxis.platform.accounting.domain.FiscalPeriodStatus
 import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_PERIOD
 import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_YEAR
 import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT

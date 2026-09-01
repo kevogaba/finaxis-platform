@@ -1,11 +1,11 @@
 package com.finaxis.platform.accounting.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
-import com.finaxis.platform.accounting.application.FiscalPeriodKey
 import com.finaxis.platform.accounting.application.FiscalPeriodStateChangeGuard
 import com.finaxis.platform.accounting.application.FiscalPeriodStateStore
-import com.finaxis.platform.accounting.application.FiscalPeriodStatus
 import com.finaxis.platform.accounting.application.PostingPeriodResolver
+import com.finaxis.platform.accounting.domain.FiscalPeriodKey
+import com.finaxis.platform.accounting.domain.FiscalPeriodStatus
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import org.jooq.DSLContext
@@ -13,9 +13,11 @@ import org.junit.jupiter.api.Test
 import org.springframework.aop.support.AopUtils
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
+import org.springframework.dao.CannotAcquireLockException
 import org.springframework.test.context.TestConstructor
 import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.support.TransactionTemplate
+import java.time.Duration
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -46,6 +48,7 @@ class FiscalPeriodConcurrencyIntegrationTests(
     private val applicationContext: org.springframework.context.ApplicationContext,
     private val dsl: DSLContext,
     private val periods: FiscalPeriodStateStore,
+    private val lockTimeout: TransactionLockTimeout,
     organisationProvisioningService: OrganisationProvisioningService,
     transactionManager: PlatformTransactionManager,
 ) {
@@ -77,7 +80,7 @@ class FiscalPeriodConcurrencyIntegrationTests(
                     transactions.execute {
                         periods.lockForStateChange(key)
                         closeAcquiredAt.set(System.nanoTime())
-                        periods.updateStatus(key, FiscalPeriodStatus.CLOSED, ACTOR_ID)
+                        periods.updateStatus(key, FiscalPeriodStatus.CLOSED, ACTOR_ID, null)
                     }
                 }
             // The barrier that gives this test its teeth. Without it the release below fires
@@ -139,7 +142,14 @@ class FiscalPeriodConcurrencyIntegrationTests(
                 }
 
             assertTrue(postingRead.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
-            transactions.execute { periods.updateStatus(key, FiscalPeriodStatus.CLOSED, ACTOR_ID) }
+            transactions.execute {
+                periods.updateStatus(
+                    key,
+                    FiscalPeriodStatus.CLOSED,
+                    ACTOR_ID,
+                    null,
+                )
+            }
             closeCommitted.countDown()
             posting.get(TIMEOUT_SECONDS, TimeUnit.SECONDS)
         }
@@ -192,7 +202,7 @@ class FiscalPeriodConcurrencyIntegrationTests(
                 executor.submit {
                     transactions.execute {
                         periods.lockForStateChange(key)
-                        periods.updateStatus(key, FiscalPeriodStatus.CLOSED, ACTOR_ID)
+                        periods.updateStatus(key, FiscalPeriodStatus.CLOSED, ACTOR_ID, null)
                         firstLocked.countDown()
                         assertTrue(releaseFirst.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
                     }
@@ -267,7 +277,14 @@ class FiscalPeriodConcurrencyIntegrationTests(
     @Test
     fun `S6 a reopen after a rejected posting resurrects nothing`() {
         val key = openPeriod("s6")
-        transactions.execute { periods.updateStatus(key, FiscalPeriodStatus.CLOSED, ACTOR_ID) }
+        transactions.execute {
+            periods.updateStatus(
+                key,
+                FiscalPeriodStatus.CLOSED,
+                ACTOR_ID,
+                null,
+            )
+        }
 
         transactions.execute {
             assertEquals(
@@ -277,7 +294,7 @@ class FiscalPeriodConcurrencyIntegrationTests(
         }
         assertEquals(0, calendar.journalCount(key.organisationId))
 
-        transactions.execute { periods.updateStatus(key, FiscalPeriodStatus.OPEN, ACTOR_ID) }
+        transactions.execute { periods.updateStatus(key, FiscalPeriodStatus.OPEN, ACTOR_ID, null) }
         transactions.execute {
             assertEquals(
                 FiscalPeriodStatus.OPEN,
@@ -343,6 +360,56 @@ class FiscalPeriodConcurrencyIntegrationTests(
 
         assertFailsWith<IllegalStateException> { periods.lockForPosting(key) }
         assertFailsWith<IllegalStateException> { periods.lockForStateChange(key) }
+    }
+
+    @Test
+    fun `S9 an expired lock_timeout surfaces as CannotAcquireLockException`() {
+        // The assertion whose absence let a dead catch ship. FiscalPeriodLifecycleService bounds
+        // the close path with SET LOCAL lock_timeout and translates the expiry into the published
+        // accounting.fiscal_period_lock_timeout code - but an earlier revision caught
+        // QueryTimeoutException, which PostgreSQL's 55P03 never produces. Spring's PostgreSQL
+        // error codes list 55P03 under cannotAcquireLockCodes, and QueryTimeoutException is a
+        // *sibling* of CannotAcquireLockException under TransientDataAccessException, never a
+        // supertype. So the catch was unreachable, the published code could not be raised by any
+        // path, and a close blocked behind a long posting returned a 500.
+        //
+        // This pins what the database actually throws, on a real lock, at a timeout short enough
+        // to keep the suite fast.
+        val key = openPeriod("s9")
+        val postingHolds = CountDownLatch(1)
+        val releasePosting = CountDownLatch(1)
+        val observed = AtomicReference<Throwable>()
+
+        Executors.newVirtualThreadPerTaskExecutor().use { executor ->
+            val posting =
+                executor.submit {
+                    transactions.execute {
+                        periods.lockForPosting(key)
+                        postingHolds.countDown()
+                        assertTrue(releasePosting.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+                    }
+                }
+            assertTrue(postingHolds.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+            val close =
+                executor.submit {
+                    runCatching {
+                        transactions.execute {
+                            lockTimeout.applyToCurrentTransaction(Duration.ofMillis(250))
+                            periods.lockForStateChange(key)
+                        }
+                    }.onFailure(observed::set)
+                }
+            close.get(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            releasePosting.countDown()
+            posting.get(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        }
+
+        assertTrue(
+            observed.get() is CannotAcquireLockException,
+            "an expired lock_timeout must arrive as CannotAcquireLockException, but was " +
+                "${observed.get()?.let { it::class.qualifiedName }}",
+        )
     }
 
     @Test

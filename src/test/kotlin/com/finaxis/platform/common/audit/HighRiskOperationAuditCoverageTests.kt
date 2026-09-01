@@ -76,6 +76,37 @@ class HighRiskOperationAuditCoverageTests(
     }
 
     @Test
+    fun `every action not pending enforcement has a real call site`() {
+        // The assertion the ratchet was missing, and the reason two CRITICAL fiscal-period
+        // operations shipped unaudited. `actions pending enforcement have no production call site
+        // yet` only looks at entries still IN pendingEnforcement, and
+        // `every mapped audit action is reachable in production` uses the deliberately loose text
+        // match, which any permission literal satisfies. So an entry could be DELETED from
+        // pendingEnforcement — the act that claims "this is now wired" — and nothing checked that
+        // it was. Discharging an entry is exactly the moment the claim needs verifying.
+        val callSites = callSiteAuditActions()
+        assertTrue(
+            CALL_SITE_CANARY in callSites,
+            "the call-site scan found nothing it should have found, so this rule would pass " +
+                "vacuously - check the working directory and the scan itself",
+        )
+
+        val discharged =
+            auditedActionByPermission.values
+                .distinct()
+                .filterNot { it in pendingEnforcement.keys }
+                .filterNot { it in callSites }
+                .sorted()
+
+        assertTrue(
+            discharged.isEmpty(),
+            "these actions are neither pending enforcement nor emitted by any audit call site: " +
+                "$discharged - either wire them, or put them back in pendingEnforcement against " +
+                "the issue that will",
+        )
+    }
+
+    @Test
     fun `actions pending enforcement have no production call site yet`() {
         val unmapped = pendingEnforcement.keys.filterNot { it in auditedActionByPermission.values }
         assertTrue(
@@ -206,16 +237,37 @@ class HighRiskOperationAuditCoverageTests(
         assertTrue(
             "AccountingAuditActions.FISCAL_PERIOD_CLOSE" in index["fiscal_period.close"].orEmpty(),
             "expected the audit registry's declaration among the candidates, but got " +
-                "${index["fiscal_period.close"]}. The same value is declared more than once - " +
-                "AccountingPermissions spells most codes identically to their action - so the " +
-                "index must keep every candidate rather than letting one overwrite another",
+                "${index["fiscal_period.close"]}",
+        )
+        assertTrue(
+            index.values.none { candidates ->
+                candidates.any { it.startsWith("AccountingPermissions.") }
+            },
+            "a permission constant must never enter this index. AccountingPermissions spells " +
+                "most codes identically to their audit action, so indexing it let a file that " +
+                "merely *checked* fiscal_period.close count as a call site that *audits* it - " +
+                "which is how two CRITICAL operations were signed off as wired while auditing " +
+                "nothing",
         )
     }
 
     /**
-     * Maps each audit action to the `Object.CONSTANT` reference a call site would use for it, by
-     * reading the constants objects that declare them. Derived from source rather than hard-coded
-     * so a renamed constant stops being matched instead of silently continuing to match.
+     * Maps each audit action to the `SomeAuditActions.CONSTANT` reference a call site would use for
+     * it, read from source rather than hard-coded so a renamed constant stops being matched instead
+     * of silently continuing to match.
+     *
+     * Scoped to files named `*AuditActions` on purpose, and this is the correction that matters
+     * most in this suite. An earlier revision indexed **every** `const val` in production source
+     * by value, and `AccountingPermissions.FISCAL_PERIOD_OPEN` holds the identical string as
+     * `AccountingAuditActions.FISCAL_PERIOD_OPEN` — so a file that merely checked the *permission*
+     * and happened to mention `auditService` somewhere counted as an audit call site for the
+     * *action*. `FiscalPeriodLifecycleService` did exactly that: it audited only `reopen`, checked
+     * `AccountingPermissions.FISCAL_PERIOD_OPEN`/`FISCAL_PERIOD_CLOSE`, and the ratchet reported
+     * all three as wired. Two genuinely unaudited CRITICAL operations were signed off by a name
+     * collision.
+     *
+     * An audit action is referenced through an `*AuditActions` registry by convention, so that is
+     * what the index accepts.
      */
     private fun auditActionConstantNames(): Map<String, Set<String>> =
         Path
@@ -223,6 +275,7 @@ class HighRiskOperationAuditCoverageTests(
             .toFile()
             .walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
+            .filter { it.nameWithoutExtension.endsWith(AUDIT_ACTION_REGISTRY_SUFFIX) }
             .flatMap { file ->
                 val objectName = file.nameWithoutExtension
                 CONSTANT_DECLARATION
@@ -234,6 +287,9 @@ class HighRiskOperationAuditCoverageTests(
     private companion object {
         /** Only a file that calls the audit service can emit an audit action. */
         const val AUDIT_SERVICE_MARKER = "auditService"
+
+        /** Audit actions are referenced through a `*AuditActions` registry, never a permission. */
+        const val AUDIT_ACTION_REGISTRY_SUFFIX = "AuditActions"
 
         /** `const val NAME = "value"`, capturing the constant name and the action it holds. */
         val CONSTANT_DECLARATION = Regex("""const val (\w+)\s*=\s*"([\w.]+)"""")
@@ -254,9 +310,6 @@ class HighRiskOperationAuditCoverageTests(
             mapOf(
                 "gl_account.approve" to "#38",
                 "gl_account.deactivate" to "#38",
-                "fiscal_period.open" to "#39",
-                "fiscal_period.close" to "#39",
-                "fiscal_period.reopen" to "#39",
                 "journal.create_manual" to "#48",
                 "journal.approve" to "#48",
                 "journal.reverse" to "#43",
@@ -271,7 +324,7 @@ class HighRiskOperationAuditCoverageTests(
          * no audit at all could be waved through by *adding* an entry here, which is the opposite
          * of what this map is for. Lower it as entries are discharged; never raise it.
          */
-        const val MAXIMUM_PENDING_ENFORCEMENT = 12
+        const val MAXIMUM_PENDING_ENFORCEMENT = 9
 
         /** A wired action the scan must always find; its absence means the scan is broken. */
         const val CALL_SITE_CANARY = "settings.update"

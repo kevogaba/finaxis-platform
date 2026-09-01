@@ -1,6 +1,9 @@
 package com.finaxis.platform.accounting.application
 
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
+import com.finaxis.platform.accounting.domain.FiscalPeriodKey
+import com.finaxis.platform.accounting.domain.FiscalPeriodSnapshot
+import com.finaxis.platform.accounting.domain.FiscalPeriodStatus
 import com.finaxis.platform.common.application.ConflictException
 import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.util.UUID
@@ -48,9 +51,10 @@ class FiscalPeriodStateChangeGuard(
         current: FiscalPeriodSnapshot,
         target: FiscalPeriodStatus,
         actorId: UUID,
+        reason: String? = null,
     ) {
         requireChangeable(current, target)
-        if (!periods.updateStatus(current.key, target, actorId)) {
+        if (!periods.updateStatus(current.key, target, actorId, reason)) {
             throw ConflictException(
                 code = STATE_CHANGE_MATCHED_NO_ROW,
                 safeDetail = "The fiscal period is no longer available for a state change.",
@@ -86,9 +90,12 @@ class FiscalPeriodStateChangeGuard(
         )
 
     private companion object {
+        // Aliases, never private copies. An earlier revision of PostingPeriodResolver declared
+        // its own string for a code the public contract also named, and the two drifted; these
+        // three were still private here, which is the same defect one issue later.
         const val PERIOD_NOT_FOUND = PostingErrorCodes.PERIOD_NOT_FOUND
-        const val ALREADY_IN_STATE = "accounting.fiscal_period_already_in_state"
-        const val PERIOD_LOCKED = "accounting.fiscal_period_locked"
-        const val STATE_CHANGE_MATCHED_NO_ROW = "accounting.fiscal_period_state_change_failed"
+        const val ALREADY_IN_STATE = PostingErrorCodes.PERIOD_ALREADY_IN_STATE
+        const val PERIOD_LOCKED = PostingErrorCodes.PERIOD_LOCKED
+        const val STATE_CHANGE_MATCHED_NO_ROW = PostingErrorCodes.PERIOD_STATE_CHANGE_FAILED
     }
 }

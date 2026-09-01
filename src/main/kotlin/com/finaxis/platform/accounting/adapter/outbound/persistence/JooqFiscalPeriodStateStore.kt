@@ -1,9 +1,9 @@
 package com.finaxis.platform.accounting.adapter.outbound.persistence
 
-import com.finaxis.platform.accounting.application.FiscalPeriodKey
-import com.finaxis.platform.accounting.application.FiscalPeriodSnapshot
 import com.finaxis.platform.accounting.application.FiscalPeriodStateStore
-import com.finaxis.platform.accounting.application.FiscalPeriodStatus
+import com.finaxis.platform.accounting.domain.FiscalPeriodKey
+import com.finaxis.platform.accounting.domain.FiscalPeriodSnapshot
+import com.finaxis.platform.accounting.domain.FiscalPeriodStatus
 import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_PERIOD
 import org.jooq.DSLContext
 import org.jooq.Record5
@@ -53,6 +53,13 @@ class JooqFiscalPeriodStateStore(
             .fetchOne()
             ?.let(::toSnapshot)
 
+    override fun findById(key: FiscalPeriodKey): FiscalPeriodSnapshot? =
+        selectPeriod()
+            .where(ACCOUNTING_FISCAL_PERIOD.ORGANISATION_ID.eq(key.organisationId))
+            .and(ACCOUNTING_FISCAL_PERIOD.ID.eq(key.fiscalPeriodId))
+            .fetchOne()
+            ?.let(::toSnapshot)
+
     override fun lockForPosting(key: FiscalPeriodKey): FiscalPeriodSnapshot? =
         readUnderLock(key) { id, organisationId ->
             rowLock.lockForShare(
@@ -78,9 +85,10 @@ class JooqFiscalPeriodStateStore(
     /**
      * Writes the new status under the exclusive lock the caller already holds.
      *
-     * [actorId] populates `updated_by`, so the row itself says who last moved it. That is a mirror
-     * for convenience: the authoritative record of who performed a transition, and the one the
-     * reopen actor-identity check reads, is `fiscal_period_transition_log.created_by`.
+     * [actorId] populates `updated_by` and [reason] populates `status_reason`, so the row says who
+     * last moved it and why without a join. Both are mirrors: the authoritative record of who
+     * performed a transition, and the one the reopen actor-identity check reads, is
+     * `fiscal_period_transition_log.created_by`.
      *
      * A false return means the row no longer exists for that tenant. It cannot mean a concurrent
      * change: the caller holds `FOR UPDATE`, so nothing else can move the row until it commits.
@@ -89,6 +97,7 @@ class JooqFiscalPeriodStateStore(
         key: FiscalPeriodKey,
         newStatus: FiscalPeriodStatus,
         actorId: UUID,
+        reason: String?,
     ): Boolean {
         // The contract above says the caller holds FOR UPDATE. Outside a transaction that lock was
         // released the instant it was taken, so the write would silently bypass the protocol rather
@@ -97,6 +106,7 @@ class JooqFiscalPeriodStateStore(
         return dsl
             .update(ACCOUNTING_FISCAL_PERIOD)
             .set(ACCOUNTING_FISCAL_PERIOD.STATUS, newStatus.name)
+            .set(ACCOUNTING_FISCAL_PERIOD.STATUS_REASON, reason)
             .set(ACCOUNTING_FISCAL_PERIOD.UPDATED_AT, OffsetDateTime.now(clock))
             .set(ACCOUNTING_FISCAL_PERIOD.UPDATED_BY, actorId)
             .set(
