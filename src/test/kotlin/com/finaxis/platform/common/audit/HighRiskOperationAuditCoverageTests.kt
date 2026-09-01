@@ -114,11 +114,17 @@ class HighRiskOperationAuditCoverageTests(
             "pendingEnforcement names actions that are not in the registry at all: $unmapped",
         )
 
-        assertTrue(
-            pendingEnforcement.size <= MAXIMUM_PENDING_ENFORCEMENT,
-            "pendingEnforcement grew to ${pendingEnforcement.size}. It is a ratchet, not a " +
-                "parking space: a new high-risk permission needs an audit call site, not another " +
-                "entry here. Lower MAXIMUM_PENDING_ENFORCEMENT as entries are discharged.",
+        // Equality, not `<=`, and the difference is the whole ratchet. With `<=`, discharging an
+        // entry without lowering the constant leaves slack behind, and the next unwired high-risk
+        // action can be parked in this map without failing anything - which is the opposite of what
+        // the map is for. Equality makes the ceiling follow the map down and never back up.
+        assertEquals(
+            MAXIMUM_PENDING_ENFORCEMENT,
+            pendingEnforcement.size,
+            "pendingEnforcement is ${pendingEnforcement.size} and the ceiling is " +
+                "$MAXIMUM_PENDING_ENFORCEMENT. If you discharged an entry, lower the ceiling to " +
+                "match. If you added one, do not: it is a ratchet, not a parking space - a new " +
+                "high-risk permission needs an audit call site, not another entry here.",
         )
 
         val callSites = callSiteAuditActions()
@@ -308,8 +314,6 @@ class HighRiskOperationAuditCoverageTests(
          */
         val pendingEnforcement =
             mapOf(
-                "gl_account.approve" to "#38",
-                "gl_account.deactivate" to "#38",
                 "journal.create_manual" to "#48",
                 "journal.approve" to "#48",
                 "journal.reverse" to "#43",
@@ -323,8 +327,11 @@ class HighRiskOperationAuditCoverageTests(
          * The ratchet may only shrink. Without this, a new HIGH/CRITICAL permission shipped with
          * no audit at all could be waved through by *adding* an entry here, which is the opposite
          * of what this map is for. Lower it as entries are discharged; never raise it.
+         *
+         * Asserted as an **equality** against the map size, so a discharge that forgets to lower
+         * this constant fails rather than quietly banking slack for the next unwired action.
          */
-        const val MAXIMUM_PENDING_ENFORCEMENT = 9
+        const val MAXIMUM_PENDING_ENFORCEMENT = 7
 
         /** A wired action the scan must always find; its absence means the scan is broken. */
         const val CALL_SITE_CANARY = "settings.update"

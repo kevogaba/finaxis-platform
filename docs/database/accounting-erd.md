@@ -564,6 +564,45 @@ accounts a caller names would not exclude the move that closes the cycle from th
 edits are rare administrative operations, not the posting path, so serialising them per tenant
 costs nothing measurable — this is the one place in accounting where a coarse lock is right.
 
+### The GL-account lifecycle is two-actor at both ends, and an amendment is not a third way
+
+`gl_account` has `submit`/`approve` codes where the fiscal period has none, so the maker-checker
+control here is the conventional pair: approval requires `gl_account.approve` and an actor who is
+not the account's **most recent** submitter, resolved from `gl_account_transition_log`. Most recent,
+not the creator: an account submitted, rejected, corrected by someone else and resubmitted has a
+different maker from its creator, and reading `gl_account.created_by` would let the resubmitter
+approve their own submission.
+
+Two consequences of that shape are recorded here because neither is obvious and both were wrong in
+an earlier revision.
+
+**Deactivation is two-actor as well, against the approver.** `INV-10` names GL-account deactivation
+as privileged, and it is the transition most easily left single-actor: there is no
+`gl_account.deactivate_request` code to build a submit/approve pair from, and the catalogue is
+frozen. It does not need one. Deactivation's maker is the actor who **approved** the account — that
+is the act that put it into service — so a deactivation is refused when the approver performs it.
+Withdrawing an account changes the shape of every future report, which is exactly the class of
+change `INV-10` exists to require two people for.
+
+**An amendment cannot become a third path around approval.** Preserving the stored status during an
+update is not sufficient, and reading it as sufficient is the mistake: an actor holding only
+`gl_account.update` could rewrite the code, placement, usage or manual-posting flag of an already
+approved account, the status would stay `ACTIVE`, nothing would be re-approved, and what the checker
+approved would no longer be what the ledger has. A maker could do the same to their own submission
+while it sat in `PENDING_APPROVAL`, so the checker would approve a record that had changed
+underneath them. So amendment is bounded by state: everything in `DRAFT`, nothing in
+`PENDING_APPROVAL` or `INACTIVE`, and in `ACTIVE` only the name and description — neither of which
+changes what posts to the account or where it rolls up. A structural change to a live account is
+`DEACTIVATE` plus a replacement, which is also what keeps history readable.
+
+**Both actor-identity lookups run under the account's row lock.** They read the transition log, not
+the account row, so they look independent of any lock — the trap. Resolved before the lock, an
+approval whose lookup runs while the submission is still uncommitted resolves *no* submitter at
+all; the submission then commits, the transition reads `PENDING_APPROVAL`, and the same actor
+approves their own work. Every transition writes the log while holding `FOR UPDATE` on the account,
+so holding that lock is what makes "the most recent submitter" a stable answer for the rest of the
+transaction. The fiscal-period service has the identical obligation for the same reason.
+
 Two columns are specified here but **created by issue #46**, following this document's convention
 for later-issue additions: `is_control_account BOOLEAN NOT NULL DEFAULT FALSE` and
 `control_subledger_kind TEXT`, the classification `INV-14`'s reconciliation proofs are keyed on.

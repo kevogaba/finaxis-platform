@@ -6,6 +6,7 @@ import com.finaxis.platform.accounting.domain.AccountUsage
 import com.finaxis.platform.accounting.domain.ChartHierarchyPolicy
 import com.finaxis.platform.accounting.domain.GlAccount
 import com.finaxis.platform.accounting.domain.GlAccountStatus
+import com.finaxis.platform.accounting.domain.GlAccountTransition
 import java.util.UUID
 
 /**
@@ -70,6 +71,26 @@ interface GlAccountStore {
         organisationId: UUID,
         accountId: UUID,
     ): Int
+
+    /**
+     * Takes an exclusive row lock on the account and returns it as read **under** that lock.
+     *
+     * Returns null when no such row exists for that tenant. The freshly read snapshot is returned
+     * rather than a boolean on purpose, as `FiscalPeriodStateStore.lockForStateChange` also does:
+     * a caller handed only "the lock was taken" would carry on validating against the snapshot it
+     * read before the lock, which is the race the lock exists to close.
+     *
+     * A lifecycle transition needs this, and not only for the account's own status. The
+     * maker-checker control reads `gl_account_transition_log`, so it looks independent of the
+     * account row — but every transition writes that log while holding this lock, so holding it is
+     * what makes "the most recent submitter" a stable answer for the rest of the transaction.
+     * Without it, an approval whose lookup runs while the submission is still uncommitted resolves
+     * no submitter at all, and then approves the very submission that commits underneath it.
+     */
+    fun lockForStateChange(
+        organisationId: UUID,
+        accountId: UUID,
+    ): GlAccount?
 
     /** True when the account has at least one child. */
     fun hasChildren(
@@ -150,3 +171,21 @@ data class NewGlAccount(
     val isContraAccount: Boolean = false,
     val manualPostingAllowed: Boolean = false,
 )
+
+/**
+ * Who performed a given transition on a GL account last.
+ *
+ * Exists so approval can require a different actor from the one who submitted, which is what
+ * *"the maker cannot approve the same critical change they submitted"* means in practice. The
+ * answer lives in `gl_account_transition_log`, so the accounting transition-log writer implements
+ * this — the account row's `updated_by` only says who moved it last, which is a different question
+ * once an account has been submitted, rejected and resubmitted.
+ */
+interface GlAccountMakerResolver {
+    /** The actor of the most recent [transition] on the account, or null when it never happened. */
+    fun lastActorFor(
+        organisationId: UUID,
+        accountId: UUID,
+        transition: GlAccountTransition,
+    ): UUID?
+}

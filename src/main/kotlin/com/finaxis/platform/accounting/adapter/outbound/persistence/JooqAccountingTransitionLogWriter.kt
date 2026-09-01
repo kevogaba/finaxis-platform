@@ -2,12 +2,16 @@ package com.finaxis.platform.accounting.adapter.outbound.persistence
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.accounting.application.FiscalPeriodMakerResolver
+import com.finaxis.platform.accounting.application.GlAccountMakerResolver
 import com.finaxis.platform.accounting.domain.FiscalPeriodAggregate
 import com.finaxis.platform.accounting.domain.FiscalPeriodKey
 import com.finaxis.platform.accounting.domain.FiscalPeriodTransition
+import com.finaxis.platform.accounting.domain.GlAccountAggregate
+import com.finaxis.platform.accounting.domain.GlAccountTransition
 import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogWriter
 import com.finaxis.platform.jooq.tables.references.FISCAL_PERIOD_TRANSITION_LOG
+import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT_TRANSITION_LOG
 import org.jooq.DSLContext
 import org.jooq.JSONB
 import org.springframework.stereotype.Component
@@ -23,9 +27,10 @@ import java.util.UUID
  * `accounting.adapter.outbound.persistence` may write it, which is why the shared executor had to
  * learn to dispatch rather than lifecycle's writer learning about accounting.
  *
- * It also answers [FiscalPeriodMakerResolver], because the actor who closed a period is recorded
- * here and nowhere else: `accounting_fiscal_period.updated_by` says who last moved the row, which
- * is not the same question once a period has been closed, reopened and closed again.
+ * It also answers both maker resolvers, because the actor who performed a given transition is
+ * recorded here and nowhere else. The entity row's `updated_by` says who moved it *last*, which is
+ * a different question once a period has been closed, reopened and closed again, or an account
+ * submitted, rejected and resubmitted.
  */
 @Component
 class JooqAccountingTransitionLogWriter(
@@ -33,36 +38,82 @@ class JooqAccountingTransitionLogWriter(
     private val clock: Clock,
     private val objectMapper: ObjectMapper,
 ) : TransitionLogWriter,
-    FiscalPeriodMakerResolver {
-    override fun supports(aggregateType: String): Boolean =
-        aggregateType == FiscalPeriodAggregate.AGGREGATE_TYPE
+    FiscalPeriodMakerResolver,
+    GlAccountMakerResolver {
+    override fun supports(aggregateType: String): Boolean = aggregateType in OWNED_TYPES
 
     override fun save(log: TransitionLog) {
         val organisationId =
             UUID.fromString(
                 requireNotNull(log.metadata[ORGANISATION_ID] as String?) {
-                    "A fiscal-period transition log needs its organisation in metadata; without " +
+                    "An accounting transition log needs its organisation in metadata; without " +
                         "it the row cannot be written tenant-safely."
                 },
             )
         val now = OffsetDateTime.now(clock)
-        dsl
-            .insertInto(FISCAL_PERIOD_TRANSITION_LOG)
-            .set(FISCAL_PERIOD_TRANSITION_LOG.ORGANISATION_ID, organisationId)
-            .set(FISCAL_PERIOD_TRANSITION_LOG.ENTITY_ID, UUID.fromString(log.aggregateId))
-            .set(FISCAL_PERIOD_TRANSITION_LOG.TRANSITION_NAME, log.transition)
-            .set(FISCAL_PERIOD_TRANSITION_LOG.STATUS_FROM, log.fromState)
-            .set(FISCAL_PERIOD_TRANSITION_LOG.STATUS_TO, log.toState)
-            .set(FISCAL_PERIOD_TRANSITION_LOG.REASON, log.reason)
-            .set(FISCAL_PERIOD_TRANSITION_LOG.CREATED_AT, log.createdAt.atOffset(ZoneOffset.UTC))
-            .set(FISCAL_PERIOD_TRANSITION_LOG.CREATED_BY, log.actorId.toActorId())
-            .set(FISCAL_PERIOD_TRANSITION_LOG.UPDATED_AT, now)
-            .set(FISCAL_PERIOD_TRANSITION_LOG.UPDATED_BY, log.actorId.toActorId())
-            .set(
-                FISCAL_PERIOD_TRANSITION_LOG.METADATA_JSONB,
-                JSONB.jsonb(objectMapper.writeValueAsString(log.metadata)),
-            ).execute()
+        val metadata = JSONB.jsonb(objectMapper.writeValueAsString(log.metadata))
+        val actorId = log.actorId.toActorId()
+        val createdAt = log.createdAt.atOffset(ZoneOffset.UTC)
+
+        when (log.aggregateType) {
+            FiscalPeriodAggregate.AGGREGATE_TYPE -> {
+                dsl
+                    .insertInto(FISCAL_PERIOD_TRANSITION_LOG)
+                    .set(FISCAL_PERIOD_TRANSITION_LOG.ORGANISATION_ID, organisationId)
+                    .set(FISCAL_PERIOD_TRANSITION_LOG.ENTITY_ID, UUID.fromString(log.aggregateId))
+                    .set(FISCAL_PERIOD_TRANSITION_LOG.TRANSITION_NAME, log.transition)
+                    .set(FISCAL_PERIOD_TRANSITION_LOG.STATUS_FROM, log.fromState)
+                    .set(FISCAL_PERIOD_TRANSITION_LOG.STATUS_TO, log.toState)
+                    .set(FISCAL_PERIOD_TRANSITION_LOG.REASON, log.reason)
+                    .set(FISCAL_PERIOD_TRANSITION_LOG.CREATED_AT, createdAt)
+                    .set(FISCAL_PERIOD_TRANSITION_LOG.CREATED_BY, actorId)
+                    .set(FISCAL_PERIOD_TRANSITION_LOG.UPDATED_AT, now)
+                    .set(FISCAL_PERIOD_TRANSITION_LOG.UPDATED_BY, actorId)
+                    .set(FISCAL_PERIOD_TRANSITION_LOG.METADATA_JSONB, metadata)
+                    .execute()
+            }
+
+            GlAccountAggregate.AGGREGATE_TYPE -> {
+                dsl
+                    .insertInto(GL_ACCOUNT_TRANSITION_LOG)
+                    .set(GL_ACCOUNT_TRANSITION_LOG.ORGANISATION_ID, organisationId)
+                    .set(GL_ACCOUNT_TRANSITION_LOG.ENTITY_ID, UUID.fromString(log.aggregateId))
+                    .set(GL_ACCOUNT_TRANSITION_LOG.TRANSITION_NAME, log.transition)
+                    .set(GL_ACCOUNT_TRANSITION_LOG.STATUS_FROM, log.fromState)
+                    .set(GL_ACCOUNT_TRANSITION_LOG.STATUS_TO, log.toState)
+                    .set(GL_ACCOUNT_TRANSITION_LOG.REASON, log.reason)
+                    .set(GL_ACCOUNT_TRANSITION_LOG.CREATED_AT, createdAt)
+                    .set(GL_ACCOUNT_TRANSITION_LOG.CREATED_BY, actorId)
+                    .set(GL_ACCOUNT_TRANSITION_LOG.UPDATED_AT, now)
+                    .set(GL_ACCOUNT_TRANSITION_LOG.UPDATED_BY, actorId)
+                    .set(GL_ACCOUNT_TRANSITION_LOG.METADATA_JSONB, metadata)
+                    .execute()
+            }
+
+            // Unreachable while `supports` gates this, and kept so it stays unreachable: a type
+            // added there without a branch here would otherwise write nothing and report success.
+            else -> {
+                error("Accounting owns no transition log for ${log.aggregateType}")
+            }
+        }
     }
+
+    override fun lastActorFor(
+        organisationId: UUID,
+        accountId: UUID,
+        transition: GlAccountTransition,
+    ): UUID? =
+        dsl
+            .select(GL_ACCOUNT_TRANSITION_LOG.CREATED_BY)
+            .from(GL_ACCOUNT_TRANSITION_LOG)
+            .where(GL_ACCOUNT_TRANSITION_LOG.ORGANISATION_ID.eq(organisationId))
+            .and(GL_ACCOUNT_TRANSITION_LOG.ENTITY_ID.eq(accountId))
+            .and(GL_ACCOUNT_TRANSITION_LOG.TRANSITION_NAME.eq(transition.name))
+            .orderBy(
+                GL_ACCOUNT_TRANSITION_LOG.CREATED_AT.desc(),
+                GL_ACCOUNT_TRANSITION_LOG.ID.desc(),
+            ).limit(1)
+            .fetchOne(GL_ACCOUNT_TRANSITION_LOG.CREATED_BY)
 
     /**
      * The actor of the most recent [transition] on a period, or null when it never happened.
@@ -107,5 +158,15 @@ class JooqAccountingTransitionLogWriter(
 
     private companion object {
         const val ORGANISATION_ID = "organisationId"
+
+        /**
+         * The aggregate types accounting owns a transition-log table for.
+         *
+         * Kept beside the `when` in [save] rather than derived from it, for the same reason
+         * lifecycle's writer keeps its own list: a type added to one and not the other would
+         * otherwise reach the `error` branch at runtime instead of failing a test.
+         */
+        val OWNED_TYPES =
+            setOf(FiscalPeriodAggregate.AGGREGATE_TYPE, GlAccountAggregate.AGGREGATE_TYPE)
     }
 }

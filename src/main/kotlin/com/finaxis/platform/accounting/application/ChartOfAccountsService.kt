@@ -20,18 +20,19 @@ import java.util.UUID
 /**
  * Chart-of-accounts behaviour over the `gl_account` schema.
  *
- * Owns the rules that are independent of the lifecycle state machine: hierarchy validity, code and
- * structural immutability, posting eligibility and tenant scope. Issue #38 puts the state
- * transitions between [GlAccountStatus] values under the common FSM with maker-checker; this
- * service deliberately does **not** move an account between statuses at all, so the two changes
- * cannot both claim to own the lifecycle.
+ * Owns the rules that are independent of the state machine: hierarchy validity, code and
+ * structural immutability, and tenant scope. It owns what an account *is*;
+ * [GlAccountLifecycleService] owns how it *moves*.
  *
- * An earlier revision made one exception: a `deactivate` that wrote `INACTIVE` straight through the
- * store. That was the whole problem. It bypassed [com.finaxis.platform.common.transitions
- * .TransitionExecutor], `gl_account_transition_log`, maker-checker, and the audit emission
- * `gl_account.deactivate` is registered `HIGH` for — so a successful privileged deactivation left
- * no lifecycle and no audit evidence. Deactivation belongs to issue #38's lifecycle service, and
- * until that exists there is no path to it here.
+ * That split is load-bearing rather than tidy. This service **never** changes an account's status:
+ * [create] always lands in `DRAFT` and [update] carries the stored status over untouched, so
+ * neither is a way around the approval the FSM requires.
+ *
+ * An earlier revision made one exception: a `deactivate` here that wrote `INACTIVE` straight
+ * through the store. It bypassed the transition executor, `gl_account_transition_log`,
+ * maker-checker and the audit emission `gl_account.deactivate` is registered `HIGH` for, so a
+ * successful privileged deactivation left no lifecycle and no audit evidence. It is
+ * [GlAccountLifecycleService]'s `DEACTIVATE` transition instead.
  *
  * Every entry point takes an explicit `organisationId` and `actorId` and checks a permission code.
  * Nothing here reads the ambient request context: an accounting write must be callable from a
@@ -137,6 +138,7 @@ class ChartOfAccountsService(
         if (proposed.code != current.code) {
             requireCodeAvailable(command.organisationId, proposed.code)
         }
+        requireAmendable(current, proposed)
         requireManualPostingMatchesUsage(proposed)
         validatePlacement(proposed, existing = true)
 
@@ -264,6 +266,50 @@ class ChartOfAccountsService(
         accounts.subtreeHeightOf(account.organisationId, account.id)
 
     /**
+     * Rejects an amendment the account's lifecycle state does not permit.
+     *
+     * Preserving the stored status is not enough to stop an amendment being a way around approval,
+     * and an earlier revision relied on exactly that. Once the FSM exists, an actor holding only
+     * `gl_account.update` could rewrite the code, placement, usage or posting flag of an account a
+     * checker had already approved — the status stayed `ACTIVE`, so nothing was re-approved, but
+     * what the checker approved is not what the ledger now has. A maker could do the same to their
+     * own submission while it sat in `PENDING_APPROVAL`, so the checker approved a record that had
+     * since changed underneath them.
+     *
+     * The rule by state:
+     *
+     * - `DRAFT` — anything. Nobody has approved it, so there is nothing to go around.
+     * - `PENDING_APPROVAL` — nothing. The record is under review and must not move while it is.
+     * - `ACTIVE` — the name and description only. Neither changes what posts to the account or
+     *   where it rolls up, so neither needs a second pair of eyes; everything else does, and gets
+     *   there by `DEACTIVATE` plus a fresh account, which is also what keeps history readable.
+     * - `INACTIVE` — nothing. It has been withdrawn.
+     */
+    private fun requireAmendable(
+        current: GlAccount,
+        proposed: GlAccount,
+    ) {
+        if (current.status == GlAccountStatus.DRAFT) {
+            return
+        }
+        val presentationOnly =
+            proposed == current.copy(name = proposed.name, description = proposed.description)
+        if (current.status == GlAccountStatus.ACTIVE && presentationOnly) {
+            return
+        }
+        throw ConflictException(
+            code = NOT_AMENDABLE,
+            safeDetail =
+                if (current.status == GlAccountStatus.ACTIVE) {
+                    "An approved account accepts only a name or description change; " +
+                        "deactivate it and create its replacement instead."
+                } else {
+                    "A ${current.status} general-ledger account cannot be amended."
+                },
+        )
+    }
+
+    /**
      * Rejects a header account that also claims to accept manual entries.
      *
      * `V6` enforces the same pairing in `chk_gl_account_manual_posting`. Without this check the
@@ -336,6 +382,7 @@ class ChartOfAccountsService(
         const val HEADER_NOT_POSTABLE = "accounting.gl_account_header_not_postable"
         const val STALE_ACCOUNT = "accounting.gl_account_stale"
         const val INVALID_PAGE_SIZE = "accounting.gl_account_invalid_page_size"
+        const val NOT_AMENDABLE = "accounting.gl_account_not_amendable"
 
         /**
          * Stands in while the candidate is validated, and is never written.
