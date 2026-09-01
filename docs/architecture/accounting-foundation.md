@@ -543,7 +543,14 @@ be covered by a test that fails when the verification read is removed.
 `transaction_date`, not `value_date`,
   not `posted_at`, not the wall clock.
 - **Period ranges within a fiscal year neither overlap nor gap**, so resolution from a business
-  date to a period is total and deterministic. #36 makes this declarative in the schema.
+  date to a period is total and deterministic. The two halves are enforced differently, and an
+  earlier revision of this line assigned both to #36's schema, which is not achievable.
+  **Overlap** is declarative: #36 ships `ex_accounting_fiscal_period_no_overlap`, a tenant-scoped
+  `EXCLUDE USING gist` constraint. **Gaplessness** is not expressible as a row constraint — it is
+  a property of a whole calendar, and no table constraint can see the neighbouring rows it would
+  need — so it is enforced by #39's `FiscalCalendarService`, the only path that creates a year or
+  a period, which materialises a year as one contiguous set. A gap arising any other way is not
+  silent corruption: a posting into it is rejected with `accounting.fiscal_period_not_found`.
 - **A journal may only be created while its period is open.** The check happens inside the posting
   transaction, against the period row, not against a cached value.
 - **A closed period may be reopened; a locked period may not.** Reopening is a privileged
@@ -588,10 +595,42 @@ identity is persisted and who is **not** the maker (`INV-10`):
 | --- | --- |
 | Create, modify or deactivate a GL account | Changes the shape of every future report |
 | Activate a posting-rule version | Silently changes where money lands for every subsequent posting |
-| Close, lock or reopen a fiscal period | Determines what can still be posted and what has been reported |
+| Lock or reopen a fiscal period | Makes a reporting period irreversible, or undoes one that was reported |
+| Close a fiscal period | Determines what can still be posted — but see the note below |
 | Post a manual journal entry | Bypasses posting-rule resolution by definition |
 | Reverse a posted journal | Changes reported figures for a period that may already be closed |
 | Change tenant accounting settings, excluding the functional currency | Reinterprets reporting behaviour |
+
+**Two actors attach to the step that cannot be undone, not to every step in a reversible pair.**
+`INV-10` asks for a checker whose identity is persisted and who is not the maker. For a fiscal
+period that requirement is discharged on **lock** and **reopen**, and deliberately not on **close**,
+which is why the two are separate rows above. Three things force it.
+
+A transition log records an act *after* it has happened, so it cannot gate the act that creates it.
+A different-actor rule between two operations therefore constrains the *second* one; there is no
+second actor available for a first close unless the design adds a `fiscal_period.close_request`
+permission and models close as submit-then-approve. The catalogue `V5` seeded has no such code and
+is frozen.
+
+It does not need one, because a close is **reversible**. A wrongly closed period is reopened — under
+`fiscal_period.reopen`, a break-glass code checked with no system-actor exemption, a mandatory
+reason, an audit record, and an actor who is not the closer. The step that makes a reporting state
+*irreversible* is `LOCKED`, and that carries the same two-actor rule against the latest closer plus
+the same no-exemption check. So no single principal can, alone, produce a state that cannot be
+undone. That is the property `INV-10` is protecting, and it holds.
+
+This also matches the platform's own precedent rather than departing from it. `user.invite` /
+`user.approve` puts maker-checker on the step that *commits* the outcome, not on every step leading
+to it, and migration `V4` seeds a second bootstrap actor precisely so the committing step has a
+distinct checker.
+
+The residual gap is stated rather than hidden: a single actor holding `fiscal_period.close` can stop
+posting into a period without a second pair of eyes, and every close is audited at `CRITICAL` with
+the actor's identity. A deployment wanting a checker on the close itself needs a
+`fiscal_period.close_request` code and a forward migration; the same migration should add
+`fiscal_period.lock`, which today reuses `fiscal_period.close` for the same catalogue-freeze reason.
+Both are recommended follow-ups, and until they exist no role should hold `fiscal_period.close`
+unless it is also trusted to lock.
 
 **The functional currency is frozen once the tenant has posted.** It is deliberately absent from
 the table above, because maker-checker is the wrong control for it: approval makes a change
@@ -601,7 +640,10 @@ every balance, header total and daily projection then sums incompatible units. N
 approval repairs that, and this design ships no revaluation engine.
 
 So the rule is structural rather than procedural: once a tenant has a single posted journal, its
-functional currency cannot change. Issue #36 enforces this where the setting is written. A tenant
+functional currency cannot change. The enforcement point is **issue #40**, where `journal_entry`
+first exists — an earlier revision assigned it to issue #36, which creates the fiscal calendar and
+the chart of accounts and therefore has no table the predicate *"has posted"* can be read from.
+A tenant
 that genuinely needs to redenominate needs a versioned conversion and revaluation boundary, which
 is a separate design and is explicitly out of scope here — recorded so that a later change does not
 mistake silence for permission.

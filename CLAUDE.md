@@ -191,6 +191,14 @@ tables or columns outside those documents.
 do not stack fix-ups, review responses or merge commits on top. A reviewer reads one commit message
 that describes the whole change, and `main` keeps one commit per unit of work.
 
+**Prefer a stack of small pull requests over one large one.** When a unit of work has internal
+sequence — a design record, then the migration that transcribes it, then the adapter that uses
+it — split it there and branch each pull request off the previous one, rather than shipping the
+whole thing as one reviewable lump. Each branch stays small enough to review on its own terms,
+a reviewer can disagree with the design before the SQL exists, and a defect found late is
+re-pushed to one branch instead of unpicked from a monolith. Branch off `main` only for the base
+of the stack. Merge bottom-up, and rebase the rest of the stack after each merge.
+
 Consequences worth stating, because they are where this rule is usually broken:
 
 - Review feedback is folded into the existing commit by amending, not added as a follow-up commit.
