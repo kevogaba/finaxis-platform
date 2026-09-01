@@ -154,6 +154,20 @@ Run the complete local gate with:
 It runs static analysis, checks, IAM-scoped JaCoCo verification, and `bootJar`. CI also runs a
 Qodana job in `.github/workflows/static-analysis-and-tests.yml`.
 
+## Contributing changes
+
+Two rules govern how work reaches `main`, and [CLAUDE.md](CLAUDE.md) is the authority on both.
+
+**One pull request carries exactly one conventional commit over its base.** Fold review feedback
+into that commit by amending rather than adding a follow-up commit, and push with
+`--force-with-lease`.
+
+**Prefer a stack of small pull requests over one large one.** Where a change has internal
+sequence — a design record, then the migration that transcribes it, then the adapter that uses
+it — split it there and branch each pull request off the previous one. Only the base of a stack
+branches off `main`. Every branch must pass `./gradlew qualityGate` on its own base, not merely at
+the top of the stack. Merge bottom-up, rebasing the remainder after each merge.
+
 ## Project status and follow-ups
 
 - The welcome-email provider integration is pending; the current JobRunr handler is a stub.
