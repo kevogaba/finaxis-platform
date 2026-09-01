@@ -99,7 +99,7 @@ Preserve `logistics.shipment.approve` for compatibility:
 
 - `FoundationSchemaMigrationTests` — all 23 tables created on an empty PostgreSQL via
   Testcontainers
-- `FoundationSeedDataTests` — the exact 54-code catalogue, superset role coverage, support-role
+- `FoundationSeedDataTests` — the exact catalogue size seeded by the migrations present, superset role coverage, support-role
   scope, and bootstrap-administrator login pre-checks
 - `FoundationSchemaGuidTests` — see ADR 0015
 - A live reset: `docker compose down -v`, fresh volume, application boot applies exactly three

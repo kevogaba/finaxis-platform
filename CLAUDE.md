@@ -69,6 +69,10 @@ Identifier rules, enforced by `IdentifierGenerationRuleTests`:
   and get no `guid`.
 
 See `docs/database/foundation-schema.md`, `docs/adr/0010-...`, and `docs/adr/0015-...`.
+Accounting schema is designed but not yet created: `docs/database/accounting-erd.md` is the
+design authority every accounting migration implements, and
+`docs/architecture/accounting-foundation.md` holds the invariants. Do not invent accounting
+tables or columns outside those documents.
 
 ## Authorization
 
