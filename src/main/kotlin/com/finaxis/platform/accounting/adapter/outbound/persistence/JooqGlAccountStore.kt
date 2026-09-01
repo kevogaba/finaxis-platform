@@ -51,6 +51,26 @@ class JooqGlAccountStore(
             .fetchOne()
             ?.let(::toAccount)
 
+    /**
+     * `FOR UPDATE`, with the tenant predicate in the same statement as the lock.
+     *
+     * Locking on the primary key alone would let a caller that supplies another tenant's account id
+     * lock, read and then transition that row, and the mismatch would be invisible to any check
+     * performed against the caller's own organisation id.
+     */
+    override fun lockForStateChange(
+        organisationId: UUID,
+        accountId: UUID,
+    ): GlAccount? {
+        requireActiveTransaction("Locking a general-ledger account for a state change")
+        return selectAccount()
+            .where(GL_ACCOUNT.ORGANISATION_ID.eq(organisationId))
+            .and(GL_ACCOUNT.ID.eq(accountId))
+            .forUpdate()
+            .fetchOne()
+            ?.let(::toAccount)
+    }
+
     override fun findByCode(
         organisationId: UUID,
         code: AccountCode,
