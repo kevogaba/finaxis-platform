@@ -186,6 +186,7 @@ Qodana job in `.github/workflows/static-analysis-and-tests.yml`.
 | Operations | [Business date and COB](docs/operations/business-date.md) |
 | Operations | [Tenant provisioning](docs/operations/tenant-provisioning.md) |
 | Operations | [Tenant settings](docs/operations/tenant-settings.md) |
+| Security | [Accounting authorization](docs/security/accounting-authorization.md) |
 | Security | [Active organisation context](docs/security/active-organisation-context.md) |
 | Security | [Audit logging](docs/security/audit-logging.md) |
 | Security | [Authorization model](docs/security/authorization-model.md) |
@@ -220,5 +221,6 @@ Qodana job in `.github/workflows/static-analysis-and-tests.yml`.
 | [0018](docs/adr/0018-financial-transaction-atomicity-invariant.md) | Financial transaction atomicity invariant |
 | [0019](docs/adr/0019-accounting-money-representation-and-rounding.md) | Accounting money representation and rounding |
 | [0020](docs/adr/0020-immutable-ledger-and-reversal-only-correction.md) | Immutable ledger and reversal-only correction |
+| [0021](docs/adr/0021-accounting-permission-catalogue-and-privileged-operations.md) | Accounting permission catalogue and privileged operations |
 
 Historical planning, specification, and audit artifacts are archived under `docs/archive/`.

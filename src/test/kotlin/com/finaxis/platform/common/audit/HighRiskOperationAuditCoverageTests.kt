@@ -75,6 +75,36 @@ class HighRiskOperationAuditCoverageTests(
         )
     }
 
+    @Test
+    fun `actions pending enforcement have no production call site yet`() {
+        val unmapped = pendingEnforcement.keys.filterNot { it in auditedActionByPermission.values }
+        assertTrue(
+            unmapped.isEmpty(),
+            "pendingEnforcement names actions that are not in the registry at all: $unmapped",
+        )
+
+        assertTrue(
+            pendingEnforcement.size <= MAXIMUM_PENDING_ENFORCEMENT,
+            "pendingEnforcement grew to ${pendingEnforcement.size}. It is a ratchet, not a " +
+                "parking space: a new high-risk permission needs an audit call site, not another " +
+                "entry here. Lower MAXIMUM_PENDING_ENFORCEMENT as entries are discharged.",
+        )
+
+        val callSites = callSiteAuditActions()
+        assertTrue(
+            CALL_SITE_CANARY in callSites,
+            "the call-site scan found nothing it should have found, so this rule would pass " +
+                "vacuously - check the working directory and the scan itself, not the registry",
+        )
+
+        val nowWired = pendingEnforcement.keys intersect callSites
+        assertTrue(
+            nowWired.isEmpty(),
+            "these actions now have a real production call site - delete them from " +
+                "pendingEnforcement so the registry stops claiming they are unwired: $nowWired",
+        )
+    }
+
     /** Actions written as string literals at an explicit `auditService` call site. */
     private fun literalAuditActions(): Set<String> {
         val source =
@@ -84,9 +114,58 @@ class HighRiskOperationAuditCoverageTests(
                 .walkTopDown()
                 .filter { it.isFile && it.extension == "kt" }
                 .joinToString("\n") { it.readText() }
+        // Matches BOTH a raw literal and a reference through a constants object. Matching only the
+        // literal is what made an earlier revision of this ratchet unable to close:
+        // AccountingAuditActions exists precisely so call sites write
+        // AccountingAuditActions.FISCAL_PERIOD_CLOSE rather than "fiscal_period.close", so a
+        // correctly wired call site contained no literal and was never detected.
+        //
+        // FSM transitions compose their action at runtime from aggregate and transition names and
+        // can never appear as either, so lifecycleDerivedAuditActions() is folded in as well.
+        val constantNames = auditActionConstantNames()
         return auditedActionByPermission.values
-            .filter { source.contains("\"$it\"") }
-            .toSet()
+            .filter { action ->
+                source.contains("\"$action\"") ||
+                    constantNames[action].orEmpty().any { source.contains(it) }
+            }.toSet() + lifecycleDerivedAuditActions()
+    }
+
+    /**
+     * Actions with a real call site.
+     *
+     * [literalAuditActions] is a plain text match over `src/main/kotlin`, so any file that merely
+     * *names* an action satisfies it - a constants object, or a role bundle listing permission
+     * codes that happen to share an action's name. That is acceptable for the reachability rule
+     * while behaviour is still being built, but it cannot back a ratchet.
+     *
+     * So this variant asks a semantic question rather than maintaining a list of files to ignore:
+     * only a file that actually calls the audit service can emit an audit action. A file that
+     * never mentions `auditService` is not a call site, whatever strings it contains.
+     */
+    private fun callSiteAuditActions(): Set<String> {
+        val source =
+            Path
+                .of("src/main/kotlin")
+                .toFile()
+                .walkTopDown()
+                .filter { it.isFile && it.extension == "kt" }
+                .map { it.readText() }
+                .filter { it.contains(AUDIT_SERVICE_MARKER) }
+                .joinToString("\n")
+        // Matches BOTH a raw literal and a reference through a constants object. Matching only the
+        // literal is what made an earlier revision of this ratchet unable to close:
+        // AccountingAuditActions exists precisely so call sites write
+        // AccountingAuditActions.FISCAL_PERIOD_CLOSE rather than "fiscal_period.close", so a
+        // correctly wired call site contained no literal and was never detected.
+        //
+        // FSM transitions compose their action at runtime from aggregate and transition names and
+        // can never appear as either, so lifecycleDerivedAuditActions() is folded in as well.
+        val constantNames = auditActionConstantNames()
+        return auditedActionByPermission.values
+            .filter { action ->
+                source.contains("\"$action\"") ||
+                    constantNames[action].orEmpty().any { source.contains(it) }
+            }.toSet() + lifecycleDerivedAuditActions()
     }
 
     /**
@@ -109,10 +188,111 @@ class HighRiskOperationAuditCoverageTests(
             add("membership", MembershipLifecycleTransition.entries.toTypedArray())
         }
 
+    @Test
+    fun `the constant-reference index actually resolves declarations`() {
+        // This guard exists because the regex behind it was, at first, written with doubled
+        // backslashes inside a Kotlin raw string - which matches literal backslashes and therefore
+        // nothing at all. The index silently returned an empty map, so the ratchet it feeds could
+        // not detect a constant-referencing call site: the exact defect it had been changed to fix,
+        // reintroduced invisibly. A guard whose failure mode is "matches nothing" needs a test that
+        // fails when it matches nothing.
+        val index = auditActionConstantNames()
+
+        assertTrue(
+            index.isNotEmpty(),
+            "no `const val NAME = \"value\"` declaration was resolved, so the ratchet cannot see " +
+                "a call site that references an audit action through a constants object",
+        )
+        assertTrue(
+            "AccountingAuditActions.FISCAL_PERIOD_CLOSE" in index["fiscal_period.close"].orEmpty(),
+            "expected the audit registry's declaration among the candidates, but got " +
+                "${index["fiscal_period.close"]}. The same value is declared more than once - " +
+                "AccountingPermissions spells most codes identically to their action - so the " +
+                "index must keep every candidate rather than letting one overwrite another",
+        )
+    }
+
+    /**
+     * Maps each audit action to the `Object.CONSTANT` reference a call site would use for it, by
+     * reading the constants objects that declare them. Derived from source rather than hard-coded
+     * so a renamed constant stops being matched instead of silently continuing to match.
+     */
+    private fun auditActionConstantNames(): Map<String, Set<String>> =
+        Path
+            .of("src/main/kotlin")
+            .toFile()
+            .walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .flatMap { file ->
+                val objectName = file.nameWithoutExtension
+                CONSTANT_DECLARATION
+                    .findAll(file.readText())
+                    .map { it.groupValues[2] to "$objectName.${it.groupValues[1]}" }
+            }.groupBy({ it.first }, { it.second })
+            .mapValues { (_, references) -> references.toSet() }
+
     private companion object {
+        /** Only a file that calls the audit service can emit an audit action. */
+        const val AUDIT_SERVICE_MARKER = "auditService"
+
+        /** `const val NAME = "value"`, capturing the constant name and the action it holds. */
+        val CONSTANT_DECLARATION = Regex("""const val (\w+)\s*=\s*"([\w.]+)"""")
+
+        /**
+         * Accounting actions whose permission is seeded but whose emitting behaviour is not built
+         * yet, each against the issue that will wire it. Issue #34 seeds the catalogue ahead of the
+         * accounting schema so Phase B does not add codes piecemeal, which necessarily creates this
+         * gap.
+         *
+         * The set can only shrink, and that is enforced two ways: [MAXIMUM_PENDING_ENFORCEMENT]
+         * stops it being widened by hand, and the moment an action gains a real call site -
+         * whether written as a literal, through a constants object, or composed by an FSM
+         * transition - `actions pending enforcement have no production call site yet` fails until
+         * its entry is deleted. It must reach empty before the accounting readiness gate (#54).
+         */
+        val pendingEnforcement =
+            mapOf(
+                "gl_account.approve" to "#38",
+                "gl_account.deactivate" to "#38",
+                "fiscal_period.open" to "#39",
+                "fiscal_period.close" to "#39",
+                "fiscal_period.reopen" to "#39",
+                "journal.create_manual" to "#48",
+                "journal.approve" to "#48",
+                "journal.reverse" to "#43",
+                "journal.post_prior_period" to "#41",
+                "posting_rule.create" to "#45",
+                "posting_rule.create_version" to "#45",
+                "posting_rule.approve" to "#45",
+                "reconciliation.resolve" to "#46",
+            )
+
+        /**
+         * The ratchet may only shrink. Without this, a new HIGH/CRITICAL permission shipped with
+         * no audit at all could be waved through by *adding* an entry here, which is the opposite
+         * of what this map is for. Lower it as entries are discharged; never raise it.
+         */
+        const val MAXIMUM_PENDING_ENFORCEMENT = 13
+
+        /** A wired action the scan must always find; its absence means the scan is broken. */
+        const val CALL_SITE_CANARY = "settings.update"
+
         val auditedActionByPermission =
             mapOf(
                 "branch.activate" to "branch.activate",
+                "fiscal_period.close" to "fiscal_period.close",
+                "fiscal_period.open" to "fiscal_period.open",
+                "fiscal_period.reopen" to "fiscal_period.reopen",
+                "gl_account.approve" to "gl_account.approve",
+                "gl_account.deactivate" to "gl_account.deactivate",
+                "journal.approve" to "journal.approve",
+                "journal.create_manual" to "journal.create_manual",
+                "journal.post_prior_period" to "journal.post_prior_period",
+                "journal.reverse" to "journal.reverse",
+                "posting_rule.approve" to "posting_rule.approve",
+                "posting_rule.create" to "posting_rule.create",
+                "posting_rule.update" to "posting_rule.create_version",
+                "reconciliation.resolve" to "reconciliation.resolve",
                 "branch.approve" to "branch.submit",
                 "branch.close" to "branch.close",
                 "branch.create" to "branch.create_draft",

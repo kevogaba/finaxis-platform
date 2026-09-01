@@ -9,8 +9,8 @@ Read it with [the accounting foundation](../architecture/accounting-foundation.m
 invariants and the benchmark reasoning, and with
 [the foundation schema](foundation-schema.md), whose conventions every table below inherits.
 
-The application schema is `V1`–`V4` at this point in the stack; issue #34 adds `V5`, which seeds
-accounting permissions and creates no tables. Accounting migrations take the next free versions
+The application schema is `V1`–`V5`; `V5` seeds the accounting permission catalogue and creates no
+tables. Accounting migrations take the next free versions
 **at implementation time** — never assume the numbers below, and check `db/migration` rather than
 this sentence.
 

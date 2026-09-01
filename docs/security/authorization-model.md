@@ -5,32 +5,48 @@ Keycloak authenticates users. Finaxis authorizes them. Runtime checks evaluate p
 memberships in an organisation and, optionally, a selected branch.
 
 Read this with [active organisation context](active-organisation-context.md),
-[login prechecks](login-prechecks.md), and
+[login prechecks](login-prechecks.md),
+[accounting authorization](accounting-authorization.md), and
 [ADR 0005](../adr/0005-organisation-lifecycle-no-hard-delete.md).
 
 ## Permission catalogue and roles
 
-`V2__platform_reference_data.sql` seeds a global catalogue of **54 permission codes** in
-`permission`. Each has a stable `permission_code`, `module_code`, `risk_level`,
-`system_permission`, and status. Module codes are `tenant`, `branch`, `iam`, `audit`, and
-`settings`; risk levels are `LOW`, `MEDIUM`, `HIGH`, and `CRITICAL`.
+The global catalogue in `permission` holds **80 permission codes**: 54 foundation codes seeded by
+`V2__platform_reference_data.sql` and 26 accounting codes seeded by
+`V5__accounting_permission_catalogue.sql`. Each has a stable `permission_code`, `module_code`,
+`risk_level`, `system_permission`, and status. Module codes are `tenant`, `branch`, `iam`,
+`audit`, `settings`, and `accounting`; risk levels are `LOW`, `MEDIUM`, `HIGH`, and `CRITICAL`.
+
+The accounting codes, why they are grouped the way they are, and what the two accounting role
+bundles guarantee are documented separately in
+[accounting authorization](accounting-authorization.md).
 
 The catalogue is the authorization vocabulary and is owned by the platform — organisations cannot
 invent permission codes, only compose them into roles. `FoundationSeedDataTests` asserts the exact
 set, so adding a code is a deliberate, reviewed change.
 
-Two of the roles below are seeded by migration; the other five are created by **application code**
+Two of the roles below are seeded by migration; the other seven are created by **application code**
 at organisation-provisioning time (`JooqOrganisationBranchProvisioningStore`) and appear in no
 migration.
 
 Organisation approval creates these organisation-local system roles from the catalogue (in code,
 not in a migration):
 
-- `TENANT_ADMIN`: all baseline permissions;
-- `TENANT_AUDITOR`: `audit.view` and `business_date.view`;
+- `TENANT_ADMIN`: all baseline permissions, plus the accounting configuration and oversight codes
+  (not manual journal preparation, approval, reversal, prior-period posting, reconciliation
+  resolution or period reopening);
+- `TENANT_AUDITOR`: read-only across the platform — `audit.view`, `business_date.view`,
+  `tenant.view`, `branch.view`, `user.view`, `membership.view`, `branch_assignment.view`,
+  `role.view`, `role_assignment.view`, `permission.view`, `settings.view`, the six accounting
+  reads (`gl_account.view`, `fiscal_period.view`, `journal.view`, `posting_rule.view`,
+  `reconciliation.view`, `accounting_report.view`), and the session codes
+  `auth.select_organisation`, `auth.select_branch`, `iam.profile.read`;
 - `IAM_ADMIN`: user, role, and audit administration permissions;
-- `BRANCH_MANAGER`: branch lifecycle, branch assignment, and business-date view permissions;
-- `BRANCH_OPERATOR`: `business_date.view`.
+- `BRANCH_MANAGER`: branch lifecycle, branch assignment, business-date view, and
+  `accounting_report.view` permissions;
+- `BRANCH_OPERATOR`: `business_date.view`;
+- `ACCOUNTING_OPERATOR`: the accounting maker bundle — prepares and submits, never approves;
+- `ACCOUNTING_APPROVER`: the accounting checker bundle — approves and posts, never prepares.
 
 `V2__platform_reference_data.sql` also creates the reserved platform organisation:
 

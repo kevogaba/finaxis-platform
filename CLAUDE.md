@@ -51,6 +51,10 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   `user.approve`/`user.assign_branch` to the bootstrapped `local-admin` role, missing from `V3`,
   and seeds a second bootstrap actor (`local.checker`) holding the same role, since `local.admin`
   cannot approve its own invitations
+- `V5__accounting_permission_catalogue.sql` — seeds the 26-code accounting permission catalogue
+  under a new `accounting` module code in the `41000000-…` identifier block, grants them to
+  `PLATFORM_SUPER_ADMIN`, and gives the bootstrap `local-admin` the tenant-configuration subset.
+  Reference data only; see `docs/security/accounting-authorization.md`
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
