@@ -10,6 +10,7 @@
 @org.springframework.modulith.ApplicationModule(
     displayName = "IAM",
     allowedDependencies = {
+      "accounting",
       "common::application",
       "common::audit",
       "common::context",

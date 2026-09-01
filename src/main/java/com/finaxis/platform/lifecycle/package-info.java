@@ -8,6 +8,7 @@
 @org.springframework.modulith.ApplicationModule(
     displayName = "Lifecycle",
     allowedDependencies = {
+      "accounting",
       "common::application",
       "common::audit",
       "common::context",

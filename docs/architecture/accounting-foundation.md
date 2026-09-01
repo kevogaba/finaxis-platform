@@ -140,8 +140,11 @@ noticing.
 **Binary floating point is banned in accounting schema and code**, and both halves are enforced
 rather than reviewed:
 
-- an ArchUnit rule forbids `Double` and `Float` anywhere under `com.finaxis.platform.accounting..`;
-- a schema test forbids any `double precision` or `real` column in an accounting table.
+- `AccountingBoundaryRuleTests.accounting code never uses binary floating point` forbids `Double`
+  and `Float` anywhere under `com.finaxis.platform.accounting..`;
+- `FoundationSchemaNumericTypeTests` forbids any `double precision` or `real` column in any
+  application table — wider than accounting on purpose, so it is meaningful before the
+  accounting tables exist rather than passing vacuously until issue #36.
 
 A rule that is only written down is a rule that is eventually broken by a hurried change. These
 two tests are the reason this decision survives contact with the next twenty pull requests.

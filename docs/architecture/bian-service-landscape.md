@@ -113,11 +113,11 @@ Changing deployment topology therefore requires an ADR that supersedes ADR 0017.
 
 ### Current modules
 
-`iam`, `lifecycle`, `notifications`, `common`, `config`, `jooq`.
+`accounting`, `iam`, `lifecycle`, `notifications`, `common`, `config`, `jooq`.
 
 ### Planned modules
 
-`accounting` (issue #31), then member, savings/deposits, shares, loans, teller/cash, payments,
+member, savings/deposits, shares, loans, teller/cash, payments,
 billing/fees, reconciliation and financial statements as the product phases land.
 
 ### Capability and context diagram

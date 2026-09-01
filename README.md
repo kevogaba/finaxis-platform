@@ -166,6 +166,8 @@ Qodana job in `.github/workflows/static-analysis-and-tests.yml`.
 | Area | Document |
 | --- | --- |
 | API | [Foundation REST API](docs/api/foundation-api.md) |
+| Architecture | [Accounting foundation](docs/architecture/accounting-foundation.md) |
+| Architecture | [Accounting module boundary](docs/architecture/accounting-module-boundary.md) |
 | Architecture | [API governance](docs/architecture/api-governance.md) |
 | Architecture | [API versioning](docs/architecture/api-versioning.md) |
 | Architecture | [Audit logging](docs/architecture/audit-logging.md) |

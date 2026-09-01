@@ -56,9 +56,42 @@ class ModuleDependencyRuleTests {
             .should()
             .dependOnClassesThat()
             .resideInAnyPackage(
+                "com.finaxis.platform.accounting..",
                 "com.finaxis.platform.iam..",
                 "com.finaxis.platform.lifecycle..",
                 "com.finaxis.platform.notifications..",
+            ).check(productionClasses)
+    }
+
+    @Test
+    fun `no production code publishes directly through RabbitTemplate`() {
+        noClasses()
+            .that()
+            .resideInAPackage("com.finaxis.platform..")
+            .should()
+            .dependOnClassesThat()
+            .haveFullyQualifiedName("org.springframework.amqp.rabbit.core.RabbitTemplate")
+            .because(
+                "integration events are externalized only through transition event factories and " +
+                    "the Namastack outbox; see " +
+                    "docs/adr/0008-transactional-outbox-over-direct-amqp.md",
+            ).check(productionClasses)
+    }
+
+    @Test
+    fun `only messaging adapters depend on AMQP`() {
+        noClasses()
+            .that()
+            .resideOutsideOfPackages(
+                "com.finaxis.platform..adapter.inbound.messaging..",
+                "com.finaxis.platform..adapter.outbound.messaging..",
+                "com.finaxis.platform.common.transitions..",
+            ).should()
+            .dependOnClassesThat()
+            .resideInAnyPackage("org.springframework.amqp..")
+            .because(
+                "broker types belong at the messaging edge; application and domain code " +
+                    "publishes through the outbox and never speaks AMQP",
             ).check(productionClasses)
     }
 
