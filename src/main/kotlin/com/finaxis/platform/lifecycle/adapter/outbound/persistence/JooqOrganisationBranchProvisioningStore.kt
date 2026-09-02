@@ -371,6 +371,13 @@ class JooqOrganisationBootstrapStore(
                 .fetchOne(ORGANISATION.TIMEZONE),
         ) { "Organisation was not found." }
 
+    override fun baseCurrencyCode(organisationId: UUID): String? =
+        dsl
+            .select(ORGANISATION.BASE_CURRENCY_CODE)
+            .from(ORGANISATION)
+            .where(ORGANISATION.ID.eq(organisationId))
+            .fetchOne(ORGANISATION.BASE_CURRENCY_CODE)
+
     override fun ensureHeadOfficeDraft(organisationId: UUID): HeadOfficeDraftResult {
         dsl
             .select(BRANCH.ID)

@@ -3,18 +3,20 @@ package com.finaxis.platform.accounting.support
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE_HISTORY
+import com.finaxis.platform.jooq.tables.references.JOURNAL_ENTRY
+import com.finaxis.platform.jooq.tables.references.JOURNAL_LINE
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_SETTING
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_TRANSITION_LOG
+import com.finaxis.platform.jooq.tables.references.POSTING_REQUEST
+import com.finaxis.platform.jooq.tables.references.REFERENCE_SEQUENCE
 import org.jooq.DSLContext
 import java.time.LocalDate
 import java.util.UUID
 
 /**
- * Probes for the durable effects that exist today.
- *
- * Issues #36 and #40 add `accountingFiscalPeriodRows`, `postingRequestRows`, `journalEntryRows` and
- * `journalLineRows` here; nothing else in the harness changes.
+ * Probes for the durable effects that exist today, including the three journal tables issue #41
+ * writes and the reference-sequence counter it increments.
  *
  * `outbox_record` and `event_publication` are created by their starters outside Flyway and so have
  * no generated jOOQ metadata - those two probes use raw SQL deliberately.
@@ -124,6 +126,40 @@ object FoundationAtomicityProbes {
                 ).fetchOne()
                 ?.value1()
                 ?.toLong() ?: 0L
+        }
+
+    /** Posting requests for one organisation. */
+    fun postingRequestRows(organisationId: UUID): AtomicityProbe =
+        AtomicityProbe("posting_request") { dsl ->
+            dsl
+                .fetchCount(POSTING_REQUEST, POSTING_REQUEST.ORGANISATION_ID.eq(organisationId))
+                .toLong()
+        }
+
+    /** Journal headers for one organisation. */
+    fun journalEntryRows(organisationId: UUID): AtomicityProbe =
+        AtomicityProbe("journal_entry") { dsl ->
+            dsl.fetchCount(JOURNAL_ENTRY, JOURNAL_ENTRY.ORGANISATION_ID.eq(organisationId)).toLong()
+        }
+
+    /** Journal lines for one organisation. */
+    fun journalLineRows(organisationId: UUID): AtomicityProbe =
+        AtomicityProbe("journal_line") { dsl ->
+            dsl.fetchCount(JOURNAL_LINE, JOURNAL_LINE.ORGANISATION_ID.eq(organisationId)).toLong()
+        }
+
+    /**
+     * The tenant's next journal number. The one UPDATE the posting path performs on a pre-existing
+     * row; counting appended rows cannot see it roll back, so it gets a probe of its own.
+     */
+    fun journalSequenceValue(organisationId: UUID): AtomicityProbe =
+        AtomicityProbe("reference_sequence[JOURNAL]") { dsl ->
+            dsl
+                .select(REFERENCE_SEQUENCE.NEXT_VALUE)
+                .from(REFERENCE_SEQUENCE)
+                .where(REFERENCE_SEQUENCE.ORGANISATION_ID.eq(organisationId))
+                .and(REFERENCE_SEQUENCE.SEQUENCE_CODE.eq("JOURNAL"))
+                .fetchOne(REFERENCE_SEQUENCE.NEXT_VALUE) ?: 0L
         }
 
     /** Append-only organisation lifecycle transition log rows for one aggregate. */

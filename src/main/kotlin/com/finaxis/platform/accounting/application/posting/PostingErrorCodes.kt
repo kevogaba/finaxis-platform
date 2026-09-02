@@ -25,8 +25,41 @@ object PostingErrorCodes {
     /** A referenced general-ledger account is unknown, inactive or not postable. */
     const val ACCOUNT_NOT_POSTABLE = "accounting.account_not_postable"
 
-    /** The same durable source reference was already posted. */
+    /**
+     * The same durable source reference was already posted.
+     *
+     * Not raised for a faithful retry: a request whose source reference and fingerprint both match
+     * a posted request gets that request's receipt back (`INV-7`). Raised only for the case the
+     * engine cannot make sense of - a committed request for the reference that is not `POSTED`.
+     */
     const val DUPLICATE_SOURCE_REFERENCE = "accounting.duplicate_source_reference"
+
+    /** The same source reference was reused for a materially different request. */
+    const val POSTING_REQUEST_CONFLICT = "accounting.posting_request_conflict"
+
+    /** No posting rule resolves the event for this tenant on the posting date. */
+    const val POSTING_RULE_NOT_FOUND = "accounting.posting_rule_not_found"
+
+    /** The caller's posting context does not match the active request context. */
+    const val CONTEXT_MISMATCH = "accounting.context_mismatch"
+
+    /** The organisation is not in a lifecycle state that permits financial activity. */
+    const val ORGANISATION_NOT_POSTABLE = "accounting.organisation_not_postable"
+
+    /** The branch does not exist in the organisation or does not permit financial activity. */
+    const val BRANCH_NOT_POSTABLE = "accounting.branch_not_postable"
+
+    /** The organisation has no functional currency to post in. */
+    const val FUNCTIONAL_CURRENCY_UNAVAILABLE = "accounting.functional_currency_unavailable"
+
+    /** A leg is denominated in a currency other than the tenant's functional currency. */
+    const val CURRENCY_NOT_SUPPORTED = "accounting.currency_not_supported"
+
+    /** The tenant has no `JOURNAL` reference sequence to number the journal from. */
+    const val JOURNAL_SEQUENCE_MISSING = "accounting.journal_sequence_missing"
+
+    /** The tenant's functional currency cannot change once a journal has been posted. */
+    const val FUNCTIONAL_CURRENCY_FROZEN = "accounting.functional_currency_frozen"
 
     /** The fiscal period is already in the state the caller asked for. */
     const val PERIOD_ALREADY_IN_STATE = "accounting.fiscal_period_already_in_state"

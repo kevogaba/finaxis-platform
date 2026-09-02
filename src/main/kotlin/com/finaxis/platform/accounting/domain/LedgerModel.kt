@@ -1,0 +1,52 @@
+package com.finaxis.platform.accounting.domain
+
+import java.util.UUID
+
+/**
+ * The kind of journal a header records, matching `chk_journal_entry_type` exactly.
+ *
+ * There is deliberately no `CORRECTION`: a correction is a [REVERSAL] followed by a fresh
+ * [STANDARD] or [MANUAL] posting, per ADR 0020.
+ */
+enum class JournalEntryType {
+    /** Produced from a product module's posting intent through a posting rule. */
+    STANDARD,
+
+    /** Produced from a manual journal approved under `journal.approve`. */
+    MANUAL,
+
+    /** The equal-and-opposite entry that corrects another journal. */
+    REVERSAL,
+}
+
+/**
+ * The lifecycle of a posting request, matching `chk_posting_request_status` exactly.
+ *
+ * There is no `REJECTED`: a rejected posting rolls back with the transaction that attempted it,
+ * and with it the request row it had claimed. See `docs/database/accounting-erd.md`.
+ */
+enum class PostingRequestStatus {
+    /** Claimed, journal not yet written. Visible only inside the posting transaction. */
+    PENDING,
+
+    /** The journal is committed. */
+    POSTED,
+}
+
+/**
+ * One debit or credit the ledger is asked to record, already resolved to a general-ledger account.
+ *
+ * Product modules never build one of these — they express [com.finaxis.platform.accounting
+ * .application.posting.PostingIntent] and accounting resolves it. A leg is what the resolver
+ * produces and what accounting's own callers (reversal, manual journals) supply directly.
+ *
+ * [subledgerReference] is the product-owned position this leg moves, carried on the line for
+ * drill-down and control-account reconciliation only; it is descriptive, never a foreign key.
+ */
+data class PostingLeg(
+    val accountId: UUID,
+    val side: PostingSide,
+    val amount: MonetaryAmount,
+    val narrative: String? = null,
+    val subledgerReference: String? = null,
+)

@@ -23,6 +23,10 @@ import java.util.UUID
  *
  * [context] is likewise not a trust boundary: the implementation must reconcile it against
  * `AccountingContextLookup` and reject a mismatch, or a caller could name another tenant.
+ *
+ * [correctsPostingRequestId] names the posting this one replaces after its journal was reversed,
+ * so a correction - reversal then re-post - keeps its lineage on the mutable request rather than
+ * on the immutable journal (ADR 0020). Null for an ordinary posting.
  */
 data class PostFinancialFactsCommand(
     val context: AccountingContext,
@@ -30,6 +34,7 @@ data class PostFinancialFactsCommand(
     val intent: PostingIntent,
     val dates: PostingDateRequest = PostingDateRequest(),
     val narrative: String? = null,
+    val correctsPostingRequestId: UUID? = null,
 )
 
 /** A request to reverse a posted journal entry with a compensating entry. */

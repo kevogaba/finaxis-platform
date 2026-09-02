@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.accounting.AccountingLedgerActivity
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.audit.Redacted
@@ -31,6 +32,7 @@ class TenantSettingsService(
     private val auditService: AuditService,
     private val eventPublisher: TransitionEventPublisher,
     private val clock: Clock,
+    private val ledgerActivity: AccountingLedgerActivity,
 ) {
     /** Creates or updates one tenant setting for an active organisation. */
     @Transactional
@@ -39,6 +41,7 @@ class TenantSettingsService(
         val definition = TenantSettingCatalog.require(command.key)
         authorize(definition, command.organisationId, command.actorId)
         val canonical = TenantSettingCatalog.canonicalize(command.key, command.value)
+        requireFunctionalCurrencyNotFrozen(command.organisationId, command.key)
 
         val before =
             settingsStore.upsertSetting(
@@ -62,12 +65,19 @@ class TenantSettingsService(
         return view(command.key, definition, stored = null, rawValue = canonical)
     }
 
-    /** Deactivates one tenant setting for an active organisation. */
+    /**
+     * Deactivates one tenant setting for an active organisation.
+     *
+     * Deactivation changes the setting's effective value as surely as an update does, so the
+     * functional-currency freeze applies here too: a tenant that has posted a journal cannot be
+     * left with no base currency at all.
+     */
     @Transactional
     fun deactivate(command: DeactivateTenantSettingCommand) {
         requireActive(command.organisationId)
         val definition = TenantSettingCatalog.require(command.key)
         authorize(definition, command.organisationId, command.actorId)
+        requireFunctionalCurrencyNotFrozen(command.organisationId, command.key)
 
         val before = settingsStore.currentSetting(command.organisationId, command.key)
         val deactivated =
@@ -174,6 +184,28 @@ class TenantSettingsService(
         }
     }
 
+    /**
+     * The functional currency is frozen once the tenant has posted a journal.
+     *
+     * Journal lines are immutable, so a later line in a different unit would make every balance,
+     * header total and daily projection a sum of incompatible units, and no approval repairs that.
+     * Accounting owns the answer; lifecycle only asks. See
+     * `docs/architecture/accounting-foundation.md`, *"The functional currency is frozen once the
+     * tenant has posted"*.
+     */
+    private fun requireFunctionalCurrencyNotFrozen(
+        organisationId: UUID,
+        key: String,
+    ) {
+        if (key == BASE_CURRENCY_SETTING && ledgerActivity.hasPostedJournals(organisationId)) {
+            throw ConflictException(
+                code = FUNCTIONAL_CURRENCY_FROZEN,
+                safeDetail =
+                    "The base currency cannot change once the organisation has posted a journal.",
+            )
+        }
+    }
+
     private fun authorize(
         definition: TenantSettingDefinition,
         organisationId: UUID,
@@ -276,6 +308,13 @@ class TenantSettingsService(
     }
 
     private companion object {
+        const val BASE_CURRENCY_SETTING = "base_currency"
+
+        /** Aliases the accounting contract so the two published codes cannot drift. */
+        const val FUNCTIONAL_CURRENCY_FROZEN =
+            com.finaxis.platform.accounting.application.posting.PostingErrorCodes
+                .FUNCTIONAL_CURRENCY_FROZEN
+
         const val SETTINGS_UPDATED_TARGET = "finaxis.lifecycle.organisation.settings-updated"
         const val ORGANISATION_SETTING = "ORGANISATION_SETTING"
         const val SETTING_MUTATE_PERMISSION = "settings.update"
