@@ -15,6 +15,7 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestConstructor
 import java.util.UUID
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -75,6 +76,14 @@ class LifecycleAccountingAdapterIntegrationTests(
 
         assertTrue(tenantLookup.isOrganisationPostable(organisationId))
         assertFalse(tenantLookup.isOrganisationPostable(uuidV7()))
+    }
+
+    @Test
+    fun `the functional currency is the organisation's base currency column`() {
+        val organisationId = fixture.createActiveOrganisation("accounting-currency", ACTOR_ID)
+
+        assertEquals("KES", tenantLookup.functionalCurrencyOf(organisationId))
+        assertNull(tenantLookup.functionalCurrencyOf(uuidV7()))
     }
 
     @Test

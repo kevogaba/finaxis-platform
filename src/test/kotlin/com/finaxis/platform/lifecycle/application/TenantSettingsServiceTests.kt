@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.accounting.AccountingLedgerActivity
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.audit.AuditEvent
@@ -28,14 +29,49 @@ class TenantSettingsServiceTests {
     private val auditEvents = RecordingAuditRepository()
     private val clock = Clock.fixed(Instant.parse("2026-07-17T10:15:30Z"), ZoneOffset.UTC)
     private val auditService = AuditService(auditEvents, clock)
+    private val ledger = FakeLedgerActivity()
     private val service =
-        TenantSettingsService(lifecycleStore, settingsStore, guard, auditService, events, clock)
+        TenantSettingsService(
+            lifecycleStore,
+            settingsStore,
+            guard,
+            auditService,
+            events,
+            clock,
+            ledger,
+        )
 
     private val organisationId = uuidV7()
     private val actorId = uuidV7()
 
     private fun activate() {
         lifecycleStore.states[organisationId] = OrganisationLifecycleState.ACTIVE
+    }
+
+    @Test
+    fun `the base currency is frozen once the ledger reports a posted journal`() {
+        // The functional-currency freeze the accounting foundation requires: journal lines are
+        // immutable, so a later line in another unit would make every balance a sum of
+        // incompatible units. Lifecycle asks accounting and refuses; every other key is untouched.
+        activate()
+        ledger.posted = true
+
+        val failure =
+            assertFailsWith<ConflictException> {
+                service.createOrUpdate(
+                    CreateOrUpdateTenantSettingCommand(
+                        organisationId,
+                        "base_currency",
+                        "USD",
+                        actorId,
+                    ),
+                )
+            }
+        assertEquals("accounting.functional_currency_frozen", failure.code)
+
+        service.createOrUpdate(
+            CreateOrUpdateTenantSettingCommand(organisationId, "default_timezone", "UTC", actorId),
+        )
     }
 
     @Test
@@ -333,6 +369,12 @@ private class CapturingPublisherForSettings : TransitionEventPublisher {
     override fun publish(event: TransitionEvent) {
         published.add(event)
     }
+}
+
+private class FakeLedgerActivity : AccountingLedgerActivity {
+    var posted = false
+
+    override fun hasPostedJournals(organisationId: java.util.UUID) = posted
 }
 
 private class RecordingAuditRepository : AuditEventRepository {

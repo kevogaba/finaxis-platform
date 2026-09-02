@@ -11,6 +11,7 @@ import com.finaxis.platform.accounting.domain.ChartHierarchyPolicy
 import com.finaxis.platform.accounting.domain.GlAccount
 import com.finaxis.platform.accounting.domain.GlAccountStatus
 import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT
+import com.finaxis.platform.jooq.tables.references.JOURNAL_LINE
 import org.jooq.DSLContext
 import org.jooq.Record
 import org.jooq.impl.DSL
@@ -129,6 +130,18 @@ class JooqGlAccountStore(
                 .from(GL_ACCOUNT)
                 .where(GL_ACCOUNT.ORGANISATION_ID.eq(organisationId))
                 .and(GL_ACCOUNT.PARENT_ACCOUNT_ID.eq(accountId)),
+        )
+
+    override fun hasJournalLines(
+        organisationId: UUID,
+        accountId: UUID,
+    ): Boolean =
+        dsl.fetchExists(
+            DSL
+                .selectOne()
+                .from(JOURNAL_LINE)
+                .where(JOURNAL_LINE.ORGANISATION_ID.eq(organisationId))
+                .and(JOURNAL_LINE.GL_ACCOUNT_ID.eq(accountId)),
         )
 
     override fun list(

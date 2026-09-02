@@ -6,9 +6,11 @@
 > [the accounting foundation](accounting-foundation.md).
 
 At this stage the module is **contracts, the fiscal calendar, the chart of accounts with their
-lifecycles and maker-checker controls, and their adapters**. There is no journal schema yet (issue
-#40) and no posting engine (issue #41). The boundary existed before any table, deliberately, so
-later work cannot accidentally couple a product module to ledger persistence.
+lifecycles and maker-checker controls, the journal schema, and the synchronous posting engine
+behind `PostingService`**. No posting rule exists yet (issues #44, #45), so the resolver behind the
+public API refuses every product-module intent with `accounting.posting_rule_not_found`; the engine
+itself is live for accounting's own callers. The boundary existed before any table, deliberately,
+so later work cannot accidentally couple a product module to ledger persistence.
 
 ## What this module owns
 
@@ -50,6 +52,17 @@ on `lifecycle` and no module depends on `iam`.
 | `AccountingPermissionGuard` | `iam` | `iam.adapter.outbound.authorization.AccountingPermissionGuardAdapter` |
 | `AccountingBusinessDateLookup` | `lifecycle` | `lifecycle.adapter.outbound.accounting.LifecycleAccountingBusinessDateAdapter` |
 | `AccountingTenantLookup` | `lifecycle` | `lifecycle.adapter.outbound.accounting.LifecycleAccountingTenantAdapter` |
+
+`AccountingTenantLookup` also answers the tenant's **functional currency**, read from
+`organisation.base_currency_code`. That column, not the `base_currency` tenant setting, is the
+currency of record for the ledger: it is set at provisioning, carries the ISO 4217 check, and can
+only be amended while the organisation is a draft, so it is fixed before a journal can exist.
+
+One port runs the other way. `AccountingLedgerActivity`, declared in the accounting root package
+and implemented by accounting's own persistence adapter, lets lifecycle ask *"has this tenant
+posted?"* before it accepts a `base_currency` setting change - the functional-currency freeze the
+accounting foundation requires. Lifecycle already depends on `accounting` for the ports above, so
+no new module edge is created.
 
 Both provider modules gained `"accounting"` in their `allowedDependencies`. The resulting module
 graph stays acyclic: `iam → lifecycle`, `iam → accounting`, `lifecycle → accounting`,
@@ -127,8 +140,7 @@ invariant the codebase already held rather than forcing a change.
 
 | Missing | Issue |
 | --- | --- |
-| Journal schema | #40 |
-| `PostingService` implementation | #41 |
+| Journal reversal | #43 |
 | Posting rules and their resolver | #44, #45 |
 | Control accounts and reconciliation | #46 |
 | Manual journals | #48 |
@@ -139,11 +151,33 @@ schema (#36), the accounting permission catalogue (#34) and the fiscal-period co
 semantics (#35) — have shipped, together with the GL-account domain (#37), the chart-of-accounts
 FSM (#38) and the fiscal-period lifecycle (#39).
 
-Two consequences of that state are worth stating plainly. `PostingService` has **no bean**;
-`AccountingModuleContextTests` asserts its absence so a later partial implementation is a visible
-change rather than something that quietly starts satisfying injection points. And
-`HexagonalArchitectureTest`'s web-adapter allow-list will need extending when the first accounting
-controller lands in #52 — there is no accounting web adapter today, so no edit was needed here.
+Two consequences of that state are worth stating plainly. `PostingLegResolver` is the
+`UnconfiguredPostingLegResolver` bean until #45 replaces it, and `AccountingModuleContextTests`
+asserts exactly that so the rule-backed resolver landing beside it rather than instead of it is a
+visible change. And `HexagonalArchitectureTest`'s web-adapter allow-list will need extending when
+the first accounting controller lands in #52 — there is no accounting web adapter today, so no edit
+was needed here.
+
+## The posting engine
+
+`PostingEngine` lives in `accounting.application.ledger`, which carries no `@NamedInterface` and is
+therefore module-internal: product modules reach it only through `PostingService`, and accounting's
+own callers - reversal (#43) and manual journals (#48) - call it directly. There is exactly one
+place a `journal_entry` row is created, which is what *"the same PostingEngine"* means mechanically.
+
+It runs inside the **caller's** transaction (`Propagation.MANDATORY` on the public service) and in
+this order: reconcile the caller's `AccountingContext` against the ambient one; check the
+organisation and branch are postable and read the functional currency; resolve the dates and lock
+the fiscal period through `PostingPeriodResolver`; ask the `LegProvider` for the legs, now that the
+posting date - and so the rule version - is known; settle every leg through `MoneyPolicy`, refuse
+any currency but the functional one, and check every account through `GlAccountPostingPolicy`;
+prove the set balances in memory; claim the source reference with `INSERT … ON CONFLICT DO
+NOTHING` and answer a duplicate from the locked existing row; allocate the gapless number from
+`reference_sequence`; write the header and the lines; **re-read the lines and compare them with the
+header**, the `INV-4` enforcement point; mark the request `POSTED`.
+
+Every failure before the claim leaves nothing behind. Every failure after it rolls the claim back
+with the caller's transaction, so a rejected request never occupies its source reference.
 
 ## Related documents
 

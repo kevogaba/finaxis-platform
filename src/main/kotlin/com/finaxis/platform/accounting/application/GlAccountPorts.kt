@@ -99,6 +99,19 @@ interface GlAccountStore {
     ): Boolean
 
     /**
+     * True when at least one journal line has ever posted to the account.
+     *
+     * The other half of *"has been used"*, answerable now that `journal_line` exists: an account
+     * with a line has financial history recorded against its code, class and usage, and
+     * `ChartHierarchyPolicy` freezes all three. One bounded existence probe over the read-path
+     * index, never a count.
+     */
+    fun hasJournalLines(
+        organisationId: UUID,
+        accountId: UUID,
+    ): Boolean
+
+    /**
      * Lists a tenant's chart in code order, from [afterCode] exclusive, at most [pageSize] rows.
      *
      * There is no unpaginated variant on purpose: `INV-15` requires every accounting query to be

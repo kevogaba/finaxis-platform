@@ -2,6 +2,9 @@ package com.finaxis.platform.accounting
 
 import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.accounting.adapter.outbound.context.RequestContextAccountingLookup
+import com.finaxis.platform.accounting.application.ledger.DefaultPostingService
+import com.finaxis.platform.accounting.application.ledger.PostingLegResolver
+import com.finaxis.platform.accounting.application.ledger.UnconfiguredPostingLegResolver
 import com.finaxis.platform.accounting.application.port.outbound.AccountingContextLookup
 import com.finaxis.platform.accounting.application.posting.PostingService
 import org.junit.jupiter.api.Test
@@ -42,13 +45,23 @@ class AccountingModuleContextTests(
     }
 
     @Test
-    fun `no posting service implementation exists yet`() {
-        // Deliberate: issue #31 ships the contract, issue #41 ships the engine. Asserting the
-        // absence means a later accidental partial implementation is a visible, reviewed change
-        // rather than something that quietly starts satisfying injection points.
+    fun `exactly one posting service exists and it is the engine-backed one`() {
+        // Inverted from Phase A, which asserted the bean's absence so a partial implementation
+        // would be a visible change. Issue #41 is that change: one bean, the engine behind it.
         assertContentEquals(
-            emptyArray(),
+            arrayOf("postingService"),
             applicationContext.getBeanNamesForType(PostingService::class.java),
+        )
+        assertIs<DefaultPostingService>(applicationContext.getBean(PostingService::class.java))
+    }
+
+    @Test
+    fun `no posting rule resolver exists yet, and the placeholder says so`() {
+        // Issue #45 replaces this bean. Asserting the placeholder means a rule-backed resolver
+        // landing without removing it - two beans, or a silently overridden one - is a visible
+        // change rather than a startup ambiguity.
+        assertIs<UnconfiguredPostingLegResolver>(
+            applicationContext.getBean(PostingLegResolver::class.java),
         )
     }
 }

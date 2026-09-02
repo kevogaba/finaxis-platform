@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.adapter.outbound.accounting
 
 import com.finaxis.platform.accounting.AccountingTenantLookup
 import com.finaxis.platform.lifecycle.application.FoundationLifecycleReader
+import com.finaxis.platform.lifecycle.application.OrganisationBootstrapStore
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import org.springframework.stereotype.Component
@@ -17,6 +18,7 @@ import java.util.UUID
 @Component
 class LifecycleAccountingTenantAdapter(
     private val lifecycleReader: FoundationLifecycleReader,
+    private val bootstrapStore: OrganisationBootstrapStore,
 ) : AccountingTenantLookup {
     override fun isOrganisationPostable(organisationId: UUID): Boolean =
         lifecycleReader.findOrganisation(organisationId)?.state == OrganisationLifecycleState.ACTIVE
@@ -26,4 +28,7 @@ class LifecycleAccountingTenantAdapter(
         branchId: UUID,
     ): Boolean =
         lifecycleReader.findBranch(organisationId, branchId)?.state == BranchLifecycleState.ACTIVE
+
+    override fun functionalCurrencyOf(organisationId: UUID): String? =
+        bootstrapStore.baseCurrencyCode(organisationId)
 }

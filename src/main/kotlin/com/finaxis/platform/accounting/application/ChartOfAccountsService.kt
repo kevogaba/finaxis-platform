@@ -130,10 +130,14 @@ class ChartOfAccountsService(
                 manualPostingAllowed = command.manualPostingAllowed ?: current.manualPostingAllowed,
             )
 
+        // "Has been used" is both halves now: children beneath it, or a journal line posted to it.
+        // Either freezes the code, class and usage, because either means history was recorded
+        // against them. An account with lines can still be re-parented, renamed and described.
         ChartHierarchyPolicy.requireStructurallyMutable(
             current,
             proposed,
-            accounts.hasChildren(command.organisationId, command.accountId),
+            accounts.hasChildren(command.organisationId, command.accountId) ||
+                accounts.hasJournalLines(command.organisationId, command.accountId),
         )
         if (proposed.code != current.code) {
             requireCodeAvailable(command.organisationId, proposed.code)

@@ -19,4 +19,15 @@ interface AccountingTenantLookup {
         organisationId: UUID,
         branchId: UUID,
     ): Boolean
+
+    /**
+     * Returns the organisation's functional currency - `organisation.base_currency_code` - or null
+     * when the organisation does not exist.
+     *
+     * The column, not the `base_currency` tenant setting: the column is set at provisioning,
+     * carries the ISO 4217 check, and can only be amended while the organisation is still a draft,
+     * so it is fixed before a journal can exist. The setting is a tenant preference that lifecycle
+     * refuses to change once accounting reports a posted journal.
+     */
+    fun functionalCurrencyOf(organisationId: UUID): String?
 }

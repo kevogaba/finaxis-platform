@@ -40,6 +40,9 @@ interface OrganisationBootstrapStore {
     /** Returns the configured IANA timezone used to derive the default business date. */
     fun timezone(organisationId: UUID): String
 
+    /** Returns the organisation's base currency code, or null when it does not exist. */
+    fun baseCurrencyCode(organisationId: UUID): String?
+
     /** Creates (or finds) the head-office branch in [BranchLifecycleState.DRAFT]. */
     fun ensureHeadOfficeDraft(organisationId: UUID): HeadOfficeDraftResult
 
