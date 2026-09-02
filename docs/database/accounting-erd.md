@@ -834,7 +834,7 @@ source reference, ever.
 | `source_entity_id` | `UUID` | no | Identity of that entity, for drill-down. Descriptive: **not** a foreign key (`INV-16`) |
 | `source_reference` | `TEXT` | no | The durable idempotency identity, unique per tenant and module (`INV-7`) |
 | `event_code` | `TEXT` | no | Semantic posting event the legs were resolved from, e.g. `SAVINGS_DEPOSIT` |
-| `request_fingerprint` | `TEXT` | no | SHA-256, hex, of the canonical request — source triple, event, dates, currency and legs. Never the raw payload |
+| `request_fingerprint` | `TEXT` | no | SHA-256, hex, of the canonical request — source triple, event, entry type, branch, correction/reversal lineage, dates and currency. Never the raw payload, never the resolved legs |
 | `posting_rule_version_id` | `UUID` | yes | The exact rule version that resolved the legs; null for a reversal or a manual journal. Column created here, foreign key added by #44's migration |
 | `corrects_posting_request_id` | `UUID` | yes | The request this replacement posting corrects, after its journal was reversed |
 | `business_date` | `DATE` | no | The tenant business date when the posting was made |
@@ -871,9 +871,19 @@ Plus the mutable audit set: `created_at`, `created_by`, `updated_at`, `updated_b
 | `chk_posting_request_version` | `CHECK (row_version >= 0)` | Convention |
 
 `request_fingerprint` is what lets issue #42 tell a safe retry from a conflicting reuse of the
-same key without storing the request. It is computed by the engine over a canonical rendering —
-sorted, separator-delimited, currency-qualified amounts at scale 6 — so the same economic request
-always hashes the same and a different one never collides by formatting.
+same key without storing the request. Issue #89 (ADR 0023) settled its final composition: it is
+computed by the engine over the caller's own inputs — the source triple, the event code, the entry
+type, the branch, the correction and reversal lineage, the resolved transaction/value/posting
+dates, the functional currency, the product class selector, and the caller's asserted financial
+facts (`PostingIntent.Facts`, sorted, each amount settled to `MoneyPolicy.STORAGE_SCALE` before
+hashing so a caller-supplied `500.0` and `500.00` hash identically) — encoded field-by-field as a
+null/present marker byte plus, when present, a fixed 4-byte length and the value's UTF-8 bytes,
+never a delimiter-joined string a value could itself contain. It is deliberately **not** computed
+over the resolved legs: the claim happens before a rule-resolved posting's legs are asked for, so
+nothing the digest covers may depend on resolving them. The product class and financial facts are
+what still give a rule-resolved posting selector- and amount-level discrimination without that
+resolution — they are the caller's own asserted inputs, known before any rule ever runs (see ADR
+0023 for why, and for the idempotency-contract consequence of the branch/lineage widening).
 
 | Index | Definition | Justifying query |
 | --- | --- | --- |

@@ -209,7 +209,7 @@ class PostingRuleService(
             requireDifferentActorFromTheSubmitter(command, version)
             val legs = rules.findLegs(command.organisationId, version.id)
             PostingRulePolicy.requireWellFormed(legs)
-            requirePostableAccounts(command.organisationId, legs)
+            requirePostableAccounts(command.organisationId, legs, lockAccounts = true)
             supersedeCurrentHead(command, version)
         }
     }
@@ -523,17 +523,34 @@ class PostingRuleService(
         }
     }
 
+    /**
+     * Validates that every account a version's legs reference is eligible to receive a posting.
+     *
+     * [lockAccounts] is true only when [approve] calls this: activation is what makes the resolver
+     * able to select the version, so it is the moment that must be serialised against a concurrent
+     * deactivation. [GlAccountStore.lockForPosting] takes the same shared, ascending-id-order lock
+     * the posting engine takes before it validates a posting's accounts, so it excludes, and is
+     * excluded by, [GlAccountStore.lockForStateChange]'s exclusive lock - the one deactivation
+     * takes. Without it, approval could read an account as postable, activate a version that
+     * references it, and commit a moment before a concurrent deactivation whose own guard had not
+     * yet seen the version become `ACTIVE`. Draft and amendment validation ([validateLegs]) do not
+     * activate anything, so they read without locking.
+     */
     private fun requirePostableAccounts(
         organisationId: UUID,
         legs: List<PostingRuleLeg>,
+        lockAccounts: Boolean = false,
     ) {
-        legs.map { it.accountId }.distinct().forEach { accountId ->
+        legs.map { it.accountId }.distinct().sorted().forEach { accountId ->
             val account =
-                accounts.findById(organisationId, accountId)
-                    ?: throw InvalidOperationException(
-                        code = PostingErrorCodes.ACCOUNT_NOT_POSTABLE,
-                        safeDetail = "A leg names a general-ledger account that does not exist.",
-                    )
+                if (lockAccounts) {
+                    accounts.lockForPosting(organisationId, accountId)
+                } else {
+                    accounts.findById(organisationId, accountId)
+                } ?: throw InvalidOperationException(
+                    code = PostingErrorCodes.ACCOUNT_NOT_POSTABLE,
+                    safeDetail = "A leg names a general-ledger account that does not exist.",
+                )
             GlAccountPostingPolicy.requirePostable(account)
         }
     }

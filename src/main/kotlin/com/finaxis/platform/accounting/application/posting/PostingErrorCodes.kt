@@ -37,6 +37,12 @@ object PostingErrorCodes {
     /** The same source reference was reused for a materially different request. */
     const val POSTING_REQUEST_CONFLICT = "accounting.posting_request_conflict"
 
+    /** A correction names a posting request that does not exist in the tenant. */
+    const val CORRECTION_TARGET_NOT_FOUND = "accounting.correction_target_not_found"
+
+    /** A correction names a posting request whose journal has not been reversed. */
+    const val CORRECTION_TARGET_NOT_REVERSED = "accounting.correction_target_not_reversed"
+
     /** No posting rule resolves the event for this tenant on the posting date. */
     const val POSTING_RULE_NOT_FOUND = "accounting.posting_rule_not_found"
 

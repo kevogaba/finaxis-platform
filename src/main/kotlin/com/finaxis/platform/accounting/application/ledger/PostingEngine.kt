@@ -4,14 +4,15 @@ import com.finaxis.platform.accounting.AccountingTenantLookup
 import com.finaxis.platform.accounting.application.GlAccountPostingPolicy
 import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.PostingPeriodResolver
-import com.finaxis.platform.accounting.application.ResolvePostingPeriodCommand
 import com.finaxis.platform.accounting.application.ResolvedPostingPeriod
 import com.finaxis.platform.accounting.application.port.outbound.AccountingContextLookup
+import com.finaxis.platform.accounting.application.posting.FinancialFact
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.application.posting.PostingReceipt
 import com.finaxis.platform.accounting.domain.AccountingContext
 import com.finaxis.platform.accounting.domain.AccountingDates
 import com.finaxis.platform.accounting.domain.AccountingSourceReference
+import com.finaxis.platform.accounting.domain.GlAccount
 import com.finaxis.platform.accounting.domain.JournalEntryType
 import com.finaxis.platform.accounting.domain.MoneyPolicy
 import com.finaxis.platform.accounting.domain.PostingDateRequest
@@ -21,9 +22,11 @@ import com.finaxis.platform.accounting.domain.PostingSide
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.math.BigDecimal
 import java.time.Clock
+import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.UUID
 
@@ -34,7 +37,15 @@ import java.util.UUID
  * and refuses a mismatch, so a caller cannot name another tenant. [source] is the durable lineage
  * and idempotency identity. The legs are not a field but a [LegProvider], because a rule-resolved
  * posting cannot know its legs until the posting date - and therefore the rule version in force -
- * has been resolved, which the engine does.
+ * has been resolved, which the engine does, and only for a genuinely new posting (see
+ * [PostingEngine.post]). [financialFacts] is what lets the idempotency fingerprint discriminate on
+ * amount even though the legs cannot be resolved before the claim: the caller's own asserted
+ * amounts, known before any rule ever runs. Empty for reversal and manual journals, whose source
+ * reference already derives from an immutable record and so can never legitimately name two
+ * different amounts (see [PostingFingerprint]). [productClass] is likewise a selector dimension the
+ * fingerprint must see: it can route the same event code to a different posting rule
+ * ([com.finaxis.platform.accounting.domain.PostingRuleSelector]), so two requests differing only in
+ * it are not the same posting even when every financial fact matches.
  */
 data class LedgerPostingRequest(
     val context: AccountingContext,
@@ -45,13 +56,16 @@ data class LedgerPostingRequest(
     val narrative: String? = null,
     val reversesJournalEntryId: UUID? = null,
     val correctsPostingRequestId: UUID? = null,
+    val financialFacts: List<FinancialFact> = emptyList(),
+    val productClass: String? = null,
 )
 
 /**
  * Supplies the legs once the accounting dates are known.
  *
  * The public posting service wraps the posting-rule resolver here; reversal and manual journals
- * wrap an already explicit set of legs. The engine does not know which.
+ * wrap an already explicit set of legs. The engine does not know which, and - since issue #89 -
+ * does not call this at all for a request that turns out to replay one already posted.
  */
 fun interface LegProvider {
     /** Returns the legs to record for a posting whose dates resolved to [dates]. */
@@ -70,13 +84,25 @@ fun interface LegProvider {
  * mutation, the product sub-ledger effect and the journal therefore commit or roll back together
  * (`INV-12`); nothing here uses a broker, a background job or `REQUIRES_NEW`.
  *
- * The order of the steps is the design, and each is placed where it is for a reason stated in
- * `docs/architecture/accounting-foundation.md`: context and tenant checks before anything is
- * read; period resolution - which takes the shared row lock - before legs are resolved, because
- * the rule version depends on the posting date; the in-memory balance check before the claim, so
- * an unbalanced request never occupies its source reference; the claim before the number, so a
- * duplicate never burns a gapless number; and the verification read after the lines, before
- * return, because a row-level `CHECK` cannot sum children.
+ * **The claim comes first, before anything that can drift.** [post] reconciles the caller's
+ * context, validates a correction's target (if any) exists and has been reversed - immutable,
+ * append-only facts that can only ever go from false to true, never back, so checking them is
+ * never what breaks a replay - resolves the accounting dates - a pure function of the tenant
+ * business date, which cannot itself go stale - computes the idempotency fingerprint from those
+ * dates and the caller's own inputs, and claims `(organisation, source_module, source_reference)`,
+ * all before it asks whether the fiscal period is open, whether the organisation or branch may
+ * currently post, what the legs are, or whether the accounts they reference are eligible. A
+ * faithful retry of an already committed posting is answered by [replay] from that claim alone: it
+ * never re-enters any of that validation, so a period that has since closed, an account that has
+ * since been deactivated, a posting rule that has since changed, or a tenant that has since been
+ * suspended can never turn a successful retry into a spurious failure (see
+ * `docs/adr/0023-posting-idempotency-and-account-locking.md`). Only a request the claim finds
+ * genuinely new - [postNew] - runs the state that *can* drift, in this order: tenant and branch
+ * postability; the period lock, which takes the shared lock issue #35 requires before the legs are
+ * resolved, because the rule version depends on the posting date; a lock on every distinct account
+ * the legs reference, in ascending id order, which is what closes the account-eligibility race
+ * from the posting side (`docs/adr/0023-...`); and the in-memory balance check. The verification
+ * read happens after the lines, before return, because a row-level `CHECK` cannot sum children.
  */
 class PostingEngine(
     private val contextLookup: AccountingContextLookup,
@@ -84,6 +110,7 @@ class PostingEngine(
     private val periods: PostingPeriodResolver,
     private val accounts: GlAccountStore,
     private val journals: JournalStore,
+    private val journalReads: JournalReadStore,
     private val numbers: JournalNumberAllocator,
     private val clock: Clock,
 ) {
@@ -99,33 +126,20 @@ class PostingEngine(
     ): PostingReceipt {
         requireActiveTransaction()
         val context = reconcileContext(request.context)
-        requireTenantPostable(context)
+        requireValidCorrectionTarget(context.organisationId, request.correctsPostingRequestId)
+        val dates = periods.resolveDates(context.organisationId, request.dates)
         val functionalCurrency = requireFunctionalCurrency(context.organisationId)
-
-        val period =
-            periods.resolveForPosting(
-                ResolvePostingPeriodCommand(
-                    organisationId = context.organisationId,
-                    actorId = context.actorId,
-                    dates = request.dates,
-                ),
-            )
-        val resolved = legs.legsFor(period.dates)
-        val settled = settleLegs(context, resolved.legs, functionalCurrency)
-        val totals = requireBalanced(settled)
         val fingerprint =
             PostingFingerprint.of(
-                request.source,
-                request.eventCode,
-                request.entryType,
-                period.dates,
+                request,
+                context.branchId,
+                dates,
                 functionalCurrency,
-                settled,
             )
 
         val claim =
             journals.claimPostingRequest(
-                newRequest(request, context, period, resolved, functionalCurrency, fingerprint),
+                newRequest(request, context, dates, functionalCurrency, fingerprint),
             )
         return when (claim) {
             is PostingRequestClaim.Existing -> {
@@ -133,12 +147,50 @@ class PostingEngine(
             }
 
             is PostingRequestClaim.Claimed -> {
-                writeJournal(
-                    Prepared(request, context, period, settled, totals, functionalCurrency),
-                    claim.postingRequestId,
-                )
+                postNew(request, context, dates, functionalCurrency, legs, claim.postingRequestId)
             }
         }
+    }
+
+    /**
+     * Validates and writes a genuinely new posting, now that this transaction alone holds the
+     * source reference.
+     *
+     * Nothing here runs for a replay, and that is the point: a faithful retry of an already
+     * committed posting must return its receipt even when the organisation or branch has since been
+     * suspended, the fiscal period has since closed, an account has since been deactivated, or the
+     * posting rule that resolved it has since changed. None of that is re-decided on a replay
+     * because none of it is re-decided-able - the journal already exists. Everything checked here
+     * is state that can move backward over time; [requireValidCorrectionTarget] is checked in
+     * [post] instead, before the claim, precisely because it cannot.
+     */
+    private fun postNew(
+        request: LedgerPostingRequest,
+        context: AccountingContext,
+        dates: AccountingDates,
+        functionalCurrency: String,
+        legs: LegProvider,
+        postingRequestId: UUID,
+    ): PostingReceipt {
+        requireTenantPostable(context)
+        val period = periods.lockAndValidate(context.organisationId, context.actorId, dates)
+        val resolved = legs.legsFor(period.dates)
+        val lockedAccounts = lockAccounts(context.organisationId, resolved.legs)
+        val settled = settleLegs(resolved.legs, functionalCurrency, lockedAccounts)
+        val totals = requireBalanced(settled)
+
+        return writeJournal(
+            Prepared(
+                request = request,
+                context = context,
+                period = period,
+                settled = settled,
+                totals = totals,
+                functionalCurrency = functionalCurrency,
+                postingRuleVersionId = resolved.postingRuleVersionId,
+            ),
+            postingRequestId,
+        )
     }
 
     /**
@@ -152,55 +204,29 @@ class PostingEngine(
         prepared: Prepared,
         postingRequestId: UUID,
     ): PostingReceipt {
-        val request = prepared.request
         val context = prepared.context
         val period = prepared.period
         val settled = prepared.settled
-        val totals = prepared.totals
-        val functionalCurrency = prepared.functionalCurrency
         val postedAt = clock.instant().truncatedTo(ChronoUnit.MICROS)
         val entryNumber = allocateNumber(context.organisationId)
         val journalEntryId =
             journals.insertJournalEntry(
-                NewJournalEntry(
-                    organisationId = context.organisationId,
-                    branchId = context.branchId,
-                    postingRequestId = postingRequestId,
-                    fiscalPeriodId = period.period.key.fiscalPeriodId,
-                    entryNumber = entryNumber,
-                    entryType = request.entryType,
-                    reversesJournalEntryId = request.reversesJournalEntryId,
-                    dates = period.dates,
-                    currencyCode = functionalCurrency,
-                    functionalCurrencyCode = functionalCurrency,
-                    totalDebitFunctional = totals.debit,
-                    totalCreditFunctional = totals.credit,
-                    lineCount = settled.size,
-                    narrative = request.narrative,
-                    postedAt = postedAt,
-                    actorId = context.actorId,
-                ),
+                newJournalEntry(prepared, postingRequestId, entryNumber, postedAt),
             )
-        journals.insertJournalLines(
-            settled.mapIndexed { index, leg ->
-                NewJournalLine(
-                    organisationId = context.organisationId,
-                    journalEntryId = journalEntryId,
-                    lineNumber = index + 1,
-                    leg = leg,
-                    branchId = context.branchId,
-                    fiscalPeriodId = period.period.key.fiscalPeriodId,
-                    postingDate = period.dates.postingDate,
-                    functionalCurrencyCode = functionalCurrency,
-                    functionalAmount = leg.amount.amount,
-                    exchangeRate = UNITY,
-                    sourceModule = request.source.sourceModule,
-                    actorId = context.actorId,
-                )
-            },
+        journals.insertJournalLines(newJournalLines(prepared, journalEntryId))
+        verifyHeaderAgainstLines(
+            context.organisationId,
+            journalEntryId,
+            prepared.totals,
+            settled.size,
         )
-        verifyHeaderAgainstLines(context.organisationId, journalEntryId, totals, settled.size)
-        journals.markPosted(context.organisationId, postingRequestId, postedAt, context.actorId)
+        journals.markPosted(
+            context.organisationId,
+            postingRequestId,
+            postedAt,
+            prepared.postingRuleVersionId,
+            context.actorId,
+        )
 
         return PostingReceipt(
             postingRequestId = postingRequestId,
@@ -209,6 +235,50 @@ class PostingEngine(
             businessDate = period.dates.businessDate,
             postedAt = postedAt,
             lineCount = settled.size,
+        )
+    }
+
+    private fun newJournalEntry(
+        prepared: Prepared,
+        postingRequestId: UUID,
+        entryNumber: Long,
+        postedAt: Instant,
+    ) = NewJournalEntry(
+        organisationId = prepared.context.organisationId,
+        branchId = prepared.context.branchId,
+        postingRequestId = postingRequestId,
+        fiscalPeriodId = prepared.period.period.key.fiscalPeriodId,
+        entryNumber = entryNumber,
+        entryType = prepared.request.entryType,
+        reversesJournalEntryId = prepared.request.reversesJournalEntryId,
+        dates = prepared.period.dates,
+        currencyCode = prepared.functionalCurrency,
+        functionalCurrencyCode = prepared.functionalCurrency,
+        totalDebitFunctional = prepared.totals.debit,
+        totalCreditFunctional = prepared.totals.credit,
+        lineCount = prepared.settled.size,
+        narrative = prepared.request.narrative,
+        postedAt = postedAt,
+        actorId = prepared.context.actorId,
+    )
+
+    private fun newJournalLines(
+        prepared: Prepared,
+        journalEntryId: UUID,
+    ) = prepared.settled.mapIndexed { index, leg ->
+        NewJournalLine(
+            organisationId = prepared.context.organisationId,
+            journalEntryId = journalEntryId,
+            lineNumber = index + 1,
+            leg = leg,
+            branchId = prepared.context.branchId,
+            fiscalPeriodId = prepared.period.period.key.fiscalPeriodId,
+            postingDate = prepared.period.dates.postingDate,
+            functionalCurrencyCode = prepared.functionalCurrency,
+            functionalAmount = leg.amount.amount,
+            exchangeRate = UNITY,
+            sourceModule = prepared.request.source.sourceModule,
+            actorId = prepared.context.actorId,
         )
     }
 
@@ -256,7 +326,36 @@ class PostingEngine(
             )
 
     /**
-     * Validates every leg and returns them at storage scale.
+     * Takes the posting-time lock on every distinct account the legs reference, in ascending id
+     * order, and returns each locked snapshot keyed by its id.
+     *
+     * The order is the whole design. Every transaction that locks more than one `gl_account` row -
+     * only this one does - takes them in the same ascending order, so two postings that reference
+     * the same accounts can never deadlock each other, and this lock is always the last one a
+     * posting takes, after the fiscal-period lock. It closes the account-eligibility race from the
+     * posting side: [GlAccountStore.lockForPosting] takes a shared lock that excludes, and is
+     * excluded by, [GlAccountStore.lockForStateChange]'s exclusive lock, so an account cannot be
+     * deactivated - or have its code, class or usage changed - between this call and the journal
+     * line that follows it (`docs/adr/0023-posting-idempotency-and-account-locking.md`).
+     */
+    private fun lockAccounts(
+        organisationId: UUID,
+        legs: List<PostingLeg>,
+    ): Map<UUID, GlAccount> =
+        legs
+            .map { it.accountId }
+            .distinct()
+            .sorted()
+            .associateWith { accountId ->
+                accounts.lockForPosting(organisationId, accountId)
+                    ?: throw InvalidOperationException(
+                        code = PostingErrorCodes.ACCOUNT_NOT_POSTABLE,
+                        safeDetail = "A referenced general-ledger account does not exist.",
+                    )
+            }
+
+    /**
+     * Validates every leg against its locked account and returns them at storage scale.
      *
      * Single-currency for now, and deliberately so: ADR 0019 ships no rate table, so a leg in any
      * currency but the functional one is refused rather than converted at a silent rate of one.
@@ -264,9 +363,9 @@ class PostingEngine(
      * placeholder.
      */
     private fun settleLegs(
-        context: AccountingContext,
         legs: List<PostingLeg>,
         functionalCurrency: String,
+        lockedAccounts: Map<UUID, GlAccount>,
     ): List<PostingLeg> {
         if (legs.size < MINIMUM_LEGS) {
             throw InvalidOperationException(
@@ -284,22 +383,9 @@ class PostingEngine(
                             "only; no exchange rate is configured.",
                 )
             }
-            requirePostableAccount(context.organisationId, leg.accountId)
+            GlAccountPostingPolicy.requirePostable(lockedAccounts.getValue(leg.accountId))
             leg.copy(amount = amount)
         }
-    }
-
-    private fun requirePostableAccount(
-        organisationId: UUID,
-        accountId: UUID,
-    ) {
-        val account =
-            accounts.findById(organisationId, accountId)
-                ?: throw InvalidOperationException(
-                    code = PostingErrorCodes.ACCOUNT_NOT_POSTABLE,
-                    safeDetail = "A referenced general-ledger account does not exist.",
-                )
-        GlAccountPostingPolicy.requirePostable(account)
     }
 
     private fun requireBalanced(legs: List<PostingLeg>): Totals {
@@ -314,11 +400,48 @@ class PostingEngine(
         return Totals(debit, credit)
     }
 
+    /**
+     * Refuses a correction that names a target this tenant does not hold, or whose journal has not
+     * been reversed.
+     *
+     * `uq_posting_request_corrects` already guarantees a request is replaced at most once; this is
+     * the sequencing half, that a replacement may only be posted after its target's journal was
+     * actually reversed.
+     *
+     * Called from [post], **before** the claim - unlike every check [postNew] runs - because both
+     * facts it tests are monotonic: a target either exists or it never will, and once reversed it
+     * stays reversed forever (there is no un-reversal). Checking either fact can therefore never
+     * turn a faithful replay into a spurious failure, which is exactly the property that makes
+     * [postNew]'s other checks unsafe to run before the claim. Placement matters for a second
+     * reason too: `claimPostingRequest`'s insert writes `corrects_posting_request_id`, and
+     * `fk_posting_request_corrects` would otherwise reject a nonexistent target as a raw
+     * constraint violation instead of this named [ResourceNotFoundException].
+     */
+    private fun requireValidCorrectionTarget(
+        organisationId: UUID,
+        correctsPostingRequestId: UUID?,
+    ) {
+        val targetId = correctsPostingRequestId ?: return
+        journalReads.findPostingRequest(organisationId, targetId)
+            ?: throw ResourceNotFoundException(
+                code = PostingErrorCodes.CORRECTION_TARGET_NOT_FOUND,
+                safeDetail = "The posting request named as corrected does not exist.",
+            )
+        val targetJournal = journalReads.findJournalEntryForRequest(organisationId, targetId)
+        if (targetJournal == null ||
+            journalReads.findReversalOf(organisationId, targetJournal.id) == null
+        ) {
+            throw ConflictException(
+                code = PostingErrorCodes.CORRECTION_TARGET_NOT_REVERSED,
+                safeDetail = "The posting request named as corrected has not been reversed.",
+            )
+        }
+    }
+
     private fun newRequest(
         request: LedgerPostingRequest,
         context: AccountingContext,
-        period: ResolvedPostingPeriod,
-        resolved: ResolvedLegs,
+        dates: AccountingDates,
         functionalCurrency: String,
         fingerprint: String,
     ) = NewPostingRequest(
@@ -330,9 +453,8 @@ class PostingEngine(
         sourceReference = request.source.idempotencyKey,
         eventCode = request.eventCode,
         fingerprint = fingerprint,
-        postingRuleVersionId = resolved.postingRuleVersionId,
         correctsPostingRequestId = request.correctsPostingRequestId,
-        dates = period.dates,
+        dates = dates,
         currencyCode = functionalCurrency,
         narrative = request.narrative,
         actorId = context.actorId,
@@ -348,6 +470,11 @@ class PostingEngine(
      * conflicting reuse of the identity and is refused (`INV-7`). A committed row that is still
      * `PENDING` cannot exist - the status flips in the same transaction as the journal - so it is
      * reported as a defect rather than guessed at.
+     *
+     * Never calls [LegProvider.legsFor] and never touches the period, the accounts or the tenant's
+     * postability: none of it is re-decided for a replay, because the fingerprint - computed from
+     * the caller's own inputs, never from resolved legs - is already the proof that this is the
+     * same request (`docs/adr/0023-posting-idempotency-and-account-locking.md`).
      */
     private fun replay(
         context: AccountingContext,
@@ -422,7 +549,7 @@ class PostingEngine(
         val credit: BigDecimal,
     )
 
-    /** Everything validated before the claim, handed to the write step as one value. */
+    /** Everything validated after the claim, handed to the write step as one value. */
     private data class Prepared(
         val request: LedgerPostingRequest,
         val context: AccountingContext,
@@ -430,6 +557,7 @@ class PostingEngine(
         val settled: List<PostingLeg>,
         val totals: Totals,
         val functionalCurrency: String,
+        val postingRuleVersionId: UUID?,
     )
 
     private companion object {

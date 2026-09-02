@@ -125,7 +125,18 @@ class ChartOfAccountsService(
         // so the read and the write have to sit inside the same serialised section - see
         // `lockHierarchy`.
         lockHierarchy(command.organisationId)
-        val current = requireAccount(command.organisationId, command.accountId)
+        // The account's own exclusive lock, not a plain read. Posting takes this account's shared
+        // lock before it inserts a journal_line, and never touches gl_account itself, so the
+        // account's row_version cannot move to signal that history appeared. Locking here is what
+        // makes hasJournalLines below see a posting that is concurrently in flight: either this
+        // transaction waits for the posting to commit and then sees its line, or the posting waits
+        // for this one to finish deciding whether the identity freeze applies.
+        val current =
+            accounts.lockForStateChange(command.organisationId, command.accountId)
+                ?: throw ResourceNotFoundException(
+                    code = NOT_FOUND,
+                    safeDetail = "The general-ledger account does not exist.",
+                )
 
         val proposed =
             current.copy(

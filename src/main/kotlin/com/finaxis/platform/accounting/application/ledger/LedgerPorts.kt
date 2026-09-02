@@ -12,6 +12,11 @@ import java.util.UUID
 /**
  * A posting request before the database has given it an identity: the durable source lineage and
  * the dates the engine resolved. Never carries an `id`; the database default generates it.
+ *
+ * Carries no `postingRuleVersionId`. Issue #89 moved the idempotency claim ahead of leg
+ * resolution, so the exact rule version - which the legs alone determine - is not yet known when
+ * this is built; [JournalStore.markPosted] writes it once resolution has happened, for a request
+ * this transaction actually claimed.
  */
 data class NewPostingRequest(
     val organisationId: UUID,
@@ -22,7 +27,6 @@ data class NewPostingRequest(
     val sourceReference: String,
     val eventCode: String,
     val fingerprint: String,
-    val postingRuleVersionId: UUID?,
     val correctsPostingRequestId: UUID?,
     val dates: AccountingDates,
     val currencyCode: String,
@@ -188,11 +192,19 @@ interface JournalStore {
         journalEntryId: UUID,
     ): JournalTotals
 
-    /** Moves the request to `POSTED` and stamps `posted_at`. */
+    /**
+     * Moves the request to `POSTED`, stamps `posted_at`, and records the rule version that
+     * resolved its legs.
+     *
+     * [postingRuleVersionId] is written here rather than at the claim, because the claim happens
+     * before legs - and therefore the rule version - are resolved (issue #89). Null for a
+     * reversal or a manual journal, exactly as the column has always documented.
+     */
     fun markPosted(
         organisationId: UUID,
         postingRequestId: UUID,
         postedAt: Instant,
+        postingRuleVersionId: UUID?,
         actorId: UUID,
     )
 

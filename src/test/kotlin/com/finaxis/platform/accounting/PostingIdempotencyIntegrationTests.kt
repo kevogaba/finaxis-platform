@@ -8,8 +8,10 @@ import com.finaxis.platform.accounting.application.ledger.PostingLineageService
 import com.finaxis.platform.accounting.application.ledger.ResolvedLegs
 import com.finaxis.platform.accounting.application.ledger.SourceEntityLineageQuery
 import com.finaxis.platform.accounting.application.ledger.SourceLineageQuery
+import com.finaxis.platform.accounting.application.posting.FinancialFact
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.application.posting.PostingReceipt
+import com.finaxis.platform.accounting.application.posting.PostingService
 import com.finaxis.platform.accounting.domain.AccountingContext
 import com.finaxis.platform.accounting.domain.AccountingSourceReference
 import com.finaxis.platform.accounting.domain.JournalEntryType
@@ -20,6 +22,7 @@ import com.finaxis.platform.accounting.domain.PostingSide
 import com.finaxis.platform.accounting.schema.JournalSchemaFixture
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.context.ActorContext
 import com.finaxis.platform.common.context.BranchContext
 import com.finaxis.platform.common.context.RequestContext
@@ -30,7 +33,10 @@ import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_PERIOD
 import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_YEAR
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
+import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.JOURNAL_ENTRY
+import com.finaxis.platform.jooq.tables.references.ORGANISATION
+import com.finaxis.platform.jooq.tables.references.POSTING_REQUEST
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.withRequestContext
@@ -67,6 +73,7 @@ import kotlin.test.assertTrue
 class PostingIdempotencyIntegrationTests(
     private val engine: PostingEngine,
     private val lineage: PostingLineageService,
+    private val postingService: PostingService,
     private val dsl: DSLContext,
     private val transactionManager: PlatformTransactionManager,
     organisationProvisioningService: OrganisationProvisioningService,
@@ -74,6 +81,11 @@ class PostingIdempotencyIntegrationTests(
     private val tenants = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
     private val schema = JournalSchemaFixture(dsl)
     private val transactions = TransactionTemplate(transactionManager)
+
+    // Correction lineage needs a reversal, and a reversal needs a checker distinct from the maker
+    // who posted the original (`journal.self_reversal`) - reused rather than re-implemented, so
+    // this suite and JournalReversalIntegrationTests do not drift on how a checker is provisioned.
+    private val reversals = JournalReversalFixture(dsl, engine, tenants, schema, transactions)
 
     @Test
     fun `a sequential duplicate returns the same receipt and one financial effect`() {
@@ -265,6 +277,132 @@ class PostingIdempotencyIntegrationTests(
         )
     }
 
+    @Test
+    fun `a retry replays even after the fiscal period has since closed`() {
+        // postNew is the only place the period is consulted; a replay never reaches it, so closing
+        // the period between the original post and its retry must not turn the retry into
+        // `accounting.fiscal_period_closed` (issue #89's core claim-ordering guarantee).
+        val tenant = provisionTenant("idem-period-closed")
+        val original = inContext(tenant) { transactions.execute { post(tenant, "dep-x") }!! }
+
+        dsl
+            .update(ACCOUNTING_FISCAL_PERIOD)
+            .set(ACCOUNTING_FISCAL_PERIOD.STATUS, "CLOSED")
+            .where(ACCOUNTING_FISCAL_PERIOD.ORGANISATION_ID.eq(tenant.organisationId))
+            .execute()
+
+        val retried = inContext(tenant) { transactions.execute { post(tenant, "dep-x") }!! }
+
+        assertEquals(original.journalEntryId, retried.journalEntryId)
+        assertEquals(1, journalCount(tenant))
+    }
+
+    @Test
+    fun `a retry replays even after an account has since been deactivated`() {
+        // Same guarantee from the account side: a replay never calls GlAccountStore.lockForPosting,
+        // so deactivating a referenced account between the original post and its retry must not
+        // turn the retry into `accounting.account_not_postable`.
+        val tenant = provisionTenant("idem-account-inactive")
+        val original = inContext(tenant) { transactions.execute { post(tenant, "dep-x") }!! }
+
+        dsl
+            .update(GL_ACCOUNT)
+            .set(GL_ACCOUNT.STATUS, "INACTIVE")
+            .where(GL_ACCOUNT.ID.eq(tenant.debitAccountId))
+            .execute()
+
+        val retried = inContext(tenant) { transactions.execute { post(tenant, "dep-x") }!! }
+
+        assertEquals(original.journalEntryId, retried.journalEntryId)
+        assertEquals(1, journalCount(tenant))
+    }
+
+    @Test
+    fun `a retry replays even after the organisation has since been suspended`() {
+        // requireTenantPostable runs only in postNew; LifecycleAccountingTenantAdapter reads this
+        // column directly with no cache, so flipping it is a faithful simulation of a suspension
+        // landing between the original post and its retry - which must not become
+        // `accounting.organisation_not_postable`.
+        val tenant = provisionTenant("idem-org-suspended")
+        val original = inContext(tenant) { transactions.execute { post(tenant, "dep-x") }!! }
+
+        dsl
+            .update(ORGANISATION)
+            .set(ORGANISATION.STATUS, "SUSPENDED")
+            .where(ORGANISATION.ID.eq(tenant.organisationId))
+            .execute()
+
+        val retried = inContext(tenant) { transactions.execute { post(tenant, "dep-x") }!! }
+
+        assertEquals(original.journalEntryId, retried.journalEntryId)
+        assertEquals(1, journalCount(tenant))
+    }
+
+    @Test
+    fun `a correction naming a target this tenant does not hold is refused`() {
+        val tenant = provisionTenant("idem-correction-unknown")
+
+        val failure =
+            assertFailsWith<ResourceNotFoundException> {
+                inContext(tenant) {
+                    transactions.execute { post(tenant, "dep-x", corrects = uuidV7()) }
+                }
+            }
+
+        assertEquals(PostingErrorCodes.CORRECTION_TARGET_NOT_FOUND, failure.code)
+        assertEquals(0, journalCount(tenant))
+    }
+
+    @Test
+    fun `a correction naming a target that was never reversed is refused`() {
+        val tenant = provisionTenant("idem-correction-unreversed")
+        val original = inContext(tenant) { transactions.execute { post(tenant, "dep-original") }!! }
+
+        val failure =
+            assertFailsWith<ConflictException> {
+                inContext(tenant) {
+                    transactions.execute {
+                        post(tenant, "dep-correction", corrects = original.postingRequestId)
+                    }
+                }
+            }
+
+        assertEquals(PostingErrorCodes.CORRECTION_TARGET_NOT_REVERSED, failure.code)
+        assertEquals(1, journalCount(tenant), "only the unreversed original was ever written")
+    }
+
+    @Test
+    fun `a correction naming a reversed target succeeds`() {
+        val tenant = reversals.provisionTenant("idem-correction-reversed")
+        val original = reversals.postOriginal(tenant, debit = "100.00")
+        reversals.inContext(tenant, tenant.checker) {
+            postingService.reverse(
+                reversals.command(tenant, original.journalEntryId, reason = "Wrong amount"),
+            )
+        }
+
+        val correction =
+            reversals.inContext(tenant, JournalReversalFixture.MAKER) {
+                transactions.execute {
+                    reversals.postExplicit(
+                        tenant,
+                        "dep-corrected",
+                        debit = "110.00",
+                        corrects = original.postingRequestId,
+                    )
+                }!!
+            }
+
+        assertEquals(
+            original.postingRequestId,
+            dsl
+                .select(POSTING_REQUEST.CORRECTS_POSTING_REQUEST_ID)
+                .from(POSTING_REQUEST)
+                .where(POSTING_REQUEST.ID.eq(correction.postingRequestId))
+                .fetchOne(POSTING_REQUEST.CORRECTS_POSTING_REQUEST_ID),
+        )
+    }
+
     // ---- helpers ------------------------------------------------------------------------------
 
     private data class Tenant(
@@ -342,6 +480,7 @@ class PostingIdempotencyIntegrationTests(
         module: String = "savings",
         entityId: UUID = UUID.nameUUIDFromBytes(reference.toByteArray()),
         narrative: String? = null,
+        corrects: UUID? = null,
     ): PostingReceipt =
         engine.post(
             LedgerPostingRequest(
@@ -350,6 +489,11 @@ class PostingIdempotencyIntegrationTests(
                 eventCode = "SAVINGS_DEPOSIT",
                 entryType = JournalEntryType.STANDARD,
                 narrative = narrative,
+                correctsPostingRequestId = corrects,
+                // A real DefaultPostingService caller carries these from PostingIntent.Facts; this
+                // helper calls the engine directly, so it supplies the same shape by hand to keep
+                // the amount-conflict scenario faithful to how a product module actually posts.
+                financialFacts = listOf(FinancialFact("AMOUNT", kes(amount))),
             ),
         ) {
             ResolvedLegs(

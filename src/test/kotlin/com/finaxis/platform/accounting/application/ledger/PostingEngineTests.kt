@@ -9,6 +9,7 @@ import com.finaxis.platform.accounting.application.GlAccountPage
 import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.PostingPeriodResolver
 import com.finaxis.platform.accounting.application.port.outbound.AccountingContextLookup
+import com.finaxis.platform.accounting.application.posting.FinancialFact
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.domain.AccountClass
 import com.finaxis.platform.accounting.domain.AccountCode
@@ -26,10 +27,10 @@ import com.finaxis.platform.accounting.domain.MoneyPolicy
 import com.finaxis.platform.accounting.domain.PostingLeg
 import com.finaxis.platform.accounting.domain.PostingRequestStatus
 import com.finaxis.platform.accounting.domain.PostingSide
-import com.finaxis.platform.common.application.ApplicationException
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
@@ -56,6 +57,12 @@ import kotlin.test.assertTrue
  * The real `PostingPeriodResolver` is used over faked ports rather than faked itself, so the
  * period protocol the engine depends on is exercised as it will run. What the database enforces -
  * constraints, locks, the verification read against real rows - is `PostingEngineIntegrationTests`.
+ *
+ * Since issue #89 (ADR 0023) the claim comes before validation, so [assertNothingWritten] checks
+ * for no *committed* effect - no journal, no posted request - rather than no row at all: a request
+ * this transaction claimed and then refused still leaves a `PENDING` row in [FakeJournalStore],
+ * exactly as a real `posting_request` insert would exist until the surrounding transaction rolls
+ * back. The fake cannot model the rollback itself, only its outcome.
  */
 class PostingEngineTests {
     private val context = AccountingContext(ORGANISATION_ID, BRANCH_ID, ACTOR_ID, "corr-1")
@@ -78,6 +85,7 @@ class PostingEngineTests {
                 clock,
             ),
             accounts,
+            journals,
             journals,
             numbers,
             clock,
@@ -118,9 +126,20 @@ class PostingEngineTests {
     }
 
     @Test
-    fun `the legs are asked for after the posting date is known`() {
+    fun `the rule version is recorded when the request is marked posted`() {
+        val versionId = uuidV7()
+
+        engine.post(request()) { dates -> ResolvedLegs(legs(), versionId) }
+
+        assertEquals(versionId, journals.requests.single().postingRuleVersionId)
+    }
+
+    @Test
+    fun `the legs are asked for only after the period is locked and validated`() {
         // A rule-resolved posting cannot know its legs until the posting date - and so the rule
-        // version in force - is resolved. The provider receives the resolved dates.
+        // version in force - is resolved. The provider receives the resolved, locked period's
+        // dates, and is never called at all for a request that turns out to replay one already
+        // posted.
         var seen: LocalDate? = null
         engine.post(request()) { dates ->
             seen = dates.postingDate
@@ -128,6 +147,7 @@ class PostingEngineTests {
         }
 
         assertEquals(TODAY, seen)
+        assertTrue(periods.lockRequests > 0, "the period must be locked before legs are resolved")
     }
 
     @Test
@@ -184,6 +204,14 @@ class PostingEngineTests {
     }
 
     @Test
+    fun `accounts are locked in ascending id order before their eligibility is validated`() {
+        engine.post(request(), explicit(legs()))
+
+        val expected = listOf(DEBIT_ACCOUNT, CREDIT_ACCOUNT).sorted()
+        assertEquals(expected, accounts.postingLockOrder)
+    }
+
+    @Test
     fun `a closed period commits nothing`() {
         periods.locked = snapshot(FiscalPeriodStatus.CLOSED)
 
@@ -209,6 +237,7 @@ class PostingEngineTests {
         }
         assertTrue(periods.lockRequests == 0, "no period was touched")
         assertNothingWritten()
+        assertTrue(journals.requests.isEmpty(), "the source reference was never even claimed")
     }
 
     @Test
@@ -245,6 +274,11 @@ class PostingEngineTests {
 
         assertEquals(PostingErrorCodes.FUNCTIONAL_CURRENCY_UNAVAILABLE, failure.code)
         assertNothingWritten()
+        assertTrue(
+            journals.requests.isEmpty(),
+            "the functional currency builds the claim itself, so it is checked before the claim " +
+                "is even attempted",
+        )
     }
 
     @Test
@@ -272,17 +306,91 @@ class PostingEngineTests {
     }
 
     @Test
-    fun `the same reference with a different request is a conflict never a second effect`() {
+    fun `the same reference with a different event or branch is a conflict not a replay`() {
         engine.post(request(), explicit(legs()))
+        journals.commitClaims()
+
+        val differentEvent =
+            assertFailsWith<ConflictException> {
+                engine.post(request(eventCode = "SAVINGS_WITHDRAWAL"), explicit(legs()))
+            }
+        assertEquals(PostingErrorCodes.POSTING_REQUEST_CONFLICT, differentEvent.code)
+
+        // A caller may not claim a *different* branch than the one it authenticated under - the
+        // context-mismatch test above covers that - but it may claim tenant level (no branch) when
+        // it was made under one, and that is a materially different posting from the branch-scoped
+        // original.
+        val differentBranch =
+            assertFailsWith<ConflictException> {
+                engine.post(request(context = context.copy(branchId = null)), explicit(legs()))
+            }
+        assertEquals(PostingErrorCodes.POSTING_REQUEST_CONFLICT, differentBranch.code)
+
+        assertEquals(1, journals.entries.size)
+    }
+
+    /**
+     * The complement of the "different legs" test below: a rule-resolved posting - one whose
+     * request carries [LedgerPostingRequest.financialFacts] - still gets amount-level conflict
+     * detection, because the facts are the caller's own asserted amounts and are safe to
+     * fingerprint before any rule ever runs. This is what closes the gap an earlier revision of
+     * this change left open, where dropping the resolved legs from the fingerprint silently
+     * dropped every amount with them.
+     */
+    @Test
+    fun `a retry with a different financial fact amount is a conflict`() {
+        engine.post(request(financialFacts = listOf(fact("PRINCIPAL", "500.00"))), explicit(legs()))
         journals.commitClaims()
 
         val failure =
             assertFailsWith<ConflictException> {
-                engine.post(request(), explicit(legs(amount = "250.00")))
+                engine.post(
+                    request(financialFacts = listOf(fact("PRINCIPAL", "501.00"))),
+                    explicit(legs()),
+                )
             }
 
         assertEquals(PostingErrorCodes.POSTING_REQUEST_CONFLICT, failure.code)
         assertEquals(1, journals.entries.size)
+    }
+
+    /**
+     * [com.finaxis.platform.accounting.domain.PostingRuleSelector] can route the same event code
+     * through a different rule by product class, so a retry that only changes it must conflict
+     * rather than replay - otherwise it would silently reuse a journal posted under a rule the
+     * caller no longer asked for.
+     */
+    @Test
+    fun `a retry with a different product class is a conflict`() {
+        engine.post(request(productClass = "SAVINGS:REGULAR"), explicit(legs()))
+        journals.commitClaims()
+
+        val failure =
+            assertFailsWith<ConflictException> {
+                engine.post(request(productClass = "SAVINGS:PREMIUM"), explicit(legs()))
+            }
+
+        assertEquals(PostingErrorCodes.POSTING_REQUEST_CONFLICT, failure.code)
+        assertEquals(1, journals.entries.size)
+    }
+
+    /**
+     * The behaviour change ADR 0023 documents: the fingerprint no longer covers the resolved legs,
+     * because covering them would require resolving a rule-backed posting's legs before the claim
+     * - exactly the staleness issue #89 removes. A retry that differs only in the legs its provider
+     * would now produce is indistinguishable from a faithful retry by the fingerprint alone, and
+     * `replay` never asks the provider for legs at all, so the second call's legs are never even
+     * looked at.
+     */
+    @Test
+    fun `a retry with different legs from the same provider still replays`() {
+        val first = engine.post(request(), explicit(legs()))
+        journals.commitClaims()
+
+        val second = engine.post(request(), explicit(legs(amount = "250.00")))
+
+        assertEquals(first.journalEntryId, second.journalEntryId)
+        assertEquals(1, journals.entries.size, "the second call's legs were never written")
     }
 
     @Test
@@ -324,22 +432,142 @@ class PostingEngineTests {
         assertNotNull(stored.postedAt)
     }
 
+    // ---- issue #89: a replay never re-validates state that could have drifted -----------------
+
+    @Test
+    fun `a retry replays even after the period has since closed`() {
+        val first = engine.post(request(), explicit(legs()))
+        journals.commitClaims()
+        periods.locked = snapshot(FiscalPeriodStatus.CLOSED)
+
+        val second = engine.post(request(), explicit(legs()))
+
+        assertEquals(first.journalEntryId, second.journalEntryId)
+    }
+
+    @Test
+    fun `a retry replays even after the organisation has since been suspended`() {
+        val first = engine.post(request(), explicit(legs()))
+        journals.commitClaims()
+        tenants.organisationPostable = false
+
+        val second = engine.post(request(), explicit(legs()))
+
+        assertEquals(first.journalEntryId, second.journalEntryId)
+    }
+
+    @Test
+    fun `a retry replays even after an account has since been deactivated`() {
+        val first = engine.post(request(), explicit(legs()))
+        journals.commitClaims()
+        accounts.put(DEBIT_ACCOUNT, GlAccountStatus.INACTIVE)
+
+        val second = engine.post(request(), explicit(legs()))
+
+        assertEquals(first.journalEntryId, second.journalEntryId)
+    }
+
+    @Test
+    fun `a retry replays even when the leg provider would now throw`() {
+        // The rule-resolution failure mode issue #89 point 6 describes: a retroactive supersession
+        // or backdated retirement can make the resolver refuse to resolve the same event it once
+        // did. A replay must not call the provider at all, so it cannot be affected.
+        val first = engine.post(request(), explicit(legs()))
+        journals.commitClaims()
+        val throwingProvider =
+            LegProvider { error("the resolver would refuse to resolve this event now") }
+
+        val second = engine.post(request(), throwingProvider)
+
+        assertEquals(first.journalEntryId, second.journalEntryId)
+    }
+
+    // ---- issue #89: correction lineage -----------------------------------------------------
+
+    @Test
+    fun `a correction naming a target this tenant does not hold is refused`() {
+        val failure =
+            assertFailsWith<ResourceNotFoundException> {
+                engine.post(request(correctsPostingRequestId = uuidV7()), explicit(legs()))
+            }
+
+        assertEquals(PostingErrorCodes.CORRECTION_TARGET_NOT_FOUND, failure.code)
+        assertNothingWritten()
+    }
+
+    @Test
+    fun `a correction naming a target that was never reversed is refused`() {
+        val original = engine.post(request(), explicit(legs()))
+        journals.commitClaims()
+
+        val failure =
+            assertFailsWith<ConflictException> {
+                engine.post(
+                    request(
+                        source = SOURCE_2,
+                        correctsPostingRequestId = original.postingRequestId,
+                    ),
+                    explicit(legs()),
+                )
+            }
+
+        assertEquals(PostingErrorCodes.CORRECTION_TARGET_NOT_REVERSED, failure.code)
+    }
+
+    @Test
+    fun `a correction naming a reversed target succeeds`() {
+        val original = engine.post(request(), explicit(legs()))
+        journals.commitClaims()
+        journals.reversedJournalIds += original.journalEntryId
+
+        val correction =
+            engine.post(
+                request(source = SOURCE_2, correctsPostingRequestId = original.postingRequestId),
+                explicit(legs()),
+            )
+
+        assertEquals(2, journals.entries.size)
+        assertEquals(
+            original.postingRequestId,
+            journals.requests
+                .single { it.sourceReference == SOURCE_2.idempotencyKey }
+                .correctsPostingRequestId,
+        )
+        assertNotNull(correction)
+    }
+
     private fun assertNothingWritten() {
-        assertTrue(journals.requests.isEmpty(), "no request may survive a refusal")
         assertTrue(journals.entries.isEmpty(), "no header may survive a refusal")
         assertTrue(journals.lines.isEmpty(), "no line may survive a refusal")
+        assertTrue(
+            journals.requests.none { it.status == PostingRequestStatus.POSTED },
+            "no request may be committed as posted after a refusal",
+        )
     }
 
     private fun request(
         context: AccountingContext = this.context,
+        source: AccountingSourceReference = SOURCE_1,
+        eventCode: String = "SAVINGS_DEPOSIT",
         narrative: String? = null,
+        correctsPostingRequestId: UUID? = null,
+        financialFacts: List<FinancialFact> = emptyList(),
+        productClass: String? = null,
     ) = LedgerPostingRequest(
         context = context,
-        source = AccountingSourceReference("savings", "SAVINGS_DEPOSIT", SOURCE_ID, "dep-1"),
-        eventCode = "SAVINGS_DEPOSIT",
+        source = source,
+        eventCode = eventCode,
         entryType = JournalEntryType.STANDARD,
         narrative = narrative,
+        correctsPostingRequestId = correctsPostingRequestId,
+        financialFacts = financialFacts,
+        productClass = productClass,
     )
+
+    private fun fact(
+        code: String,
+        amount: String,
+    ) = FinancialFact(code, MonetaryAmount(BigDecimal(amount), "KES"))
 
     private fun explicit(legs: List<PostingLeg>) = LegProvider { ResolvedLegs(legs, null) }
 
@@ -446,6 +674,10 @@ class PostingEngineTests {
 
     private class FakeGlAccountStore : GlAccountStore {
         private val accounts = mutableMapOf<UUID, GlAccount>()
+        private val activeRuleAccounts = mutableSetOf<UUID>()
+
+        /** Every account id locked via [lockForPosting], in call order, cleared by no test. */
+        val postingLockOrder = mutableListOf<UUID>()
 
         fun put(
             id: UUID,
@@ -491,6 +723,19 @@ class PostingEngineTests {
             accountId: UUID,
         ) = findById(organisationId, accountId)
 
+        override fun lockForPosting(
+            organisationId: UUID,
+            accountId: UUID,
+        ): GlAccount? {
+            postingLockOrder += accountId
+            return findById(organisationId, accountId)
+        }
+
+        override fun hasActivePostingRuleLegs(
+            organisationId: UUID,
+            accountId: UUID,
+        ) = accountId in activeRuleAccounts
+
         override fun hasChildren(
             organisationId: UUID,
             accountId: UUID,
@@ -509,11 +754,13 @@ class PostingEngineTests {
     }
 
     /**
-     * In-memory journal store. Claims are "uncommitted" until [commitClaims] is called, mirroring
-     * that a second caller only sees a committed row; a claim within the same test before that is
-     * treated as this transaction's own insert.
+     * In-memory journal store and read store. Claims are "uncommitted" until [commitClaims] is
+     * called, mirroring that a second caller only sees a committed row; a claim within the same
+     * test before that is treated as this transaction's own insert.
      */
-    private class FakeJournalStore : JournalStore {
+    private class FakeJournalStore :
+        JournalStore,
+        JournalReadStore {
         class StoredRequest(
             val id: UUID,
             val sourceModule: String,
@@ -521,16 +768,19 @@ class PostingEngineTests {
             val sourceReference: String,
             val eventCode: String,
             val fingerprint: String,
+            val correctsPostingRequestId: UUID?,
             val narrative: String?,
             val correlationId: String?,
             var status: PostingRequestStatus,
             var postedAt: Instant?,
+            var postingRuleVersionId: UUID? = null,
         )
 
         val requests = mutableListOf<StoredRequest>()
         val entries = mutableListOf<NewJournalEntry>()
         val entryIds = mutableListOf<UUID>()
         val lines = mutableListOf<NewJournalLine>()
+        val reversedJournalIds = mutableSetOf<UUID>()
         var dropLastLine = false
         private val committed = mutableSetOf<UUID>()
 
@@ -551,16 +801,17 @@ class PostingEngineTests {
             val id = uuidV7()
             requests +=
                 StoredRequest(
-                    id,
-                    request.sourceModule,
-                    request.sourceEntityType,
-                    request.sourceReference,
-                    request.eventCode,
-                    request.fingerprint,
-                    request.narrative,
-                    request.correlationId,
-                    PostingRequestStatus.PENDING,
-                    null,
+                    id = id,
+                    sourceModule = request.sourceModule,
+                    sourceEntityType = request.sourceEntityType,
+                    sourceReference = request.sourceReference,
+                    eventCode = request.eventCode,
+                    fingerprint = request.fingerprint,
+                    correctsPostingRequestId = request.correctsPostingRequestId,
+                    narrative = request.narrative,
+                    correlationId = request.correlationId,
+                    status = PostingRequestStatus.PENDING,
+                    postedAt = null,
                 )
             return PostingRequestClaim.Claimed(id)
         }
@@ -590,11 +841,13 @@ class PostingEngineTests {
             organisationId: UUID,
             postingRequestId: UUID,
             postedAt: Instant,
+            postingRuleVersionId: UUID?,
             actorId: UUID,
         ) {
             requests.single { it.id == postingRequestId }.apply {
                 status = PostingRequestStatus.POSTED
                 this.postedAt = postedAt
+                this.postingRuleVersionId = postingRuleVersionId
             }
         }
 
@@ -605,9 +858,66 @@ class PostingEngineTests {
             entries
                 .indexOfFirst { it.postingRequestId == postingRequestId }
                 .takeIf { it >= 0 }
-                ?.let(
-                    ::view,
-                )
+                ?.let(::view)
+
+        override fun findJournalEntry(
+            organisationId: UUID,
+            journalEntryId: UUID,
+        ): JournalEntryView? = entryIds.indexOf(journalEntryId).takeIf { it >= 0 }?.let(::view)
+
+        override fun findReversalOf(
+            organisationId: UUID,
+            journalEntryId: UUID,
+        ): JournalEntryView? = if (journalEntryId in reversedJournalIds) view(0) else null
+
+        override fun findPostingRequest(
+            organisationId: UUID,
+            postingRequestId: UUID,
+        ): PostingRequestView? = requests.find { it.id == postingRequestId }?.let(::toRequestView)
+
+        override fun findPostingRequestBySource(
+            organisationId: UUID,
+            sourceModule: String,
+            sourceReference: String,
+        ): PostingRequestView? =
+            requests
+                .find { it.sourceModule == sourceModule && it.sourceReference == sourceReference }
+                ?.let(::toRequestView)
+
+        override fun listPostingRequestsForEntity(
+            organisationId: UUID,
+            sourceModule: String,
+            sourceEntityType: String,
+            sourceEntityId: UUID,
+            beforeId: UUID?,
+            pageSize: Int,
+        ): List<PostingRequestView> = emptyList()
+
+        override fun findJournalLines(
+            organisationId: UUID,
+            journalEntryId: UUID,
+        ): List<JournalLineView> = emptyList()
+
+        private fun toRequestView(stored: StoredRequest) =
+            PostingRequestView(
+                id = stored.id,
+                organisationId = ORGANISATION_ID,
+                branchId = BRANCH_ID,
+                sourceModule = stored.sourceModule,
+                sourceEntityType = stored.sourceEntityType,
+                sourceEntityId = SOURCE_ID,
+                sourceReference = stored.sourceReference,
+                eventCode = stored.eventCode,
+                status = stored.status,
+                postingRuleVersionId = stored.postingRuleVersionId,
+                correctsPostingRequestId = stored.correctsPostingRequestId,
+                postingDate = TODAY,
+                businessDate = TODAY,
+                narrative = stored.narrative,
+                postedAt = stored.postedAt,
+                requestedBy = ACTOR_ID,
+                correlationId = stored.correlationId,
+            )
 
         private fun view(index: Int): JournalEntryView {
             val entry = entries[index]
@@ -655,6 +965,8 @@ class PostingEngineTests {
         val CREDIT_ACCOUNT: UUID = uuidV7()
         val TODAY: LocalDate = LocalDate.of(2026, 8, 15)
         val NOW: Instant = Instant.parse("2026-08-15T10:00:00Z")
+        val SOURCE_1 = AccountingSourceReference("savings", "SAVINGS_DEPOSIT", SOURCE_ID, "dep-1")
+        val SOURCE_2 = AccountingSourceReference("savings", "SAVINGS_DEPOSIT", SOURCE_ID, "dep-2")
 
         @Suppress("unused")
         val SCALE = MoneyPolicy.STORAGE_SCALE

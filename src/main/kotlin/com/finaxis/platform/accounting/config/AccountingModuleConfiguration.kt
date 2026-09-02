@@ -10,6 +10,7 @@ import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.PostingPeriodResolver
 import com.finaxis.platform.accounting.application.ledger.DefaultPostingService
 import com.finaxis.platform.accounting.application.ledger.JournalNumberAllocator
+import com.finaxis.platform.accounting.application.ledger.JournalReadStore
 import com.finaxis.platform.accounting.application.ledger.JournalReversalService
 import com.finaxis.platform.accounting.application.ledger.JournalStore
 import com.finaxis.platform.accounting.application.ledger.PostingEngine
@@ -68,6 +69,7 @@ class AccountingModuleConfiguration {
      * unit tests construct it directly with fakes, and because the engine and its stores became
      * beans in the same change as the `V7` tables they write.
      */
+    @Suppress("LongParameterList")
     @Bean
     fun postingEngine(
         contextLookup: AccountingContextLookup,
@@ -75,9 +77,19 @@ class AccountingModuleConfiguration {
         periods: PostingPeriodResolver,
         accounts: GlAccountStore,
         journals: JournalStore,
+        journalReads: JournalReadStore,
         numbers: JournalNumberAllocator,
         clock: Clock,
-    ) = PostingEngine(contextLookup, tenants, periods, accounts, journals, numbers, clock)
+    ) = PostingEngine(
+        contextLookup,
+        tenants,
+        periods,
+        accounts,
+        journals,
+        journalReads,
+        numbers,
+        clock,
+    )
 
     /**
      * Resolves a product module's intent against the rule version effective on the posting date.

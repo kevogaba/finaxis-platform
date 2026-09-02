@@ -11,8 +11,11 @@ import com.finaxis.platform.accounting.domain.AccountUsage
 import com.finaxis.platform.accounting.domain.ChartHierarchyPolicy
 import com.finaxis.platform.accounting.domain.GlAccount
 import com.finaxis.platform.accounting.domain.GlAccountStatus
+import com.finaxis.platform.accounting.domain.PostingRuleVersionStatus
 import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.JOURNAL_LINE
+import com.finaxis.platform.jooq.tables.references.POSTING_RULE_LEG
+import com.finaxis.platform.jooq.tables.references.POSTING_RULE_VERSION
 import org.jooq.DSLContext
 import org.jooq.Record
 import org.jooq.impl.DSL
@@ -72,6 +75,54 @@ class JooqGlAccountStore(
             .fetchOne()
             ?.let(::toAccount)
     }
+
+    /**
+     * `FOR SHARE`, with the tenant predicate in the same statement as the lock.
+     *
+     * Many postings hold this lock on the same account concurrently - it does not conflict with
+     * itself - but it does conflict with [lockForStateChange]'s exclusive lock, so a lifecycle
+     * transition on the account waits for every in-flight posting against it, and a posting waits
+     * for a transition already in progress.
+     */
+    override fun lockForPosting(
+        organisationId: UUID,
+        accountId: UUID,
+    ): GlAccount? {
+        requireActiveTransaction("Locking a general-ledger account for posting")
+        return selectAccount()
+            .where(GL_ACCOUNT.ORGANISATION_ID.eq(organisationId))
+            .and(GL_ACCOUNT.ID.eq(accountId))
+            .forShare()
+            .fetchOne()
+            ?.let(::toAccount)
+    }
+
+    /**
+     * An `EXISTS` join from `posting_rule_leg` to `posting_rule_version`, served by
+     * `idx_posting_rule_leg_account` on the leg side and the version's primary key on the other -
+     * bounded and index-backed, never a count.
+     *
+     * Matches every *approved* status - `ACTIVE`, `SUPERSEDED` and `RETIRED` - not only `ACTIVE`:
+     * [PostingRuleVersion.governs] resolves a posting against whichever approved version's
+     * effective window covers the posting date, so a backdated posting can still be routed through
+     * a `SUPERSEDED` or `RETIRED` version. Only `DRAFT` and `PENDING_APPROVAL` are truly
+     * unreachable by the resolver.
+     */
+    override fun hasActivePostingRuleLegs(
+        organisationId: UUID,
+        accountId: UUID,
+    ): Boolean =
+        dsl.fetchExists(
+            DSL
+                .selectOne()
+                .from(POSTING_RULE_LEG)
+                .join(POSTING_RULE_VERSION)
+                .on(POSTING_RULE_VERSION.ID.eq(POSTING_RULE_LEG.POSTING_RULE_VERSION_ID))
+                .and(POSTING_RULE_VERSION.ORGANISATION_ID.eq(POSTING_RULE_LEG.ORGANISATION_ID))
+                .where(POSTING_RULE_LEG.ORGANISATION_ID.eq(organisationId))
+                .and(POSTING_RULE_LEG.GL_ACCOUNT_ID.eq(accountId))
+                .and(POSTING_RULE_VERSION.STATUS.`in`(APPROVED_STATUS_NAMES)),
+        )
 
     override fun findByCode(
         organisationId: UUID,
@@ -350,4 +401,9 @@ class JooqGlAccountStore(
             controlSubledgerKind =
                 row.get(GL_ACCOUNT.CONTROL_SUBLEDGER_KIND)?.let(ControlSubledgerKind::valueOf),
         )
+
+    private companion object {
+        val APPROVED_STATUS_NAMES: List<String> =
+            PostingRuleVersionStatus.entries.filter { it.isApproved }.map { it.name }
+    }
 }
