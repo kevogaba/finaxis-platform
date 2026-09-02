@@ -118,6 +118,36 @@ object PostingErrorCodes {
     /** This posting-rule operation requires a reason, and the reason cannot be blank. */
     const val POSTING_RULE_REASON_REQUIRED = "accounting.posting_rule_reason_required"
 
+    /** A control account is postable, names one sub-ledger kind, and refuses manual posting. */
+    const val CONTROL_ACCOUNT_INVALID = "accounting.control_account_invalid"
+
+    /** A reconciliation proves a date that has happened, not one that has not. */
+    const val RECONCILIATION_DATE_IN_FUTURE = "accounting.reconciliation_date_in_future"
+
+    /** A sub-ledger balance carries more precision than the evidence row can store. */
+    const val SUBLEDGER_BALANCE_PRECISION = "accounting.subledger_balance_precision"
+
+    /** The account is not a control account, so there is no sub-ledger to prove it against. */
+    const val NOT_A_CONTROL_ACCOUNT = "accounting.not_a_control_account"
+
+    /** No module implements the sub-ledger proof for this control class yet. */
+    const val SUBLEDGER_PROVIDER_MISSING = "accounting.subledger_provider_missing"
+
+    /** The reconciliation run does not exist in the tenant. */
+    const val RECONCILIATION_RUN_NOT_FOUND = "accounting.reconciliation_run_not_found"
+
+    /** Only a BREAK can be resolved. */
+    const val RECONCILIATION_NOT_A_BREAK = "accounting.reconciliation_not_a_break"
+
+    /** The actor who ran a reconciliation cannot resolve its break. */
+    const val RECONCILIATION_SELF_RESOLUTION = "accounting.reconciliation_self_resolution"
+
+    /** Resolving a reconciliation break requires a reason. */
+    const val RECONCILIATION_REASON_REQUIRED = "accounting.reconciliation_reason_required"
+
+    /** A reconciliation tolerance cannot be negative. */
+    const val RECONCILIATION_TOLERANCE_INVALID = "accounting.reconciliation_tolerance_invalid"
+
     /** The fiscal period is already in the state the caller asked for. */
     const val PERIOD_ALREADY_IN_STATE = "accounting.fiscal_period_already_in_state"
 

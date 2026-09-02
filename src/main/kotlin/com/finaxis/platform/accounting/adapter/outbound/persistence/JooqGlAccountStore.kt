@@ -1,5 +1,6 @@
 package com.finaxis.platform.accounting.adapter.outbound.persistence
 
+import com.finaxis.platform.accounting.ControlSubledgerKind
 import com.finaxis.platform.accounting.application.GlAccountPage
 import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.GlAccountWriteStore
@@ -184,6 +185,8 @@ class JooqGlAccountStore(
                 .set(GL_ACCOUNT.ACCOUNT_USAGE, account.usage.name)
                 .set(GL_ACCOUNT.IS_CONTRA_ACCOUNT, account.isContraAccount)
                 .set(GL_ACCOUNT.MANUAL_POSTING_ALLOWED, account.manualPostingAllowed)
+                .set(GL_ACCOUNT.IS_CONTROL_ACCOUNT, account.isControlAccount)
+                .set(GL_ACCOUNT.CONTROL_SUBLEDGER_KIND, account.controlSubledgerKind?.name)
                 .set(GL_ACCOUNT.PARENT_ACCOUNT_ID, account.parentAccountId)
                 .set(GL_ACCOUNT.STATUS, account.status.name)
                 .set(GL_ACCOUNT.CREATED_AT, now)
@@ -228,6 +231,8 @@ class JooqGlAccountStore(
             .set(GL_ACCOUNT.ACCOUNT_USAGE, account.usage.name)
             .set(GL_ACCOUNT.IS_CONTRA_ACCOUNT, account.isContraAccount)
             .set(GL_ACCOUNT.MANUAL_POSTING_ALLOWED, account.manualPostingAllowed)
+            .set(GL_ACCOUNT.IS_CONTROL_ACCOUNT, account.isControlAccount)
+            .set(GL_ACCOUNT.CONTROL_SUBLEDGER_KIND, account.controlSubledgerKind?.name)
             .set(GL_ACCOUNT.PARENT_ACCOUNT_ID, account.parentAccountId)
             .set(GL_ACCOUNT.UPDATED_AT, OffsetDateTime.now(clock))
             .set(GL_ACCOUNT.UPDATED_BY, actorId)
@@ -275,6 +280,8 @@ class JooqGlAccountStore(
                 GL_ACCOUNT.STATUS,
                 GL_ACCOUNT.STATUS_REASON,
                 GL_ACCOUNT.ROW_VERSION,
+                GL_ACCOUNT.IS_CONTROL_ACCOUNT,
+                GL_ACCOUNT.CONTROL_SUBLEDGER_KIND,
             ).from(GL_ACCOUNT)
 
     /**
@@ -309,7 +316,8 @@ class JooqGlAccountStore(
                 SELECT g.id, g.organisation_id, g.account_code, g.account_name, g.description,
                        g.account_class, g.account_usage, g.is_contra_account,
                        g.manual_posting_allowed, g.parent_account_id, g.status,
-                       g.status_reason, g.row_version
+                       g.status_reason, g.row_version, g.is_control_account,
+                       g.control_subledger_kind
                 FROM walk w
                 JOIN gl_account g ON g.id = w.id
                 WHERE g.organisation_id = ?
@@ -338,5 +346,8 @@ class JooqGlAccountStore(
             status = GlAccountStatus.valueOf(row.get(GL_ACCOUNT.STATUS)!!),
             statusReason = row.get(GL_ACCOUNT.STATUS_REASON),
             rowVersion = row.get(GL_ACCOUNT.ROW_VERSION)!!,
+            isControlAccount = row.get(GL_ACCOUNT.IS_CONTROL_ACCOUNT)!!,
+            controlSubledgerKind =
+                row.get(GL_ACCOUNT.CONTROL_SUBLEDGER_KIND)?.let(ControlSubledgerKind::valueOf),
         )
 }

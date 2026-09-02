@@ -51,6 +51,7 @@ on `lifecycle` and no module depends on `iam`.
 | `AccountingPermissionGuard` | `iam` | `iam.adapter.outbound.authorization.AccountingPermissionGuardAdapter` |
 | `AccountingBusinessDateLookup` | `lifecycle` | `lifecycle.adapter.outbound.accounting.LifecycleAccountingBusinessDateAdapter` |
 | `AccountingTenantLookup` | `lifecycle` | `lifecycle.adapter.outbound.accounting.LifecycleAccountingTenantAdapter` |
+| `SubledgerProofProvider` | future product modules | none yet - a test provider proves the seam |
 
 `AccountingTenantLookup` also answers the tenant's **functional currency**, read from
 `organisation.base_currency_code`. That column, not the `base_currency` tenant setting, is the
@@ -139,7 +140,6 @@ invariant the codebase already held rather than forcing a change.
 
 | Missing | Issue |
 | --- | --- |
-| Control accounts and reconciliation | #46 |
 | Manual journals | #48 |
 | Accounting REST adapters | #52 |
 
@@ -193,6 +193,28 @@ Activation supersedes the rule's current head by closing its window the day befo
 takes effect, in the same transaction. Legs and `effective_from` are editable in `DRAFT` only.
 `PostingRuleService.dryRun` resolves an intent through the same resolver in a read-only transaction
 and returns the legs it would post, so an administrator can test a configuration without a journal.
+
+## Control accounts and reconciliation
+
+A control account **is** a GL account (ADR 0020): `gl_account.is_control_account` and
+`control_subledger_kind`, with `V9`'s `CHECK`s making a control account postable, single-kind and
+closed to manual posting. `ChartOfAccountsService` refuses the same combinations first, by name, and
+`GlAccountPostingPolicy.requireManualPostingAllowed` refuses a control account outright - a
+hand-written line into one breaks its reconciliation by definition.
+
+`ControlAccountReconciliationService` is the detective control of `INV-14`. A run reads the GL side
+through `LedgerBalanceQuery` - `SUM(signed_functional_amount)` over the account's lines as of a
+date, optionally within a branch - asks the one `SubledgerProofProvider` that supports the account's
+kind for the sub-ledger aggregate in the same sign convention, and writes a
+`control_account_reconciliation_run` row: `MATCHED` within the run's tolerance (zero by default),
+otherwise `BREAK`. It never reaches into a product module's persistence and never touches a journal;
+a break is corrected by a reversal or a fresh posting and a later run proves it. `resolve` signs a
+break off, `CRITICAL`, with a reason, by an actor other than the runner, and is audited.
+
+The provider port is the seam a future savings, loans or shares module implements: *"what did your
+ledger total in this scope as of this date"*, one aggregate back, nothing else crossing. A kind with
+no provider is reported as `accounting.subledger_provider_missing` rather than silently matched.
+End-of-day and period-close orchestration hooks in by calling `run`; nothing here schedules it.
 
 ## Reversal
 

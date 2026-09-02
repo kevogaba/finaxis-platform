@@ -4,11 +4,11 @@ This document is the database-design authority for accounting. Issues #36, #40, 
 implement it: if implementation proves a change is required, change this document first, record
 why, then write the forward-only migration.
 
-The five tables issue #36 created, the three tables issue #40 created and the four tables issue
-#44 creates are specified below to column, constraint and index level, so each migration is a
-transcription rather than a design exercise. The later issues' tables are still specified at
-relationship level only, and each will be brought to column level by the change that implements
-it — the same way the earlier ones were, and for the same reason. An earlier revision of this
+The five tables issue #36 created, the three tables issue #40 created, the four tables issue #44
+created and the evidence table issue #46 creates are specified below to column, constraint and
+index level, so each migration is a transcription rather than a design exercise. Issue #47's
+projection is still specified at relationship level only and will be brought to column level by the
+change that implements it — the same way the earlier ones were, and for the same reason. An earlier revision of this
 document promised that an implementing agent *"never has to invent a table, a column or a
 constraint"* while carrying no column definitions for any table, which made the promise false for
 the first issue that tried to keep it.
@@ -26,7 +26,7 @@ sentence.
 | `V6` | `accounting_fiscal_year`, `accounting_fiscal_period`, `gl_account`, two transition logs | #36 |
 | `V7` | `posting_request`, `journal_entry`, `journal_line`, and the `reference_sequence` backfill | #40 |
 | `V8` | `posting_rule`, `posting_rule_version`, `posting_rule_leg`, one transition log, and the `posting_request` rule-version foreign key | #44 |
-| Then | `control_account_reconciliation_run` | #46 |
+| `V9` | `gl_account.is_control_account` and `control_subledger_kind`, `control_account_reconciliation_run`, `idx_journal_line_subledger` | #46 |
 | Then | `gl_account_daily_balance` | #47 |
 
 Issue #34's permission migration carries no accounting tables — only reference data.
@@ -123,8 +123,8 @@ and branch is a *dimension on the posting*, carried on `journal_entry` and `jour
 
 Issue #36's first acceptance criterion is *"schema matches #30 ERD exactly **or** #30 is
 deliberately updated first with the approved design change"*. Everything in this section takes the
-second branch. Eight questions were settled here for issue #36, four more for issue #40, and
-four for issue #44. Most
+second branch. Eight questions were settled here for issue #36, four more for issue #40, four for
+issue #44, and two for issue #46. Most
 had no answer anywhere in the design record; two had answers that contradict each other; one had an
 answer that was wrong. Each is settled before the migration exists, with the reasoning attached,
 rather than decided by accident in SQL.
@@ -431,6 +431,24 @@ range; the status says how the version's window came to be closed, not whether i
 the dates it covers. That is what lets a prior-period correction re-post under the version that was
 in force on its posting date.
 
+### A reconciliation compares two signed balances in the ledger's convention
+
+`control_account_reconciliation_run` records `gl_balance` and `subledger_balance` as **signed
+functional amounts, debits positive and credits negative** — the same convention as
+`journal_line.signed_functional_amount`. The owning module reports its aggregate in that
+convention too, so member deposits of 1,000 arrive as `-1000` and equality is the subtraction the
+generated `difference` column performs, not a rule that depends on the account's class. The
+alternative — comparing magnitudes and letting each control class say which side it lives on — would
+put accounting knowledge into every product module and make a sign error look like a match.
+
+### Exact equality is the default, and a tolerance is recorded on the run that used it
+
+Financial control accounts default to exact monetary equality. A run may be given a non-negative
+`tolerance` for a specifically approved rounding or timing policy, and the row keeps it, so a
+`MATCHED` verdict is never separable from the bound it was judged against.
+`chk_control_account_reconciliation_run_matched` refuses a `MATCHED` row whose difference exceeds
+its tolerance, which is the part of the verdict a row can see.
+
 ## Column definitions for the issue #36 tables
 
 Every column, constraint, index and comment the first accounting migration creates. The audit set
@@ -731,9 +749,10 @@ approves their own work. Every transition writes the log while holding `FOR UPDA
 so holding that lock is what makes "the most recent submitter" a stable answer for the rest of the
 transaction. The fiscal-period service has the identical obligation for the same reason.
 
-Two columns are specified here but **created by issue #46**, following this document's convention
-for later-issue additions: `is_control_account BOOLEAN NOT NULL DEFAULT FALSE` and
+Two columns are specified here and **created by issue #46's `V9`**, following this document's
+convention for later-issue additions: `is_control_account BOOLEAN NOT NULL DEFAULT FALSE` and
 `control_subledger_kind TEXT`, the classification `INV-14`'s reconciliation proofs are keyed on.
+Their constraints are under [the #46 column definitions](#column-definitions-for-the-issue-46-tables).
 
 ### `gl_account_transition_log` and `fiscal_period_transition_log`
 
@@ -1115,6 +1134,80 @@ closed version with no closing date; a leg targeting another tenant's account or
 or over-100 percentage; a second residual leg for one fact; an unknown resolution strategy; and a
 `posting_request` naming a version from another tenant.
 
+## Column definitions for the issue #46 tables
+
+### `gl_account` additions
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `is_control_account` | `BOOLEAN` | no | Whether the account represents the aggregate position of one subsidiary-ledger class; defaults false |
+| `control_subledger_kind` | `TEXT` | yes | The class it controls; set exactly when `is_control_account` |
+
+| Constraint | Kind | Purpose |
+| --- | --- | --- |
+| `chk_gl_account_control_kind_present` | `CHECK (is_control_account = (control_subledger_kind IS NOT NULL))` | The flag and the kind travel together |
+| `chk_gl_account_control_kind` | `CHECK (control_subledger_kind IS NULL OR control_subledger_kind IN (…))` | `SAVINGS_DEPOSITS`, `SHARE_CAPITAL`, `LOAN_PRINCIPAL`, `ACCRUED_INTEREST_RECEIVABLE`, `ACCRUED_INTEREST_PAYABLE`, `TELLER_CASH`, `SUSPENSE` — the classes `ControlSubledgerKind` declares |
+| `chk_gl_account_control_postable` | `CHECK (NOT is_control_account OR account_usage = 'POSTABLE')` | A header cannot hold a position |
+| `chk_gl_account_control_no_manual_posting` | `CHECK (NOT is_control_account OR NOT manual_posting_allowed)` | A hand-written entry would break the reconciliation by definition |
+
+| Index | Definition | Justifying query |
+| --- | --- | --- |
+| `idx_gl_account_control` | `(organisation_id, control_subledger_kind) WHERE is_control_account` | *"The control accounts of this tenant for this class"* — what a period-close orchestration iterates |
+
+### `control_account_reconciliation_run`
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `gl_account_id` | `UUID` | no | The control account proved |
+| `branch_id` | `UUID` | yes | Scope; null for the whole tenant |
+| `control_subledger_kind` | `TEXT` | no | The class, copied from the account at run time |
+| `as_of_date` | `DATE` | no | The business date the two sides were taken as of |
+| `currency_code` | `CHAR(3)` | no | The functional currency both sides are in |
+| `gl_balance` | `NUMERIC(23, 6)` | no | `SUM(signed_functional_amount)` over the account's lines with `posting_date <= as_of_date`, within the scope |
+| `subledger_balance` | `NUMERIC(23, 6)` | no | The provider's aggregate, same sign convention |
+| `difference` | `NUMERIC(23, 6)` | no | **Generated**: `gl_balance - subledger_balance` |
+| `tolerance` | `NUMERIC(23, 6)` | no | The bound the verdict was judged against; defaults `0` |
+| `status` | `TEXT` | no | `MATCHED`, `BREAK` or `RESOLVED` |
+| `provider` | `TEXT` | no | The `SubledgerProofProvider.providerName` that answered |
+| `subledger_detail_jsonb` | `JSONB` | no | Drill-down references the provider supplied; descriptive only |
+| `resolution_reason` | `TEXT` | yes | Why a break was signed off |
+| `resolved_by` | `UUID` | yes | The checker; never the runner |
+| `resolved_at` | `TIMESTAMPTZ` | yes | When |
+
+Plus the mutable audit set — a run is created once and moved to `RESOLVED` at most once.
+
+| Constraint | Kind | Purpose |
+| --- | --- | --- |
+| `uq_control_account_reconciliation_run_guid` | `UNIQUE (guid)` | Alternate key |
+| `fk_control_account_reconciliation_run_account` | `FOREIGN KEY (organisation_id, gl_account_id)` | A run cannot prove another tenant's account |
+| `fk_control_account_reconciliation_run_branch` | `FOREIGN KEY (organisation_id, branch_id)` | A run cannot scope to another tenant's branch |
+| `chk_control_account_reconciliation_run_status` | `CHECK (status IN (…))` | The three adopted states |
+| `chk_control_account_reconciliation_run_matched` | `CHECK (status <> 'MATCHED' OR abs(gl_balance - subledger_balance) <= tolerance)` | A match is within its tolerance |
+| `chk_control_account_reconciliation_run_resolved` | `CHECK (…)` | `RESOLVED` carries who, when and why, and nothing else does |
+| `chk_control_account_reconciliation_run_tolerance` | `CHECK (tolerance >= 0)` | A bound is non-negative |
+| `chk_control_account_reconciliation_run_currency` | `CHECK (currency_code ~ '^[A-Z]{3}$')` | The foundation currency regex |
+| `chk_control_account_reconciliation_run_provider` | `CHECK (provider ~ '^[A-Za-z0-9._-]{1,128}$')` | A module name |
+| `chk_control_account_reconciliation_run_version` | `CHECK (row_version >= 0)` | Convention |
+
+| Index | Definition | Justifying query |
+| --- | --- | --- |
+| `idx_control_account_reconciliation_run_account_date` | `(organisation_id, gl_account_id, as_of_date DESC, id DESC)` | The account foreign key, and *"the runs of this control account, newest first"* |
+
+### `idx_journal_line_subledger`
+
+Deferred from #40 to here, where its query first exists:
+`(organisation_id, source_module, subledger_reference, posting_date, id) WHERE subledger_reference
+IS NOT NULL` — Q6, the GL lines that moved one subsidiary position, for reconciliation drill-down.
+Partial, because lines with no position never need it.
+
+### What `V9` proves before it merges
+
+`ControlAccountSchemaIntegrationTests` exercises every constraint above against PostgreSQL by name;
+`ControlAccountReconciliationIntegrationTests` proves the service through a test
+`SubledgerProofProvider` — a matching proof, a break, repeatability, a recorded tolerance, as-of and
+branch scoping, resolution by a different actor with a reason and an audit event, and that no run
+ever touches a journal.
+
 ## The period selector
 
 `journal_entry` and `journal_line` both carry `posting_date DATE NOT NULL`. **It is the only column
@@ -1205,7 +1298,7 @@ Deferred, with the issue that creates each:
 - `idx_journal_line_branch_account_date (organisation_id, branch_id, posting_date, gl_account_id)
   INCLUDE (direction, functional_amount)` — branch trial balance, issue #49.
 - `idx_journal_line_subledger (organisation_id, source_module, subledger_reference, posting_date,
-  id) WHERE subledger_reference IS NOT NULL` — control-account reconciliation, issue #46.
+  id) WHERE subledger_reference IS NOT NULL` — control-account reconciliation, created by `V9`.
 
 ## Tables deliberately not created
 
@@ -1232,7 +1325,7 @@ Deferred, with the issue that creates each:
 | #41, #42, #43 | The posting engine, its verification read, idempotency over `uq_posting_request_source`, and reversal |
 | #44 | `posting_rule`, `posting_rule_version`, `posting_rule_leg`, their transition log, and the `posting_request` rule-version foreign key |
 | #45 | The version lifecycle and the deterministic resolver over those tables |
-| #46 | Control-account classification and the reconciliation proof contract |
+| #46 | `V9`: the control-account classification, `control_account_reconciliation_run`, `idx_journal_line_subledger`, and the reconciliation proof contract |
 | #47 | `gl_account_daily_balance` and its documented rebuild query |
 | #49, #50, #51 | The read models, using the query patterns and pagination contract |
 | #54 | The `REVOKE UPDATE, DELETE` operational prerequisite |
