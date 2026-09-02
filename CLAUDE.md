@@ -66,6 +66,9 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   `journal_entry` and `journal_line`, transcribed from `docs/database/accounting-erd.md`, plus the
   `reference_sequence` backfill that gives the SQL-created `PLATFORM` and bootstrap organisations
   the `JOURNAL` counter gapless numbering locks on
+- `V8__accounting_posting_rules.sql` — versioned, effective-dated posting rules: `posting_rule`,
+  `posting_rule_version`, `posting_rule_leg`, their transition log, and the `posting_request`
+  rule-version foreign key `V7` left for the table to exist
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -88,9 +91,9 @@ Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 See `docs/database/foundation-schema.md`, `docs/adr/0010-...`, and `docs/adr/0015-...`.
 `docs/database/accounting-erd.md` is the design authority every accounting migration implements,
 and `docs/architecture/accounting-foundation.md` holds the invariants. `V6` created the fiscal
-calendar and the chart of accounts from it and `V7` the journal tables; the posting-rule,
-reconciliation and projection tables are still design-only. Do not invent accounting tables or
-columns outside those documents.
+calendar and the chart of accounts from it, `V7` the journal tables and `V8` the posting-rule
+tables; the reconciliation and projection tables are still design-only. Do not invent accounting
+tables or columns outside those documents.
 
 ## Authorization
 

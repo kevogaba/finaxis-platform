@@ -108,7 +108,7 @@ Add `guid` only to the tables expected to be externally referenced:
 
 ## Verification
 
-- `FoundationSchemaGuidTests` — all 31 application tables have a non-null `uuidv7()`-defaulted
+- `FoundationSchemaGuidTests` — all 35 application tables have a non-null `uuidv7()`-defaulted
   `guid` backed by a single-column unique index; generated values are distinct and time-ordered
 - `FoundationSchemaConstraintTests` — a client-supplied duplicate `guid` is rejected
 - `IdentifierGenerationRuleTests` — `UUID.randomUUID()` appears nowhere in production code, and no

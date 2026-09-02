@@ -4,11 +4,11 @@ This document is the database-design authority for accounting. Issues #36, #40, 
 implement it: if implementation proves a change is required, change this document first, record
 why, then write the forward-only migration.
 
-The five tables issue #36 created and the three tables issue #40 creates are specified below to
-column, constraint and index level, so each migration is a transcription rather than a design
-exercise. The later issues' tables are still specified at relationship level only, and each will be
-brought to column level by the change that implements it — the same way #36's and #40's were, and
-for the same reason. An earlier revision of this
+The five tables issue #36 created, the three tables issue #40 created and the four tables issue
+#44 creates are specified below to column, constraint and index level, so each migration is a
+transcription rather than a design exercise. The later issues' tables are still specified at
+relationship level only, and each will be brought to column level by the change that implements
+it — the same way the earlier ones were, and for the same reason. An earlier revision of this
 document promised that an implementing agent *"never has to invent a table, a column or a
 constraint"* while carrying no column definitions for any table, which made the promise false for
 the first issue that tried to keep it.
@@ -25,7 +25,7 @@ sentence.
 | --- | --- | --- |
 | `V6` | `accounting_fiscal_year`, `accounting_fiscal_period`, `gl_account`, two transition logs | #36 |
 | `V7` | `posting_request`, `journal_entry`, `journal_line`, and the `reference_sequence` backfill | #40 |
-| Then | `posting_rule`, `posting_rule_version`, `posting_rule_leg`, one transition log | #44 |
+| `V8` | `posting_rule`, `posting_rule_version`, `posting_rule_leg`, one transition log, and the `posting_request` rule-version foreign key | #44 |
 | Then | `control_account_reconciliation_run` | #46 |
 | Then | `gl_account_daily_balance` | #47 |
 
@@ -123,7 +123,8 @@ and branch is a *dimension on the posting*, carried on `journal_entry` and `jour
 
 Issue #36's first acceptance criterion is *"schema matches #30 ERD exactly **or** #30 is
 deliberately updated first with the approved design change"*. Everything in this section takes the
-second branch. Eight questions were settled here for issue #36, and four more for issue #40. Most
+second branch. Eight questions were settled here for issue #36, four more for issue #40, and
+four for issue #44. Most
 had no answer anywhere in the design record; two had answers that contradict each other; one had an
 answer that was wrong. Each is settled before the migration exists, with the reasoning attached,
 rather than decided by accident in SQL.
@@ -382,6 +383,53 @@ idempotency claim, and a two-int transaction advisory lock in
 reversal. The partial unique index stays the authoritative backstop for at-most-one reversal; the
 advisory lock exists so the race resolves to a named conflict rather than to a unique violation
 that aborts the caller's whole transaction.
+
+### A posting rule carries no status; its versions do
+
+`posting_rule` is a container the way `accounting_fiscal_year` is: it names the event and the
+selector dimensions, and its versions carry the lifecycle. A stored rule status would be a
+denormalisation of *"does this rule have an approved version in force"*, which is derivable and
+cannot drift. Retiring a rule is retiring its head version; a rule with no approved version is a
+rule that resolves nothing.
+
+The rule's identity and selectors — `event_code`, `product_class`, `currency_code` — are frozen
+once any version has been approved, and the application enforces it: a historical posting names
+the version it used, and the version's meaning includes which event and dimensions it answered.
+
+### Selectors are unique with `NULLS NOT DISTINCT`, and specificity resolves; ties fail fast
+
+`UNIQUE NULLS NOT DISTINCT (organisation_id, event_code, product_class, currency_code)` admits at
+most one rule per selector combination, treating *"any product class"* as a value rather than as
+PostgreSQL's default distinct-null. The resolver then chooses the **most specific** rule whose
+selectors match the intent — both dimensions over one, one over none — which is deterministic by
+construction. Two rules matching at the *same* specificity — one by product class, one by
+currency — are a configuration defect, and the resolver fails with
+`accounting.posting_rule_ambiguous` rather than picking one. Issue #45 owns the resolver; the
+constraint is what makes its determinism a schema property rather than a code property.
+
+### `account_resolution` admits `FIXED_ACCOUNT` only
+
+An earlier revision of this document named `PRODUCT_PARAMETER` as *"the single indirection
+point"*. It is still the intended extension — a leg whose account comes from a product's own
+configuration rather than being named in the rule — but no product module exists to bind the
+parameter, so a schema that admitted the value would admit a leg that no code path can resolve.
+`chk_posting_rule_leg_resolution` therefore names one value, `gl_account_id` is `NOT NULL`, and
+adding the strategy is a forward-only widening of the `CHECK` and a relaxing of the column in the
+migration that ships the first product binding. YAGNI wins over completeness here because the
+alternative is a version that can be approved and never posts.
+
+### A version is immutable once approved, except for the two columns that close it
+
+`posting_rule_version` keeps the standard mutable audit set, and that is deliberate: `status`,
+`status_reason` and `effective_to` legitimately change after approval — a successor supersedes it,
+or it is retired — and `row_version` is what makes those writes safe. What is immutable is the
+version's **content**: its legs and its `effective_from`. The application enforces that by
+allowing leg writes only while the version is `DRAFT`, and `ex_posting_rule_version_no_overlap`
+enforces that approved versions of one rule never govern the same posting date. Three approved
+statuses — `ACTIVE`, `SUPERSEDED`, `RETIRED` — all resolve a posting whose date falls inside their
+range; the status says how the version's window came to be closed, not whether it may be used for
+the dates it covers. That is what lets a prior-period correction re-post under the version that was
+in force on its posting date.
 
 ## Column definitions for the issue #36 tables
 
@@ -937,6 +985,136 @@ afterwards, including the `V3` bootstrap tenant that had none.
 plans against their shared-block budgets, which is what makes the index choices above a test
 rather than a paragraph.
 
+## Column definitions for the issue #44 tables
+
+Every column, constraint, index and comment the third accounting migration creates. All four tables
+carry the identifier pair and the standard mutable audit set; the reasoning for the mutable set on a
+"versioned, immutable" table is under the settled questions above.
+
+### `posting_rule`
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `rule_code` | `TEXT` | no | Tenant-unique code an accountant recognises, e.g. `SAVINGS-DEPOSIT` |
+| `rule_name` | `TEXT` | no | Display name |
+| `description` | `TEXT` | yes | Free text |
+| `event_code` | `TEXT` | no | The financial event the rule answers, e.g. `SAVINGS_DEPOSIT`; matches `posting_request.event_code` |
+| `product_class` | `TEXT` | yes | Optional selector, e.g. `SAVINGS:REGULAR`; `NULL` means every product class |
+| `currency_code` | `CHAR(3)` | yes | Optional selector; `NULL` means every currency |
+
+| Constraint | Kind | Purpose |
+| --- | --- | --- |
+| `uq_posting_rule_guid` | `UNIQUE (guid)` | Alternate key |
+| `uq_posting_rule_organisation_id` | `UNIQUE (organisation_id, id)` | Composite foreign-key target for versions |
+| `uq_posting_rule_organisation_code` | `UNIQUE (organisation_id, rule_code)` | One code per tenant |
+| `uq_posting_rule_selector` | `UNIQUE NULLS NOT DISTINCT (organisation_id, event_code, product_class, currency_code)` | One rule per selector combination |
+| `chk_posting_rule_code` | `CHECK (rule_code ~ '^[A-Za-z0-9._-]{1,64}$')` | Bounded, typeable |
+| `chk_posting_rule_event_code` | `CHECK (event_code ~ '^[A-Z][A-Z0-9_]{0,63}$')` | The same shape `posting_request.event_code` enforces |
+| `chk_posting_rule_product_class` | `CHECK (product_class IS NULL OR product_class ~ '^[A-Z][A-Z0-9_:.-]{0,63}$')` | Bounded selector |
+| `chk_posting_rule_currency` | `CHECK (currency_code IS NULL OR currency_code ~ '^[A-Z]{3}$')` | The foundation currency regex |
+| `chk_posting_rule_version` | `CHECK (row_version >= 0)` | Convention |
+
+| Index | Definition | Justifying query |
+| --- | --- | --- |
+| `idx_posting_rule_event` | `(organisation_id, event_code)` | The resolver's candidate lookup: every rule for this event in this tenant, a handful of rows |
+
+### `posting_rule_version`
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `posting_rule_id` | `UUID` | no | Owning rule |
+| `version_number` | `INTEGER` | no | Ordinal within the rule, `1`-based |
+| `status` | `TEXT` | no | `DRAFT`, `PENDING_APPROVAL`, `ACTIVE`, `SUPERSEDED` or `RETIRED` |
+| `status_reason` | `TEXT` | yes | Why the version is in its current state, including a rejection reason |
+| `effective_from` | `DATE` | no | First posting date the version governs, inclusive |
+| `effective_to` | `DATE` | yes | Last posting date, inclusive; `NULL` while open-ended |
+| `description` | `TEXT` | yes | What changed in this version |
+
+| Constraint | Kind | Purpose |
+| --- | --- | --- |
+| `uq_posting_rule_version_guid` | `UNIQUE (guid)` | Alternate key |
+| `uq_posting_rule_version_organisation_id` | `UNIQUE (organisation_id, id)` | Composite foreign-key target for legs, the transition log and `posting_request` |
+| `uq_posting_rule_version_number` | `UNIQUE (organisation_id, posting_rule_id, version_number)` | Version numbers do not repeat within a rule |
+| `fk_posting_rule_version_rule` | `FOREIGN KEY (organisation_id, posting_rule_id)` | A version cannot belong to another tenant's rule |
+| `chk_posting_rule_version_number` | `CHECK (version_number > 0)` | Ordinals are 1-based |
+| `chk_posting_rule_version_status` | `CHECK (status IN (…))` | The five adopted states |
+| `chk_posting_rule_version_effective` | `CHECK (effective_to IS NULL OR effective_to >= effective_from)` | A window cannot end before it starts |
+| `chk_posting_rule_version_closed_when_ended` | `CHECK (status NOT IN ('SUPERSEDED', 'RETIRED') OR effective_to IS NOT NULL)` | A closed version has a closing date |
+| `chk_posting_rule_version_version` | `CHECK (row_version >= 0)` | Convention |
+| `ex_posting_rule_version_no_overlap` | `EXCLUDE USING gist (…) WHERE (status IN ('ACTIVE', 'SUPERSEDED', 'RETIRED'))` | Approved versions of one rule never govern the same date |
+
+The exclusion constraint reuses the `btree_gist` mechanism `V6` installed and is scoped to the
+**rule**, not the tenant: two different rules may of course be in force on the same day. Drafts and
+proposals are outside the constraint, so an administrator can prepare a successor while the current
+version still runs.
+
+| Index | Definition | Justifying query |
+| --- | --- | --- |
+| `idx_posting_rule_version_rule_status` | `(organisation_id, posting_rule_id, status)` | The rule foreign key, the resolver's *"approved versions of this rule"* read, and the lifecycle's *"is there a pending version"* check |
+
+### `posting_rule_leg`
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `posting_rule_version_id` | `UUID` | no | Owning version |
+| `leg_number` | `INTEGER` | no | Stable ordinal within the version, `1`-based; becomes the journal line order |
+| `direction` | `TEXT` | no | `DEBIT` or `CREDIT` |
+| `account_resolution` | `TEXT` | no | `FIXED_ACCOUNT`, the only admitted strategy |
+| `gl_account_id` | `UUID` | no | The account the leg lands in; `ACTIVE` and `POSTABLE` at activation and at posting, enforced by the application |
+| `amount_source` | `TEXT` | no | The `FinancialFact` code the leg takes its amount from |
+| `amount_percentage` | `NUMERIC(9, 6)` | no | Share of the fact, `(0, 100]`; defaults to `100` |
+| `is_residual` | `BOOLEAN` | no | Receives the fact total minus the other legs of the fact (`INV-2`) |
+| `narrative` | `TEXT` | yes | Line description, at most 200 characters |
+
+| Constraint | Kind | Purpose |
+| --- | --- | --- |
+| `uq_posting_rule_leg_guid` | `UNIQUE (guid)` | Alternate key |
+| `uq_posting_rule_leg_number` | `UNIQUE (organisation_id, posting_rule_version_id, leg_number)` | Deterministic leg order, and the version foreign key's index |
+| `fk_posting_rule_leg_version` | `FOREIGN KEY (organisation_id, posting_rule_version_id)` | A leg cannot belong to another tenant's version |
+| `fk_posting_rule_leg_account` | `FOREIGN KEY (organisation_id, gl_account_id)` | A leg cannot target another tenant's account |
+| `chk_posting_rule_leg_number` | `CHECK (leg_number > 0)` | Ordinals are 1-based |
+| `chk_posting_rule_leg_direction` | `CHECK (direction IN ('DEBIT', 'CREDIT'))` | Direction carries the sign |
+| `chk_posting_rule_leg_resolution` | `CHECK (account_resolution IN ('FIXED_ACCOUNT'))` | The one admitted strategy |
+| `chk_posting_rule_leg_amount_source` | `CHECK (amount_source ~ '^[A-Z][A-Z0-9_]{0,63}$')` | A fact code |
+| `chk_posting_rule_leg_percentage` | `CHECK (amount_percentage > 0 AND amount_percentage <= 100)` | A share, never zero, never more than the whole |
+| `chk_posting_rule_leg_narrative` | `CHECK (narrative IS NULL OR char_length(narrative) <= 200)` | Bounded free text |
+| `chk_posting_rule_leg_version` | `CHECK (row_version >= 0)` | Convention |
+
+| Index | Definition | Justifying query |
+| --- | --- | --- |
+| `uq_posting_rule_leg_residual` | `UNIQUE (organisation_id, posting_rule_version_id, amount_source, direction) WHERE is_residual` | At most one residual leg per fact **per side**: each side of a split absorbs its own rounding remainder |
+| `idx_posting_rule_leg_account` | `(organisation_id, gl_account_id)` | The account foreign key, and *"which rules target this account"* — the question deactivation asks |
+
+Nothing at the database level requires the legs of a version to balance, because a rule's balance
+depends on the facts it is applied to: two legs taking `100%` of `PRINCIPAL` on opposite sides
+balance for every input, but a rule that debits `PRINCIPAL` and credits `PRINCIPAL` and `FEE`
+balances only if the intent supplies both. Balance is proved per posting by the engine (`INV-4`),
+and the lifecycle refuses to activate a version whose legs cannot balance for any input — no debit
+leg, or no credit leg — which is the half that is knowable from the rule alone.
+
+### `posting_rule_version_transition_log`
+
+Copies `gl_account_transition_log` exactly, with the composite foreign key
+`(organisation_id, entity_id) → posting_rule_version` and the index
+`(organisation_id, entity_id, created_at DESC)`. `created_by` is what makes *"the approver is not
+the most recent submitter"* answerable from data, as it is for GL accounts.
+
+### The `posting_request` foreign key
+
+`V7` created `posting_request.posting_rule_version_id` without its foreign key, because the table it
+references did not exist. `V8` adds `fk_posting_request_rule_version` over
+`(organisation_id, posting_rule_version_id)` and the partial index
+`idx_posting_request_rule_version` that serves it and *"which postings used this version"*.
+
+### What `V8` proves before it merges
+
+`PostingRuleSchemaIntegrationTests` exercises every constraint above against PostgreSQL by name:
+the selector uniqueness with nulls treated as values; a second approved version overlapping the
+first, including an open-ended one; a draft overlapping an approved version being accepted; a
+closed version with no closing date; a leg targeting another tenant's account or version; a zero
+or over-100 percentage; a second residual leg for one fact; an unknown resolution strategy; and a
+`posting_request` naming a version from another tenant.
+
 ## The period selector
 
 `journal_entry` and `journal_line` both carry `posting_date DATE NOT NULL`. **It is the only column
@@ -1052,7 +1230,8 @@ Deferred, with the issue that creates each:
 | #36 | The fiscal calendar and chart-of-accounts tables |
 | #40 | `posting_request`, `journal_entry`, `journal_line`, the #40 index set only, and the `reference_sequence` backfill |
 | #41, #42, #43 | The posting engine, its verification read, idempotency over `uq_posting_request_source`, and reversal |
-| #44, #45 | The posting-rule tables and deterministic resolution |
+| #44 | `posting_rule`, `posting_rule_version`, `posting_rule_leg`, their transition log, and the `posting_request` rule-version foreign key |
+| #45 | The version lifecycle and the deterministic resolver over those tables |
 | #46 | Control-account classification and the reconciliation proof contract |
 | #47 | `gl_account_daily_balance` and its documented rebuild query |
 | #49, #50, #51 | The read models, using the query patterns and pagination contract |
