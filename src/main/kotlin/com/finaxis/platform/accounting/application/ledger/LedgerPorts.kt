@@ -224,6 +224,12 @@ interface JournalReadStore {
         postingRequestId: UUID,
     ): JournalEntryView?
 
+    /** Finds the reversal of [journalEntryId], or null when it has not been reversed. */
+    fun findReversalOf(
+        organisationId: UUID,
+        journalEntryId: UUID,
+    ): JournalEntryView?
+
     /** Finds one request by id within a tenant, or null. */
     fun findPostingRequest(
         organisationId: UUID,

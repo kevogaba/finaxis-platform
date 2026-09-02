@@ -61,6 +61,27 @@ object PostingErrorCodes {
     /** The tenant's functional currency cannot change once a journal has been posted. */
     const val FUNCTIONAL_CURRENCY_FROZEN = "accounting.functional_currency_frozen"
 
+    /** The journal entry does not exist in the tenant. */
+    const val JOURNAL_NOT_FOUND = "accounting.journal_not_found"
+
+    /** The journal entry already has a reversal; a journal is reversed at most once. */
+    const val JOURNAL_ALREADY_REVERSED = "accounting.journal_already_reversed"
+
+    /** A reversal cannot itself be reversed; post the correction afresh. */
+    const val REVERSAL_NOT_REVERSIBLE = "accounting.reversal_not_reversible"
+
+    /** The actor who posted a journal cannot be the one who reverses it. */
+    const val JOURNAL_SELF_REVERSAL = "accounting.journal_self_reversal"
+
+    /** Reversing a journal requires a reason, and the reason cannot be blank. */
+    const val REVERSAL_REASON_REQUIRED = "accounting.reversal_reason_required"
+
+    /** The reversal reason is longer than the ledger's narrative columns can store. */
+    const val REVERSAL_REASON_TOO_LONG = "accounting.reversal_reason_too_long"
+
+    /** A journal is reversed from the branch it was posted to, not from another one. */
+    const val REVERSAL_BRANCH_MISMATCH = "accounting.reversal_branch_mismatch"
+
     /** The fiscal period is already in the state the caller asked for. */
     const val PERIOD_ALREADY_IN_STATE = "accounting.fiscal_period_already_in_state"
 

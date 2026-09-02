@@ -45,6 +45,15 @@ object AdvisoryLockNamespace {
     const val ACCOUNTING_CHART_HIERARCHY: Int = 3
 
     /**
+     * Reversing one journal.
+     *
+     * Keyed on the journal, because "at most one reversal" is a property of one journal and a row
+     * lock on the immutable `journal_entry` is unavailable under the least-privilege role issue #54
+     * introduces - `FOR UPDATE` needs the `UPDATE` privilege that role revokes.
+     */
+    const val ACCOUNTING_JOURNAL_REVERSAL: Int = 4
+
+    /**
      * The `objid` for a two-int advisory lock, derived in the JVM so a caller never has to
      * round-trip to the database for a lock key.
      *
