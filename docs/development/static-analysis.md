@@ -133,6 +133,26 @@ module boundary before depending on internals from another module.
 Detekt uses the `dev.detekt` 2.x alpha line because Kotlin 2.4.10 is newer than
 Detekt 1.23.x support.
 
+Java compilation runs with `-Xlint:all -Werror`, but only for hand-written sources. Spring
+AOT generates the `aot` and `aotTest` source sets during a native or image build, and that
+generated code inherits raw-type and unchecked warnings from the framework signatures it
+calls. `compileAotJava` and `compileAotTestJava` therefore compile with `-Xlint:none` and
+without Error Prone; the project cannot edit those files, so failing the build on their
+warnings only blocks the native image. See
+[Native image deployment](../operations/native-image-deployment.md).
+
+The Checkstyle, PMD and SpotBugs plugins add a task per source set, which gives the AOT source
+sets their own - `checkstyleAot`, `pmdAot`, `spotbugsAot` and their `aotTest` counterparts.
+Those grade the same generated code and are disabled for the same reason; `checkstyleAot`
+alone reports thousands of violations, which would fail `check` for anyone who has run a
+native build. Analysis of hand-written sources is unchanged.
+
+For the same reason `compileAotJava` follows `processAot` rather than running independently.
+Gradle does not clean the output of a task it skipped, so a build with AOT off would otherwise
+compile - and `bootJar` would package - whatever the last AOT-enabled build generated. The two
+image variants produce different bean definitions, so that is a real failure rather than a
+tidiness point.
+
 Error Prone is configured only for `JavaCompile` tasks. Current Error Prone versions
 require a modern JDK to run; this project compiles with Java 25, so the setup is
 compatible. If Error Prone later lags a new JDK release, keep the plugin configured

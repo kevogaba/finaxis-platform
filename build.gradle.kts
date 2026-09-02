@@ -382,17 +382,52 @@ tasks.named<SpotBugsTask>("spotbugsTest") {
     classes = files(layout.buildDirectory.dir("classes/java/test"))
 }
 
+// Spring AOT writes generated Java sources into the `aot` and `aotTest` source sets. They are
+// framework output the project cannot edit, and they inherit raw-type and unchecked warnings from
+// the framework signatures they call, which the repository-wide `-Werror` policy turns into a
+// failed `compileAotJava`. Keep the strict policy on hand-written sources and compile the
+// generated ones without lint or Error Prone.
+val generatedAotCompileTaskNames = setOf("compileAotJava", "compileAotTestJava")
+
+// The Checkstyle, PMD and SpotBugs plugins add a task per source set, so the `aot` and `aotTest`
+// source sets get their own - and those grade the same generated code. `checkstyleAot` alone
+// reports thousands of violations against files the project cannot edit, which fails `check` for
+// anyone who has run a native build. Switch them off for the same reason `compileAotJava` compiles
+// without lint; the analysis of hand-written sources is untouched.
+val generatedAotAnalysisTaskNames =
+    setOf(
+        "checkstyleAot",
+        "checkstyleAotTest",
+        "pmdAot",
+        "pmdAotTest",
+        "spotbugsAot",
+        "spotbugsAotTest",
+    )
+
+tasks.matching { it.name in generatedAotAnalysisTaskNames }.configureEach {
+    enabled = false
+}
+
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
-    options.compilerArgs.addAll(
-        listOf(
-            "-Xlint:all",
-            "-Werror",
-        ),
-    )
-    options.errorprone {
-        disableWarningsInGeneratedCode = true
-        excludedPaths = ".*/build/.*|.*/generated/.*"
+    if (name in generatedAotCompileTaskNames) {
+        options.compilerArgs.add("-Xlint:none")
+        // Called on the property rather than assigned inside an `errorprone { }` block:
+        // `ErrorProneOptions` exposes `enabled`, so an `isEnabled = false` there silently resolves
+        // against the enclosing `JavaCompile` and disables the compile task itself, which leaves
+        // the native image without its AOT initializer.
+        options.errorprone.enabled.set(false)
+    } else {
+        options.compilerArgs.addAll(
+            listOf(
+                "-Xlint:all",
+                "-Werror",
+            ),
+        )
+        options.errorprone {
+            disableWarningsInGeneratedCode = true
+            excludedPaths = ".*/build/.*|.*/generated/.*"
+        }
     }
 }
 
@@ -407,25 +442,185 @@ tasks.withType<JavaExec> {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
 
+// Spring AOT is mandatory for everything this repository ships. Both deployable images run their
+// bean definitions from AOT output, and a native image cannot be built without it: `processAot`
+// generates the bean definitions, proxies and reachability metadata that `native-image` compiles
+// against. It is therefore switched on unconditionally for `bootBuildImage` and the native tasks,
+// and `-PenableAot=true` adds it to a plain `bootJar`. Only `bootJar` and `qualityGate`, which
+// produce nothing that is deployed, run without it, because refreshing the context at build time
+// costs about a minute.
+val aotRequiredTaskNames = setOf("bootBuildImage", "nativeBuild", "nativeCompile", "nativeRun")
+
+val aotEnabled =
+    gradle.startParameter.taskNames.any { it.substringAfterLast(':') in aotRequiredTaskNames } ||
+        providers.gradleProperty("enableAot").map(String::toBoolean).getOrElse(false)
+
+// Which of the two images `bootBuildImage` produces. Native by default; set
+// FINAXIS_NATIVE_IMAGE=false (or `-PnativeImage=false`) for the JVM image. Both are AOT-processed
+// and both are deployable, so a deployment can publish the pair and choose between them at run
+// time - the native image for start-up latency and footprint, the JVM one where the runtime
+// features below matter more.
+val nativeImageEnabled =
+    providers
+        .gradleProperty("nativeImage")
+        .orElse(providers.environmentVariable("FINAXIS_NATIVE_IMAGE"))
+        .map(String::toBoolean)
+        .getOrElse(true)
+
+// Spring Modulith's runtime support is the one capability a native image cannot keep, and it is
+// dropped from that build alone - the JVM image and every JVM run keep it. Nothing load-bearing
+// goes with it: the outbox, its RabbitMQ publishing and its retries, and the Modulith event
+// externalization behind them all keep working. It is the main reason to keep the JVM image
+// buildable.
+//
+// Spring Modulith's runtime support bootstraps `ApplicationModules` by having ArchUnit import the
+// application packages from the classpath. A native image has no class files to import and no
+// dynamic plugin loading, so `ApplicationModulesRuntime` fails on a missing
+// `com.tngtech.archunit.core.importer.ModuleImportPlugin` - see
+// https://github.com/spring-projects/spring-modulith/issues/735. Its beans are lazy, but the
+// observability post-processor and the startup module verifier both force them. Dropping
+// `spring-modulith-runtime`, `-actuator` and `-observability-core` costs the `/actuator/modulith`
+// endpoint - which `management.endpoints.web.exposure.include` does not expose anyway - and
+// per-module spans. This application declares no `ApplicationModuleInitializer` beans, the other
+// thing that support drives, and module structure is still verified by the test suite.
+//
+// There is no way to keep it: `ApplicationModulesFactory.defaultFactory()` is hardwired to the
+// ArchUnit-backed `ApplicationModules::of`, and no Modulith artefact ships a factory that reads the
+// `application-modules.json` its own AOT processor generates. Recovering it would mean embedding
+// every application class file in the image as a resource for ArchUnit to import, to get back an
+// endpoint `management.endpoints.web.exposure.include` does not expose and per-module spans.
+//
+// `processAotClasspath` is resolved independently of `runtimeClasspath` and does not inherit its
+// exclude rules, so all three classpaths have to be named: `processAot` decides which bean
+// definitions are generated, `nativeImageClasspath` is what `nativeCompile` compiles, and
+// `runtimeClasspath` is what ends up in the jar `bootBuildImage` hands to the buildpack.
+val nativeExcludedConfigurationNames =
+    setOf("nativeImageClasspath", "processAotClasspath", "runtimeClasspath")
+
+// Guarded on the task graph, not on `nativeImageEnabled` alone, and the difference is a real bug
+// rather than a nicety. `nativeImageEnabled` defaults to true, so keying the exclusion off it
+// stripped these three artefacts from `runtimeClasspath` for *every* invocation - `bootRun`,
+// `bootJar`, `qualityGate` - contradicting the comment directly above, which promises that every
+// JVM run keeps them. Only a build that actually produces a native image may drop them:
+// `nativeCompile`/`nativeBuild`/`nativeRun` always do, and `bootBuildImage` does only when the
+// native variant is selected. A JVM `bootBuildImage`, and an AOT-processed plain `bootJar` via
+// `-PenableAot=true`, both keep Modulith.
+val nativeOnlyTaskNames = setOf("nativeBuild", "nativeCompile", "nativeRun")
+
+val requestedTaskNames = gradle.startParameter.taskNames.map { it.substringAfterLast(':') }
+
+val buildsNativeImage =
+    requestedTaskNames.any { it in nativeOnlyTaskNames } ||
+        (requestedTaskNames.contains("bootBuildImage") && nativeImageEnabled)
+
+if (buildsNativeImage) {
+    configurations.matching { it.name in nativeExcludedConfigurationNames }.configureEach {
+        exclude(group = "org.springframework.modulith", module = "spring-modulith-actuator")
+        exclude(
+            group = "org.springframework.modulith",
+            module = "spring-modulith-observability-core",
+        )
+        exclude(group = "org.springframework.modulith", module = "spring-modulith-runtime")
+    }
+}
+
 tasks.named<BootJar>("bootJar") {
     layered {
         enabled.set(System.getenv("ENABLE_LAYERED_JAR")?.toBoolean() ?: false)
     }
+    // The Spring Boot plugin puts the `aot` source set on this jar's classpath unconditionally, and
+    // Gradle does not clean the output of a task it skipped - so an AOT-free build after an
+    // AOT-enabled one packages the previous run's bean definitions. That is not merely untidy: the
+    // Modulith module descriptor is written into both the AOT resources and, by the test suite,
+    // into the main ones, and `bootJar` then fails on the duplicate. An AOT-free jar carries no AOT
+    // output.
+    if (!aotEnabled) {
+        val aotOutput = sourceSets.named("aot").get().output
+        val aotOutputDirs = aotOutput.classesDirs.files + setOfNotNull(aotOutput.resourcesDir)
+        classpath?.let { current ->
+            setClasspath(current.filter { file -> file !in aotOutputDirs })
+        }
+    }
+    // Spring Modulith writes its module descriptor into the main resources *output* when the test
+    // suite builds the module structure. It is not a source resource, it is a different and much
+    // larger document than the one `processAot` generates for the runtime, and having both on the
+    // classpath fails this task on a duplicate entry. Dropping the test-written copy keeps the jar
+    // identical whether or not tests have run.
+    val mainResourcesDir =
+        sourceSets
+            .named("main")
+            .get()
+            .output.resourcesDir
+    filesMatching("**/META-INF/spring-modulith/application-modules.json") {
+        if (mainResourcesDir != null && file.startsWith(mainResourcesDir)) {
+            exclude()
+        }
+    }
+    // The Spring Boot plugin stamps this entry on every bootJar as soon as the GraalVM plugin is
+    // applied, and Paketo's spring-boot buildpack turns its presence alone into a native-image
+    // build plan. It therefore has to mean what it says: dropped when AOT did not run, and dropped
+    // for the JVM image, which is AOT-processed but must not be compiled to a binary. The manifest
+    // is materialised by the task action, so removing it here still lands before the archive is
+    // written.
+    doFirst {
+        if (!aotEnabled || !nativeImageEnabled) {
+            manifest.attributes.remove("Spring-Boot-Native-Processed")
+        }
+    }
 }
 
 tasks.named<BootBuildImage>("bootBuildImage") {
-    imageName = "ghcr.io/finaxis/platform:${project.version}"
+    // The two images have to be separately addressable for a deployment to publish both and choose
+    // at run time, so the JVM one carries a `-jvm` tag. FINAXIS_IMAGE_NAME overrides the whole
+    // reference for a registry that names things differently.
+    val imageTagSuffix = if (nativeImageEnabled) "" else "-jvm"
+    imageName =
+        System.getenv("FINAXIS_IMAGE_NAME")?.takeIf(String::isNotBlank)
+            ?: "ghcr.io/finaxis/platform:${project.version}$imageTagSuffix"
+    // The buildpacks download the Liberica NIK toolchain from inside the build container. Behind a
+    // TLS-inspecting egress proxy those downloads are re-signed with a private CA the container
+    // does not trust, and the build fails on certificate verification. Point
+    // FINAXIS_BUILD_CA_BUNDLE at a PEM bundle to mount over the container's trust store.
+    System.getenv("FINAXIS_BUILD_CA_BUNDLE")?.takeIf(String::isNotBlank)?.let { caBundle ->
+        bindings.add("$caBundle:/etc/ssl/certs/ca-certificates.crt:ro")
+    }
+    // `environment.set` replaces the map wholesale, so each branch has to be complete. Both run
+    // Spring AOT; what differs is what consumes it. A native image has no JVM, so the HotSpot flags
+    // in JAVA_TOOL_OPTIONS would go unread there, while the JVM image has to be told to use the AOT
+    // bean definitions it ships - `BP_SPRING_AOT_ENABLED` is what adds `-Dspring.aot.enabled=true`
+    // to its launcher.
     environment.set(
-        mapOf(
-            "BP_JVM_VERSION" to "25.*",
-            "BP_NATIVE_IMAGE" to (System.getenv("BP_NATIVE_IMAGE") ?: "false"),
-            "BP_SPRING_AOT_ENABLED" to "true",
-            "BP_JVM_AOTCACHE_ENABLED" to "true",
-            "BP_GRADLE_ADDITIONAL_BUILD_ARGUMENTS" to "-x test",
-            "BP_NATIVE_IMAGE_BUILD_ARGUMENTS" to "--enable-native-access=ALL-UNNAMED",
-            "BPE_APPEND_JAVA_TOOL_OPTIONS" to
-                "-XX:+HeapDumpOnOutOfMemoryError,-XX:InitialRAMPercentage=25,-XX:MaxRAMPercentage=75,-XX:+ExitOnOutOfMemoryError",
-        ),
+        if (nativeImageEnabled) {
+            buildMap {
+                // Selects the Liberica NIK major version the buildpack compiles with; the AOT jar
+                // is Java 25 bytecode, so an older default would not read it.
+                put("BP_JVM_VERSION", "25.*")
+                put("BP_NATIVE_IMAGE", "true")
+                // Extra `native-image` arguments, for callers that have to build somewhere
+                // smaller than a developer machine. CI passes `-Ob` here: a two-core runner with
+                // 8 GB cannot finish the optimising build, and quick-build mode still exercises
+                // the whole reachability analysis - which is the part that actually breaks - for
+                // a fraction of the memory. Left unset locally, so a developer still gets the
+                // optimised image the deployment would ship.
+                System.getenv("FINAXIS_NATIVE_BUILD_ARGS")?.takeIf(String::isNotBlank)?.let {
+                    put("BP_NATIVE_IMAGE_BUILD_ARGUMENTS", it)
+                }
+            }
+        } else {
+            mapOf(
+                "BP_JVM_VERSION" to "25.*",
+                "BP_SPRING_AOT_ENABLED" to "true",
+                // `BPE_APPEND_*` concatenates with no separator unless `BPE_DELIM_*` gives one, and
+                // JAVA_TOOL_OPTIONS is space-separated. Without both, the flags below arrive glued
+                // to the option before them and the JVM refuses to start:
+                // `Unrecognized VM option 'ExitOnOutOfMemoryError-XX:+HeapDump…'`.
+                "BPE_DELIM_JAVA_TOOL_OPTIONS" to " ",
+                // Heap sizing is left to the buildpack's memory calculator, which derives an
+                // explicit -Xmx from the container limit; a MaxRAMPercentage beside it is ignored.
+                "BPE_APPEND_JAVA_TOOL_OPTIONS" to
+                    "-XX:+HeapDumpOnOutOfMemoryError -XX:+ExitOnOutOfMemoryError",
+            )
+        },
     )
 }
 
@@ -509,7 +704,17 @@ tasks.matching { it.name == "processTestAot" }.configureEach {
 }
 
 tasks.matching { it.name == "processAot" }.configureEach {
-    enabled = providers.gradleProperty("enableAot").map(String::toBoolean).getOrElse(false)
+    enabled = aotEnabled
+}
+
+// `processAot` writes the `aot` sources but `compileAotJava` compiles whatever is in that source
+// set, so a disabled `processAot` still leaves the previous run's output to be compiled. That is
+// not hypothetical: the two image variants generate different bean definitions - the JVM one keeps
+// Spring Modulith's runtime support - so a `qualityGate` after building the other variant compiled
+// stale sources against a classpath that no longer had their types. The compile step follows the
+// generation step instead.
+tasks.matching { it.name in generatedAotCompileTaskNames }.configureEach {
+    enabled = aotEnabled
 }
 
 tasks.register("ktlintCheck") {

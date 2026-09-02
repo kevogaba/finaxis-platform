@@ -1,11 +1,18 @@
 package com.finaxis.platform.common.web.ratelimit
 
+import org.springframework.aot.hint.annotation.RegisterReflectionForBinding
 import org.springframework.boot.context.properties.ConfigurationProperties
 
 /**
  * Typed configuration for distributed API rate limiting.
+ *
+ * Spring AOT registers the annotated properties type itself but not the types reached through
+ * `paths`, so a native image binds `finaxis.rate-limit.paths.rules` against classes Kotlin
+ * reflection cannot then load (`KotlinReflectionInternalError: Class not found`). Naming them here
+ * keeps the registration next to the declaration that needs it.
  */
 @ConfigurationProperties(prefix = "finaxis.rate-limit")
+@RegisterReflectionForBinding(RateLimitPathProperties::class, RateLimitPathRule::class)
 data class RateLimitProperties(
     val enabled: Boolean = true,
     val includeHeaders: Boolean = true,

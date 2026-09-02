@@ -141,6 +141,33 @@ CORS origins, HSTS and CSP, disables development tooling and API documentation, 
 active-organisation HMAC secret without a default. See
 [production hardening](docs/security/production-hardening.md).
 
+## Deployment image
+
+`bootBuildImage` builds one of two deployable images. Both run their bean definitions from Spring
+AOT output — AOT is not optional for either — and both are published from the same commit, so a
+deployment can build the pair and choose per environment:
+
+```bash
+./gradlew bootBuildImage                              # native, :0.0.1-SNAPSHOT
+FINAXIS_NATIVE_IMAGE=false ./gradlew bootBuildImage   # JVM,    :0.0.1-SNAPSHOT-jvm
+docker compose --profile image up platform
+curl -fsS http://localhost:8081/actuator/health
+```
+
+The native image starts in ~8 seconds against ~40 for the JVM one, and carries no JVM at all. The
+JVM image builds in ~90 seconds rather than ~13 minutes and keeps Spring Modulith's runtime
+support — the one capability a native image cannot provide, because it needs ArchUnit to import
+class files that an image does not have. Everything else is in both.
+`FINAXIS_NATIVE_IMAGE` selects the variant and `FINAXIS_IMAGE_NAME` overrides the reference;
+`./gradlew nativeCompile` builds the executable on the host without Docker. CI builds both on
+every push.
+
+GraalVM's closed-world assumption means `@ConditionalOnProperty` and `@Profile` are resolved when
+the image is built, not when it starts, so the feature set has to be chosen at build time. That
+constraint, what the native variant gives up, and how to find the next missing reflection or
+serialization hint are covered in
+[Native image deployment](docs/operations/native-image-deployment.md).
+
 ## Testing
 
 The project maintains unit tests and Spring integration tests. Integration coverage uses
@@ -202,6 +229,7 @@ the top of the stack. Merge bottom-up, rebasing the remainder after each merge.
 | Database | [Foundation schema](docs/database/foundation-schema.md) |
 | Operations | [Branch provisioning](docs/operations/branch-provisioning.md) |
 | Operations | [Business date and COB](docs/operations/business-date.md) |
+| Operations | [Native image deployment](docs/operations/native-image-deployment.md) |
 | Operations | [Tenant provisioning](docs/operations/tenant-provisioning.md) |
 | Operations | [Tenant settings](docs/operations/tenant-settings.md) |
 | Security | [Accounting authorization](docs/security/accounting-authorization.md) |

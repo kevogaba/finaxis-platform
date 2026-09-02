@@ -203,7 +203,7 @@ class TenantSettingsControllerTests
                 .get("${ApiPaths.TENANT_SETTINGS}/unknown") {
                     with(authentication(tenantToken(tenantId)))
                 }.andExpect {
-                    status { isUnprocessableEntity() }
+                    status { isUnprocessableContent() }
                     jsonPath("$.code") { value("invalid_operation") }
                 }
         }
