@@ -148,6 +148,31 @@ object PostingErrorCodes {
     /** A reconciliation tolerance cannot be negative. */
     const val RECONCILIATION_TOLERANCE_INVALID = "accounting.reconciliation_tolerance_invalid"
 
+    /** The manual journal does not exist in the tenant. */
+    const val MANUAL_JOURNAL_NOT_FOUND = "accounting.manual_journal_not_found"
+
+    /** Only a DRAFT manual journal can be amended. */
+    const val MANUAL_JOURNAL_NOT_EDITABLE = "accounting.manual_journal_not_editable"
+
+    /** The manual journal changed while it was being amended or moved. */
+    const val MANUAL_JOURNAL_STALE = "accounting.manual_journal_stale"
+
+    /** The requested state change is not a legal transition from the journal's current state. */
+    const val MANUAL_JOURNAL_TRANSITION_NOT_ALLOWED =
+        "accounting.manual_journal_transition_not_allowed"
+
+    /** Amending, submitting or cancelling a manual journal is the maker's act alone. */
+    const val MANUAL_JOURNAL_NOT_THE_MAKER = "accounting.manual_journal_not_the_maker"
+
+    /** The actor who submitted a manual journal cannot approve it. */
+    const val MANUAL_JOURNAL_SELF_APPROVAL = "accounting.manual_journal_self_approval"
+
+    /** Lines must number at least two, be numbered 1..n, and name eligible accounts. */
+    const val MANUAL_JOURNAL_LINES_INVALID = "accounting.manual_journal_lines_invalid"
+
+    /** A manual journal needs a title and a reason, and a rejection needs a reason. */
+    const val MANUAL_JOURNAL_REASON_REQUIRED = "accounting.manual_journal_reason_required"
+
     /** The fiscal period is already in the state the caller asked for. */
     const val PERIOD_ALREADY_IN_STATE = "accounting.fiscal_period_already_in_state"
 

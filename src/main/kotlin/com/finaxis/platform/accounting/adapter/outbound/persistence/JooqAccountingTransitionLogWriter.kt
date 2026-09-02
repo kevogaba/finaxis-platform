@@ -3,18 +3,22 @@ package com.finaxis.platform.accounting.adapter.outbound.persistence
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.accounting.application.FiscalPeriodMakerResolver
 import com.finaxis.platform.accounting.application.GlAccountMakerResolver
+import com.finaxis.platform.accounting.application.manual.ManualJournalMakerResolver
 import com.finaxis.platform.accounting.application.rules.PostingRuleVersionMakerResolver
 import com.finaxis.platform.accounting.domain.FiscalPeriodAggregate
 import com.finaxis.platform.accounting.domain.FiscalPeriodKey
 import com.finaxis.platform.accounting.domain.FiscalPeriodTransition
 import com.finaxis.platform.accounting.domain.GlAccountAggregate
 import com.finaxis.platform.accounting.domain.GlAccountTransition
+import com.finaxis.platform.accounting.domain.ManualJournalAggregate
+import com.finaxis.platform.accounting.domain.ManualJournalTransition
 import com.finaxis.platform.accounting.domain.PostingRuleVersionAggregate
 import com.finaxis.platform.accounting.domain.PostingRuleVersionTransition
 import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogWriter
 import com.finaxis.platform.jooq.tables.references.FISCAL_PERIOD_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT_TRANSITION_LOG
+import com.finaxis.platform.jooq.tables.references.MANUAL_JOURNAL_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.POSTING_RULE_VERSION_TRANSITION_LOG
 import org.jooq.DSLContext
 import org.jooq.JSONB
@@ -44,7 +48,8 @@ class JooqAccountingTransitionLogWriter(
 ) : TransitionLogWriter,
     FiscalPeriodMakerResolver,
     GlAccountMakerResolver,
-    PostingRuleVersionMakerResolver {
+    PostingRuleVersionMakerResolver,
+    ManualJournalMakerResolver {
     override fun supports(aggregateType: String): Boolean = aggregateType in OWNED_TYPES
 
     override fun save(log: TransitionLog) {
@@ -70,6 +75,8 @@ class JooqAccountingTransitionLogWriter(
             GlAccountAggregate.AGGREGATE_TYPE -> saveGlAccount(log, row)
 
             PostingRuleVersionAggregate.AGGREGATE_TYPE -> savePostingRuleVersion(log, row)
+
+            ManualJournalAggregate.AGGREGATE_TYPE -> saveManualJournal(log, row)
 
             // Unreachable while `supports` gates this, and kept so it stays unreachable: a type
             // added there without a branch here would otherwise write nothing and report success.
@@ -127,6 +134,26 @@ class JooqAccountingTransitionLogWriter(
             .execute()
     }
 
+    private fun saveManualJournal(
+        log: TransitionLog,
+        row: LogRow,
+    ) {
+        dsl
+            .insertInto(MANUAL_JOURNAL_TRANSITION_LOG)
+            .set(MANUAL_JOURNAL_TRANSITION_LOG.ORGANISATION_ID, row.organisationId)
+            .set(MANUAL_JOURNAL_TRANSITION_LOG.ENTITY_ID, row.entityId)
+            .set(MANUAL_JOURNAL_TRANSITION_LOG.TRANSITION_NAME, log.transition)
+            .set(MANUAL_JOURNAL_TRANSITION_LOG.STATUS_FROM, log.fromState)
+            .set(MANUAL_JOURNAL_TRANSITION_LOG.STATUS_TO, log.toState)
+            .set(MANUAL_JOURNAL_TRANSITION_LOG.REASON, log.reason)
+            .set(MANUAL_JOURNAL_TRANSITION_LOG.CREATED_AT, row.createdAt)
+            .set(MANUAL_JOURNAL_TRANSITION_LOG.CREATED_BY, row.actorId)
+            .set(MANUAL_JOURNAL_TRANSITION_LOG.UPDATED_AT, row.now)
+            .set(MANUAL_JOURNAL_TRANSITION_LOG.UPDATED_BY, row.actorId)
+            .set(MANUAL_JOURNAL_TRANSITION_LOG.METADATA_JSONB, row.metadata)
+            .execute()
+    }
+
     private fun savePostingRuleVersion(
         log: TransitionLog,
         row: LogRow,
@@ -163,6 +190,23 @@ class JooqAccountingTransitionLogWriter(
                 GL_ACCOUNT_TRANSITION_LOG.ID.desc(),
             ).limit(1)
             .fetchOne(GL_ACCOUNT_TRANSITION_LOG.CREATED_BY)
+
+    override fun lastActorFor(
+        organisationId: UUID,
+        journalId: UUID,
+        transition: ManualJournalTransition,
+    ): UUID? =
+        dsl
+            .select(MANUAL_JOURNAL_TRANSITION_LOG.CREATED_BY)
+            .from(MANUAL_JOURNAL_TRANSITION_LOG)
+            .where(MANUAL_JOURNAL_TRANSITION_LOG.ORGANISATION_ID.eq(organisationId))
+            .and(MANUAL_JOURNAL_TRANSITION_LOG.ENTITY_ID.eq(journalId))
+            .and(MANUAL_JOURNAL_TRANSITION_LOG.TRANSITION_NAME.eq(transition.name))
+            .orderBy(
+                MANUAL_JOURNAL_TRANSITION_LOG.CREATED_AT.desc(),
+                MANUAL_JOURNAL_TRANSITION_LOG.ID.desc(),
+            ).limit(1)
+            .fetchOne(MANUAL_JOURNAL_TRANSITION_LOG.CREATED_BY)
 
     override fun lastActorFor(
         organisationId: UUID,
@@ -237,6 +281,7 @@ class JooqAccountingTransitionLogWriter(
                 FiscalPeriodAggregate.AGGREGATE_TYPE,
                 GlAccountAggregate.AGGREGATE_TYPE,
                 PostingRuleVersionAggregate.AGGREGATE_TYPE,
+                ManualJournalAggregate.AGGREGATE_TYPE,
             )
     }
 }

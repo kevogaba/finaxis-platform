@@ -206,6 +206,9 @@ class AccountingBoundaryRuleTests {
                 "PostingRuleLeg",
                 "PostingRuleVersionTransitionLog",
                 "ControlAccountReconciliationRun",
+                "ManualJournal",
+                "ManualJournalLine",
+                "ManualJournalTransitionLog",
             )
 
         /**
@@ -213,7 +216,7 @@ class AccountingBoundaryRuleTests {
          * into one package, so ownership is asserted by type name. Keep in sync with the canonical
          * ERD in `docs/database/accounting-erd.md`.
          *
-         * The thirteen in [SHIPPED_ACCOUNTING_TABLE_TYPES] exist as of `V9`;
+         * The sixteen in [SHIPPED_ACCOUNTING_TABLE_TYPES] exist as of `V10`;
          * `GlAccountDailyBalance` is created by issue #47. Naming a type before its table exists
          * is deliberate — the rule then guards from the moment the table appears rather than from
          * the moment someone remembers to add it here.
@@ -237,6 +240,11 @@ class AccountingBoundaryRuleTests {
                 "GlAccountTransitionLog",
                 "FiscalPeriodTransitionLog",
                 "PostingRuleVersionTransitionLog",
+                // Issue #48's manual-journal draft aggregate, added to the ERD by the change that
+                // created it, so the boundary rule guards it from its first build.
+                "ManualJournal",
+                "ManualJournalLine",
+                "ManualJournalTransitionLog",
             )
 
         val accountingJooqTables: DescribedPredicate<JavaClass> =

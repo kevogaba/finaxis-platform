@@ -312,11 +312,7 @@ class HighRiskOperationAuditCoverageTests(
          * transition - `actions pending enforcement have no production call site yet` fails until
          * its entry is deleted. It must reach empty before the accounting readiness gate (#54).
          */
-        val pendingEnforcement =
-            mapOf(
-                "journal.create_manual" to "#48",
-                "journal.approve" to "#48",
-            )
+        val pendingEnforcement: Map<String, String> = emptyMap()
 
         /**
          * The ratchet may only shrink. Without this, a new HIGH/CRITICAL permission shipped with
@@ -326,7 +322,7 @@ class HighRiskOperationAuditCoverageTests(
          * Asserted as an **equality** against the map size, so a discharge that forgets to lower
          * this constant fails rather than quietly banking slack for the next unwired action.
          */
-        const val MAXIMUM_PENDING_ENFORCEMENT = 2
+        const val MAXIMUM_PENDING_ENFORCEMENT = 0
 
         /** A wired action the scan must always find; its absence means the scan is broken. */
         const val CALL_SITE_CANARY = "settings.update"

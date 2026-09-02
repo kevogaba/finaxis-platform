@@ -140,7 +140,8 @@ invariant the codebase already held rather than forcing a change.
 
 | Missing | Issue |
 | --- | --- |
-| Manual journals | #48 |
+| Ledger balance projections and daily rollups | #47 |
+| Trial balance, GL ledger and financial-statement read models | #49, #50, #51 |
 | Accounting REST adapters | #52 |
 
 Phase A and B items that this table used to list — the fiscal-calendar and chart-of-accounts
@@ -215,6 +216,27 @@ The provider port is the seam a future savings, loans or shares module implement
 ledger total in this scope as of this date"*, one aggregate back, nothing else crossing. A kind with
 no provider is reported as `accounting.subledger_provider_missing` rather than silently matched.
 End-of-day and period-close orchestration hooks in by calling `run`; nothing here schedules it.
+
+## Manual journals
+
+`ManualJournalService` is the one legitimate way to name general-ledger accounts by hand, and the
+one that offers no way around the engine. A `manual_journal` draft carries explicit debit and credit
+lines, a mandatory reason and its own transition log (`V10`); nothing about it touches
+`posting_request`, `journal_entry` or `journal_line`. `DRAFT → PENDING_APPROVAL → POSTED`, rejection
+back to `DRAFT` with a reason, cancellation from `DRAFT`. **Approval is the posting**: `APPROVE`
+runs the `PostingEngine` with the lines as legs, `entry_type = 'MANUAL'`, the draft's id as the
+durable source, and writes the produced journal's id onto the draft in the same compare-and-set that
+moves it to `POSTED` - so the draft, its log, the `journal.approve` audit event and the ledger rows
+commit together or not at all. The client never sets `POSTED` and never supplies the journal
+identity.
+
+Controls: `journal.create_manual` (`HIGH`, audited) to draft, `journal.submit` to submit,
+`journal.approve` (`CRITICAL`, audited) to approve or reject; the approver is not the most recent
+submitter, resolved from `manual_journal_transition_log` under the header's row lock; and every
+line's account has opted into manual posting and is not a control account, which
+`GlAccountPostingPolicy.requireManualPostingAllowed` enforces and `V9`'s `CHECK` backs. With this
+the `HighRiskOperationAuditCoverageTests` ratchet reaches zero: every `HIGH` and `CRITICAL`
+accounting permission has a real audit call site.
 
 ## Reversal
 

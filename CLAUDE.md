@@ -19,8 +19,8 @@ Modules (`com.finaxis.platform`): `iam` (identity, authorization, active-organis
 roles, permissions, and user REST adapters), `lifecycle` (organisation/branch/user/membership
 FSMs, tenant setup, business date, audit views, and REST adapters), `accounting`
 (general-ledger boundary, posting contracts, the fiscal-calendar and chart-of-accounts schema
-with their lifecycles, the journal schema, the synchronous posting engine, and versioned posting
-rules with their resolver, so a product module can post any event its tenant has configured - see
+with their lifecycles, the journal schema, the synchronous posting engine, versioned posting rules,
+reversal, control-account reconciliation and manual journals - see
 `docs/architecture/accounting-module-boundary.md`), `notifications` (RabbitMQ
 listener → JobRunr job), `common` (reusable transitions/audit/context/persistence/web infra),
 `config`.
@@ -72,6 +72,8 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
 - `V9__accounting_control_accounts_and_reconciliation.sql` — `is_control_account` and
   `control_subledger_kind` on `gl_account`, the `control_account_reconciliation_run` evidence
   table, and `idx_journal_line_subledger`
+- `V10__accounting_manual_journals.sql` — the manual-journal draft aggregate: `manual_journal`,
+  `manual_journal_line` and their transition log; approval posts through the engine
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -94,9 +96,10 @@ Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 See `docs/database/foundation-schema.md`, `docs/adr/0010-...`, and `docs/adr/0015-...`.
 `docs/database/accounting-erd.md` is the design authority every accounting migration implements,
 and `docs/architecture/accounting-foundation.md` holds the invariants. `V6` created the fiscal
-calendar and the chart of accounts from it, `V7` the journal tables, `V8` the posting-rule tables
-and `V9` control accounts and their reconciliation evidence; the projection table is still
-design-only. Do not invent accounting tables or columns outside those documents.
+calendar and the chart of accounts from it, `V7` the journal tables, `V8` the posting-rule tables,
+`V9` control accounts and their reconciliation evidence, and `V10` manual-journal drafts; the
+projection table is still design-only. Do not invent accounting tables or columns outside those
+documents.
 
 ## Authorization
 
