@@ -598,11 +598,6 @@ class PostingEngineTests {
             }
         }
 
-        override fun findJournalEntry(
-            organisationId: UUID,
-            journalEntryId: UUID,
-        ): JournalEntryView? = entryIds.indexOf(journalEntryId).takeIf { it >= 0 }?.let(::view)
-
         override fun findJournalEntryForRequest(
             organisationId: UUID,
             postingRequestId: UUID,
@@ -613,11 +608,6 @@ class PostingEngineTests {
                 ?.let(
                     ::view,
                 )
-
-        override fun findJournalLines(
-            organisationId: UUID,
-            journalEntryId: UUID,
-        ): List<JournalLineView> = emptyList()
 
         private fun view(index: Int): JournalEntryView {
             val entry = entries[index]
