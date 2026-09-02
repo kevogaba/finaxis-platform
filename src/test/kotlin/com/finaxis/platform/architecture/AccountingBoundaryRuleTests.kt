@@ -187,7 +187,8 @@ class AccountingBoundaryRuleTests {
 
         /**
          * The subset of [ACCOUNTING_TABLE_TYPES] that a migration has actually created. Later
-         * issues move their own names into this set as their migrations land.
+         * issues move their own names into this set as their migrations land: `V6` the first
+         * five, `V7` the three journal tables.
          */
         val SHIPPED_ACCOUNTING_TABLE_TYPES =
             setOf(
@@ -196,6 +197,9 @@ class AccountingBoundaryRuleTests {
                 "GlAccount",
                 "GlAccountTransitionLog",
                 "FiscalPeriodTransitionLog",
+                "PostingRequest",
+                "JournalEntry",
+                "JournalLine",
             )
 
         /**
@@ -203,8 +207,8 @@ class AccountingBoundaryRuleTests {
          * into one package, so ownership is asserted by type name. Keep in sync with the canonical
          * ERD in `docs/database/accounting-erd.md`.
          *
-         * The five in [SHIPPED_ACCOUNTING_TABLE_TYPES] exist as of `V6`; the rest are created by
-         * issues #40, #44, #46 and #47. Naming a type before its table exists is deliberate — the
+         * The eight in [SHIPPED_ACCOUNTING_TABLE_TYPES] exist as of `V7`; the rest are created by
+         * issues #44, #46 and #47. Naming a type before its table exists is deliberate — the
          * rule then guards from the moment the table appears rather than from the moment someone
          * remembers to add it here.
          */
