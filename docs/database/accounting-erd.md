@@ -4,10 +4,11 @@ This document is the database-design authority for accounting. Issues #36, #40, 
 implement it: if implementation proves a change is required, change this document first, record
 why, then write the forward-only migration.
 
-The five tables issue #36 creates are specified below to column, constraint and index level, so
-that migration is a transcription rather than a design exercise. The later issues' tables are still
-specified at relationship level only, and each will be brought to column level by the change that
-implements it — the same way #36's were, and for the same reason. An earlier revision of this
+The five tables issue #36 created and the three tables issue #40 creates are specified below to
+column, constraint and index level, so each migration is a transcription rather than a design
+exercise. The later issues' tables are still specified at relationship level only, and each will be
+brought to column level by the change that implements it — the same way #36's and #40's were, and
+for the same reason. An earlier revision of this
 document promised that an implementing agent *"never has to invent a table, a column or a
 constraint"* while carrying no column definitions for any table, which made the promise false for
 the first issue that tried to keep it.
@@ -23,7 +24,7 @@ sentence.
 | Migration | Contents | Issue |
 | --- | --- | --- |
 | `V6` | `accounting_fiscal_year`, `accounting_fiscal_period`, `gl_account`, two transition logs | #36 |
-| Next | `posting_request`, `journal_entry`, `journal_line` | #40 |
+| `V7` | `posting_request`, `journal_entry`, `journal_line`, and the `reference_sequence` backfill | #40 |
 | Then | `posting_rule`, `posting_rule_version`, `posting_rule_leg`, one transition log | #44 |
 | Then | `control_account_reconciliation_run` | #46 |
 | Then | `gl_account_daily_balance` | #47 |
@@ -122,9 +123,10 @@ and branch is a *dimension on the posting*, carried on `journal_entry` and `jour
 
 Issue #36's first acceptance criterion is *"schema matches #30 ERD exactly **or** #30 is
 deliberately updated first with the approved design change"*. Everything in this section takes the
-second branch. Eight questions are settled here. Most had no answer anywhere in the design record;
-two had answers that contradict each other; one had an answer that was wrong. Each is settled
-before the migration exists, with the reasoning attached, rather than decided by accident in SQL.
+second branch. Eight questions were settled here for issue #36, and four more for issue #40. Most
+had no answer anywhere in the design record; two had answers that contradict each other; one had an
+answer that was wrong. Each is settled before the migration exists, with the reasoning attached,
+rather than decided by accident in SQL.
 
 ### Fiscal-period status is `FUTURE`, `OPEN`, `CLOSED`, `LOCKED`
 
@@ -302,6 +304,84 @@ creates. Issue #36 creates no table the rule can be evaluated against.
 The enforcement point is therefore the first issue that can express it — #40, where
 `journal_entry` appears. That correction is made in the foundation document as part of this change
 rather than left as a promise the schema cannot keep.
+
+Precisely where inside #40's stack it lands is worth one more sentence, because #40 is two pull
+requests. The migration creates the table the predicate reads; the *check* is a read of that table
+from the two places the functional currency can change — lifecycle's organisation update and the
+`base_currency` tenant setting — through an accounting-declared query port, and it ships with the
+posting engine (#41), which is the first change that can write a row for the predicate to find.
+
+### `posting_request` has no persistable `REJECTED` state
+
+[The accounting foundation](../architecture/accounting-foundation.md)'s posting walkthrough
+described status-aware collision handling with three branches — completed, rejected, in flight —
+and warned that treating a rejected request as a duplicate would strand its source. The middle
+branch cannot exist, and the reason is the atomicity invariant itself.
+
+A posting is rejected by throwing: an unbalanced set, an account that is not postable, a closed
+period, a missing rule. The throw rolls back the transaction that attempted the posting, and with
+it the `posting_request` row the engine had claimed. `INV-12` forbids a `REQUIRES_NEW` write in the
+posting path, and the one exception it names — an independent audit of a rejection — is an
+`audit_event`, not a ledger row. So after a rejection there is nothing in `posting_request` to be
+in a `REJECTED` state.
+
+The status domain is therefore **`PENDING`, `POSTED`**. `PENDING` is the state of the row between
+the idempotency claim and the journal write, which is to say it is visible only inside the posting
+transaction and to a concurrent duplicate blocked on the same key; no committed row is ever
+`PENDING`. A retry after a rejection finds no row and posts afresh — exactly the outcome the
+walkthrough wanted for the rejected case, reached without a second transaction. The walkthrough is
+corrected in the same change as this section.
+
+A consequence for the retry story: `posting_request` **is** the mutable half of the design, as
+ADR 0020 says, but its mutability is bounded to one transaction. After commit it is written again
+only by a correction's `corrects_posting_request_id` pointing *at* it, never by an update *of* it.
+
+### A request produces at most one journal, and the link is a unique key, not a cycle
+
+`POSTING_REQUEST ||--o| JOURNAL_ENTRY : produces` could be modelled two ways: a nullable
+`journal_entry_id` on `posting_request` pointing forward, or the `posting_request_id` that
+`journal_entry` must carry anyway, made unique. The forward pointer creates a circular foreign key
+between the two tables — insertable only in a fixed order with a trailing `UPDATE`, and an
+`UPDATE` is exactly the statement issue #54's privilege model is designed to make rare.
+
+Adopted: **`UNIQUE (organisation_id, posting_request_id)` on `journal_entry`**, and no
+`journal_entry_id` column on `posting_request`. "Which journal did this request produce" is one
+unique-index lookup; "which request produced this journal" is a column read. The request's status
+flips to `POSTED` in the same transaction as the journal insert, so a committed `POSTED` request
+with no journal is unrepresentable in practice and detectable in one anti-join if it ever were.
+
+### `entry_type` is `STANDARD`, `MANUAL` or `REVERSAL`, and the reversal link is a `CHECK`
+
+ADR 0020 names `REVERSAL` and forbids `CORRECTION`. It does not name the others. Two more are
+adopted: `STANDARD` for a journal produced from a product module's posting intent through a
+posting rule, and `MANUAL` for one produced from a manual journal approved under `journal.approve`
+(issue #48). `MANUAL` is not decorative: every reporting filter an auditor asks for first —
+*"show me the hand-written entries in this period"* — would otherwise be a join to
+`posting_request.source_module`, and the two columns cannot drift because both are written once
+by the engine in the same statement sequence.
+
+`entry_type = 'REVERSAL'` and `reverses_journal_entry_id IS NOT NULL` are made **equivalent by a
+`CHECK`**, so neither a reversal with no link nor a linked non-reversal is representable. The
+partial unique index over `(organisation_id, reverses_journal_entry_id)` then gives at most one
+reversal per journal, and the reversal of a `REVERSAL` is refused by the engine rather than the
+schema (issue #43): correction of a reversal is a fresh posting, which keeps *"has this journal
+been reversed"* a one-index question.
+
+### Serialisation never relies on a row lock over the immutable tables
+
+`SELECT … FOR UPDATE` and `SELECT … FOR SHARE` require the `UPDATE` privilege on the table.
+Issue #54 revokes `UPDATE` and `DELETE` on `journal_entry` and `journal_line` from the application
+role, so a design that took a row lock on a journal — to guard against a concurrent second
+reversal, say — would work in every test and fail on the day the privilege model it exists for is
+switched on.
+
+Every serialisation the engine needs is therefore taken on a **mutable** row or an advisory lock:
+`reference_sequence` for the gapless number, `posting_request` under `FOR UPDATE` for the
+idempotency claim, and a two-int transaction advisory lock in
+`AdvisoryLockNamespace.ACCOUNTING_JOURNAL_REVERSAL`, keyed on the original journal's id, for
+reversal. The partial unique index stays the authoritative backstop for at-most-one reversal; the
+advisory lock exists so the race resolves to a named conflict rather than to a unique violation
+that aborts the caller's whole transaction.
 
 ## Column definitions for the issue #36 tables
 
@@ -622,13 +702,240 @@ composite foreign key is `(organisation_id, entity_id)` against the parent table
 `created_by` is the actor of the transition, which is what makes the reopen actor-identity check
 above answerable from data.
 
-### A prerequisite issue #36 does not close
+### A prerequisite issue #36 does not close, and #40 does
 
 `reference_sequence` is seeded with `MEMBER`, `TRANSACTION` and `JOURNAL` when an organisation is
 provisioned through `OrganisationProvisioningService`. The bootstrap tenant created by `V3` in SQL
 has **no** `reference_sequence` rows at all, so the gapless journal number issue #40 depends on has
-no counter for it. That is #40's to fix, in the migration that introduces the tables which need the
-counter; it is recorded here so it is not discovered at posting time.
+no counter for it. `V7` closes it: it inserts the three rows for every organisation that lacks them,
+with `ON CONFLICT DO NOTHING` on `uq_reference_sequence_organisation_code` so a tenant provisioned
+through the application is untouched. The engine still fails loudly, with
+`accounting.journal_sequence_missing`, if a tenant somehow has no `JOURNAL` row — a silent
+fallback to a different numbering path is exactly the failure the backfill exists to prevent.
+
+## Column definitions for the issue #40 tables
+
+Every column, constraint, index and comment the second accounting migration creates. As above, the
+identifier pair (`id`, `guid`) is specified once under the conventions and not repeated. The audit
+columns differ per table and are stated per table, because that difference is the immutability
+design: `posting_request` carries the mutable set, the two journal tables carry `created_at` and
+`created_by` only.
+
+Every money column follows [the money and currency section](#money-and-currency-columns), every
+date column follows [the period selector](#the-period-selector), and every parent reference is a
+composite foreign key on `(organisation_id, <parent_id>)` with the `uq_<table>_organisation_id`
+target declared in the same `CREATE TABLE`.
+
+### `posting_request`
+
+The durable identity of one business transaction's accounting effect: what asked for the posting,
+which rule version answered, and the idempotency key that makes a retry a no-op. One row per
+source reference, ever.
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `branch_id` | `UUID` | yes | Originating branch; null for a head-office or tenant-level posting |
+| `source_module` | `TEXT` | no | Module that owns the business transaction, e.g. `savings`; `accounting` for reversals and manual journals |
+| `source_entity_type` | `TEXT` | no | Kind of business entity, for drill-down, e.g. `SAVINGS_DEPOSIT`, `JOURNAL_REVERSAL`, `MANUAL_JOURNAL`. Bounded like `source_module`, because it is a key column of an index and an unbounded value can exceed the B-tree tuple limit |
+| `source_entity_id` | `UUID` | no | Identity of that entity, for drill-down. Descriptive: **not** a foreign key (`INV-16`) |
+| `source_reference` | `TEXT` | no | The durable idempotency identity, unique per tenant and module (`INV-7`) |
+| `event_code` | `TEXT` | no | Semantic posting event the legs were resolved from, e.g. `SAVINGS_DEPOSIT` |
+| `request_fingerprint` | `TEXT` | no | SHA-256, hex, of the canonical request — source triple, event, dates, currency and legs. Never the raw payload |
+| `posting_rule_version_id` | `UUID` | yes | The exact rule version that resolved the legs; null for a reversal or a manual journal. Column created here, foreign key added by #44's migration |
+| `corrects_posting_request_id` | `UUID` | yes | The request this replacement posting corrects, after its journal was reversed |
+| `business_date` | `DATE` | no | The tenant business date when the posting was made |
+| `transaction_date` | `DATE` | no | When the source event occurred |
+| `value_date` | `DATE` | no | From when it affects interest or float |
+| `posting_date` | `DATE` | no | The day whose books it lands in; selects the period |
+| `currency_code` | `CHAR(3)` | no | The transaction currency of the request |
+| `narrative` | `TEXT` | yes | Free text, at most 500 characters |
+| `status` | `TEXT` | no | `PENDING` inside the posting transaction, `POSTED` once committed |
+| `posted_at` | `TIMESTAMPTZ` | yes | The instant the journal became immutable; set exactly when `status` is `POSTED` |
+| `correlation_id` | `TEXT` | yes | The request correlation the posting was made under |
+| `request_id` | `TEXT` | yes | The `X-Request-Id` of the originating request |
+
+Plus the mutable audit set: `created_at`, `created_by`, `updated_at`, `updated_by`, `row_version`.
+
+| Constraint | Kind | Purpose |
+| --- | --- | --- |
+| `uq_posting_request_guid` | `UNIQUE (guid)` | Alternate key |
+| `uq_posting_request_organisation_id` | `UNIQUE (organisation_id, id)` | Composite foreign-key target for `journal_entry` and for the correction link |
+| `uq_posting_request_source` | `UNIQUE (organisation_id, source_module, source_reference)` | **The idempotency mechanism.** One financial effect per durable source identity, per tenant |
+| `fk_posting_request_branch` | `FOREIGN KEY (organisation_id, branch_id)` | A request cannot name another tenant's branch |
+| `fk_posting_request_corrects` | `FOREIGN KEY (organisation_id, corrects_posting_request_id)` | Correction lineage stays inside the tenant |
+| `chk_posting_request_not_self_correction` | `CHECK (corrects_posting_request_id IS NULL OR corrects_posting_request_id <> id)` | A request cannot correct itself |
+| `chk_posting_request_status` | `CHECK (status IN ('PENDING', 'POSTED'))` | The two adopted states |
+| `chk_posting_request_posted_at` | `CHECK ((status = 'POSTED') = (posted_at IS NOT NULL))` | `posted_at` is set exactly when posted |
+| `chk_posting_request_dates` | `CHECK (posting_date <= business_date AND transaction_date <= business_date)` | Neither date may follow the business date, mirroring `PostingDatePolicy` |
+| `chk_posting_request_currency` | `CHECK (currency_code ~ '^[A-Z]{3}$')` | The foundation currency regex |
+| `chk_posting_request_source_module` | `CHECK (source_module ~ '^[a-z][a-z0-9_]{0,63}$')` | A module name, lower-case, bounded |
+| `chk_posting_request_source_entity_type` | `CHECK (source_entity_type ~ '^[A-Z][A-Z0-9_]{0,63}$')` | An entity kind, upper-case, bounded: it is a key column of `idx_posting_request_source_entity` |
+| `chk_posting_request_source_reference` | `CHECK (char_length(source_reference) BETWEEN 1 AND 200 AND btrim(source_reference) <> '')` | Bounded, and genuinely non-blank: `'   '` passes a length check and would make every later operation of that module a retry of the first |
+| `chk_posting_request_event_code` | `CHECK (event_code ~ '^[A-Z][A-Z0-9_]{0,63}$')` | An event code, upper-case, bounded |
+| `chk_posting_request_fingerprint` | `CHECK (request_fingerprint ~ '^[0-9a-f]{64}$')` | A SHA-256 digest, lower-case hex |
+| `chk_posting_request_narrative` | `CHECK (narrative IS NULL OR char_length(narrative) <= 500)` | Bounded free text |
+| `chk_posting_request_version` | `CHECK (row_version >= 0)` | Convention |
+
+`request_fingerprint` is what lets issue #42 tell a safe retry from a conflicting reuse of the
+same key without storing the request. It is computed by the engine over a canonical rendering —
+sorted, separator-delimited, currency-qualified amounts at scale 6 — so the same economic request
+always hashes the same and a different one never collides by formatting.
+
+| Index | Definition | Justifying query |
+| --- | --- | --- |
+| `idx_posting_request_source_entity` | `(organisation_id, source_module, source_entity_type, source_entity_id, id DESC)` | Q5 drill-down from a business entity to its postings — *"every posting this deposit produced"*. Ends in the keyset column so one index serves both the drill-down and the paging order; without it a later page of a busy entity costs more than an earlier one |
+| `uq_posting_request_corrects` | `UNIQUE (organisation_id, corrects_posting_request_id) WHERE corrects_posting_request_id IS NOT NULL` | The correction foreign key, and *"what replaced this request"*. Partial, because almost no request corrects another. **Unique**, because a request is replaced at most once: two attempts with different source references would otherwise each produce a journal and duplicate the replacement effect |
+
+`uq_posting_request_source` is the third index and serves the idempotency claim directly.
+
+**Two foreign keys deliberately get no index, and the reason is stated rather than left as an
+oversight of `V1`'s rule.** `branch_id` is never a lookup key here — branch reporting reads
+`journal_line`, whose branch index is issue #49's — and `branch` rows are never deleted, so the
+index would only ever be maintained, never read. `posting_rule_version_id` receives its foreign key
+and its index together in #44's migration, where the reporting question *"which postings used this
+rule version"* first has an answer. This table receives one row per financial transaction, roughly
+200,000 a day at the design envelope, and every index on it is paid on every one of them.
+
+### `journal_entry`
+
+The balanced header. Immutable once committed: no `updated_at`, no `updated_by`, no `row_version`,
+and `REVOKE UPDATE, DELETE` under issue #54.
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `branch_id` | `UUID` | yes | The branch the journal is booked to |
+| `posting_request_id` | `UUID` | no | The request that produced this journal; unique, so a request produces at most one |
+| `fiscal_period_id` | `UUID` | no | The period `posting_date` resolved to, bound at posting time (`INV-9`) |
+| `entry_number` | `BIGINT` | no | Gapless, tenant-scoped, from `reference_sequence` code `JOURNAL` |
+| `entry_type` | `TEXT` | no | `STANDARD`, `MANUAL` or `REVERSAL` |
+| `reverses_journal_entry_id` | `UUID` | yes | The journal this one reverses; set exactly when `entry_type` is `REVERSAL` |
+| `business_date` | `DATE` | no | Copied from the request |
+| `transaction_date` | `DATE` | no | Copied from the request |
+| `value_date` | `DATE` | no | Copied from the request |
+| `posting_date` | `DATE` | no | Copied from the request; the period selector |
+| `currency_code` | `CHAR(3)` | no | The transaction currency |
+| `functional_currency_code` | `CHAR(3)` | no | The tenant's functional currency at posting time |
+| `total_debit_functional` | `NUMERIC(23, 6)` | no | Sum of the debit lines' `functional_amount` |
+| `total_credit_functional` | `NUMERIC(23, 6)` | no | Sum of the credit lines' `functional_amount`; equal to the debit total |
+| `line_count` | `INTEGER` | no | How many lines the journal has; at least two |
+| `narrative` | `TEXT` | yes | Free text, at most 500 characters |
+| `posted_at` | `TIMESTAMPTZ` | no | The instant the journal became immutable |
+| `created_at` | `TIMESTAMPTZ` | no | When the row was written |
+| `created_by` | `UUID` | yes | The actor of the posting |
+
+| Constraint | Kind | Purpose |
+| --- | --- | --- |
+| `uq_journal_entry_guid` | `UNIQUE (guid)` | Alternate key |
+| `uq_journal_entry_organisation_id` | `UNIQUE (organisation_id, id)` | Composite foreign-key target for `journal_line`, for the reversal link, and later for #48's manual journal |
+| `uq_journal_entry_number` | `UNIQUE (organisation_id, entry_number)` | Gapless numbering is also unique numbering; Q5 drill-down by entry number |
+| `uq_journal_entry_posting_request` | `UNIQUE (organisation_id, posting_request_id)` | A request produces at most one journal |
+| `fk_journal_entry_posting_request` | `FOREIGN KEY (organisation_id, posting_request_id)` | Lineage stays inside the tenant |
+| `fk_journal_entry_fiscal_period` | `FOREIGN KEY (organisation_id, fiscal_period_id)` | A journal cannot bind to another tenant's period |
+| `fk_journal_entry_branch` | `FOREIGN KEY (organisation_id, branch_id)` | A journal cannot be booked to another tenant's branch |
+| `fk_journal_entry_reverses` | `FOREIGN KEY (organisation_id, reverses_journal_entry_id)` | A reversal cannot point across tenants |
+| `chk_journal_entry_number` | `CHECK (entry_number > 0)` | Numbering starts at one |
+| `chk_journal_entry_type` | `CHECK (entry_type IN ('STANDARD', 'MANUAL', 'REVERSAL'))` | The three adopted types |
+| `chk_journal_entry_reversal_link` | `CHECK ((entry_type = 'REVERSAL') = (reverses_journal_entry_id IS NOT NULL))` | A reversal always names its original, and nothing else does |
+| `chk_journal_entry_not_self_reversal` | `CHECK (reverses_journal_entry_id IS NULL OR reverses_journal_entry_id <> id)` | A journal cannot reverse itself |
+| `chk_journal_entry_balanced` | `CHECK (total_debit_functional = total_credit_functional)` | The header half of `INV-4` |
+| `chk_journal_entry_total_positive` | `CHECK (total_debit_functional > 0)` | An empty journal is unrepresentable |
+| `chk_journal_entry_line_count` | `CHECK (line_count >= 2)` | Double entry needs two sides |
+| `chk_journal_entry_dates` | `CHECK (posting_date <= business_date AND transaction_date <= business_date)` | Mirrors the request |
+| `chk_journal_entry_currency` | `CHECK (currency_code ~ '^[A-Z]{3}$')` | The foundation currency regex |
+| `chk_journal_entry_functional_currency` | `CHECK (functional_currency_code ~ '^[A-Z]{3}$')` | The foundation currency regex |
+| `chk_journal_entry_narrative` | `CHECK (narrative IS NULL OR char_length(narrative) <= 500)` | Bounded free text |
+
+The header constraints cover only what one row can see. `INV-4` is *enforced* by the posting
+engine's verification read inside the posting transaction — see
+[enforcing the balance invariant](../architecture/accounting-foundation.md#enforcing-the-balance-invariant)
+— and *detected* after the fact by the header-versus-lines proof query.
+
+| Index | Definition | Justifying query |
+| --- | --- | --- |
+| `uq_journal_entry_reversal_once` | `UNIQUE (organisation_id, reverses_journal_entry_id) WHERE reverses_journal_entry_id IS NOT NULL` | At most one reversal per journal (`INV-6`), and *"has this journal been reversed"* in one lookup |
+| `idx_journal_entry_posting_date` | `(organisation_id, posting_date, id)` | The header-versus-lines proof query, which is bounded by tenant and date range; and *"the journals of this period"* in posting order |
+
+`fiscal_period_id` and `branch_id` get no index here. A period *is* a `posting_date` range, so every
+query that would filter by period filters by the indexed date instead; and branch reporting is a
+`journal_line` question, whose index is #49's. Both parents are never deleted.
+
+### `journal_line`
+
+One debit or credit against one GL account. The largest table in the schema — roughly 800,000
+rows a day at the design envelope — and the one every aggregate reads, so it deliberately
+denormalises `branch_id`, `fiscal_period_id`, `posting_date` and the currency codes from its
+header. That is safe **only because** the row is append-only under a hard no-update rule.
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `journal_entry_id` | `UUID` | no | The header |
+| `line_number` | `INTEGER` | no | Stable ordinal within the journal, `1`-based |
+| `gl_account_id` | `UUID` | no | The account debited or credited; `ACTIVE` and `POSTABLE` at posting time, enforced by the engine |
+| `branch_id` | `UUID` | yes | Copied from the header |
+| `fiscal_period_id` | `UUID` | no | Copied from the header |
+| `posting_date` | `DATE` | no | Copied from the header; the read-path key |
+| `direction` | `TEXT` | no | `DEBIT` or `CREDIT`; carries the sign |
+| `currency_code` | `CHAR(3)` | no | The transaction currency |
+| `amount` | `NUMERIC(23, 6)` | no | In the transaction currency, always positive |
+| `functional_currency_code` | `CHAR(3)` | no | The tenant's functional currency |
+| `functional_amount` | `NUMERIC(23, 6)` | no | In the functional currency, always positive; the balance invariant is over this column |
+| `exchange_rate` | `NUMERIC(20, 10)` | no | Transaction to functional, positive; `1` in a single-currency tenant |
+| `signed_functional_amount` | `NUMERIC(23, 6)` | no | **Generated**: `functional_amount` for a debit, its negation for a credit. For ad-hoc and reconciliation SQL |
+| `source_module` | `TEXT` | no | Copied from the request, for Q6 without a join |
+| `subledger_reference` | `TEXT` | yes | The product-owned position this line moved, for Q5 and Q6 drill-down. Descriptive, no foreign key (`INV-16`), at most 200 characters |
+| `narrative` | `TEXT` | yes | Free text, at most 500 characters |
+| `created_at` | `TIMESTAMPTZ` | no | When the row was written |
+| `created_by` | `UUID` | yes | The actor of the posting |
+
+| Constraint | Kind | Purpose |
+| --- | --- | --- |
+| `uq_journal_line_guid` | `UNIQUE (guid)` | Alternate key |
+| `uq_journal_line_entry_number` | `UNIQUE (organisation_id, journal_entry_id, line_number)` | Deterministic line numbering within a journal, and the journal-drill-down path |
+| `fk_journal_line_entry` | `FOREIGN KEY (organisation_id, journal_entry_id)` | A line cannot belong to another tenant's journal |
+| `fk_journal_line_account` | `FOREIGN KEY (organisation_id, gl_account_id)` | A line cannot post to another tenant's account |
+| `fk_journal_line_branch` | `FOREIGN KEY (organisation_id, branch_id)` | A line cannot be booked to another tenant's branch |
+| `fk_journal_line_fiscal_period` | `FOREIGN KEY (organisation_id, fiscal_period_id)` | A line cannot bind to another tenant's period |
+| `chk_journal_line_number` | `CHECK (line_number > 0)` | Ordinals are 1-based |
+| `chk_journal_line_direction` | `CHECK (direction IN ('DEBIT', 'CREDIT'))` | Direction carries the sign (`INV-3`) |
+| `chk_journal_line_amount` | `CHECK (amount > 0)` | No zero or negative line (`INV-3`) |
+| `chk_journal_line_functional_amount` | `CHECK (functional_amount > 0)` | The invariant column cannot be zeroed by a conversion defect |
+| `chk_journal_line_exchange_rate` | `CHECK (exchange_rate > 0)` | A rate is a positive ratio (`INV-1`) |
+| `chk_journal_line_currency` | `CHECK (currency_code ~ '^[A-Z]{3}$')` | The foundation currency regex |
+| `chk_journal_line_functional_currency` | `CHECK (functional_currency_code ~ '^[A-Z]{3}$')` | The foundation currency regex |
+| `chk_journal_line_source_module` | `CHECK (source_module ~ '^[a-z][a-z0-9_]{0,63}$')` | Mirrors the request |
+| `chk_journal_line_subledger_reference` | `CHECK (subledger_reference IS NULL OR char_length(subledger_reference) BETWEEN 1 AND 200)` | Bounded, non-blank when present |
+| `chk_journal_line_narrative` | `CHECK (narrative IS NULL OR char_length(narrative) <= 500)` | Bounded free text |
+
+Nothing at the database level requires `gl_account_id` to be `ACTIVE` and `POSTABLE`. Status is a
+property of the account *at posting time*, and an account legitimately becomes `INACTIVE` after it
+has received lines, so a foreign key over `(organisation_id, id, status)` would either reject the
+deactivation or invalidate history. The engine enforces eligibility through
+`GlAccountPostingPolicy`; the schema enforces tenant scope.
+
+| Index | Definition | Justifying query |
+| --- | --- | --- |
+| `idx_journal_line_account_date` | `(organisation_id, gl_account_id, posting_date, id) INCLUDE (direction, functional_amount, branch_id, journal_entry_id)` | Q1, Q3 movements, Q7 keyset pages, and the header-versus-lines proof's inner aggregate. The one index that carries the ledger's read load |
+
+`uq_journal_line_entry_number` is the second index and serves Q5 — *"the lines of this journal"*
+— as well as the entry foreign key. `gl_account_id` is served by the read-path index. `branch_id`
+and `fiscal_period_id` get no index here, for the reasons given under `journal_entry`; the branch
+trial-balance index `idx_journal_line_branch_account_date` is #49's and the sub-ledger index
+`idx_journal_line_subledger` is #46's, each created with its `EXPLAIN` plan.
+
+### What `V7` proves before it merges
+
+Every constraint above is exercised against PostgreSQL 18 through Testcontainers by
+`JournalSchemaIntegrationTests`, asserting the *named* constraint rather than merely the exception
+type: a zero and a negative amount; an unbalanced header; a one-line header; a `REVERSAL` with no
+link and a `STANDARD` with one; a self-reversal; a second reversal of one journal; a line, a
+journal and a reversal that cross tenants; a duplicate source reference; a `POSTED` request with
+no `posted_at`; and the generated `signed_functional_amount` for both directions. The `V7`
+backfill is proved by asserting every organisation has all three `reference_sequence` rows
+afterwards, including the `V3` bootstrap tenant that had none.
+
+`AccountingQueryPlanTests` seeds the fixture the foundation specifies and asserts the Q1 and Q5
+plans against their shared-block budgets, which is what makes the index choices above a test
+rather than a paragraph.
 
 ## The period selector
 
@@ -702,7 +1009,9 @@ are specified in this document but created by that issue, each with an
 
 The three indexes issue #36 creates, and the one lookup that deliberately gets none, are listed
 with their justifying queries under
-[the column definitions](#column-definitions-for-the-issue-36-tables) above. What follows is the
+[the #36 column definitions](#column-definitions-for-the-issue-36-tables); the six issue #40
+creates, and the four foreign keys that deliberately get none, under
+[the #40 column definitions](#column-definitions-for-the-issue-40-tables). What follows is the
 ledger's read path, which issue #40 creates.
 
 The one index that carries the ledger's read load:
@@ -741,7 +1050,8 @@ Deferred, with the issue that creates each:
 | Issue | Implements |
 | --- | --- |
 | #36 | The fiscal calendar and chart-of-accounts tables |
-| #40 | `posting_request`, `journal_entry`, `journal_line`, and the #40 index set only |
+| #40 | `posting_request`, `journal_entry`, `journal_line`, the #40 index set only, and the `reference_sequence` backfill |
+| #41, #42, #43 | The posting engine, its verification read, idempotency over `uq_posting_request_source`, and reversal |
 | #44, #45 | The posting-rule tables and deterministic resolution |
 | #46 | Control-account classification and the reconciliation proof contract |
 | #47 | `gl_account_daily_balance` and its documented rebuild query |

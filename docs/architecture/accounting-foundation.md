@@ -412,19 +412,30 @@ Step by step, with the decision each step embodies:
    `source_reference`, the `posting_date` read from the `posting_date` table, `branch_id`,
    `transaction_date`, optional `value_date`, currency and amount, and the fact type. It does not
    pass GL accounts and it does not pass debits and credits.
-3. **Accounting claims idempotency first.** The `posting_request` insert either succeeds or
-   collides on `UNIQUE (organisation_id, source_module, source_reference)`. **Collision handling is
-   status-aware**, because a request can be rejected before it ever produces a journal:
+3. **Accounting claims idempotency first.** The `posting_request` insert is an
+   `INSERT … ON CONFLICT DO NOTHING` on `UNIQUE (organisation_id, source_module,
+   source_reference)` — never a bare insert whose unique violation would abort the caller's whole
+   transaction and the product module's own writes with it. When the claim inserts nothing, the
+   existing row is locked `FOR UPDATE` and its `request_fingerprint` compared with the new
+   request's:
 
-   - the existing request **completed** — return its journal and write nothing (`INV-7`);
-   - the existing request was **rejected** — re-evaluate it and post afresh under the retry, since
-     there is no journal to return and treating this as a duplicate would leave a legitimate source
-     permanently unpostable once its cause is fixed;
-   - the existing request is **in flight** — the row lock serialises the second caller, which then
-     observes one of the two outcomes above.
+   - same fingerprint and the existing request is **posted** — return its journal and write
+     nothing (`INV-7`);
+   - a **different fingerprint** — the same durable identity is being reused for a materially
+     different request, which is a conflict (`accounting.posting_request_conflict`), never a
+     second financial effect;
+   - the existing request is **in flight** — the lock serialises the second caller, which then
+     observes one of the two outcomes above once the first commits, or finds no row and proceeds
+     if the first rolled back.
 
-   Returning "the existing journal" unconditionally is wrong for the rejected case and is called
-   out here because it is the obvious implementation and it silently strands the source.
+   There is deliberately **no rejected branch**, and an earlier revision of this step had one. A
+   rejected posting throws, and the throw rolls back the transaction that attempted it together
+   with the `posting_request` row it had claimed — `INV-12` forbids the `REQUIRES_NEW` write that
+   would be needed to keep the row. So nothing is left behind to be *rejected*; a retry after the
+   cause is fixed finds no row and posts afresh, which is the outcome the earlier text wanted,
+   reached without a second transaction. The status domain is therefore `PENDING` and `POSTED`,
+   and no committed row is ever `PENDING`. See
+   [the accounting schema](../database/accounting-erd.md#posting_request-has-no-persistable-rejected-state).
 4. **Accounting resolves the posting rule version effective on the `posting_date`** — not on
    today's date. This is what makes a prior-period correction re-post under the rule that was in
    force when the transaction happened.
@@ -643,6 +654,11 @@ So the rule is structural rather than procedural: once a tenant has a single pos
 functional currency cannot change. The enforcement point is **issue #40**, where `journal_entry`
 first exists — an earlier revision assigned it to issue #36, which creates the fiscal calendar and
 the chart of accounts and therefore has no table the predicate *"has posted"* can be read from.
+Within #40's stack the migration creates the table and the check itself ships with the posting
+engine (#41): lifecycle asks accounting, through an accounting-declared `AccountingLedgerActivity`
+query port, whether the tenant has posted, from the two places the functional currency can
+change — the organisation update and the `base_currency` tenant setting — and refuses the change
+when it has.
 A tenant
 that genuinely needs to redenominate needs a versioned conversion and revaluation boundary, which
 is a separate design and is explicitly out of scope here — recorded so that a later change does not

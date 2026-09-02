@@ -221,6 +221,18 @@ Consequences worth stating, because they are where this rule is usually broken:
 
 ## Static analysis & quality gates
 
+**`./gradlew qualityGate` must pass locally before any push.** Not after, and not "CI will tell
+me": a red pipeline costs a full cycle and a reviewer's attention to learn something the same
+command answers in about fifteen minutes on the machine that made the change. Push only once it
+comes back clean.
+
+That gate runs the Testcontainers suites, so **the Docker daemon has to be up**. If `docker ps`
+fails with a missing socket, start it (`dockerd` in the background, or the platform's service
+manager) and wait for `docker ps` to answer before running the gate. A sandbox that ships the
+Docker client with no running daemon looks exactly like a machine without Docker; check for the
+daemon rather than assuming. Substituting an embedded database for the real containers is a last
+resort, tells you less, and must be said out loud in the change if it happens.
+
 Run before finalizing any change. Shortcut: `./gradlew qualityGate` (staticAnalysis + check +
 JaCoCo verification + `bootJar`). Individually: `spotlessCheck`, `ktlintCheck`, `detekt`,
 `checkstyleMain checkstyleTest`, `pmdMain pmdTest`, `spotbugsMain spotbugsTest`, `test`.
