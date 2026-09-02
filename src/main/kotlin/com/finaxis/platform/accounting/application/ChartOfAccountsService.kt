@@ -1,6 +1,8 @@
 package com.finaxis.platform.accounting.application
 
 import com.finaxis.platform.accounting.AccountingPermissionGuard
+import com.finaxis.platform.accounting.ControlSubledgerKind
+import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.domain.AccountClass
 import com.finaxis.platform.accounting.domain.AccountCode
 import com.finaxis.platform.accounting.domain.AccountUsage
@@ -78,8 +80,11 @@ class ChartOfAccountsService(
                 description = command.description,
                 isContraAccount = command.isContraAccount,
                 manualPostingAllowed = command.manualPostingAllowed,
+                isControlAccount = command.isControlAccount,
+                controlSubledgerKind = command.controlSubledgerKind,
             )
         requireManualPostingMatchesUsage(candidate)
+        requireControlClassificationConsistent(candidate)
         validatePlacement(candidate, existing = false)
 
         return translatingDuplicateCode {
@@ -96,6 +101,8 @@ class ChartOfAccountsService(
                     description = candidate.description,
                     isContraAccount = candidate.isContraAccount,
                     manualPostingAllowed = candidate.manualPostingAllowed,
+                    isControlAccount = candidate.isControlAccount,
+                    controlSubledgerKind = candidate.controlSubledgerKind,
                 ),
             )
         }
@@ -128,6 +135,9 @@ class ChartOfAccountsService(
                 usage = command.usage ?: current.usage,
                 parentAccountId = command.parentAccountId.orKeep(current.parentAccountId),
                 manualPostingAllowed = command.manualPostingAllowed ?: current.manualPostingAllowed,
+                isControlAccount = command.isControlAccount ?: current.isControlAccount,
+                controlSubledgerKind =
+                    command.controlSubledgerKind.orKeep(current.controlSubledgerKind),
             )
 
         // "Has been used" is both halves now: children beneath it, or a journal line posted to it.
@@ -144,6 +154,7 @@ class ChartOfAccountsService(
         }
         requireAmendable(current, proposed)
         requireManualPostingMatchesUsage(proposed)
+        requireControlClassificationConsistent(proposed)
         validatePlacement(proposed, existing = true)
 
         if (!translatingDuplicateCode { writes.update(proposed, command.actorId) }) {
@@ -337,6 +348,29 @@ class ChartOfAccountsService(
     }
 
     /**
+     * Rejects a control-account classification the schema would refuse, with a named code.
+     *
+     * A control account is postable, carries exactly one sub-ledger kind, and never takes a manual
+     * entry - a hand-written line into a control account breaks its reconciliation by definition
+     * (`INV-14`). `V9` enforces the same three pairings; this states them first.
+     */
+    private fun requireControlClassificationConsistent(candidate: GlAccount) {
+        val kindPresent = candidate.controlSubledgerKind != null
+        val consistent =
+            candidate.isControlAccount == kindPresent &&
+                (!candidate.isControlAccount || candidate.usage == AccountUsage.POSTABLE) &&
+                (!candidate.isControlAccount || !candidate.manualPostingAllowed)
+        if (!consistent) {
+            throw InvalidOperationException(
+                code = PostingErrorCodes.CONTROL_ACCOUNT_INVALID,
+                safeDetail =
+                    "A control account is a postable account with exactly one sub-ledger kind " +
+                        "and no manual posting.",
+            )
+        }
+    }
+
+    /**
      * Runs a write, turning a `uq_gl_account_organisation_code` violation into the published
      * conflict.
      *
@@ -420,6 +454,8 @@ data class CreateGlAccountCommand(
     val description: String? = null,
     val isContraAccount: Boolean = false,
     val manualPostingAllowed: Boolean = false,
+    val isControlAccount: Boolean = false,
+    val controlSubledgerKind: ControlSubledgerKind? = null,
 )
 
 /**
@@ -441,6 +477,8 @@ data class UpdateGlAccountCommand(
     val usage: AccountUsage? = null,
     val parentAccountId: Patch<UUID?> = Patch.Unchanged,
     val manualPostingAllowed: Boolean? = null,
+    val isControlAccount: Boolean? = null,
+    val controlSubledgerKind: Patch<ControlSubledgerKind?> = Patch.Unchanged,
 )
 
 /**

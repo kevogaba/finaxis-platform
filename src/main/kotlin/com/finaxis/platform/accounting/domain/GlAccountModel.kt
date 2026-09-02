@@ -1,5 +1,6 @@
 package com.finaxis.platform.accounting.domain
 
+import com.finaxis.platform.accounting.ControlSubledgerKind
 import java.util.UUID
 
 /**
@@ -142,6 +143,8 @@ data class GlAccount(
     val manualPostingAllowed: Boolean = false,
     val statusReason: String? = null,
     val rowVersion: Long = 0,
+    val isControlAccount: Boolean = false,
+    val controlSubledgerKind: ControlSubledgerKind? = null,
 ) {
     /** True when the account may receive a journal line: `ACTIVE` and `POSTABLE`, both required. */
     val isPostable: Boolean

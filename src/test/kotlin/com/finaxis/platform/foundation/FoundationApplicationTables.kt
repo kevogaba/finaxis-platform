@@ -4,7 +4,8 @@ package com.finaxis.platform.foundation
  * Every application-owned table, in the order `ORDER BY table_name` returns them.
  *
  * `V1` created the first 23; `V6` added the five fiscal-calendar and chart-of-accounts tables; `V7`
- * added the three journal tables; `V8` added the four posting-rule tables. Starter-managed tables —
+ * added the three journal tables; `V8` added the four posting-rule tables; `V9` the reconciliation
+ * evidence table. Starter-managed tables —
  * `outbox_record`, `event_publication` and JobRunr's — are deliberately absent: they live outside
  * Flyway and carry no `guid`, so the conventions asserted against this list do not apply to them.
  *
@@ -22,6 +23,7 @@ val APPLICATION_TABLES =
         "branch_transition_log",
         "business_date",
         "business_date_history",
+        "control_account_reconciliation_run",
         "fiscal_period_transition_log",
         "gl_account",
         "gl_account_transition_log",

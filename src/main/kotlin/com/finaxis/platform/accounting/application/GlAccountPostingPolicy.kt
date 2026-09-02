@@ -37,6 +37,12 @@ object GlAccountPostingPolicy {
      */
     fun requireManualPostingAllowed(account: GlAccount) {
         requirePostable(account)
+        if (account.isControlAccount) {
+            throw notPostable(
+                "Account ${account.code} is a control account; a manual entry would break its " +
+                    "sub-ledger reconciliation.",
+            )
+        }
         if (!account.manualPostingAllowed) {
             throw notPostable("Account ${account.code} does not accept manual journal entries.")
         }

@@ -1,5 +1,6 @@
 package com.finaxis.platform.accounting.schema
 
+import com.finaxis.platform.accounting.ControlSubledgerKind
 import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_PERIOD
 import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_YEAR
 import com.finaxis.platform.jooq.tables.references.BRANCH
@@ -133,6 +134,29 @@ class JournalSchemaFixture(
             .set(GL_ACCOUNT.ACCOUNT_CLASS, accountClass)
             .set(GL_ACCOUNT.ACCOUNT_USAGE, "POSTABLE")
             .set(GL_ACCOUNT.STATUS, "ACTIVE")
+            .set(GL_ACCOUNT.CREATED_AT, now())
+            .set(GL_ACCOUNT.UPDATED_AT, now())
+            .returning(GL_ACCOUNT.ID)
+            .fetchOne()!!
+            .id!!
+
+    /** Inserts an ACTIVE, POSTABLE control account for [kind] and returns its identifier. */
+    fun insertControlAccount(
+        organisationId: UUID,
+        code: String,
+        accountClass: String,
+        kind: ControlSubledgerKind,
+    ): UUID =
+        dsl
+            .insertInto(GL_ACCOUNT)
+            .set(GL_ACCOUNT.ORGANISATION_ID, organisationId)
+            .set(GL_ACCOUNT.ACCOUNT_CODE, code)
+            .set(GL_ACCOUNT.ACCOUNT_NAME, "Control $code")
+            .set(GL_ACCOUNT.ACCOUNT_CLASS, accountClass)
+            .set(GL_ACCOUNT.ACCOUNT_USAGE, "POSTABLE")
+            .set(GL_ACCOUNT.STATUS, "ACTIVE")
+            .set(GL_ACCOUNT.IS_CONTROL_ACCOUNT, true)
+            .set(GL_ACCOUNT.CONTROL_SUBLEDGER_KIND, kind.name)
             .set(GL_ACCOUNT.CREATED_AT, now())
             .set(GL_ACCOUNT.UPDATED_AT, now())
             .returning(GL_ACCOUNT.ID)

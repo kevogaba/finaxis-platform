@@ -1,5 +1,6 @@
 package com.finaxis.platform.accounting.application
 
+import com.finaxis.platform.accounting.ControlSubledgerKind
 import com.finaxis.platform.accounting.domain.AccountClass
 import com.finaxis.platform.accounting.domain.AccountCode
 import com.finaxis.platform.accounting.domain.AccountUsage
@@ -183,6 +184,8 @@ data class NewGlAccount(
     val description: String? = null,
     val isContraAccount: Boolean = false,
     val manualPostingAllowed: Boolean = false,
+    val isControlAccount: Boolean = false,
+    val controlSubledgerKind: ControlSubledgerKind? = null,
 )
 
 /**
