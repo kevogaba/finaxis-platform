@@ -8,13 +8,22 @@ import org.testcontainers.grafana.LgtmStackContainer
 import org.testcontainers.postgresql.PostgreSQLContainer
 import org.testcontainers.rabbitmq.RabbitMQContainer
 import org.testcontainers.utility.DockerImageName
+import java.time.Duration
 
 @TestConfiguration(proxyBeanMethods = false)
 class TestcontainersConfiguration {
+    /**
+     * The observability stack is the heaviest container in the suite - an OpenTelemetry collector,
+     * Grafana, Loki, Tempo, Prometheus and Pyroscope in one image - and on a shared CI runner that
+     * is already carrying a dozen cached Spring contexts it can take longer than Testcontainers'
+     * default 60-second startup wait to log that it is up. That wait is a ceiling, not a delay: a
+     * fast start is still fast, and only a slow runner uses the headroom.
+     */
     @Bean
     @ServiceConnection
     fun grafanaLgtmContainer(): LgtmStackContainer =
         LgtmStackContainer(DockerImageName.parse(TestContainerImages.GRAFANA_OTEL_LGTM))
+            .withStartupTimeout(LGTM_STARTUP_TIMEOUT)
 
     @Bean
     @ServiceConnection
@@ -32,6 +41,8 @@ class TestcontainersConfiguration {
         GenericContainer(DockerImageName.parse(TestContainerImages.REDIS)).withExposedPorts(6379)
 
     companion object {
+        private val LGTM_STARTUP_TIMEOUT: Duration = Duration.ofMinutes(3)
+
         /**
          * A Testcontainers "singleton container" (started once, in a static initializer, and
          * reaped by Testcontainers' own Ryuk container at suite end — never stopped by Spring)
