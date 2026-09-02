@@ -101,6 +101,27 @@ data class JournalTotals(
     val lineCount: Int,
 )
 
+/** A posting request as its callers see it: the durable lineage and where it got to. */
+data class PostingRequestView(
+    val id: UUID,
+    val organisationId: UUID,
+    val branchId: UUID?,
+    val sourceModule: String,
+    val sourceEntityType: String,
+    val sourceEntityId: UUID,
+    val sourceReference: String,
+    val eventCode: String,
+    val status: PostingRequestStatus,
+    val postingRuleVersionId: UUID?,
+    val correctsPostingRequestId: UUID?,
+    val postingDate: java.time.LocalDate,
+    val businessDate: java.time.LocalDate,
+    val narrative: String?,
+    val postedAt: Instant?,
+    val requestedBy: UUID?,
+    val correlationId: String?,
+)
+
 /** A posted journal as the engine and its callers see it. */
 data class JournalEntryView(
     val id: UUID,
@@ -135,7 +156,8 @@ data class JournalLineView(
 )
 
 /**
- * Write and read port over `posting_request`, `journal_entry` and `journal_line`.
+ * Write port over `posting_request`, `journal_entry` and `journal_line`, plus the one read the
+ * engine's replay needs.
  *
  * The only accounting code allowed to touch those generated tables is its persistence adapter, so
  * everything the engine needs is stated here in domain terms. Every method is organisation-scoped
@@ -174,17 +196,59 @@ interface JournalStore {
         actorId: UUID,
     )
 
+    /** Finds the journal a request produced, or null while it has none. */
+    fun findJournalEntryForRequest(
+        organisationId: UUID,
+        postingRequestId: UUID,
+    ): JournalEntryView?
+}
+
+/**
+ * Read port over the journal tables for callers that only look: lineage, reversal, and later the
+ * read models. Separate from [JournalStore] so the write port stays small enough to reason about
+ * and a reader can be handed nothing that writes.
+ */
+interface JournalReadStore {
     /** Finds a journal by id within a tenant, or null. */
     fun findJournalEntry(
         organisationId: UUID,
         journalEntryId: UUID,
     ): JournalEntryView?
 
-    /** Finds the journal a request produced, or null while it has none. */
+    /**
+     * Finds the journal a request produced, or null while it has none. Declared on both ports on
+     * purpose: the engine's replay and every reader need it, and one adapter method serves both.
+     */
     fun findJournalEntryForRequest(
         organisationId: UUID,
         postingRequestId: UUID,
     ): JournalEntryView?
+
+    /** Finds one request by id within a tenant, or null. */
+    fun findPostingRequest(
+        organisationId: UUID,
+        postingRequestId: UUID,
+    ): PostingRequestView?
+
+    /** Finds the request holding a source module's durable reference, or null. */
+    fun findPostingRequestBySource(
+        organisationId: UUID,
+        sourceModule: String,
+        sourceReference: String,
+    ): PostingRequestView?
+
+    /**
+     * The requests one business entity produced, newest first, from [beforeId] exclusive, at most
+     * [pageSize] rows. Keyset over the time-ordered `id`, never `OFFSET` (`INV-15`).
+     */
+    fun listPostingRequestsForEntity(
+        organisationId: UUID,
+        sourceModule: String,
+        sourceEntityType: String,
+        sourceEntityId: UUID,
+        beforeId: UUID?,
+        pageSize: Int,
+    ): List<PostingRequestView>
 
     /** The lines of one journal in line order. Bounded by construction: a journal has few lines. */
     fun findJournalLines(

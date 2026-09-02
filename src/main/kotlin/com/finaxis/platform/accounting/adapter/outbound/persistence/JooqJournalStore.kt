@@ -3,17 +3,20 @@ package com.finaxis.platform.accounting.adapter.outbound.persistence
 import com.finaxis.platform.accounting.application.ledger.ExistingPostingRequest
 import com.finaxis.platform.accounting.application.ledger.JournalEntryView
 import com.finaxis.platform.accounting.application.ledger.JournalLineView
+import com.finaxis.platform.accounting.application.ledger.JournalReadStore
 import com.finaxis.platform.accounting.application.ledger.JournalStore
 import com.finaxis.platform.accounting.application.ledger.JournalTotals
 import com.finaxis.platform.accounting.application.ledger.NewJournalEntry
 import com.finaxis.platform.accounting.application.ledger.NewJournalLine
 import com.finaxis.platform.accounting.application.ledger.NewPostingRequest
 import com.finaxis.platform.accounting.application.ledger.PostingRequestClaim
+import com.finaxis.platform.accounting.application.ledger.PostingRequestView
 import com.finaxis.platform.accounting.domain.JournalEntryType
 import com.finaxis.platform.accounting.domain.PostingRequestStatus
 import com.finaxis.platform.accounting.domain.PostingSide
 import com.finaxis.platform.jooq.keys.UQ_POSTING_REQUEST_SOURCE
 import com.finaxis.platform.jooq.tables.records.JournalEntryRecord
+import com.finaxis.platform.jooq.tables.records.PostingRequestRecord
 import com.finaxis.platform.jooq.tables.references.JOURNAL_ENTRY
 import com.finaxis.platform.jooq.tables.references.JOURNAL_LINE
 import com.finaxis.platform.jooq.tables.references.POSTING_REQUEST
@@ -29,7 +32,8 @@ import java.time.ZoneOffset
 import java.util.UUID
 
 /**
- * The `posting_request`, `journal_entry` and `journal_line` adapter behind [JournalStore].
+ * The `posting_request`, `journal_entry` and `journal_line` adapter behind [JournalStore] and
+ * [JournalReadStore].
  *
  * Every statement carries the tenant predicate, and the two journal tables are only ever
  * **inserted**: there is no `UPDATE` or `DELETE` here for them to be written by, which is the
@@ -37,10 +41,12 @@ import java.util.UUID
  * this class updates is the mutable `posting_request`, and only to flip it to `POSTED`.
  */
 @Component
+@Suppress("TooManyFunctions")
 class JooqJournalStore(
     private val dsl: DSLContext,
     private val clock: Clock,
-) : JournalStore {
+) : JournalStore,
+    JournalReadStore {
     /**
      * `INSERT … ON CONFLICT DO NOTHING RETURNING id`, then `FOR UPDATE` on the loser's row.
      *
@@ -270,6 +276,54 @@ class JooqJournalStore(
             .fetchOne()
             ?.let(::toView)
 
+    override fun findPostingRequest(
+        organisationId: UUID,
+        postingRequestId: UUID,
+    ): PostingRequestView? =
+        dsl
+            .selectFrom(POSTING_REQUEST)
+            .where(POSTING_REQUEST.ORGANISATION_ID.eq(organisationId))
+            .and(POSTING_REQUEST.ID.eq(postingRequestId))
+            .fetchOne()
+            ?.let(::toRequestView)
+
+    override fun findPostingRequestBySource(
+        organisationId: UUID,
+        sourceModule: String,
+        sourceReference: String,
+    ): PostingRequestView? =
+        dsl
+            .selectFrom(POSTING_REQUEST)
+            .where(POSTING_REQUEST.ORGANISATION_ID.eq(organisationId))
+            .and(POSTING_REQUEST.SOURCE_MODULE.eq(sourceModule))
+            .and(POSTING_REQUEST.SOURCE_REFERENCE.eq(sourceReference))
+            .fetchOne()
+            ?.let(::toRequestView)
+
+    /**
+     * Served by `idx_posting_request_source_entity`; the `id < cursor` predicate walks the
+     * time-ordered primary key backwards, so page fifty costs what page one costs.
+     */
+    @Suppress("LongParameterList")
+    override fun listPostingRequestsForEntity(
+        organisationId: UUID,
+        sourceModule: String,
+        sourceEntityType: String,
+        sourceEntityId: UUID,
+        beforeId: UUID?,
+        pageSize: Int,
+    ): List<PostingRequestView> =
+        dsl
+            .selectFrom(POSTING_REQUEST)
+            .where(POSTING_REQUEST.ORGANISATION_ID.eq(organisationId))
+            .and(POSTING_REQUEST.SOURCE_MODULE.eq(sourceModule))
+            .and(POSTING_REQUEST.SOURCE_ENTITY_TYPE.eq(sourceEntityType))
+            .and(POSTING_REQUEST.SOURCE_ENTITY_ID.eq(sourceEntityId))
+            .and(beforeId?.let { POSTING_REQUEST.ID.lt(it) } ?: DSL.noCondition())
+            .orderBy(POSTING_REQUEST.ID.desc())
+            .limit(pageSize)
+            .fetch(::toRequestView)
+
     override fun findJournalLines(
         organisationId: UUID,
         journalEntryId: UUID,
@@ -300,6 +354,27 @@ class JooqJournalStore(
                     subledgerReference = row.value8(),
                 )
             }
+
+    private fun toRequestView(record: PostingRequestRecord) =
+        PostingRequestView(
+            id = record.id!!,
+            organisationId = record.organisationId!!,
+            branchId = record.branchId,
+            sourceModule = record.sourceModule!!,
+            sourceEntityType = record.sourceEntityType!!,
+            sourceEntityId = record.sourceEntityId!!,
+            sourceReference = record.sourceReference!!,
+            eventCode = record.eventCode!!,
+            status = PostingRequestStatus.valueOf(record.status!!),
+            postingRuleVersionId = record.postingRuleVersionId,
+            correctsPostingRequestId = record.correctsPostingRequestId,
+            postingDate = record.postingDate!!,
+            businessDate = record.businessDate!!,
+            narrative = record.narrative,
+            postedAt = record.postedAt?.toInstant(),
+            requestedBy = record.createdBy,
+            correlationId = record.correlationId,
+        )
 
     private fun toView(record: JournalEntryRecord) =
         JournalEntryView(

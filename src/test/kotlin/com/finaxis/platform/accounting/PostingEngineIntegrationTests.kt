@@ -6,6 +6,7 @@ import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.PostingPeriodResolver
 import com.finaxis.platform.accounting.application.UpdateGlAccountCommand
 import com.finaxis.platform.accounting.application.ledger.JournalNumberAllocator
+import com.finaxis.platform.accounting.application.ledger.JournalReadStore
 import com.finaxis.platform.accounting.application.ledger.JournalStore
 import com.finaxis.platform.accounting.application.ledger.LedgerPostingRequest
 import com.finaxis.platform.accounting.application.ledger.NewJournalLine
@@ -89,6 +90,7 @@ class PostingEngineIntegrationTests(
     private val engine: PostingEngine,
     private val postingService: PostingService,
     private val journals: JournalStore,
+    private val ledger: JournalReadStore,
     private val contextLookup: AccountingContextLookup,
     private val tenantLookup: AccountingTenantLookup,
     private val periodResolver: PostingPeriodResolver,
@@ -127,14 +129,14 @@ class PostingEngineIntegrationTests(
         assertEquals(2, receipt.lineCount)
         assertEquals(tenant.businessDate, receipt.businessDate)
         val header =
-            requireNotNull(journals.findJournalEntry(tenant.organisationId, receipt.journalEntryId))
+            requireNotNull(ledger.findJournalEntry(tenant.organisationId, receipt.journalEntryId))
         assertEquals(1L, header.entryNumber)
         assertEquals(JournalEntryType.STANDARD, header.entryType)
         assertEquals(tenant.periodId, header.fiscalPeriodId)
         assertEquals(tenant.branchId, header.branchId)
         assertEquals(BigDecimal("500.000000"), header.totalDebitFunctional)
         assertEquals("KES", header.functionalCurrencyCode)
-        val lines = journals.findJournalLines(tenant.organisationId, receipt.journalEntryId)
+        val lines = ledger.findJournalLines(tenant.organisationId, receipt.journalEntryId)
         assertEquals(listOf(1, 2), lines.map { it.lineNumber })
         assertEquals(listOf(PostingSide.DEBIT, PostingSide.CREDIT), lines.map { it.side })
         assertEquals(

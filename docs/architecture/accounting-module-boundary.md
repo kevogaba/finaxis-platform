@@ -179,6 +179,38 @@ header**, the `INV-4` enforcement point; mark the request `POSTED`.
 Every failure before the claim leaves nothing behind. Every failure after it rolls the claim back
 with the caller's transaction, so a rejected request never occupies its source reference.
 
+## Idempotency and lineage
+
+There is exactly one idempotency mechanism at the domain layer:
+`UNIQUE (organisation_id, source_module, source_reference)` on `posting_request` (`INV-7`), claimed
+with `INSERT … ON CONFLICT DO NOTHING`. The database is the authority; no in-memory lock or cache
+takes part. Under a concurrent duplicate the second insert waits on the first's uncommitted row and
+then sees one of two outcomes: the first committed, so the existing row is locked `FOR UPDATE` and
+answered from; or the first rolled back, so the second proceeds as the only claimant. The committed
+case is proved against PostgreSQL by `PostingIdempotencyIntegrationTests`, sequentially and under
+two racing callers. The rolled-back case rests on the semantics of `ON CONFLICT DO NOTHING` against
+an uncommitted row and is **not** covered by a test yet: proving it needs the first transaction held
+open until the second is demonstrably blocked, which the current latch does not guarantee.
+
+A duplicate is answered by comparing `request_fingerprint` - a SHA-256 over the source triple, the
+event, the dates, the currency and the sorted legs, never the raw payload:
+
+| Same reference and … | Outcome |
+| --- | --- |
+| Same fingerprint, request `POSTED` | The existing receipt is returned; nothing is written |
+| Different fingerprint | `accounting.posting_request_conflict`; nothing is written |
+| Request not `POSTED` | `IllegalStateException` - unrepresentable, because the status flips in the same transaction as the journal |
+
+The HTTP `Idempotency-Key` handled by `api_idempotency_record` is a different layer with a
+different key, and the two are never conflated.
+
+Lineage is queryable in both directions through `PostingLineageService`, gated on `journal.view`:
+forward from a source module's reference or business entity to the request, journal and lines it
+produced; backward from a journal to the request that caused it. The entity listing is keyset
+paginated over the time-ordered request id and capped at the platform page-size ceiling. Every
+answer stops at the descriptive `source_entity_id`: accounting holds no foreign key into a product
+module (`INV-16`), so the last hop into the product's own records is the product module's to make.
+
 ## Related documents
 
 - [Accounting foundation](accounting-foundation.md)
