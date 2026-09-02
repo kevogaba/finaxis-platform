@@ -140,7 +140,6 @@ invariant the codebase already held rather than forcing a change.
 
 | Missing | Issue |
 | --- | --- |
-| Journal reversal | #43 |
 | Posting rules and their resolver | #44, #45 |
 | Control accounts and reconciliation | #46 |
 | Manual journals | #48 |
@@ -178,6 +177,29 @@ header**, the `INV-4` enforcement point; mark the request `POSTED`.
 
 Every failure before the claim leaves nothing behind. Every failure after it rolls the claim back
 with the caller's transaction, so a rejected request never occupies its source reference.
+
+## Reversal
+
+`JournalReversalService`, reached through `PostingService.reverse`, is the only correction of posted
+history (ADR 0020, `INV-6`). It writes a **new** journal with `entry_type = 'REVERSAL'`, lines that
+mirror the original's with the side flipped and the same positive amounts, and
+`reverses_journal_entry_id` pointing at the original - through the same engine as every other
+journal, so the period lock, account eligibility, balance check, idempotency claim, gapless number
+and verification read all apply. The original row is never touched.
+
+The controls it adds over an ordinary posting, in order: `journal.reverse` (`CRITICAL`); a
+mandatory reason; a per-journal advisory lock in `AdvisoryLockNamespace.ACCOUNTING_JOURNAL_REVERSAL`
+- a row lock on `journal_entry` needs the `UPDATE` privilege issue #54 revokes; under that lock, the
+original exists, is not itself a reversal and has no reversal yet; and the reversing actor is not
+the actor who posted the original, resolved from `journal_entry.created_by` - the same
+maker-from-the-record shape the fiscal-period and GL-account services use, because the catalogue
+has no `journal.reverse_request` code to build a submit/approve pair from. `uq_journal_entry_reversal_once`
+is the database backstop for the concurrent case, and every reversal writes a `journal.reverse`
+audit event in the same transaction as the journal.
+
+A reversal cannot be reversed. Undoing one is a fresh posting that names the original request in
+`corrects_posting_request_id`, which keeps the correction lineage on the mutable request and *"has
+this journal been reversed"* a one-index answer.
 
 ## Idempotency and lineage
 

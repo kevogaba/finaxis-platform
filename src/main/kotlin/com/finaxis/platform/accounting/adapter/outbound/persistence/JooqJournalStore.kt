@@ -276,6 +276,18 @@ class JooqJournalStore(
             .fetchOne()
             ?.let(::toView)
 
+    /** Served by `uq_journal_entry_reversal_once`, which also makes the answer at most one row. */
+    override fun findReversalOf(
+        organisationId: UUID,
+        journalEntryId: UUID,
+    ): JournalEntryView? =
+        dsl
+            .selectFrom(JOURNAL_ENTRY)
+            .where(JOURNAL_ENTRY.ORGANISATION_ID.eq(organisationId))
+            .and(JOURNAL_ENTRY.REVERSES_JOURNAL_ENTRY_ID.eq(journalEntryId))
+            .fetchOne()
+            ?.let(::toView)
+
     override fun findPostingRequest(
         organisationId: UUID,
         postingRequestId: UUID,

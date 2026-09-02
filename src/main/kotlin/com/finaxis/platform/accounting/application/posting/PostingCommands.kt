@@ -5,7 +5,6 @@ import com.finaxis.platform.accounting.domain.AccountingSourceReference
 import com.finaxis.platform.accounting.domain.MonetaryAmount
 import com.finaxis.platform.accounting.domain.PostingDateRequest
 import com.finaxis.platform.accounting.domain.PostingSide
-import java.time.LocalDate
 import java.util.UUID
 
 /**
@@ -37,13 +36,20 @@ data class PostFinancialFactsCommand(
     val correctsPostingRequestId: UUID? = null,
 )
 
-/** A request to reverse a posted journal entry with a compensating entry. */
+/**
+ * A request to reverse a posted journal entry with a compensating entry.
+ *
+ * The reversal's durable identity is derived from the journal it reverses - there can only ever be
+ * one - so the caller supplies no source reference. [dates] follows the same defaults as a posting:
+ * every omitted date is the tenant business date, and a posting date earlier than it is a backdated
+ * reversal that needs `journal.post_prior_period`. [reason] is mandatory and is recorded on the
+ * reversal journal, the request and the audit event.
+ */
 data class ReversePostingCommand(
     val context: AccountingContext,
-    val source: AccountingSourceReference,
     val originalJournalEntryId: UUID,
     val reason: String,
-    val valueDate: LocalDate? = null,
+    val dates: PostingDateRequest = PostingDateRequest(),
 )
 
 /**

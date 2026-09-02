@@ -10,6 +10,7 @@ import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.PostingPeriodResolver
 import com.finaxis.platform.accounting.application.ledger.DefaultPostingService
 import com.finaxis.platform.accounting.application.ledger.JournalNumberAllocator
+import com.finaxis.platform.accounting.application.ledger.JournalReversalService
 import com.finaxis.platform.accounting.application.ledger.JournalStore
 import com.finaxis.platform.accounting.application.ledger.PostingEngine
 import com.finaxis.platform.accounting.application.ledger.PostingLegResolver
@@ -90,5 +91,6 @@ class AccountingModuleConfiguration {
     fun postingService(
         engine: PostingEngine,
         resolver: PostingLegResolver,
-    ): PostingService = DefaultPostingService(engine, resolver)
+        reversals: JournalReversalService,
+    ): PostingService = DefaultPostingService(engine, resolver, reversals)
 }
