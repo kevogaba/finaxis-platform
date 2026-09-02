@@ -13,6 +13,7 @@ fourteen migrations were collapsed and why that reset was safe.
 | `V4__grant_local_admin_invite_approve_and_seed_checker.sql` | Grants `user.invite`/`user.approve`/`user.assign_branch` to the bootstrapped `local-admin` role, missing from `V3`, and seeds a second bootstrap actor (`local.checker`) holding the same role, since `local.admin` cannot approve its own invitations |
 | `V5__accounting_permission_catalogue.sql` | 26-code `accounting` permission catalogue (reference data only, no DDL), granted in full to `PLATFORM_SUPER_ADMIN` and as ten tenant-configuration codes to the bootstrap `local-admin` role; `PLATFORM_SUPPORT` deliberately receives none — see [accounting authorization](../security/accounting-authorization.md) |
 | `V6__accounting_fiscal_calendar_and_chart_of_accounts.sql` | The first accounting schema: `accounting_fiscal_year`, `accounting_fiscal_period`, `gl_account` and their two transition logs, plus `btree_gist` in a dedicated `extensions` schema — see [the accounting schema](accounting-erd.md) |
+| `V7__accounting_journal_schema.sql` | The immutable double-entry kernel: `posting_request`, `journal_entry`, `journal_line`, their indexes, and the `reference_sequence` backfill for organisations created in SQL — see [the accounting schema](accounting-erd.md) |
 
 `V1`–`V3` will never be edited again. Every future change is a forward-only `V4+` migration.
 

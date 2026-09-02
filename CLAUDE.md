@@ -18,8 +18,8 @@ preserving security boundaries and testability.
 Modules (`com.finaxis.platform`): `iam` (identity, authorization, active-organisation context,
 roles, permissions, and user REST adapters), `lifecycle` (organisation/branch/user/membership
 FSMs, tenant setup, business date, audit views, and REST adapters), `accounting`
-(general-ledger boundary, posting contracts, and the fiscal-calendar and chart-of-accounts
-schema; no journals and no posting engine yet - see
+(general-ledger boundary, posting contracts, the fiscal-calendar and chart-of-accounts schema
+with their lifecycles, and the journal schema; no posting engine yet - see
 `docs/architecture/accounting-module-boundary.md`), `notifications` (RabbitMQ
 listener → JobRunr job), `common` (reusable transitions/audit/context/persistence/web infra),
 `config`.
@@ -61,6 +61,10 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   transcribed from `docs/database/accounting-erd.md`. Installs `btree_gist` into a dedicated
   `extensions` schema, because jOOQ codegen reads `inputSchema = "public"` and an extension there
   would be generated into `com.finaxis.platform.jooq` on every build
+- `V7__accounting_journal_schema.sql` — the immutable double-entry kernel: `posting_request`,
+  `journal_entry` and `journal_line`, transcribed from `docs/database/accounting-erd.md`, plus the
+  `reference_sequence` backfill that gives the SQL-created `PLATFORM` and bootstrap organisations
+  the `JOURNAL` counter gapless numbering locks on
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -83,9 +87,9 @@ Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 See `docs/database/foundation-schema.md`, `docs/adr/0010-...`, and `docs/adr/0015-...`.
 `docs/database/accounting-erd.md` is the design authority every accounting migration implements,
 and `docs/architecture/accounting-foundation.md` holds the invariants. `V6` created the fiscal
-calendar and the chart of accounts from it; the journal, posting-rule, reconciliation and
-projection tables are still design-only. Do not invent accounting tables or columns outside those
-documents.
+calendar and the chart of accounts from it and `V7` the journal tables; the posting-rule,
+reconciliation and projection tables are still design-only. Do not invent accounting tables or
+columns outside those documents.
 
 ## Authorization
 
