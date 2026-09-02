@@ -60,6 +60,12 @@ object AccountingAuditActions {
     /** A posting-rule version was approved, which activates it. */
     const val POSTING_RULE_APPROVE = "posting_rule.approve"
 
+    /**
+     * Retiring a rule version. Distinct from approval because it can stop a product module
+     * posting altogether, which is the change an auditor most wants to find by itself.
+     */
+    const val POSTING_RULE_RETIRE = "posting_rule.retire"
+
     /** A control-account reconciliation break was resolved or overridden. */
     const val RECONCILIATION_RESOLVE = "reconciliation.resolve"
 }

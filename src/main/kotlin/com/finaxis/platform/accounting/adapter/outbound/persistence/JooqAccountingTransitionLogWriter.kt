@@ -3,15 +3,19 @@ package com.finaxis.platform.accounting.adapter.outbound.persistence
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.accounting.application.FiscalPeriodMakerResolver
 import com.finaxis.platform.accounting.application.GlAccountMakerResolver
+import com.finaxis.platform.accounting.application.rules.PostingRuleVersionMakerResolver
 import com.finaxis.platform.accounting.domain.FiscalPeriodAggregate
 import com.finaxis.platform.accounting.domain.FiscalPeriodKey
 import com.finaxis.platform.accounting.domain.FiscalPeriodTransition
 import com.finaxis.platform.accounting.domain.GlAccountAggregate
 import com.finaxis.platform.accounting.domain.GlAccountTransition
+import com.finaxis.platform.accounting.domain.PostingRuleVersionAggregate
+import com.finaxis.platform.accounting.domain.PostingRuleVersionTransition
 import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogWriter
 import com.finaxis.platform.jooq.tables.references.FISCAL_PERIOD_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT_TRANSITION_LOG
+import com.finaxis.platform.jooq.tables.references.POSTING_RULE_VERSION_TRANSITION_LOG
 import org.jooq.DSLContext
 import org.jooq.JSONB
 import org.springframework.stereotype.Component
@@ -39,7 +43,8 @@ class JooqAccountingTransitionLogWriter(
     private val objectMapper: ObjectMapper,
 ) : TransitionLogWriter,
     FiscalPeriodMakerResolver,
-    GlAccountMakerResolver {
+    GlAccountMakerResolver,
+    PostingRuleVersionMakerResolver {
     override fun supports(aggregateType: String): Boolean = aggregateType in OWNED_TYPES
 
     override fun save(log: TransitionLog) {
@@ -50,52 +55,96 @@ class JooqAccountingTransitionLogWriter(
                         "it the row cannot be written tenant-safely."
                 },
             )
-        val now = OffsetDateTime.now(clock)
-        val metadata = JSONB.jsonb(objectMapper.writeValueAsString(log.metadata))
-        val actorId = log.actorId.toActorId()
-        val createdAt = log.createdAt.atOffset(ZoneOffset.UTC)
-
+        val row =
+            LogRow(
+                organisationId = organisationId,
+                entityId = UUID.fromString(log.aggregateId),
+                actorId = log.actorId.toActorId(),
+                createdAt = log.createdAt.atOffset(ZoneOffset.UTC),
+                now = OffsetDateTime.now(clock),
+                metadata = JSONB.jsonb(objectMapper.writeValueAsString(log.metadata)),
+            )
         when (log.aggregateType) {
-            FiscalPeriodAggregate.AGGREGATE_TYPE -> {
-                dsl
-                    .insertInto(FISCAL_PERIOD_TRANSITION_LOG)
-                    .set(FISCAL_PERIOD_TRANSITION_LOG.ORGANISATION_ID, organisationId)
-                    .set(FISCAL_PERIOD_TRANSITION_LOG.ENTITY_ID, UUID.fromString(log.aggregateId))
-                    .set(FISCAL_PERIOD_TRANSITION_LOG.TRANSITION_NAME, log.transition)
-                    .set(FISCAL_PERIOD_TRANSITION_LOG.STATUS_FROM, log.fromState)
-                    .set(FISCAL_PERIOD_TRANSITION_LOG.STATUS_TO, log.toState)
-                    .set(FISCAL_PERIOD_TRANSITION_LOG.REASON, log.reason)
-                    .set(FISCAL_PERIOD_TRANSITION_LOG.CREATED_AT, createdAt)
-                    .set(FISCAL_PERIOD_TRANSITION_LOG.CREATED_BY, actorId)
-                    .set(FISCAL_PERIOD_TRANSITION_LOG.UPDATED_AT, now)
-                    .set(FISCAL_PERIOD_TRANSITION_LOG.UPDATED_BY, actorId)
-                    .set(FISCAL_PERIOD_TRANSITION_LOG.METADATA_JSONB, metadata)
-                    .execute()
-            }
+            FiscalPeriodAggregate.AGGREGATE_TYPE -> saveFiscalPeriod(log, row)
 
-            GlAccountAggregate.AGGREGATE_TYPE -> {
-                dsl
-                    .insertInto(GL_ACCOUNT_TRANSITION_LOG)
-                    .set(GL_ACCOUNT_TRANSITION_LOG.ORGANISATION_ID, organisationId)
-                    .set(GL_ACCOUNT_TRANSITION_LOG.ENTITY_ID, UUID.fromString(log.aggregateId))
-                    .set(GL_ACCOUNT_TRANSITION_LOG.TRANSITION_NAME, log.transition)
-                    .set(GL_ACCOUNT_TRANSITION_LOG.STATUS_FROM, log.fromState)
-                    .set(GL_ACCOUNT_TRANSITION_LOG.STATUS_TO, log.toState)
-                    .set(GL_ACCOUNT_TRANSITION_LOG.REASON, log.reason)
-                    .set(GL_ACCOUNT_TRANSITION_LOG.CREATED_AT, createdAt)
-                    .set(GL_ACCOUNT_TRANSITION_LOG.CREATED_BY, actorId)
-                    .set(GL_ACCOUNT_TRANSITION_LOG.UPDATED_AT, now)
-                    .set(GL_ACCOUNT_TRANSITION_LOG.UPDATED_BY, actorId)
-                    .set(GL_ACCOUNT_TRANSITION_LOG.METADATA_JSONB, metadata)
-                    .execute()
-            }
+            GlAccountAggregate.AGGREGATE_TYPE -> saveGlAccount(log, row)
+
+            PostingRuleVersionAggregate.AGGREGATE_TYPE -> savePostingRuleVersion(log, row)
 
             // Unreachable while `supports` gates this, and kept so it stays unreachable: a type
             // added there without a branch here would otherwise write nothing and report success.
-            else -> {
-                error("Accounting owns no transition log for ${log.aggregateType}")
-            }
+            else -> error("Accounting owns no transition log for ${log.aggregateType}")
         }
+    }
+
+    /** The tenant-safe, timestamped, attributed part of a log row, the same for every table. */
+    private data class LogRow(
+        val organisationId: UUID,
+        val entityId: UUID,
+        val actorId: UUID,
+        val createdAt: OffsetDateTime,
+        val now: OffsetDateTime,
+        val metadata: JSONB,
+    )
+
+    private fun saveFiscalPeriod(
+        log: TransitionLog,
+        row: LogRow,
+    ) {
+        dsl
+            .insertInto(FISCAL_PERIOD_TRANSITION_LOG)
+            .set(FISCAL_PERIOD_TRANSITION_LOG.ORGANISATION_ID, row.organisationId)
+            .set(FISCAL_PERIOD_TRANSITION_LOG.ENTITY_ID, row.entityId)
+            .set(FISCAL_PERIOD_TRANSITION_LOG.TRANSITION_NAME, log.transition)
+            .set(FISCAL_PERIOD_TRANSITION_LOG.STATUS_FROM, log.fromState)
+            .set(FISCAL_PERIOD_TRANSITION_LOG.STATUS_TO, log.toState)
+            .set(FISCAL_PERIOD_TRANSITION_LOG.REASON, log.reason)
+            .set(FISCAL_PERIOD_TRANSITION_LOG.CREATED_AT, row.createdAt)
+            .set(FISCAL_PERIOD_TRANSITION_LOG.CREATED_BY, row.actorId)
+            .set(FISCAL_PERIOD_TRANSITION_LOG.UPDATED_AT, row.now)
+            .set(FISCAL_PERIOD_TRANSITION_LOG.UPDATED_BY, row.actorId)
+            .set(FISCAL_PERIOD_TRANSITION_LOG.METADATA_JSONB, row.metadata)
+            .execute()
+    }
+
+    private fun saveGlAccount(
+        log: TransitionLog,
+        row: LogRow,
+    ) {
+        dsl
+            .insertInto(GL_ACCOUNT_TRANSITION_LOG)
+            .set(GL_ACCOUNT_TRANSITION_LOG.ORGANISATION_ID, row.organisationId)
+            .set(GL_ACCOUNT_TRANSITION_LOG.ENTITY_ID, row.entityId)
+            .set(GL_ACCOUNT_TRANSITION_LOG.TRANSITION_NAME, log.transition)
+            .set(GL_ACCOUNT_TRANSITION_LOG.STATUS_FROM, log.fromState)
+            .set(GL_ACCOUNT_TRANSITION_LOG.STATUS_TO, log.toState)
+            .set(GL_ACCOUNT_TRANSITION_LOG.REASON, log.reason)
+            .set(GL_ACCOUNT_TRANSITION_LOG.CREATED_AT, row.createdAt)
+            .set(GL_ACCOUNT_TRANSITION_LOG.CREATED_BY, row.actorId)
+            .set(GL_ACCOUNT_TRANSITION_LOG.UPDATED_AT, row.now)
+            .set(GL_ACCOUNT_TRANSITION_LOG.UPDATED_BY, row.actorId)
+            .set(GL_ACCOUNT_TRANSITION_LOG.METADATA_JSONB, row.metadata)
+            .execute()
+    }
+
+    private fun savePostingRuleVersion(
+        log: TransitionLog,
+        row: LogRow,
+    ) {
+        dsl
+            .insertInto(POSTING_RULE_VERSION_TRANSITION_LOG)
+            .set(POSTING_RULE_VERSION_TRANSITION_LOG.ORGANISATION_ID, row.organisationId)
+            .set(POSTING_RULE_VERSION_TRANSITION_LOG.ENTITY_ID, row.entityId)
+            .set(POSTING_RULE_VERSION_TRANSITION_LOG.TRANSITION_NAME, log.transition)
+            .set(POSTING_RULE_VERSION_TRANSITION_LOG.STATUS_FROM, log.fromState)
+            .set(POSTING_RULE_VERSION_TRANSITION_LOG.STATUS_TO, log.toState)
+            .set(POSTING_RULE_VERSION_TRANSITION_LOG.REASON, log.reason)
+            .set(POSTING_RULE_VERSION_TRANSITION_LOG.CREATED_AT, row.createdAt)
+            .set(POSTING_RULE_VERSION_TRANSITION_LOG.CREATED_BY, row.actorId)
+            .set(POSTING_RULE_VERSION_TRANSITION_LOG.UPDATED_AT, row.now)
+            .set(POSTING_RULE_VERSION_TRANSITION_LOG.UPDATED_BY, row.actorId)
+            .set(POSTING_RULE_VERSION_TRANSITION_LOG.METADATA_JSONB, row.metadata)
+            .execute()
     }
 
     override fun lastActorFor(
@@ -114,6 +163,23 @@ class JooqAccountingTransitionLogWriter(
                 GL_ACCOUNT_TRANSITION_LOG.ID.desc(),
             ).limit(1)
             .fetchOne(GL_ACCOUNT_TRANSITION_LOG.CREATED_BY)
+
+    override fun lastActorFor(
+        organisationId: UUID,
+        versionId: UUID,
+        transition: PostingRuleVersionTransition,
+    ): UUID? =
+        dsl
+            .select(POSTING_RULE_VERSION_TRANSITION_LOG.CREATED_BY)
+            .from(POSTING_RULE_VERSION_TRANSITION_LOG)
+            .where(POSTING_RULE_VERSION_TRANSITION_LOG.ORGANISATION_ID.eq(organisationId))
+            .and(POSTING_RULE_VERSION_TRANSITION_LOG.ENTITY_ID.eq(versionId))
+            .and(POSTING_RULE_VERSION_TRANSITION_LOG.TRANSITION_NAME.eq(transition.name))
+            .orderBy(
+                POSTING_RULE_VERSION_TRANSITION_LOG.CREATED_AT.desc(),
+                POSTING_RULE_VERSION_TRANSITION_LOG.ID.desc(),
+            ).limit(1)
+            .fetchOne(POSTING_RULE_VERSION_TRANSITION_LOG.CREATED_BY)
 
     /**
      * The actor of the most recent [transition] on a period, or null when it never happened.
@@ -167,6 +233,10 @@ class JooqAccountingTransitionLogWriter(
          * otherwise reach the `error` branch at runtime instead of failing a test.
          */
         val OWNED_TYPES =
-            setOf(FiscalPeriodAggregate.AGGREGATE_TYPE, GlAccountAggregate.AGGREGATE_TYPE)
+            setOf(
+                FiscalPeriodAggregate.AGGREGATE_TYPE,
+                GlAccountAggregate.AGGREGATE_TYPE,
+                PostingRuleVersionAggregate.AGGREGATE_TYPE,
+            )
     }
 }

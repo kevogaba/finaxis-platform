@@ -7,9 +7,8 @@
 
 At this stage the module is **contracts, the fiscal calendar, the chart of accounts with their
 lifecycles and maker-checker controls, the journal schema, and the synchronous posting engine
-behind `PostingService`**. No posting rule exists yet (issues #44, #45), so the resolver behind the
-public API refuses every product-module intent with `accounting.posting_rule_not_found`; the engine
-itself is live for accounting's own callers. The boundary existed before any table, deliberately,
+behind `PostingService`**. Posting rules (#44, #45) resolve a product module's intent to legs, so the public API
+posts end to end for any event a tenant has configured a rule for. The boundary existed before any table, deliberately,
 so later work cannot accidentally couple a product module to ledger persistence.
 
 ## What this module owns
@@ -140,7 +139,6 @@ invariant the codebase already held rather than forcing a change.
 
 | Missing | Issue |
 | --- | --- |
-| Posting rules and their resolver | #44, #45 |
 | Control accounts and reconciliation | #46 |
 | Manual journals | #48 |
 | Accounting REST adapters | #52 |
@@ -150,12 +148,9 @@ schema (#36), the accounting permission catalogue (#34) and the fiscal-period co
 semantics (#35) — have shipped, together with the GL-account domain (#37), the chart-of-accounts
 FSM (#38) and the fiscal-period lifecycle (#39).
 
-Two consequences of that state are worth stating plainly. `PostingLegResolver` is the
-`UnconfiguredPostingLegResolver` bean until #45 replaces it, and `AccountingModuleContextTests`
-asserts exactly that so the rule-backed resolver landing beside it rather than instead of it is a
-visible change. And `HexagonalArchitectureTest`'s web-adapter allow-list will need extending when
-the first accounting controller lands in #52 — there is no accounting web adapter today, so no edit
-was needed here.
+One consequence of that state is worth stating plainly: `HexagonalArchitectureTest`'s web-adapter
+allow-list will need extending when the first accounting controller lands in #52 — there is no
+accounting web adapter today, so no edit was needed here.
 
 ## The posting engine
 
@@ -177,6 +172,27 @@ header**, the `INV-4` enforcement point; mark the request `POSTED`.
 
 Every failure before the claim leaves nothing behind. Every failure after it rolls the claim back
 with the caller's transaction, so a rejected request never occupies its source reference.
+
+## Posting rules
+
+`PostingRuleService` owns the configuration that turns a product module's intent into legs, and
+`RuleBackedPostingLegResolver` is the engine's `PostingLegResolver`. One resolution path, per
+ADR 0020: the candidates are every `posting_rule` for the event; the winner is the most specific
+selector match on product class and functional currency, with a tie failing fast as
+`accounting.posting_rule_ambiguous`; the version is the one approved `posting_rule_version` whose
+window covers the **posting date**, which `ex_posting_rule_version_no_overlap` guarantees is at most
+one; and `PostingRulePolicy.allocate` turns the facts into legs - each leg its percentage of its
+fact, rounded `HALF_EVEN` at the minor unit, the residual leg absorbing the remainder (`INV-2`).
+The engine records the version on `posting_request.posting_rule_version_id`.
+
+The version lifecycle is the chart-of-accounts control applied to configuration: `DRAFT →
+PENDING_APPROVAL → ACTIVE`, rejection back to `DRAFT` with a reason, approval by an actor who is not
+the most recent submitter resolved from `posting_rule_version_transition_log` under the rule's row
+lock, and `posting_rule.create`, `posting_rule.create_version` and `posting_rule.approve` audited.
+Activation supersedes the rule's current head by closing its window the day before the successor
+takes effect, in the same transaction. Legs and `effective_from` are editable in `DRAFT` only.
+`PostingRuleService.dryRun` resolves an intent through the same resolver in a read-only transaction
+and returns the legs it would post, so an administrator can test a configuration without a journal.
 
 ## Reversal
 

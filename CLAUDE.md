@@ -19,8 +19,8 @@ Modules (`com.finaxis.platform`): `iam` (identity, authorization, active-organis
 roles, permissions, and user REST adapters), `lifecycle` (organisation/branch/user/membership
 FSMs, tenant setup, business date, audit views, and REST adapters), `accounting`
 (general-ledger boundary, posting contracts, the fiscal-calendar and chart-of-accounts schema
-with their lifecycles, the journal schema, and the synchronous posting engine; no posting rules
-yet, so product modules cannot post until #45 - see
+with their lifecycles, the journal schema, the synchronous posting engine, and versioned posting
+rules with their resolver, so a product module can post any event its tenant has configured - see
 `docs/architecture/accounting-module-boundary.md`), `notifications` (RabbitMQ
 listener → JobRunr job), `common` (reusable transitions/audit/context/persistence/web infra),
 `config`.

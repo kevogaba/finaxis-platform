@@ -309,8 +309,8 @@ class PostingEngineIntegrationTests(
     }
 
     @Test
-    fun `the public service refuses every intent while no posting rule exists`() {
-        // Issue #45 replaces the resolver. Until then the public API is live, wired, and says so.
+    fun `the public service refuses an intent no posting rule resolves`() {
+        // A tenant with no rule for the event: the resolver names the gap, and nothing is written.
         val tenant = provisionTenant("engine-no-rules")
         val harness = harness(tenant)
 

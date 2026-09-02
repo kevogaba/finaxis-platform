@@ -316,9 +316,6 @@ class HighRiskOperationAuditCoverageTests(
             mapOf(
                 "journal.create_manual" to "#48",
                 "journal.approve" to "#48",
-                "posting_rule.create" to "#45",
-                "posting_rule.create_version" to "#45",
-                "posting_rule.approve" to "#45",
                 "reconciliation.resolve" to "#46",
             )
 
@@ -330,7 +327,7 @@ class HighRiskOperationAuditCoverageTests(
          * Asserted as an **equality** against the map size, so a discharge that forgets to lower
          * this constant fails rather than quietly banking slack for the next unwired action.
          */
-        const val MAXIMUM_PENDING_ENFORCEMENT = 6
+        const val MAXIMUM_PENDING_ENFORCEMENT = 3
 
         /** A wired action the scan must always find; its absence means the scan is broken. */
         const val CALL_SITE_CANARY = "settings.update"

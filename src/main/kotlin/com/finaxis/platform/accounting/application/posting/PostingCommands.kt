@@ -68,10 +68,17 @@ data class ReversePostingCommand(
  * not belong on the interface product modules consume.
  */
 sealed interface PostingIntent {
-    /** Semantic financial facts resolved against a posting rule owned by accounting. */
+    /**
+     * Semantic financial facts resolved against a posting rule owned by accounting.
+     *
+     * [productClass] is an optional selector dimension - `SAVINGS:REGULAR`, say - that lets a
+     * tenant configure one rule per product class for the same event. It names a *class*, never an
+     * account: which accounts move is still the rule's decision.
+     */
     data class Facts(
         val eventCode: String,
         val facts: List<FinancialFact>,
+        val productClass: String? = null,
     ) : PostingIntent
 }
 
