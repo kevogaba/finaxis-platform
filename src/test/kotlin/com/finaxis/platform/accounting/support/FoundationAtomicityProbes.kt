@@ -5,6 +5,9 @@ import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE_HISTORY
 import com.finaxis.platform.jooq.tables.references.JOURNAL_ENTRY
 import com.finaxis.platform.jooq.tables.references.JOURNAL_LINE
+import com.finaxis.platform.jooq.tables.references.MANUAL_JOURNAL
+import com.finaxis.platform.jooq.tables.references.MANUAL_JOURNAL_LINE
+import com.finaxis.platform.jooq.tables.references.MANUAL_JOURNAL_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_SETTING
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_TRANSITION_LOG
@@ -160,6 +163,44 @@ object FoundationAtomicityProbes {
                 .where(REFERENCE_SEQUENCE.ORGANISATION_ID.eq(organisationId))
                 .and(REFERENCE_SEQUENCE.SEQUENCE_CODE.eq("JOURNAL"))
                 .fetchOne(REFERENCE_SEQUENCE.NEXT_VALUE) ?: 0L
+        }
+
+    /** Manual-journal drafts for one organisation. */
+    fun manualJournalRows(organisationId: UUID): AtomicityProbe =
+        AtomicityProbe("manual_journal") { dsl ->
+            dsl
+                .fetchCount(MANUAL_JOURNAL, MANUAL_JOURNAL.ORGANISATION_ID.eq(organisationId))
+                .toLong()
+        }
+
+    /** Manual-journal draft lines for one organisation. */
+    fun manualJournalLineRows(organisationId: UUID): AtomicityProbe =
+        AtomicityProbe("manual_journal_line") { dsl ->
+            dsl
+                .fetchCount(
+                    MANUAL_JOURNAL_LINE,
+                    MANUAL_JOURNAL_LINE.ORGANISATION_ID.eq(organisationId),
+                ).toLong()
+        }
+
+    /** Append-only manual-journal transition log rows for one organisation. */
+    fun manualJournalTransitionLogRows(organisationId: UUID): AtomicityProbe =
+        AtomicityProbe("manual_journal_transition_log") { dsl ->
+            dsl
+                .fetchCount(
+                    MANUAL_JOURNAL_TRANSITION_LOG,
+                    MANUAL_JOURNAL_TRANSITION_LOG.ORGANISATION_ID.eq(organisationId),
+                ).toLong()
+        }
+
+    /** The draft's status, which approval moves in the same transaction as the journal write. */
+    fun manualJournalStatus(journalId: UUID): AtomicityProbe =
+        AtomicityProbe("manual_journal[posted]") { dsl ->
+            dsl
+                .fetchCount(
+                    MANUAL_JOURNAL,
+                    MANUAL_JOURNAL.ID.eq(journalId).and(MANUAL_JOURNAL.STATUS.eq("POSTED")),
+                ).toLong()
         }
 
     /** Append-only organisation lifecycle transition log rows for one aggregate. */

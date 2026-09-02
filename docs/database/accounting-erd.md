@@ -27,6 +27,7 @@ sentence.
 | `V7` | `posting_request`, `journal_entry`, `journal_line`, and the `reference_sequence` backfill | #40 |
 | `V8` | `posting_rule`, `posting_rule_version`, `posting_rule_leg`, one transition log, and the `posting_request` rule-version foreign key | #44 |
 | `V9` | `gl_account.is_control_account` and `control_subledger_kind`, `control_account_reconciliation_run`, `idx_journal_line_subledger` | #46 |
+| `V10` | `manual_journal`, `manual_journal_line`, one transition log | #48 |
 | Then | `gl_account_daily_balance` | #47 |
 
 Issue #34's permission migration carries no accounting tables — only reference data.
@@ -64,6 +65,11 @@ erDiagram
     GL_ACCOUNT ||--o{ GL_ACCOUNT_DAILY_BALANCE : projects
     BRANCH ||--o{ GL_ACCOUNT_DAILY_BALANCE : partitions
     GL_ACCOUNT ||--o{ CONTROL_ACCOUNT_RECONCILIATION_RUN : proves
+    ORGANISATION ||--o{ MANUAL_JOURNAL : owns
+    MANUAL_JOURNAL ||--|{ MANUAL_JOURNAL_LINE : proposes
+    GL_ACCOUNT ||--o{ MANUAL_JOURNAL_LINE : targets
+    MANUAL_JOURNAL ||--o| JOURNAL_ENTRY : posts_as
+    MANUAL_JOURNAL ||--o{ MANUAL_JOURNAL_TRANSITION_LOG : changes
 ```
 
 ## Table classification
@@ -88,6 +94,9 @@ exist yet, and accounting holds no foreign key into them.
 | `posting_rule_leg` | Authoritative | Accounting | #44 |
 | `posting_rule_version_transition_log` | Authoritative, append-only | Accounting | #44 |
 | `control_account_reconciliation_run` | Authoritative evidence | Accounting | #46 |
+| `manual_journal` | Authoritative | Accounting | #48 |
+| `manual_journal_line` | Authoritative | Accounting | #48 |
+| `manual_journal_transition_log` | Authoritative, append-only | Accounting | #48 |
 | `gl_account_daily_balance` | **Projection**, rebuildable | Accounting | #47 |
 | savings, loan, share and teller positions | Authoritative | **Product-owned-future** | Out of Phase B |
 
@@ -124,7 +133,7 @@ and branch is a *dimension on the posting*, carried on `journal_entry` and `jour
 Issue #36's first acceptance criterion is *"schema matches #30 ERD exactly **or** #30 is
 deliberately updated first with the approved design change"*. Everything in this section takes the
 second branch. Eight questions were settled here for issue #36, four more for issue #40, four for
-issue #44, and two for issue #46. Most
+issue #44, two for issue #46, and one for issue #48. Most
 had no answer anywhere in the design record; two had answers that contradict each other; one had an
 answer that was wrong. Each is settled before the migration exists, with the reasoning attached,
 rather than decided by accident in SQL.
@@ -448,6 +457,24 @@ Financial control accounts default to exact monetary equality. A run may be give
 `MATCHED` verdict is never separable from the bound it was judged against.
 `chk_control_account_reconciliation_run_matched` refuses a `MATCHED` row whose difference exceeds
 its tolerance, which is the part of the verdict a row can see.
+
+### A manual journal draft is its own aggregate, not a `posting_request`
+
+Issue #48 allows a dedicated persisted draft model *"if #30 defines"* one, and this document did not.
+It does now, for a reason that follows from what `posting_request` is. That row is created by the
+engine at posting time; its mutability is bounded to the posting transaction; its unique source
+reference is an idempotency key; and it never carries legs, because legs live on the immutable
+`journal_line`. A manual adjustment is edited over days, submitted, rejected, amended and
+resubmitted before anything reaches the ledger, and its legs must exist before any posting does.
+Fitting that into `posting_request` would mean a long-lived mutable request with legs in a JSON
+column and a status domain the engine does not use - the two lifecycles blurred into one row.
+
+So `manual_journal` and `manual_journal_line` are the draft, with a transition log for the
+maker-checker control, and approval posts through the engine exactly as a product module would:
+`source_module = 'accounting'`, `source_entity_type = 'MANUAL_JOURNAL'`, `entry_type = 'MANUAL'`,
+one `posting_request` and one `journal_entry`, ordinary in every way. The draft keeps the journal's
+id in `journal_entry_id`, unique, so one draft posts at most once. Correction of a posted manual
+journal is a reversal; the draft is never edited after approval.
 
 ## Column definitions for the issue #36 tables
 
@@ -1208,6 +1235,86 @@ Partial, because lines with no position never need it.
 branch scoping, resolution by a different actor with a reason and an audit event, and that no run
 ever touches a journal.
 
+## Column definitions for the issue #48 tables
+
+### `manual_journal`
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `branch_id` | `UUID` | yes | The branch the adjustment is booked to |
+| `title` | `TEXT` | no | Short description, 1-200 characters |
+| `narrative` | `TEXT` | no | The reason for the adjustment, 1-500 characters; carried onto the posted journal |
+| `status` | `TEXT` | no | `DRAFT`, `PENDING_APPROVAL`, `POSTED` or `CANCELLED` |
+| `status_reason` | `TEXT` | yes | Why the draft is in its current state, including a rejection reason |
+| `transaction_date` | `DATE` | yes | Defaults to the business date at approval |
+| `value_date` | `DATE` | yes | Defaults to the business date at approval |
+| `posting_date` | `DATE` | yes | Defaults to the business date at approval; earlier is a backdated posting |
+| `journal_entry_id` | `UUID` | yes | The immutable journal approval produced; set exactly when `POSTED` |
+
+Plus the mutable audit set.
+
+| Constraint | Kind | Purpose |
+| --- | --- | --- |
+| `uq_manual_journal_guid` | `UNIQUE (guid)` | Alternate key |
+| `uq_manual_journal_organisation_id` | `UNIQUE (organisation_id, id)` | Composite foreign-key target for lines and the transition log |
+| `uq_manual_journal_entry` | `UNIQUE (organisation_id, journal_entry_id)` | One draft posts at most once |
+| `fk_manual_journal_branch` | `FOREIGN KEY (organisation_id, branch_id)` | Tenant-safe branch |
+| `fk_manual_journal_entry` | `FOREIGN KEY (organisation_id, journal_entry_id)` | Tenant-safe link to the posted journal |
+| `chk_manual_journal_status` | `CHECK (status IN (…))` | The four adopted states |
+| `chk_manual_journal_posted_has_entry` | `CHECK ((status = 'POSTED') = (journal_entry_id IS NOT NULL))` | Posted means posted |
+| `chk_manual_journal_title` | `CHECK (char_length(title) BETWEEN 1 AND 200)` | Bounded |
+| `chk_manual_journal_narrative` | `CHECK (char_length(narrative) BETWEEN 1 AND 500)` | A reason is mandatory and bounded |
+| `chk_manual_journal_version` | `CHECK (row_version >= 0)` | Convention |
+
+| Index | Definition | Justifying query |
+| --- | --- | --- |
+| `idx_manual_journal_organisation_status` | `(organisation_id, status)` | *"The drafts awaiting my approval"* |
+
+### `manual_journal_line`
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `manual_journal_id` | `UUID` | no | The draft |
+| `line_number` | `INTEGER` | no | Stable ordinal, `1`-based; becomes the journal line order |
+| `gl_account_id` | `UUID` | no | The account; must have opted into manual posting and must not be a control account (application-enforced) |
+| `direction` | `TEXT` | no | `DEBIT` or `CREDIT` |
+| `amount` | `NUMERIC(23, 6)` | no | Positive; the functional currency only, as every posting |
+| `currency_code` | `CHAR(3)` | no | The tenant's functional currency |
+| `narrative` | `TEXT` | yes | Line description, at most 500 characters |
+
+| Constraint | Kind | Purpose |
+| --- | --- | --- |
+| `uq_manual_journal_line_guid` | `UNIQUE (guid)` | Alternate key |
+| `uq_manual_journal_line_number` | `UNIQUE (organisation_id, manual_journal_id, line_number)` | Deterministic order, and the draft foreign key's index |
+| `fk_manual_journal_line_journal` | `FOREIGN KEY (organisation_id, manual_journal_id)` | Tenant-safe draft |
+| `fk_manual_journal_line_account` | `FOREIGN KEY (organisation_id, gl_account_id)` | Tenant-safe account |
+| `chk_manual_journal_line_number` | `CHECK (line_number > 0)` | Ordinals are 1-based |
+| `chk_manual_journal_line_direction` | `CHECK (direction IN ('DEBIT', 'CREDIT'))` | Direction carries the sign |
+| `chk_manual_journal_line_amount` | `CHECK (amount > 0)` | No zero or negative line |
+| `chk_manual_journal_line_currency` | `CHECK (currency_code ~ '^[A-Z]{3}$')` | The foundation currency regex |
+| `chk_manual_journal_line_narrative` | `CHECK (narrative IS NULL OR char_length(narrative) <= 500)` | Bounded |
+| `chk_manual_journal_line_version` | `CHECK (row_version >= 0)` | Convention |
+
+| Index | Definition | Justifying query |
+| --- | --- | --- |
+| `idx_manual_journal_line_account` | `(organisation_id, gl_account_id)` | The account foreign key, and *"which drafts touch this account"* before deactivation |
+
+### `manual_journal_transition_log`
+
+Copies `gl_account_transition_log` exactly, with the composite foreign key
+`(organisation_id, entity_id) → manual_journal` and the index
+`(organisation_id, entity_id, created_at DESC)`. `created_by` is what makes *"the approver is not
+the submitter"* answerable from data.
+
+### What `V10` proves before it merges
+
+`ManualJournalSchemaIntegrationTests` exercises every constraint above by name.
+`ManualJournalIntegrationTests` proves the lifecycle through the service: a draft is created and
+amended without touching the journal tables; self-approval is refused; an unbalanced draft, an
+account without manual posting, a control account and a closed period cannot post; approval posts
+through the engine and produces ordinary immutable `MANUAL` journal rows with the draft's id as
+lineage; rejection returns to `DRAFT` with a reason; and every creation and approval is audited.
+
 ## The period selector
 
 `journal_entry` and `journal_line` both carry `posting_date DATE NOT NULL`. **It is the only column
@@ -1326,6 +1433,7 @@ Deferred, with the issue that creates each:
 | #44 | `posting_rule`, `posting_rule_version`, `posting_rule_leg`, their transition log, and the `posting_request` rule-version foreign key |
 | #45 | The version lifecycle and the deterministic resolver over those tables |
 | #46 | `V9`: the control-account classification, `control_account_reconciliation_run`, `idx_journal_line_subledger`, and the reconciliation proof contract |
+| #48 | `V10`: `manual_journal`, `manual_journal_line`, their transition log, and approval through the engine |
 | #47 | `gl_account_daily_balance` and its documented rebuild query |
 | #49, #50, #51 | The read models, using the query patterns and pagination contract |
 | #54 | The `REVOKE UPDATE, DELETE` operational prerequisite |

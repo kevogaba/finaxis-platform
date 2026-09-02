@@ -45,6 +45,13 @@ object AccountingAuditActions {
     /** A manual journal was approved, which posts it. */
     const val JOURNAL_APPROVE = "journal.approve"
 
+    /**
+     * A checker refusing a manual journal. Audited beside approval because the same CRITICAL
+     * permission exercises both, and an adjustment that was refused is as much a control event as
+     * one that was posted.
+     */
+    const val JOURNAL_REJECT = "journal.reject"
+
     /** A posted journal was reversed by a contra entry. */
     const val JOURNAL_REVERSE = "journal.reverse"
 
