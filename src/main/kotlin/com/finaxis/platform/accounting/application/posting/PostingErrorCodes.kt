@@ -82,6 +82,42 @@ object PostingErrorCodes {
     /** A journal is reversed from the branch it was posted to, not from another one. */
     const val REVERSAL_BRANCH_MISMATCH = "accounting.reversal_branch_mismatch"
 
+    /** Two rules match the intent at the same specificity; the configuration must be corrected. */
+    const val POSTING_RULE_AMBIGUOUS = "accounting.posting_rule_ambiguous"
+
+    /** A rule with the same code or selector already exists in the tenant. */
+    const val POSTING_RULE_DUPLICATE = "accounting.posting_rule_duplicate"
+
+    /** The posting-rule version does not exist in the tenant. */
+    const val POSTING_RULE_VERSION_NOT_FOUND = "accounting.posting_rule_version_not_found"
+
+    /** The rule already has a draft or pending version. */
+    const val POSTING_RULE_VERSION_IN_PROGRESS = "accounting.posting_rule_version_in_progress"
+
+    /** Only a DRAFT version can be amended; an approved version is frozen. */
+    const val POSTING_RULE_VERSION_NOT_EDITABLE = "accounting.posting_rule_version_not_editable"
+
+    /** The version changed while it was being amended or moved. */
+    const val POSTING_RULE_VERSION_STALE = "accounting.posting_rule_version_stale"
+
+    /** The requested state change is not a legal transition from the version's current state. */
+    const val POSTING_RULE_TRANSITION_NOT_ALLOWED = "accounting.posting_rule_transition_not_allowed"
+
+    /** The actor who submitted or activated a version cannot also approve or retire it. */
+    const val POSTING_RULE_SELF_APPROVAL = "accounting.posting_rule_self_approval"
+
+    /** A version's legs must be numbered 1..n without gaps and name existing postable accounts. */
+    const val POSTING_RULE_LEGS_INVALID = "accounting.posting_rule_legs_invalid"
+
+    /** Retiring a version needs the last date it governs. */
+    const val POSTING_RULE_EFFECTIVE_TO_REQUIRED = "accounting.posting_rule_effective_to_required"
+
+    /** A version's window would leave dates it governed with no version, or end before it began. */
+    const val POSTING_RULE_WINDOW_INVALID = "accounting.posting_rule_window_invalid"
+
+    /** This posting-rule operation requires a reason, and the reason cannot be blank. */
+    const val POSTING_RULE_REASON_REQUIRED = "accounting.posting_rule_reason_required"
+
     /** The fiscal period is already in the state the caller asked for. */
     const val PERIOD_ALREADY_IN_STATE = "accounting.fiscal_period_already_in_state"
 

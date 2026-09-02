@@ -4,9 +4,9 @@ import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.accounting.adapter.outbound.context.RequestContextAccountingLookup
 import com.finaxis.platform.accounting.application.ledger.DefaultPostingService
 import com.finaxis.platform.accounting.application.ledger.PostingLegResolver
-import com.finaxis.platform.accounting.application.ledger.UnconfiguredPostingLegResolver
 import com.finaxis.platform.accounting.application.port.outbound.AccountingContextLookup
 import com.finaxis.platform.accounting.application.posting.PostingService
+import com.finaxis.platform.accounting.application.rules.RuleBackedPostingLegResolver
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.ApplicationContext
@@ -56,11 +56,11 @@ class AccountingModuleContextTests(
     }
 
     @Test
-    fun `no posting rule resolver exists yet, and the placeholder says so`() {
-        // Issue #45 replaces this bean. Asserting the placeholder means a rule-backed resolver
-        // landing without removing it - two beans, or a silently overridden one - is a visible
-        // change rather than a startup ambiguity.
-        assertIs<UnconfiguredPostingLegResolver>(
+    fun `the engine resolves intents through the rule-backed resolver`() {
+        // Issue #45 replaced the Phase C placeholder. Asserting the type means a second resolver
+        // landing beside it - two beans, or a silently overridden one - is a visible change rather
+        // than a startup ambiguity.
+        assertIs<RuleBackedPostingLegResolver>(
             applicationContext.getBean(PostingLegResolver::class.java),
         )
     }

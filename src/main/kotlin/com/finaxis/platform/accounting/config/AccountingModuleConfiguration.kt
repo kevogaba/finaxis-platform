@@ -14,9 +14,10 @@ import com.finaxis.platform.accounting.application.ledger.JournalReversalService
 import com.finaxis.platform.accounting.application.ledger.JournalStore
 import com.finaxis.platform.accounting.application.ledger.PostingEngine
 import com.finaxis.platform.accounting.application.ledger.PostingLegResolver
-import com.finaxis.platform.accounting.application.ledger.UnconfiguredPostingLegResolver
 import com.finaxis.platform.accounting.application.port.outbound.AccountingContextLookup
 import com.finaxis.platform.accounting.application.posting.PostingService
+import com.finaxis.platform.accounting.application.rules.PostingRuleStore
+import com.finaxis.platform.accounting.application.rules.RuleBackedPostingLegResolver
 import com.finaxis.platform.common.audit.AuditService
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -79,12 +80,15 @@ class AccountingModuleConfiguration {
     ) = PostingEngine(contextLookup, tenants, periods, accounts, journals, numbers, clock)
 
     /**
-     * Refuses every intent until issue #45 replaces this bean with the rule-backed resolver. A
-     * bean rather than an absence, so the engine is live for accounting's own callers and a
-     * product module posting too early gets a stable code instead of a wiring error.
+     * Resolves a product module's intent against the rule version effective on the posting date.
+     * Declared here rather than annotated, like the engine, so the resolver the engine and the
+     * dry run share is visibly one bean.
      */
     @Bean
-    fun postingLegResolver(): PostingLegResolver = UnconfiguredPostingLegResolver()
+    fun postingLegResolver(
+        rules: PostingRuleStore,
+        tenants: AccountingTenantLookup,
+    ): PostingLegResolver = RuleBackedPostingLegResolver(rules, tenants)
 
     /** The public posting API product modules consume. */
     @Bean
