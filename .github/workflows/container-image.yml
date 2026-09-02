@@ -1,9 +1,12 @@
 name: Container Image
 
-# Every push for now, so the image build gets exercised on every branch. The intent is to narrow
-# this to `branches: [main]` once it has proven itself.
+# Only what lands on main. An unfiltered `push:` rebuilt the image on every branch of every
+# stacked pull request, which spends runner minutes proving something the branch's own quality
+# gate already proves, and publishes nothing anyone consumes.
 on:
   push:
+    branches:
+      - "main"
   workflow_dispatch:
 
 permissions:

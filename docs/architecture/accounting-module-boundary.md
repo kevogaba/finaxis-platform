@@ -5,10 +5,10 @@
 > [ADR 0020](../adr/0020-immutable-ledger-and-reversal-only-correction.md) and
 > [the accounting foundation](accounting-foundation.md).
 
-At this stage the module is **contracts, the fiscal calendar and chart-of-accounts schema, and
-its adapters**. There is no journal schema yet (issue #40) and no posting engine (issue #41). The
-boundary existed before any table, deliberately, so later work cannot accidentally couple a product
-module to ledger persistence.
+At this stage the module is **contracts, the fiscal calendar, the chart of accounts with their
+lifecycles and maker-checker controls, and their adapters**. There is no journal schema yet (issue
+#40) and no posting engine (issue #41). The boundary existed before any table, deliberately, so
+later work cannot accidentally couple a product module to ledger persistence.
 
 ## What this module owns
 
@@ -127,12 +127,17 @@ invariant the codebase already held rather than forcing a change.
 
 | Missing | Issue |
 | --- | --- |
-| Fiscal calendar and chart-of-accounts schema | #36 |
 | Journal schema | #40 |
 | `PostingService` implementation | #41 |
-| Accounting permissions | #34 |
-| Fiscal-period concurrency semantics | #35 |
+| Posting rules and their resolver | #44, #45 |
+| Control accounts and reconciliation | #46 |
+| Manual journals | #48 |
 | Accounting REST adapters | #52 |
+
+Phase A and B items that this table used to list — the fiscal-calendar and chart-of-accounts
+schema (#36), the accounting permission catalogue (#34) and the fiscal-period concurrency
+semantics (#35) — have shipped, together with the GL-account domain (#37), the chart-of-accounts
+FSM (#38) and the fiscal-period lifecycle (#39).
 
 Two consequences of that state are worth stating plainly. `PostingService` has **no bean**;
 `AccountingModuleContextTests` asserts its absence so a later partial implementation is a visible
