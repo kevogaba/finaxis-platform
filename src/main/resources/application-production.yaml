@@ -13,10 +13,10 @@ spring:
     compose:
       enabled: false
   mail:
-    host: ${FINAXIS_SMTP_HOST}
-    port: ${FINAXIS_SMTP_PORT}
-    username: ${FINAXIS_SMTP_USERNAME}
-    password: ${FINAXIS_SMTP_PASSWORD}
+    host: ${FINAXIS_SMTP_HOST:localhost}
+    port: ${FINAXIS_SMTP_PORT:1025}
+    username: ${FINAXIS_SMTP_USERNAME:}
+    password: ${FINAXIS_SMTP_PASSWORD:}
     properties:
       mail:
         smtp:
@@ -24,22 +24,24 @@ spring:
           starttls:
             enable: true
 
-springdoc:
-  api-docs:
-    enabled: false
-
-scalar:
-  enabled: false
-
 jobrunr:
   dashboard:
     enabled: false
 
+sentry:
+  enabled: ${FINAXIS_SENTRY_ENABLED:true}
+  dsn: ${FINAXIS_SENTRY_DSN:}
+  environment: ${FINAXIS_DEPLOYMENT_ENVIRONMENT:production}
+
 finaxis:
   email:
-    enabled: true
-    from-address: ${FINAXIS_EMAIL_FROM_ADDRESS}
-    app-base-url: ${FINAXIS_EMAIL_APP_BASE_URL}
+    # Matches the base default: a Coolify deployment with no mail provider yet acquired must still
+    # boot and answer /actuator/health. FINAXIS_EMAIL_ENABLED is the live, no-rebuild-required
+    # toggle documented in
+    # docs/superpowers/specs/2026-09-06-production-readiness-coolify-deployment-design.md.
+    enabled: ${FINAXIS_EMAIL_ENABLED:false}
+    from-address: ${FINAXIS_EMAIL_FROM_ADDRESS:no-reply@finaxis.local}
+    app-base-url: ${FINAXIS_EMAIL_APP_BASE_URL:http://localhost:5173}
   iam:
     active-organisation-context:
       secret: ${FINAXIS_ACTIVE_ORGANISATION_CONTEXT_SECRET}

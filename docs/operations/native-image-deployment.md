@@ -183,8 +183,6 @@ contains for good. Setting the property at runtime does not bring a bean back.
 
 The conditionals that matter here:
 
-- `finaxis.email.enabled` defaults to `false`, so the SMTP `EmailGateway` is absent and the
-  no-op fallback is baked in.
 - `finaxis.keycloak.admin.enabled` defaults to `false`, so the Keycloak admin gateway is
   absent and the no-op `IdentityProvisioningGateway` is baked in.
 - No profile is active during `processAot`, so `@Profile("local")` beans such as
@@ -194,12 +192,18 @@ The conditionals that matter here:
 set the deployment needs:
 
 ```bash
-FINAXIS_EMAIL_ENABLED=true FINAXIS_KEYCLOAK_ADMIN_ENABLED=true ./gradlew bootBuildImage
+FINAXIS_KEYCLOAK_ADMIN_ENABLED=true ./gradlew bootBuildImage
 ```
 
 Everything that is a plain property rather than a bean condition still resolves at runtime:
 `application.yaml`, `application-production.yaml`, the `FINAXIS_*` variables, and the
-`<springProfile>` blocks in `logback-spring.xml` all behave as they do on the JVM.
+`<springProfile>` blocks in `logback-spring.xml` all behave as they do on the JVM. This
+includes `finaxis.email.enabled` as of `docs/architecture/email-delivery.md`'s current
+description: `EmailConfiguration` registers a single unconditional bean that branches on the
+property inside its method body rather than gating which bean gets registered, specifically so
+`FINAXIS_EMAIL_ENABLED` can be flipped by restarting a deployed container - JVM or native -
+without a rebuild. `finaxis.keycloak.admin.enabled` above has no equivalent treatment yet, so it
+remains frozen at build time like any other `@ConditionalOnProperty` bean condition.
 
 `developmentOnly` dependencies - DevTools and `spring-boot-docker-compose` - are excluded
 from the native classpath by the Spring Boot Gradle plugin, so the compose-derived

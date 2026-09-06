@@ -187,10 +187,11 @@ documents.
   service or event listeners — not scattered in controllers. See
   `docs/architecture/audit-logging.md`.
 - The `production` profile (`SPRING_PROFILES_ACTIVE=production`) turns on browser hardening:
-  CORS (explicit origins), secure/strict session cookie, HSTS + CSP, docs UI off, and a
-  fail-fast active-organisation secret (no default). CSRF stays disabled because auth is
-  bearer-JWT only. See `docs/security/production-hardening.md` and
-  `docs/security/active-organisation-context.md`.
+  CORS (explicit origins), secure/strict session cookie, HSTS + CSP, and a fail-fast
+  active-organisation secret (no default). API-docs (Scalar UI, OpenAPI document) unauthenticated
+  access is a Spring Security gate (`finaxis.security.api-docs.public-access-enabled`), not a
+  springdoc/Scalar enable flag — see `docs/security/production-hardening.md`. CSRF stays disabled
+  because auth is bearer-JWT only. See also `docs/security/active-organisation-context.md`.
 - Sentry is off for local development by default; enable it via environment config elsewhere.
 
 ## Testing

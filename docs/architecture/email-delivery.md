@@ -30,9 +30,17 @@ Both are always wrapped by:
   MeteredEmailGateway (decorator) — records delivery metrics regardless of which is active
 ```
 
-`EmailConfiguration` selects `SpringMailEmailGateway` when `finaxis.email.enabled=true`, and falls
-back to `DisabledEmailGateway` otherwise (the default). Either way, the bean exposed to callers is
-the `MeteredEmailGateway`-wrapped instance, so delivery is observable in every environment.
+`EmailConfiguration` registers a single, unconditional `emailGateway` bean that branches on
+`finaxis.email.enabled` inside its method body — `SpringMailEmailGateway` when `true`,
+`DisabledEmailGateway` otherwise (the default) — rather than gating which bean gets registered
+with `@ConditionalOnProperty`. This repository's `bootBuildImage`-based container images run
+Spring AOT unconditionally, which freezes a conditional bean's registration decision at
+image-build time; branching inside an always-registered bean's method body instead is what lets
+`FINAXIS_EMAIL_ENABLED` be flipped on a live Coolify deployment with just a container restart, no
+image rebuild. See
+`docs/superpowers/specs/2026-09-06-production-readiness-coolify-deployment-design.md`. Either way,
+the bean exposed to callers is the `MeteredEmailGateway`-wrapped instance, so delivery is
+observable in every environment.
 
 ## Templates
 
@@ -56,16 +64,19 @@ Finaxis-specific settings live under `finaxis.email.*` (`EmailProperties`):
 
 | Property                        | Env var                          | Default                        |
 |----------------------------------|-----------------------------------|----------------------------------|
-| `finaxis.email.enabled`          | `FINAXIS_EMAIL_ENABLED`           | `false` (`true` in production)  |
+| `finaxis.email.enabled`          | `FINAXIS_EMAIL_ENABLED`           | `false` (same in production)    |
 | `finaxis.email.from-address`     | `FINAXIS_EMAIL_FROM_ADDRESS`      | `no-reply@finaxis.local`        |
 | `finaxis.email.from-display-name`| `FINAXIS_EMAIL_FROM_DISPLAY_NAME` | `Finaxis`                        |
 | `finaxis.email.app-base-url`     | `FINAXIS_EMAIL_APP_BASE_URL`      | `http://localhost:5173`         |
 
-Production (`application-production.yaml`) requires `FINAXIS_SMTP_HOST`/`PORT`/`USERNAME`/
-`PASSWORD` and `FINAXIS_EMAIL_FROM_ADDRESS`/`APP_BASE_URL` with no default, fails fast if unset,
-and forces `smtp.auth`/`smtp.starttls.enable` to `true` — matching the fail-fast pattern used for
-`FINAXIS_ACTIVE_ORGANISATION_CONTEXT_SECRET` (see
-[production-hardening.md](../security/production-hardening.md)).
+Production (`application-production.yaml`) gives `FINAXIS_SMTP_HOST`/`PORT`/`USERNAME`/`PASSWORD`
+and `FINAXIS_EMAIL_FROM_ADDRESS`/`APP_BASE_URL` the same defaults as the base file, so a deployment
+still boots and answers `/actuator/health` before a mail provider is acquired and none of those
+variables is set; it forces `smtp.auth`/`smtp.starttls.enable` to `true` once email is enabled.
+`finaxis.email.enabled` itself defaults to `false` in every profile — a deployment turns email on
+by setting `FINAXIS_EMAIL_ENABLED=true` once a real SMTP provider exists, without a rebuild (see
+above). The active-organisation secret remains the one setting that fails fast with no default —
+see [production-hardening.md](../security/production-hardening.md).
 
 ## Observability
 
