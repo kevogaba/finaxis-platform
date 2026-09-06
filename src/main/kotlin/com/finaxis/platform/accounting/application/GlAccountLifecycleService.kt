@@ -123,7 +123,10 @@ class GlAccountLifecycleService(
             command,
             GlAccountTransition.DEACTIVATE,
             permissionAlreadyChecked = true,
-            underLock = { requireDifferentActorFrom(command, GlAccountTransition.APPROVE) },
+            underLock = {
+                requireDifferentActorFrom(command, GlAccountTransition.APPROVE)
+                requireNotReferencedByActiveRule(command)
+            },
         )
     }
 
@@ -251,6 +254,34 @@ class GlAccountLifecycleService(
         }
     }
 
+    /**
+     * Refuses deactivation while the account is named by a leg of an approved (`ACTIVE`,
+     * `SUPERSEDED` or `RETIRED`) posting-rule version.
+     *
+     * Run under the account's exclusive [GlAccountStore.lockForStateChange] lock, the same lock
+     * [com.finaxis.platform.accounting.application.ledger.PostingEngine] takes in shared mode
+     * before it validates a posting's accounts, and posting-rule approval also takes before it
+     * validates a version's accounts. That serialises this check against both: a version cannot be
+     * approved to reference this account while it is being deactivated, and this account cannot be
+     * deactivated out from under a version that just became `ACTIVE`, because whichever transaction
+     * gets there first is the one the other waits for.
+     *
+     * Without the guard the resolver would keep selecting the version for any posting date its
+     * effective window still covers - including a `SUPERSEDED` or `RETIRED` one resolving a
+     * backdated posting - and every posting through it would fail at the engine's account
+     * eligibility check instead, far from the change that caused it.
+     */
+    private fun requireNotReferencedByActiveRule(command: GlAccountTransitionCommand) {
+        if (accounts.hasActivePostingRuleLegs(command.organisationId, command.accountId)) {
+            throw ConflictException(
+                code = REFERENCED_BY_ACTIVE_RULE,
+                safeDetail =
+                    "The account is used by an in-force posting rule and cannot be deactivated " +
+                        "until that rule is retired or amended.",
+            )
+        }
+    }
+
     private fun requireReason(command: GlAccountTransitionCommand) {
         if (command.reason.isNullOrBlank()) {
             throw InvalidOperationException(
@@ -291,6 +322,7 @@ class GlAccountLifecycleService(
         const val REASON_REQUIRED = "accounting.gl_account_reason_required"
         const val TRANSITION_NOT_ALLOWED = "accounting.gl_account_transition_not_allowed"
         const val CONCURRENT_CHANGE = "accounting.gl_account_concurrent_change"
+        const val REFERENCED_BY_ACTIVE_RULE = "accounting.gl_account_referenced_by_active_rule"
 
         /**
          * The audit action a rejection records.

@@ -65,24 +65,63 @@ class PostingPeriodResolver(
      * [AccountingPermissions.JOURNAL_POST_PRIOR_PERIOD], locks the covering period, and
      * re-validates the freshly read status.
      *
+     * A convenience over [resolveDates] followed by [lockAndValidate], kept for callers - and
+     * [PostingPeriodResolverTests] - that want the dates and the lock in one call. The posting
+     * engine calls the two halves separately: it needs the dates before it claims the source
+     * reference (`INV-7`), and must not lock or validate the period at all until it knows the claim
+     * is a new request rather than a replay of one already committed.
+     *
      * Requires an active transaction: the shared lock it takes must outlive this call and be held
      * until the posting commits.
      */
     fun resolveForPosting(command: ResolvePostingPeriodCommand): ResolvedPostingPeriod {
+        val dates = resolveDates(command.organisationId, command.dates)
+        return lockAndValidate(command.organisationId, command.actorId, dates)
+    }
+
+    /**
+     * Resolves the accounting dates only: no lock, no period lookup, no permission gate.
+     *
+     * Pure with respect to everything but the business-date read: given the same business date and
+     * the same caller-supplied dates, it always answers the same [AccountingDates]. That is what
+     * lets the posting engine compute the idempotency fingerprint, and attempt the claim, before
+     * anything about the period's current state is consulted - a faithful retry must not fail here
+     * merely because the period has since closed.
+     */
+    fun resolveDates(
+        organisationId: UUID,
+        dates: PostingDateRequest,
+    ): AccountingDates {
+        val businessDate = requireBusinessDate(organisationId)
+        return PostingDatePolicy.resolve(dates, businessDate, clock.instant())
+    }
+
+    /**
+     * Gates a backdated posting on [AccountingPermissions.JOURNAL_POST_PRIOR_PERIOD], locks the
+     * period covering [dates], and re-validates the freshly read status.
+     *
+     * Takes [dates] already resolved by [resolveDates] rather than re-deriving them, so the two
+     * calls a new posting makes - one before its claim, one after - never disagree about what the
+     * dates are. Requires an active transaction: the shared lock it takes must outlive this call
+     * and be held until the posting commits.
+     */
+    fun lockAndValidate(
+        organisationId: UUID,
+        actorId: UUID,
+        dates: AccountingDates,
+    ): ResolvedPostingPeriod {
         requireActiveTransaction()
 
-        val businessDate = requireBusinessDate(command.organisationId)
-        val dates = PostingDatePolicy.resolve(command.dates, businessDate, clock.instant())
         val classification = PostingDatePolicy.classify(dates.postingDate, dates.businessDate)
         if (classification == PostingDateClassification.BACKDATED) {
             permissions.requireBreakGlassPermission(
-                command.actorId,
-                command.organisationId,
+                actorId,
+                organisationId,
                 AccountingPermissions.JOURNAL_POST_PRIOR_PERIOD,
             )
         }
 
-        val candidate = periods.findCovering(command.organisationId, dates.postingDate)
+        val candidate = periods.findCovering(organisationId, dates.postingDate)
         val locked = candidate?.key?.let { periods.lockForPosting(it) }
         requireCoveringPeriod(locked, dates)
 
@@ -95,7 +134,7 @@ class PostingPeriodResolver(
         requireOpen(period)
 
         if (classification == PostingDateClassification.BACKDATED) {
-            recordPriorPeriodAuthority(command, dates, period)
+            recordPriorPeriodAuthority(organisationId, actorId, dates, period)
         }
 
         return ResolvedPostingPeriod(dates, period, classification)
@@ -115,15 +154,16 @@ class PostingPeriodResolver(
      * own outcome is issue #41's to audit, which is the only place the journal id exists.
      */
     private fun recordPriorPeriodAuthority(
-        command: ResolvePostingPeriodCommand,
+        organisationId: UUID,
+        actorId: UUID,
         dates: AccountingDates,
         period: FiscalPeriodSnapshot,
     ) {
         auditService.recordIndependently(
             AuditCommand(
                 actorType = ACTOR_TYPE_USER,
-                actorId = command.actorId.toString(),
-                tenantId = command.organisationId.toString(),
+                actorId = actorId.toString(),
+                tenantId = organisationId.toString(),
                 action = AccountingAuditActions.JOURNAL_POST_PRIOR_PERIOD,
                 resourceType = RESOURCE_TYPE_FISCAL_PERIOD,
                 resourceId = period.key.fiscalPeriodId.toString(),

@@ -428,6 +428,21 @@ Step by step, with the decision each step embodies:
      observes one of the two outcomes above once the first commits, or finds no row and proceeds
      if the first rolled back.
 
+   The fingerprint compared here is computed from the caller's own inputs - the source triple, the
+   event, the entry type, the branch, the correction and reversal lineage, the resolved dates, the
+   functional currency, the product class selector and the caller's asserted financial facts (each
+   amount settled to storage scale before hashing) - never from the legs steps 4-5 resolve. The
+   product class and financial facts are what still give this fingerprint selector- and
+   amount-level discrimination without depending on rule resolution: they are the inputs of step 2,
+   known before any rule ever runs. That is what makes claiming idempotency come genuinely *first*:
+   nothing about the claim,
+   including telling a retry from a conflict, depends on resolving a rule or reading an account.
+   Steps 4 through 7 below therefore run only when the claim is genuinely new; a request that
+   replays an already-posted one returns
+   from step 3 alone and never reaches them, which is what lets a retry succeed even when the
+   fiscal period has since closed, an account has since been deactivated, or the posting rule has
+   since changed (issue #89, ADR 0023).
+
    There is deliberately **no rejected branch**, and an earlier revision of this step had one. A
    rejected posting throws, and the throw rolls back the transaction that attempted it together
    with the `posting_request` row it had claimed — `INV-12` forbids the `REQUIRES_NEW` write that
@@ -436,21 +451,25 @@ Step by step, with the decision each step embodies:
    reached without a second transaction. The status domain is therefore `PENDING` and `POSTED`,
    and no committed row is ever `PENDING`. See
    [the accounting schema](../database/accounting-erd.md#posting_request-has-no-persistable-rejected-state).
-4. **Accounting resolves the posting rule version effective on the `posting_date`** — not on
+4. **Accounting resolves and locks the fiscal period** from the `posting_date` and refuses the
+   posting if that period is not open (`INV-9`), taking the shared row lock issue #35 requires
+   before anything below reads an account or a rule.
+5. **Accounting resolves the posting rule version effective on the `posting_date`** — not on
    today's date. This is what makes a prior-period correction re-post under the rule that was in
    force when the transaction happened.
-5. **Accounting computes the legs**: account per leg, amount per leg, `HALF_EVEN` at the minor
+6. **Accounting computes the legs**: account per leg, amount per leg, `HALF_EVEN` at the minor
    unit, residue to the `is_residual` leg, conversion to the functional currency (`INV-2`).
-6. **Accounting resolves and validates the fiscal period** from the `posting_date` and refuses
-   the posting if that period is not open (`INV-9`).
-7. **Accounting allocates the `entry_number`** from the tenant's `JOURNAL` reference sequence and
+7. **Accounting locks every distinct account the legs reference**, in ascending id order, before
+   validating that each is `ACTIVE` and `POSTABLE` — the posting-time lock issue #90 adds (ADR
+   0023), which closes the race between this check and a concurrent deactivation or chart edit.
+8. **Accounting allocates the `entry_number`** from the tenant's `JOURNAL` reference sequence and
    writes `journal_entry` with its balanced totals and `line_count`, then the `journal_line` rows
    (`INV-4`).
-8. **The product module updates its own position.** Accounting does not touch it, and holds no
+9. **The product module updates its own position.** Accounting does not touch it, and holds no
    foreign key to it (`INV-16`).
-9. **Everything above commits in one transaction** (`INV-12`). The outbox row for any downstream
-   notification is registered inside that same transaction and published only after it commits;
-   nothing in the critical path is asynchronous.
+10. **Everything above commits in one transaction** (`INV-12`). The outbox row for any downstream
+    notification is registered inside that same transaction and published only after it commits;
+    nothing in the critical path is asynchronous.
 
 Journal numbering is worth stating explicitly. It reuses the existing `reference_sequence` table
 and its `JOURNAL` code, seeded by `OrganisationBootstrapDefaults.SEQUENCE_CODES` in

@@ -70,7 +70,6 @@ class JooqJournalStore(
                 .set(POSTING_REQUEST.SOURCE_REFERENCE, request.sourceReference)
                 .set(POSTING_REQUEST.EVENT_CODE, request.eventCode)
                 .set(POSTING_REQUEST.REQUEST_FINGERPRINT, request.fingerprint)
-                .set(POSTING_REQUEST.POSTING_RULE_VERSION_ID, request.postingRuleVersionId)
                 .set(POSTING_REQUEST.CORRECTS_POSTING_REQUEST_ID, request.correctsPostingRequestId)
                 .set(POSTING_REQUEST.BUSINESS_DATE, request.dates.businessDate)
                 .set(POSTING_REQUEST.TRANSACTION_DATE, request.dates.transactionDate)
@@ -234,6 +233,7 @@ class JooqJournalStore(
         organisationId: UUID,
         postingRequestId: UUID,
         postedAt: Instant,
+        postingRuleVersionId: UUID?,
         actorId: UUID,
     ) {
         requireActiveTransaction("Marking a posting request posted")
@@ -242,6 +242,7 @@ class JooqJournalStore(
                 .update(POSTING_REQUEST)
                 .set(POSTING_REQUEST.STATUS, PostingRequestStatus.POSTED.name)
                 .set(POSTING_REQUEST.POSTED_AT, postedAt.atOffset(ZoneOffset.UTC))
+                .set(POSTING_REQUEST.POSTING_RULE_VERSION_ID, postingRuleVersionId)
                 .set(POSTING_REQUEST.UPDATED_AT, OffsetDateTime.now(clock))
                 .set(POSTING_REQUEST.UPDATED_BY, actorId)
                 .set(POSTING_REQUEST.ROW_VERSION, POSTING_REQUEST.ROW_VERSION.plus(1))

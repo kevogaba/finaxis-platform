@@ -29,6 +29,7 @@ data class GlAccountPage(
  * `AccountingBoundaryRuleTests` enforces it. Every method is organisation-scoped by parameter
  * rather than by ambient context, so a caller cannot forget the tenant.
  */
+@Suppress("TooManyFunctions")
 interface GlAccountStore {
     /** Finds one account by id within a tenant, or null. */
     fun findById(
@@ -92,6 +93,39 @@ interface GlAccountStore {
         organisationId: UUID,
         accountId: UUID,
     ): GlAccount?
+
+    /**
+     * Takes a shared row lock on the account and returns it as read **under** that lock, or null
+     * when no such row exists for that tenant.
+     *
+     * The posting-time counterpart to [lockForStateChange]: many postings hold this lock on the
+     * same account concurrently without excluding each other, the way [PostingPeriodResolver]
+     * holds a shared lock on an open fiscal period. Any one of them still excludes a lifecycle
+     * transition taking [lockForStateChange]'s exclusive lock on the same row, and is excluded by
+     * one already in progress. That closes the account-eligibility race from both sides: the
+     * account cannot be deactivated, or have its code, class or usage changed, between this read
+     * and the journal line
+     * that follows it.
+     */
+    fun lockForPosting(
+        organisationId: UUID,
+        accountId: UUID,
+    ): GlAccount?
+
+    /**
+     * True when the account is named by a leg of an *approved* posting-rule version - `ACTIVE`,
+     * `SUPERSEDED` or `RETIRED`.
+     *
+     * Answers *"would deactivating this account break a rule a posting could resolve through"*,
+     * which `idx_posting_rule_leg_account` exists to serve. `SUPERSEDED` and `RETIRED` versions
+     * still govern a backdated posting whose date falls inside their effective window (see
+     * `PostingRuleVersion.governs`), so they count too; only an account referenced solely by a
+     * `DRAFT` or `PENDING_APPROVAL` version is truly unreachable by the resolver.
+     */
+    fun hasActivePostingRuleLegs(
+        organisationId: UUID,
+        accountId: UUID,
+    ): Boolean
 
     /** True when the account has at least one child. */
     fun hasChildren(

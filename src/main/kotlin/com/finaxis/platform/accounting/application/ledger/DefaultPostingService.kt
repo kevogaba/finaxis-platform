@@ -45,6 +45,8 @@ class DefaultPostingService(
                 dates = command.dates,
                 narrative = command.narrative,
                 correctsPostingRequestId = command.correctsPostingRequestId,
+                financialFacts = facts.facts,
+                productClass = facts.productClass,
             ),
         ) { dates -> resolver.resolve(command.context, facts, dates.postingDate) }
     }

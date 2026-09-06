@@ -7,17 +7,29 @@ import com.finaxis.platform.accounting.application.GlAccountLifecycleService
 import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.GlAccountTransitionCommand
 import com.finaxis.platform.accounting.application.UpdateGlAccountCommand
+import com.finaxis.platform.accounting.application.rules.CreatePostingRuleCommand
+import com.finaxis.platform.accounting.application.rules.CreatePostingRuleVersionCommand
+import com.finaxis.platform.accounting.application.rules.PostingRuleService
+import com.finaxis.platform.accounting.application.rules.PostingRuleVersionTransitionCommand
 import com.finaxis.platform.accounting.domain.AccountClass
 import com.finaxis.platform.accounting.domain.AccountCode
+import com.finaxis.platform.accounting.domain.AccountResolution
 import com.finaxis.platform.accounting.domain.AccountUsage
+import com.finaxis.platform.accounting.domain.AccountingPermissions
 import com.finaxis.platform.accounting.domain.GlAccount
 import com.finaxis.platform.accounting.domain.GlAccountStatus
+import com.finaxis.platform.accounting.domain.PostingRuleLeg
+import com.finaxis.platform.accounting.domain.PostingRuleSelector
+import com.finaxis.platform.accounting.domain.PostingSide
 import com.finaxis.platform.common.application.ApplicationException
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT_TRANSITION_LOG
+import com.finaxis.platform.jooq.tables.references.MEMBERSHIP_PERMISSION
+import com.finaxis.platform.jooq.tables.references.PERMISSION
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
+import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.withRequestContext
@@ -26,6 +38,8 @@ import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestConstructor
+import java.math.BigDecimal
+import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -47,6 +61,7 @@ class GlAccountLifecycleIntegrationTests(
     private val lifecycle: GlAccountLifecycleService,
     private val chart: ChartOfAccountsService,
     private val accounts: GlAccountStore,
+    private val rules: PostingRuleService,
     private val dsl: DSLContext,
     organisationProvisioningService: OrganisationProvisioningService,
 ) {
@@ -394,6 +409,55 @@ class GlAccountLifecycleIntegrationTests(
     }
 
     @Test
+    fun `deactivating an account referenced by an active posting rule is refused`() {
+        // ADR 0023's third finding: without this guard the resolver keeps selecting the version -
+        // it is still ACTIVE - and every posting through it then fails at the engine's account
+        // eligibility check instead, far from the change that caused it. Checked under the same
+        // exclusive lock as the different-actor control, alongside it in GlAccountLifecycleService.
+        val organisationId = organisation("active-rule")
+        val account = accountReferencedByAnActiveRule(organisationId)
+
+        val failure =
+            assertFailsWith<ConflictException> {
+                withRequestContext {
+                    lifecycle.deactivate(command(organisationId, account.id, MAKER, "Closing"))
+                }
+            }
+
+        assertEquals("accounting.gl_account_referenced_by_active_rule", failure.code)
+        assertEquals(
+            GlAccountStatus.ACTIVE,
+            accounts.findById(organisationId, account.id)?.status,
+            "the refused deactivation must leave the account untouched",
+        )
+    }
+
+    @Test
+    fun `deactivating an account referenced only by a retired posting rule is still refused`() {
+        // Codex review on PR #97, catching what the original `hasActivePostingRuleLegs` query
+        // missed: PostingRuleVersion.governs() resolves a posting against any *approved* status -
+        // ACTIVE, SUPERSEDED or RETIRED - so a backdated posting can still route through a version
+        // this account was retired from. Deactivation must refuse it exactly as it refuses an
+        // ACTIVE one.
+        val organisationId = organisation("retired-rule")
+        val account = accountReferencedByARetiredRule(organisationId)
+
+        val failure =
+            assertFailsWith<ConflictException> {
+                withRequestContext {
+                    lifecycle.deactivate(command(organisationId, account.id, MAKER, "Closing"))
+                }
+            }
+
+        assertEquals("accounting.gl_account_referenced_by_active_rule", failure.code)
+        assertEquals(
+            GlAccountStatus.ACTIVE,
+            accounts.findById(organisationId, account.id)?.status,
+            "the refused deactivation must leave the account untouched",
+        )
+    }
+
+    @Test
     fun `every transition is permission gated and tenant scoped`() {
         val organisationId = organisation("permission")
         val other = organisation("permission-other")
@@ -443,6 +507,186 @@ class GlAccountLifecycleIntegrationTests(
         actorId = actorId,
         reason = reason,
     )
+
+    /**
+     * An `ACTIVE` account named by a leg of an `ACTIVE` posting-rule version, and a second `ACTIVE`
+     * account for the version's other leg - the fixture
+     * `deactivating an account referenced by an active posting rule is refused` needs.
+     */
+    private fun accountReferencedByAnActiveRule(organisationId: UUID): GlAccount {
+        val account = submittedAndApproved(organisationId, "1010")
+        val creditAccount = submittedAndApproved(organisationId, "2010")
+        grantDirectly(organisationId, checker(), AccountingPermissions.POSTING_RULE_APPROVE)
+
+        val ruleId =
+            withRequestContext {
+                rules
+                    .createRule(
+                        CreatePostingRuleCommand(
+                            organisationId = organisationId,
+                            actorId = MAKER,
+                            code = "ACTIVE-RULE",
+                            name = "Active rule",
+                            selector = PostingRuleSelector("ACTIVE_RULE_EVENT"),
+                        ),
+                    ).id
+            }
+        val version =
+            withRequestContext {
+                rules.createVersion(
+                    CreatePostingRuleVersionCommand(
+                        organisationId = organisationId,
+                        actorId = MAKER,
+                        ruleId = ruleId,
+                        effectiveFrom = LocalDate.of(2026, 1, 1),
+                        legs =
+                            listOf(
+                                ruleLeg(1, PostingSide.DEBIT, account.id),
+                                ruleLeg(2, PostingSide.CREDIT, creditAccount.id),
+                            ),
+                    ),
+                )
+            }
+        withRequestContext {
+            rules.submit(PostingRuleVersionTransitionCommand(organisationId, MAKER, version.id))
+        }
+        withRequestContext {
+            rules.approve(
+                PostingRuleVersionTransitionCommand(organisationId, checker(), version.id),
+            )
+        }
+        return account
+    }
+
+    /**
+     * An `ACTIVE` account named by a leg of a version retired straight after activation - the
+     * fixture `deactivating an account referenced only by a retired posting rule is still refused`
+     * needs. [MAKER] retires it: the retiring actor must differ from whoever approved it
+     * ([PostingRuleService.retire]'s own separation-of-duties check), and [MAKER] holds
+     * `posting_rule.approve` here for exactly that, granted alongside [checker]'s.
+     */
+    private fun accountReferencedByARetiredRule(organisationId: UUID): GlAccount {
+        val account = submittedAndApproved(organisationId, "1010")
+        val creditAccount = submittedAndApproved(organisationId, "2010")
+        grantDirectly(organisationId, checker(), AccountingPermissions.POSTING_RULE_APPROVE)
+        grantDirectly(organisationId, MAKER, AccountingPermissions.POSTING_RULE_APPROVE)
+
+        val ruleId =
+            withRequestContext {
+                rules
+                    .createRule(
+                        CreatePostingRuleCommand(
+                            organisationId = organisationId,
+                            actorId = MAKER,
+                            code = "RETIRED-RULE",
+                            name = "Retired rule",
+                            selector = PostingRuleSelector("RETIRED_RULE_EVENT"),
+                        ),
+                    ).id
+            }
+        val version =
+            withRequestContext {
+                rules.createVersion(
+                    CreatePostingRuleVersionCommand(
+                        organisationId = organisationId,
+                        actorId = MAKER,
+                        ruleId = ruleId,
+                        effectiveFrom = LocalDate.of(2026, 1, 1),
+                        legs =
+                            listOf(
+                                ruleLeg(1, PostingSide.DEBIT, account.id),
+                                ruleLeg(2, PostingSide.CREDIT, creditAccount.id),
+                            ),
+                    ),
+                )
+            }
+        withRequestContext {
+            rules.submit(PostingRuleVersionTransitionCommand(organisationId, MAKER, version.id))
+        }
+        withRequestContext {
+            rules.approve(
+                PostingRuleVersionTransitionCommand(organisationId, checker(), version.id),
+            )
+        }
+        withRequestContext {
+            rules.retire(
+                PostingRuleVersionTransitionCommand(
+                    organisationId = organisationId,
+                    actorId = MAKER,
+                    versionId = version.id,
+                    reason = "Superseded by manual process",
+                    effectiveTo = LocalDate.of(2026, 6, 30),
+                ),
+            )
+        }
+        return account
+    }
+
+    /** A `DRAFT` account submitted by [MAKER] and approved by [checker], landing in `ACTIVE`. */
+    private fun submittedAndApproved(
+        organisationId: UUID,
+        code: String,
+    ): GlAccount {
+        val account = draft(organisationId, code)
+        withRequestContext { lifecycle.submit(command(organisationId, account.id, MAKER)) }
+        withRequestContext { lifecycle.approve(command(organisationId, account.id, checker())) }
+        return account
+    }
+
+    /** A single-fact, fully-allocated leg: 100% of `PRINCIPAL` on [side] into [accountId]. */
+    private fun ruleLeg(
+        number: Int,
+        side: PostingSide,
+        accountId: UUID,
+    ) = PostingRuleLeg(
+        number,
+        side,
+        AccountResolution.FIXED_ACCOUNT,
+        accountId,
+        "PRINCIPAL",
+        BigDecimal(100),
+        false,
+        null,
+    )
+
+    /**
+     * Grants [permissionCode] directly: `TENANT_ADMIN` does not itself carry
+     * `posting_rule.approve`, per [PostingRuleService.approve]'s separation of duties from
+     * [PostingRuleService.submit].
+     */
+    private fun grantDirectly(
+        organisationId: UUID,
+        actorId: UUID,
+        permissionCode: String,
+    ) {
+        val membershipId =
+            dsl
+                .select(USER_ORGANISATION_MEMBERSHIP.ID)
+                .from(USER_ORGANISATION_MEMBERSHIP)
+                .where(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId))
+                .and(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(actorId))
+                .fetchOne(USER_ORGANISATION_MEMBERSHIP.ID)
+                ?: error("no membership for $actorId in $organisationId")
+        val permissionId =
+            dsl
+                .select(PERMISSION.ID)
+                .from(PERMISSION)
+                .where(PERMISSION.PERMISSION_CODE.eq(permissionCode))
+                .fetchOne(PERMISSION.ID)
+                ?: error("permission $permissionCode is not seeded")
+        val now = OffsetDateTime.now()
+        dsl
+            .insertInto(MEMBERSHIP_PERMISSION)
+            .set(MEMBERSHIP_PERMISSION.ORGANISATION_ID, organisationId)
+            .set(MEMBERSHIP_PERMISSION.MEMBERSHIP_ID, membershipId)
+            .set(MEMBERSHIP_PERMISSION.PERMISSION_ID, permissionId)
+            .set(MEMBERSHIP_PERMISSION.EFFECT, "ALLOW")
+            .set(MEMBERSHIP_PERMISSION.GRANTED_AT, now)
+            .set(MEMBERSHIP_PERMISSION.CREATED_AT, now)
+            .set(MEMBERSHIP_PERMISSION.UPDATED_AT, now)
+            .onConflictDoNothing()
+            .execute()
+    }
 
     private fun transitionNames(
         organisationId: UUID,

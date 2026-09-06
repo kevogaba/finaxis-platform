@@ -250,6 +250,7 @@ class PostingEngineIntegrationTests(
                 periodResolver,
                 accounts,
                 LineDroppingJournalStore(journals),
+                ledger,
                 numbers,
                 clock,
             )
@@ -545,6 +546,13 @@ class PostingEngineIntegrationTests(
                 eventCode = "SAVINGS_DEPOSIT",
                 entryType = JournalEntryType.STANDARD,
                 narrative = "Counter deposit",
+                // A real product-module caller carries this from PostingIntent.Facts; supplied by
+                // hand here because this helper calls the engine directly, so a "conflicting reuse"
+                // test that varies only the amount stays distinguishable (ADR 0023).
+                financialFacts =
+                    listOf(
+                        FinancialFact("AMOUNT", MonetaryAmount(BigDecimal(debit), currency)),
+                    ),
             ),
         ) { ResolvedLegs(legs(tenant, debit, credit, currency, debitAccount), null) }
 
