@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -20,8 +21,17 @@ jobs:
   jvm-image:
     # The JVM image is what CI can actually build. Both variants are AOT-processed and both are
     # deployable; the native one is a separate, manually triggered job below, for reasons its
-    # comment explains. Nothing is pushed to a registry yet - this only proves the image builds
-    # outside a developer machine.
+    # comment explains. This job pushes the image it builds to GHCR under a fixed floating tag
+    # (`main-jvm`) and an immutable per-run one (`sha-<short-sha>-run<run-number>-jvm`); a Coolify
+    # deployment tracks the floating tag.
+    #
+    # Restricted to `refs/heads/main` even though `workflow_dispatch` has no branch filter of its
+    # own: an unguarded job would let a manual dispatch against a feature branch push that
+    # branch's code under the `main-jvm` tag Coolify tracks, deploying unmerged work. This does not
+    # break the documented "flip a repo variable, re-run the workflow" mechanism for the switches
+    # below - re-running a previous push-triggered run keeps its original `main` ref - it only
+    # blocks a *fresh* dispatch against some other branch.
+    if: github.ref == 'refs/heads/main'
     name: jvm image
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -42,7 +52,62 @@ jobs:
       - name: Build the JVM image
         env:
           FINAXIS_NATIVE_IMAGE: 'false'
+          # A fixed name, independent of build.gradle.kts's `project.version` - the push step below
+          # tags and pushes this exact reference, and pinning it here means a version bump there
+          # can never desync the two.
+          FINAXIS_IMAGE_NAME: ghcr.io/finaxis/platform:ci-build-jvm
+          # Observability infra (otel-lgtm) is back online, so every signal defaults to on; each
+          # falls back to 'true' only when no repo variable overrides it, so turning one off later
+          # is a `vars.*` change in the repo settings, not a workflow edit.
+          FINAXIS_OTEL_ENABLED: ${{ vars.FINAXIS_OTEL_ENABLED || 'true' }}
+          FINAXIS_OTEL_TRACES_ENABLED: ${{ vars.FINAXIS_OTEL_TRACES_ENABLED || 'true' }}
+          FINAXIS_OTEL_METRICS_ENABLED: ${{ vars.FINAXIS_OTEL_METRICS_ENABLED || 'true' }}
+          FINAXIS_OTEL_LOGS_ENABLED: ${{ vars.FINAXIS_OTEL_LOGS_ENABLED || 'true' }}
+          # Off by default, matching this property's own default - see
+          # docs/operations/native-image-deployment.md. Enabling it needs real Keycloak admin
+          # client credentials supplied to the deployment too, so this is a decision for whoever
+          # owns that Coolify inventory, not something this workflow assumes.
+          FINAXIS_KEYCLOAK_ADMIN_ENABLED: ${{ vars.FINAXIS_KEYCLOAK_ADMIN_ENABLED || 'false' }}
         run: ./gradlew --no-daemon bootBuildImage
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        # $GITHUB_RUN_NUMBER is one of the environment variables every run gets for free - no
+        # `${{ }}` expression needed - which keeps this a plain bash step.
+        id: tags
+        run: |
+          SHA_SHORT="$(git rev-parse --short HEAD)"
+          {
+            echo "sha_tag=ghcr.io/finaxis/platform:sha-${SHA_SHORT}-run${GITHUB_RUN_NUMBER}-jvm"
+            echo "floating_tag=ghcr.io/finaxis/platform:main-jvm"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Push the JVM image to GHCR
+        # There is no Dockerfile in this repo - bootBuildImage's Cloud Native Buildpacks build
+        # straight into the local Docker daemon, so by this point the image already exists
+        # locally under the fixed `FINAXIS_IMAGE_NAME` above. These two `docker tag`/`docker push`
+        # pairs add the references Coolify actually deploys from, rather than building anything
+        # again via docker/build-push-action the way a Dockerfile-based project would.
+        #
+        # The SHA tag also carries the run number: the documented outage/rebuild procedure is
+        # re-running this workflow for the *same* commit with different repository variables, and
+        # without a run-specific suffix that second push would silently overwrite the first
+        # build's rollback tag with different behaviour under the same name.
+        env:
+          SOURCE_IMAGE: ghcr.io/finaxis/platform:ci-build-jvm
+          SHA_TAG: ${{ steps.tags.outputs.sha_tag }}
+          FLOATING_TAG: ${{ steps.tags.outputs.floating_tag }}
+        run: |
+          docker tag "$SOURCE_IMAGE" "$SHA_TAG"
+          docker push "$SHA_TAG"
+          docker tag "$SOURCE_IMAGE" "$FLOATING_TAG"
+          docker push "$FLOATING_TAG"
 
       - name: Report the built image
         run: docker images ghcr.io/finaxis/platform --format '{{.Repository}}:{{.Tag}} {{.Size}}'
