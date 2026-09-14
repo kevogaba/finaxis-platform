@@ -128,7 +128,7 @@ class SecurityConfiguration(
      */
     private fun publicPaths(): List<String> =
         buildList {
-            add("/actuator/health")
+            add("/actuator/health/**")
             if (apiDocsProperties.publicAccessEnabled) {
                 add("/scalar/**")
                 add("/v3/api-docs/**")

@@ -12,6 +12,10 @@ spring:
   docker:
     compose:
       enabled: false
+  data:
+    redis:
+      username: ${FINAXIS_REDIS_USERNAME}
+      password: ${FINAXIS_REDIS_PASSWORD}
   mail:
     host: ${FINAXIS_SMTP_HOST:localhost}
     port: ${FINAXIS_SMTP_PORT:1025}
