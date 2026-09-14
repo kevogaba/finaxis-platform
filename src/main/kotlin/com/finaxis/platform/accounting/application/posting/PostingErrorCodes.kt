@@ -137,12 +137,14 @@ object PostingErrorCodes {
     const val BRANCH_NOT_IN_ORGANISATION = "accounting.branch_not_in_organisation"
 
     /**
-     * The proof could not take a snapshot both of its sides can be read from.
+     * A read that must see one instant could not get a stable snapshot.
      *
-     * Raised when the transaction running a reconciliation is not `REPEATABLE READ`, so the
-     * general-ledger balance and the sub-ledger aggregate could observe different states.
+     * Raised when a transaction that declared `REPEATABLE READ` is not actually running at it -
+     * Spring drops the declaration silently when the method joins a transaction already open. The
+     * control-account proof needs it so its two aggregates describe one instant; reading a manual
+     * journal needs it so a checker's header and lines are the same draft.
      */
-    const val RECONCILIATION_SNAPSHOT_UNAVAILABLE = "accounting.reconciliation_snapshot_unavailable"
+    const val SNAPSHOT_ISOLATION_UNAVAILABLE = "accounting.snapshot_isolation_unavailable"
 
     /** A reconciliation proves a date that has happened, not one that has not. */
     const val RECONCILIATION_DATE_IN_FUTURE = "accounting.reconciliation_date_in_future"
@@ -192,6 +194,10 @@ object PostingErrorCodes {
 
     /** Lines must number at least two, be numbered 1..n, and name eligible accounts. */
     const val MANUAL_JOURNAL_LINES_INVALID = "accounting.manual_journal_lines_invalid"
+
+    /** An external reference is blank or longer than the draft column can store. */
+    const val MANUAL_JOURNAL_EXTERNAL_REFERENCE_INVALID =
+        "accounting.manual_journal_external_reference_invalid"
 
     /** A manual journal needs a title and a reason, and a rejection needs a reason. */
     const val MANUAL_JOURNAL_REASON_REQUIRED = "accounting.manual_journal_reason_required"

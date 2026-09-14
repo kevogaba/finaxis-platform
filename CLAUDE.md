@@ -78,6 +78,8 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   unique `uq_gl_account_control_kind`, so a tenant has at most one control account per sub-ledger
   class. `SubledgerProofQuery` names the class, not the account, so a second one of a class could
   only ever be proven against an aggregate that is not its own
+- `V12__accounting_manual_journal_external_reference.sql` — `manual_journal.external_reference`:
+  one bounded column, so a document number has somewhere to live other than inside the narrative
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -101,9 +103,10 @@ See `docs/database/foundation-schema.md`, `docs/adr/0010-...`, and `docs/adr/001
 `docs/database/accounting-erd.md` is the design authority every accounting migration implements,
 and `docs/architecture/accounting-foundation.md` holds the invariants. `V6` created the fiscal
 calendar and the chart of accounts from it, `V7` the journal tables, `V8` the posting-rule tables,
-`V9` control accounts and their reconciliation evidence, `V10` manual-journal drafts, and `V11` the
-one-control-account-per-class uniqueness; the projection table is still design-only. Do not invent
-accounting tables or columns outside those documents.
+`V9` control accounts and their reconciliation evidence, `V10` manual-journal drafts, `V11` the
+one-control-account-per-class uniqueness, and `V12` the manual-journal external reference; the
+projection table is still design-only. Do not invent accounting tables or columns outside those
+documents.
 
 ## Authorization
 

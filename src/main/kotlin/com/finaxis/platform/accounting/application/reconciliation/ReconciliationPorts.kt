@@ -118,7 +118,7 @@ fun interface ProofSnapshot {
      *
      * Throws [com.finaxis.platform.common.application.ConflictException] with
      * [com.finaxis.platform.accounting.application.posting.PostingErrorCodes
-     * .RECONCILIATION_SNAPSHOT_UNAVAILABLE] when the transaction cannot offer a stable one.
+     * .SNAPSHOT_ISOLATION_UNAVAILABLE] when the transaction cannot offer a stable one.
      */
     fun currentSnapshotId(): String
 }

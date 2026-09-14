@@ -51,6 +51,7 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestConstructor
 import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.support.TransactionTemplate
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.OffsetDateTime
@@ -80,6 +81,7 @@ class ManualJournalIntegrationTests(
     private val tenants = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
     private val schema = JournalSchemaFixture(dsl)
     private val fx = ManualJournalFixture(dsl, manual, tenants, schema)
+    private val transactions = TransactionTemplate(transactionManager)
 
     @Test
     fun `a draft is created and amended without touching the journal, and frozen on submit`() {
@@ -92,6 +94,7 @@ class ManualJournalIntegrationTests(
                 AmendManualJournalCommand(
                     fx.context(tenant, ManualJournalFixture.MAKER),
                     draft.id,
+                    draft.rowVersion,
                     fx.content(tenant, "300.00", title = "Amended"),
                 ),
             )
@@ -113,6 +116,10 @@ class ManualJournalIntegrationTests(
                         AmendManualJournalCommand(
                             fx.context(tenant, ManualJournalFixture.MAKER),
                             draft.id,
+                            // The version as it stands after submit, not the pre-submit one:
+                            // otherwise this passes on staleness rather than on the status check
+                            // it is named for.
+                            fx.currentRowVersion(tenant, draft.id),
                             fx.content(tenant, "1.00"),
                         ),
                     )
@@ -130,6 +137,7 @@ class ManualJournalIntegrationTests(
                 AmendManualJournalCommand(
                     fx.context(tenant, ManualJournalFixture.MAKER),
                     draft.id,
+                    draft.rowVersion,
                     fx.content(tenant, "300.00", title = "Amended"),
                 ),
             )
@@ -176,7 +184,7 @@ class ManualJournalIntegrationTests(
             "the draft is the durable source of the posting",
         )
         assertEquals(listOf("SUBMIT", "APPROVE"), fx.transitionNames(tenant, draft.id))
-        assertEquals(listOf("journal.approve", "journal.create_manual"), fx.auditActions(tenant))
+        assertEquals(AUDITED_THROUGH_APPROVAL, fx.auditActions(tenant))
     }
 
     @Test
@@ -375,6 +383,157 @@ class ManualJournalIntegrationTests(
         }
     }
 
+    /**
+     * The lost update issue #92 reports, reproduced as two editors working from one view.
+     *
+     * Before the expected version came from the caller, this pair merely serialised: the second
+     * amendment read the row it had just locked, compared its version against itself, found them
+     * equal and overwrote the first maker's whole header and line set - title, narrative, dates and
+     * every amount - with `MANUAL_JOURNAL_STALE` advertising a protection that could not fire.
+     */
+    @Test
+    fun `an amendment prepared against an earlier view is refused, not silently applied`() {
+        val tenant = fx.provisionTenant("manual-stale-amend")
+        val draft = fx.create(tenant, ManualJournalFixture.MAKER, "250.00")
+
+        // Both editors read the same version. The first amendment wins.
+        val sharedView = draft.rowVersion
+        fx.inContext(tenant, ManualJournalFixture.MAKER) {
+            manual.amend(
+                AmendManualJournalCommand(
+                    fx.context(tenant, ManualJournalFixture.MAKER),
+                    draft.id,
+                    sharedView,
+                    fx.content(tenant, "300.00", title = "First edit"),
+                ),
+            )
+        }
+
+        val stale =
+            assertFailsWith<ConflictException> {
+                fx.inContext(tenant, ManualJournalFixture.MAKER) {
+                    manual.amend(
+                        AmendManualJournalCommand(
+                            fx.context(tenant, ManualJournalFixture.MAKER),
+                            draft.id,
+                            sharedView,
+                            fx.content(tenant, "999.00", title = "Second edit"),
+                        ),
+                    )
+                }
+            }
+        assertEquals(PostingErrorCodes.MANUAL_JOURNAL_STALE, stale.code)
+
+        // The amendment that landed is audited, naming the version it was prepared from; the
+        // refused one writes nothing, or the trail would claim an edit that never happened.
+        val amendments = fx.auditMetadata(tenant, "journal.amend_manual")
+        assertEquals(1, amendments.size, "only the amendment that landed is audited: $amendments")
+        assertTrue(Regex(""""amendedFromRowVersion":\s*$sharedView""") in amendments.single())
+
+        // The first edit stands, untouched, and the refused attempt wrote nothing at all - not the
+        // header, not the lines, not even the row version.
+        val afterStale =
+            fx.inContext(tenant, ManualJournalFixture.MAKER) {
+                manual.get(tenant.organisationId, draft.id, ManualJournalFixture.MAKER)
+            }
+        assertEquals("First edit", afterStale.journal.title)
+        assertEquals(sharedView + 1, afterStale.journal.rowVersion)
+        assertEquals(
+            BigDecimal("300.000000"),
+            afterStale.lines.first { it.side == PostingSide.DEBIT }.amount,
+        )
+
+        // Re-reading and retrying against the version that actually stands succeeds, which is the
+        // whole point: this is a conflict to resolve, not a wall.
+        fx.inContext(tenant, ManualJournalFixture.MAKER) {
+            manual.amend(
+                AmendManualJournalCommand(
+                    fx.context(tenant, ManualJournalFixture.MAKER),
+                    draft.id,
+                    afterStale.journal.rowVersion,
+                    fx.content(tenant, "410.00", title = "Second edit, retried"),
+                ),
+            )
+        }
+        val settled =
+            fx.inContext(tenant, ManualJournalFixture.MAKER) {
+                manual.get(tenant.organisationId, draft.id, ManualJournalFixture.MAKER)
+            }
+        assertEquals("Second edit, retried", settled.journal.title)
+    }
+
+    @Test
+    fun `a draft carries a structured external reference from creation to the approval audit`() {
+        val tenant = fx.provisionTenant("manual-external-reference")
+        val draft =
+            fx.inContext(tenant, ManualJournalFixture.MAKER) {
+                manual.create(
+                    CreateManualJournalCommand(
+                        fx.context(tenant, ManualJournalFixture.MAKER),
+                        fx.content(tenant, "120.00", externalReference = "BANK-ADVICE-4471"),
+                    ),
+                )
+            }
+        assertEquals("BANK-ADVICE-4471", draft.externalReference)
+
+        // It survives an amendment, and can be cleared by one.
+        fx.inContext(tenant, ManualJournalFixture.MAKER) {
+            manual.amend(
+                AmendManualJournalCommand(
+                    fx.context(tenant, ManualJournalFixture.MAKER),
+                    draft.id,
+                    draft.rowVersion,
+                    fx.content(tenant, "120.00", externalReference = null),
+                ),
+            )
+        }
+        assertNull(
+            fx
+                .inContext(tenant, ManualJournalFixture.MAKER) {
+                    manual.get(tenant.organisationId, draft.id, ManualJournalFixture.MAKER)
+                }.journal.externalReference,
+        )
+
+        // A blank reference is refused rather than stored: it is indistinguishable from having
+        // supplied nothing while still occupying a column reports are grouped by.
+        val blank =
+            assertFailsWith<InvalidOperationException> {
+                fx.inContext(tenant, ManualJournalFixture.MAKER) {
+                    manual.create(
+                        CreateManualJournalCommand(
+                            fx.context(tenant, ManualJournalFixture.MAKER),
+                            fx.content(tenant, "10.00", externalReference = "   "),
+                        ),
+                    )
+                }
+            }
+        assertEquals(PostingErrorCodes.MANUAL_JOURNAL_EXTERNAL_REFERENCE_INVALID, blank.code)
+    }
+
+    /**
+     * `get` is what a checker reads before approving, so its header and lines must be one draft.
+     *
+     * The guard fires when the isolation a caller declared was not the isolation it got - which is
+     * what Spring does, silently, when the read joins a transaction that is already open. Without
+     * it the annotation would be a claim nothing checks.
+     */
+    @Test
+    fun `reading a draft refuses a transaction whose snapshot can move under it`() {
+        val tenant = fx.provisionTenant("manual-torn-read")
+        val draft = fx.create(tenant, ManualJournalFixture.MAKER, "75.00")
+
+        val torn =
+            assertFailsWith<ConflictException> {
+                transactions.execute {
+                    fx.inContext(tenant, ManualJournalFixture.MAKER) {
+                        manual.get(tenant.organisationId, draft.id, ManualJournalFixture.MAKER)
+                    }
+                }
+            }
+
+        assertEquals(PostingErrorCodes.SNAPSHOT_ISOLATION_UNAVAILABLE, torn.code)
+    }
+
     @Test
     fun `only the maker may amend, submit or cancel their own draft`() {
         val tenant = fx.provisionTenant("manual-ownership")
@@ -389,6 +548,7 @@ class ManualJournalIntegrationTests(
                         AmendManualJournalCommand(
                             fx.context(tenant, tenant.checker),
                             draft.id,
+                            draft.rowVersion,
                             fx.content(tenant, "99.00"),
                         ),
                     )
@@ -514,5 +674,18 @@ class ManualJournalIntegrationTests(
                 }
             }
         assertEquals(MoneyPolicy.AMOUNT_PRECISION_EXCEEDED, unsettled.code)
+    }
+
+    private companion object {
+        /**
+         * Every audit event a draft leaves on the way to `POSTED`, in the order `auditActions`
+         * sorts them.
+         *
+         * `journal.amend_manual` is among them because an amendment is the one manual-journal
+         * operation that leaves no `manual_journal_transition_log` row, and it can rewrite every
+         * amount and account the approval then posts.
+         */
+        val AUDITED_THROUGH_APPROVAL =
+            listOf("journal.amend_manual", "journal.approve", "journal.create_manual")
     }
 }

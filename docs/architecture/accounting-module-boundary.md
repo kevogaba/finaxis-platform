@@ -258,6 +258,46 @@ line's account has opted into manual posting and is not a control account, which
 the `HighRiskOperationAuditCoverageTests` ratchet reaches zero: every `HIGH` and `CRITICAL`
 accounting permission has a real audit call site.
 
+Three properties of the draft aggregate are contract rather than convention (issue #92), and each
+closes a way a draft could be changed or reviewed on a footing the actor did not have:
+
+- **An amendment carries the row version it was prepared on.**
+  `AmendManualJournalCommand.expectedRowVersion` is required, and is compared against the header
+  under its row lock. The earlier check read the locked row's version and compared it against
+  itself, which is always equal: two makers editing from one view merely serialised, and the second
+  silently overwrote the first's whole header and line set while `MANUAL_JOURNAL_STALE` advertised a
+  protection that could not fire. The comparison runs before any line is touched, so a refused
+  amendment leaves the draft and its `row_version` untouched. An amendment that lands is audited as
+  `journal.amend_manual` (`HIGH`), naming the version it was prepared from: it is the one
+  manual-journal operation that leaves no `manual_journal_transition_log` row, and it can rewrite
+  every amount, every account and the external reference that the later `journal.approve` event
+  reports.
+- **`get` reads header and lines from one snapshot.** It is `REPEATABLE READ`, guarded by
+  `SnapshotIsolationGuard`, because it is the representation a checker reviews before approving.
+  Under `READ COMMITTED` an amendment committing between the two statements pairs an old header —
+  old title, old narrative, old version — with a new line set, so a checker could approve amounts
+  they never saw beside a reason that no longer describes them. The guard asks the database what
+  isolation is in force rather than trusting the annotation, which Spring drops silently when the
+  read joins a transaction that is already open.
+- **A document number has a column.** `manual_journal.external_reference` (`V12`) is one bounded,
+  non-blank, optional field, so the memo number or bank advice an adjustment answers to can be
+  searched and reported on instead of being buried in the narrative. It is not copied onto
+  `journal_entry` — that table has no such column and `V7` is frozen — so the posted journal stays
+  answerable through the draft it came from, and the `journal.approve` audit event carries it for
+  an investigator starting from the audit trail. Bounded in **characters**, not UTF-16 units, on
+  both sides: `chk_manual_journal_external_reference` counts with `char_length` and
+  `ManualJournalPolicy` with `codePointCount`, so the contract the maker reads is the one the
+  column enforces. The constraint's non-blank half is `~ '[^[:space:]]'` rather than
+  `btrim(...) <> ''`, because `btrim` strips spaces only and a tab-only reference would otherwise
+  pass the column while the service refused it.
+
+The rules that need nothing but the draft — the version comparison, the reference bound, the line
+count, contiguity, settled amounts, balance — live in `ManualJournalPolicy` beside the service
+rather than inside it, for the reason `PostingRulePolicy` and `GlAccountPostingPolicy` do: a rule
+about money whose only exercise costs a Spring context, a container start and a permission grant is
+a rule whose edges do not get tested. `ManualJournalService` keeps what needs a collaborator — that
+an account exists and accepts manual posting, who the maker was, what the FSM permits.
+
 ## Reversal
 
 `JournalReversalService`, reached through `PostingService.reverse`, is the only correction of posted

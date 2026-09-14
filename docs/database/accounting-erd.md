@@ -29,6 +29,7 @@ sentence.
 | `V9` | `gl_account.is_control_account` and `control_subledger_kind`, `control_account_reconciliation_run`, `idx_journal_line_subledger` | #46 |
 | `V10` | `manual_journal`, `manual_journal_line`, one transition log | #48 |
 | `V11` | `uq_gl_account_control_kind` replacing `idx_gl_account_control` | #91 |
+| `V12` | `manual_journal.external_reference` | #92 |
 | Then | `gl_account_daily_balance` | #47 |
 
 Issue #34's permission migration carries no accounting tables — only reference data.
@@ -1287,6 +1288,7 @@ ever touches a journal.
 | --- | --- | --- | --- |
 | `branch_id` | `UUID` | yes | The branch the adjustment is booked to |
 | `title` | `TEXT` | no | Short description, 1-200 characters |
+| `external_reference` | `TEXT` | yes | The document this adjustment answers to outside the ledger — a memo number, a bank advice, an auditor's schedule reference. 1-100 characters, non-blank when present |
 | `narrative` | `TEXT` | no | The reason for the adjustment, 1-500 characters; carried onto the posted journal |
 | `status` | `TEXT` | no | `DRAFT`, `PENDING_APPROVAL`, `POSTED` or `CANCELLED` |
 | `status_reason` | `TEXT` | yes | Why the draft is in its current state, including a rejection reason |
@@ -1307,12 +1309,30 @@ Plus the mutable audit set.
 | `chk_manual_journal_status` | `CHECK (status IN (…))` | The four adopted states |
 | `chk_manual_journal_posted_has_entry` | `CHECK ((status = 'POSTED') = (journal_entry_id IS NOT NULL))` | Posted means posted |
 | `chk_manual_journal_title` | `CHECK (char_length(title) BETWEEN 1 AND 200)` | Bounded |
+| `chk_manual_journal_external_reference` | `CHECK (external_reference IS NULL OR (char_length(external_reference) BETWEEN 1 AND 100 AND external_reference ~ '[^[:space:]]'))` | Bounded, and genuinely non-blank: `'   '` passes a length check and is indistinguishable from having supplied nothing, while occupying a column reports are grouped by. A regular expression rather than `btrim(...) <> ''`, because `btrim` strips spaces only — a tab or a newline alone would satisfy that while `ManualJournalPolicy`, which asks `String.isBlank()`, refuses it |
 | `chk_manual_journal_narrative` | `CHECK (char_length(narrative) BETWEEN 1 AND 500)` | A reason is mandatory and bounded |
 | `chk_manual_journal_version` | `CHECK (row_version >= 0)` | Convention |
 
 | Index | Definition | Justifying query |
 | --- | --- | --- |
 | `idx_manual_journal_organisation_status` | `(organisation_id, status)` | *"The drafts awaiting my approval"* |
+
+`external_reference` gets **no index**, deliberately: every index in this document earns its place
+by a query, and nothing reads a draft by document number yet. Issue #52's REST adapter is where a
+lookup or filter would arrive, and it is the change that should add the index with the query that
+justifies it.
+
+A single bounded column rather than a metadata map. A map becomes the place anything goes, and once
+it holds five different keys across three tenants nothing can be reported on: a regulator asking
+*"which adjustments cite bank advice 4471"* needs a column, not a JSON path that may or may not have
+been populated the same way twice. When a second structured field is genuinely needed it is a second
+column and a second decision, made in this document first.
+
+The reference is **not** copied onto `journal_entry`. That table carries no such column and `V7` is
+frozen, and inventing one would put the same fact in two places with no rule about which wins. The
+posted journal already names the draft it came from through `posting_request`'s source triple, so
+the reference stays answerable by a join; the `journal.approve` audit event also records it, which
+is what an investigator starting from the audit trail actually reads.
 
 ### `manual_journal_line`
 
@@ -1478,6 +1498,7 @@ Deferred, with the issue that creates each:
 | #45 | The version lifecycle and the deterministic resolver over those tables |
 | #46 | `V9`: the control-account classification, `control_account_reconciliation_run`, `idx_journal_line_subledger`, and the reconciliation proof contract |
 | #91 | `V11`: one control account per class per tenant, so the class the proof query names has one answer |
+| #92 | `V12`: `manual_journal.external_reference`, so a document number has somewhere to live other than inside prose |
 | #48 | `V10`: `manual_journal`, `manual_journal_line`, their transition log, and approval through the engine |
 | #47 | `gl_account_daily_balance` and its documented rebuild query |
 | #49, #50, #51 | The read models, using the query patterns and pagination contract |

@@ -42,6 +42,18 @@ object AccountingAuditActions {
     /** A manual journal was prepared. */
     const val JOURNAL_CREATE_MANUAL = "journal.create_manual"
 
+    /**
+     * A draft manual journal's header and lines were replaced by its maker.
+     *
+     * Audited even though it moves no state, because it is the one manual-journal operation that
+     * is neither a transition nor a creation: `submit`, `approve`, `reject` and `cancel` all leave
+     * a `manual_journal_transition_log` row, and an amendment left only a bumped `row_version`. It
+     * can rewrite every amount, every account and the external reference a later audit event
+     * claims, so an investigator reading `journal.create_manual` beside `journal.approve` would
+     * otherwise see two entries that never described the same draft.
+     */
+    const val JOURNAL_AMEND_MANUAL = "journal.amend_manual"
+
     /** A manual journal was approved, which posts it. */
     const val JOURNAL_APPROVE = "journal.approve"
 

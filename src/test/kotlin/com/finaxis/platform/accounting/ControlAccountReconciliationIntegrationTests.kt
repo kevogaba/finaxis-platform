@@ -323,7 +323,7 @@ class ControlAccountReconciliationIntegrationTests(
                 }
             }
 
-        assertEquals(PostingErrorCodes.RECONCILIATION_SNAPSHOT_UNAVAILABLE, failure.code)
+        assertEquals(PostingErrorCodes.SNAPSHOT_ISOLATION_UNAVAILABLE, failure.code)
         assertEquals(0, runRowCount(tenant), "a refused proof records no evidence")
     }
 

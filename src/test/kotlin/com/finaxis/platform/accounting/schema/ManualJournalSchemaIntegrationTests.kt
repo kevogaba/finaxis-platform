@@ -52,6 +52,41 @@ class ManualJournalSchemaIntegrationTests(
     }
 
     @Test
+    fun `an external reference is optional, bounded and never blank`() {
+        val tenant = fixture.createTenant("manual-schema-reference")
+
+        // Absent is the ordinary case, and so is a real document number at the bound.
+        insertDraft(tenant.organisationId, externalReference = null)
+        insertDraft(tenant.organisationId, externalReference = "BANK-ADVICE-4471")
+        insertDraft(tenant.organisationId, externalReference = "R".repeat(100))
+
+        // Blank is refused rather than stored: indistinguishable from nothing, while still
+        // occupying a column reports are grouped by.
+        assertViolates("chk_manual_journal_external_reference") {
+            insertDraft(tenant.organisationId, externalReference = "")
+        }
+        assertViolates("chk_manual_journal_external_reference") {
+            insertDraft(tenant.organisationId, externalReference = "   ")
+        }
+        // Whitespace that is not a space, too. The first revision of this constraint was
+        // `btrim(external_reference) <> ''`, and btrim strips spaces only - so a tab-only or
+        // newline-only reference was stored by a column whose service refuses it as blank, and
+        // the two contracts disagreed about one value.
+        assertViolates("chk_manual_journal_external_reference") {
+            insertDraft(tenant.organisationId, externalReference = "\t")
+        }
+        assertViolates("chk_manual_journal_external_reference") {
+            insertDraft(tenant.organisationId, externalReference = "\n\t ")
+        }
+        assertViolates("chk_manual_journal_external_reference") {
+            insertDraft(tenant.organisationId, externalReference = "R".repeat(101))
+        }
+        // The bound is characters, as `ManualJournalPolicy` counts them: 100 supplementary
+        // characters is 200 UTF-16 units and the column takes it.
+        insertDraft(tenant.organisationId, externalReference = "\uD83C\uDFE6".repeat(100))
+    }
+
+    @Test
     fun `a posted draft names exactly one tenant-safe journal, at most once`() {
         val tenant = fixture.createTenant("manual-schema-posted")
         val other = fixture.createTenant("manual-schema-other")
@@ -101,11 +136,13 @@ class ManualJournalSchemaIntegrationTests(
         journalEntryId: UUID? = null,
         title: String = "Adjustment",
         narrative: String = "Correct a mis-posting",
+        externalReference: String? = null,
     ): UUID =
         dsl
             .insertInto(MANUAL_JOURNAL)
             .set(MANUAL_JOURNAL.ORGANISATION_ID, organisationId)
             .set(MANUAL_JOURNAL.TITLE, title)
+            .set(MANUAL_JOURNAL.EXTERNAL_REFERENCE, externalReference)
             .set(MANUAL_JOURNAL.NARRATIVE, narrative)
             .set(MANUAL_JOURNAL.STATUS, status)
             .set(MANUAL_JOURNAL.JOURNAL_ENTRY_ID, journalEntryId)

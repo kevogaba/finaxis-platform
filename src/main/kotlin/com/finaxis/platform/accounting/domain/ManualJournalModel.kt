@@ -106,12 +106,20 @@ object ManualJournalLifecycle {
     )
 }
 
-/** A manual journal as the domain sees it. */
+/**
+ * A manual journal as the domain sees it.
+ *
+ * [externalReference] is the document outside the ledger this adjustment answers to - a memo
+ * number, a bank advice, an auditor's schedule reference. Structured rather than left inside
+ * [narrative] so it can be searched and reported on; descriptive only, and accounting never
+ * resolves it.
+ */
 data class ManualJournal(
     val id: UUID,
     val organisationId: UUID,
     val branchId: UUID?,
     val title: String,
+    val externalReference: String?,
     val narrative: String,
     val status: ManualJournalStatus,
     val statusReason: String?,
