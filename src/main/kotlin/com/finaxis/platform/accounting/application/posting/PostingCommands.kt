@@ -82,8 +82,24 @@ sealed interface PostingIntent {
     ) : PostingIntent
 }
 
-/** One economically meaningful amount produced by a business event, named by [code]. */
+/**
+ * One economically meaningful amount produced by a business event, named by [code].
+ *
+ * [positionReference] is the product-owned subsidiary-ledger position the amount moved - a savings
+ * account number, a loan schedule id - and is carried onto every general-ledger line the posting
+ * rule derives from this fact. It is what fills `journal_line.subledger_reference` and therefore
+ * `idx_journal_line_subledger`, the index the `Q6` control-account drill-down reads: without it a
+ * break in a control account can be seen but not traced to the positions that caused it. It is
+ * **descriptive, never a foreign key** (`INV-16`): accounting stores it and compares it, and never
+ * resolves it. Null when the event moves no single position. At most 200 characters, and never
+ * blank.
+ *
+ * It belongs on the fact rather than on the command because one posting's facts can move different
+ * positions - a repayment's principal and the interest accrued against it - and a reference on the
+ * command could only be copied onto all of them or none.
+ */
 data class FinancialFact(
     val code: String,
     val amount: MonetaryAmount,
+    val positionReference: String? = null,
 )

@@ -2,11 +2,14 @@ package com.finaxis.platform.accounting.adapter.outbound.persistence
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.accounting.ControlSubledgerKind
+import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.application.reconciliation.LedgerBalanceQuery
 import com.finaxis.platform.accounting.application.reconciliation.NewReconciliationRun
+import com.finaxis.platform.accounting.application.reconciliation.ProofSnapshot
 import com.finaxis.platform.accounting.application.reconciliation.ReconciliationRun
 import com.finaxis.platform.accounting.application.reconciliation.ReconciliationRunStore
 import com.finaxis.platform.accounting.application.reconciliation.ReconciliationStatus
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.jooq.tables.records.ControlAccountReconciliationRunRecord
 import com.finaxis.platform.jooq.tables.references.CONTROL_ACCOUNT_RECONCILIATION_RUN
 import com.finaxis.platform.jooq.tables.references.JOURNAL_LINE
@@ -46,6 +49,60 @@ class JooqLedgerBalanceQuery(
             .and(JOURNAL_LINE.POSTING_DATE.le(asOfDate))
             .and(branchId?.let { JOURNAL_LINE.BRANCH_ID.eq(it) } ?: DSL.noCondition())
             .fetchOne(0, BigDecimal::class.java) ?: BigDecimal.ZERO
+}
+
+/**
+ * PostgreSQL's answer to *"which snapshot is this transaction reading from"*, and the guard that
+ * the transaction is one whose answer stays true.
+ *
+ * Two statements, both load-bearing:
+ *
+ * `current_setting('transaction_isolation')` is the only honest way to learn the isolation actually
+ * in force. `@Transactional(isolation = REPEATABLE_READ)` is a request, not a guarantee: Spring's
+ * transaction managers ship with `validateExistingTransaction = false`, so a method that *joins* a
+ * transaction already open at `READ COMMITTED` runs at `READ COMMITTED` with its declared isolation
+ * silently dropped. The proof would then be exactly as torn as it was before, and nothing would
+ * say so. Asking the database closes that.
+ *
+ * `pg_export_snapshot()` then returns a token another session can adopt with
+ * `SET TRANSACTION SNAPSHOT`, valid while this transaction is open. A sub-ledger provider reading
+ * on accounting's own connection already sees this snapshot; one reading on a connection of its own
+ * has something it can actually honour, rather than an opaque identifier it can only log.
+ */
+@Component
+class PostgresProofSnapshot(
+    private val dsl: DSLContext,
+) : ProofSnapshot {
+    override fun currentSnapshotId(): String {
+        check(TransactionSynchronizationManager.isActualTransactionActive()) {
+            "Exporting a proof snapshot needs an active transaction."
+        }
+        val isolation =
+            dsl.fetchValue(
+                DSL.field("current_setting('transaction_isolation')", String::class.java),
+            )
+        // SERIALIZABLE is accepted as well as REPEATABLE READ. The guard's question is "does this
+        // transaction hold one snapshot for its whole life", and serializable answers it more
+        // strongly, so refusing it would reject a caller whose guarantee is better than the one
+        // demanded. Anything weaker - READ COMMITTED, READ UNCOMMITTED - is refused.
+        if (STABLE_SNAPSHOT_ISOLATIONS.none { it.equals(isolation, ignoreCase = true) }) {
+            throw ConflictException(
+                code = PostingErrorCodes.RECONCILIATION_SNAPSHOT_UNAVAILABLE,
+                safeDetail =
+                    "A reconciliation must read both of its sides from one snapshot; this " +
+                        "transaction is $isolation.",
+            )
+        }
+        return requireNotNull(
+            dsl.fetchValue(DSL.field("pg_export_snapshot()", String::class.java)),
+        ) {
+            "pg_export_snapshot() returned no snapshot identity"
+        }
+    }
+
+    private companion object {
+        val STABLE_SNAPSHOT_ISOLATIONS = setOf("repeatable read", "serializable")
+    }
 }
 
 /** Evidence rows for control-account proofs. Every statement carries the tenant predicate. */

@@ -28,6 +28,7 @@ sentence.
 | `V8` | `posting_rule`, `posting_rule_version`, `posting_rule_leg`, one transition log, and the `posting_request` rule-version foreign key | #44 |
 | `V9` | `gl_account.is_control_account` and `control_subledger_kind`, `control_account_reconciliation_run`, `idx_journal_line_subledger` | #46 |
 | `V10` | `manual_journal`, `manual_journal_line`, one transition log | #48 |
+| `V11` | `uq_gl_account_control_kind` replacing `idx_gl_account_control` | #91 |
 | Then | `gl_account_daily_balance` | #47 |
 
 Issue #34's permission migration carries no accounting tables — only reference data.
@@ -876,7 +877,10 @@ computed by the engine over the caller's own inputs — the source triple, the e
 type, the branch, the correction and reversal lineage, the resolved transaction/value/posting
 dates, the functional currency, the product class selector, and the caller's asserted financial
 facts (`PostingIntent.Facts`, sorted, each amount settled to `MoneyPolicy.STORAGE_SCALE` before
-hashing so a caller-supplied `500.0` and `500.00` hash identically) — encoded field-by-field as a
+hashing so a caller-supplied `500.0` and `500.00` hash identically, each with its
+`positionReference`, which identifies the subsidiary position the amount moved and so makes a
+re-presented reference against a different position a conflict rather than a replay) — encoded
+field-by-field as a
 null/present marker byte plus, when present, a fixed 4-byte length and the value's UTF-8 bytes,
 never a delimiter-joined string a value could itself contain. It is deliberately **not** computed
 over the resolved legs: the claim happens before a rule-resolved posting's legs are asked for, so
@@ -1189,7 +1193,37 @@ or over-100 percentage; a second residual leg for one fact; an unknown resolutio
 
 | Index | Definition | Justifying query |
 | --- | --- | --- |
-| `idx_gl_account_control` | `(organisation_id, control_subledger_kind) WHERE is_control_account` | *"The control accounts of this tenant for this class"* — what a period-close orchestration iterates |
+| `uq_gl_account_control_kind` | `UNIQUE (organisation_id, control_subledger_kind) WHERE is_control_account` | *"The control account of this tenant for this class"* — what a period-close orchestration iterates, and what makes `SubledgerProofQuery` answerable |
+
+`V11` made that index unique and dropped the non-unique `idx_gl_account_control` `V9` created.
+`SubledgerProofQuery` names a tenant, a branch, a class, a date and a currency — never an account —
+so a provider asked about `SAVINGS_DEPOSITS` answers for the whole class. With two control accounts
+of one class in a tenant, the same whole-class total would be compared against each of them and at
+least one verdict would be silently wrong. One control account per class per tenant is what makes
+the aggregate the question has an answer to. Widening the port with an account or partition key is
+the alternative, and is deliberately deferred until a product module needs it: a port is easier to
+widen later than to narrow.
+
+The index is partial on `is_control_account` and carries **no status predicate**. A deactivated
+control account still holds its class, because a proof of a date on which it was live is legitimate
+and would otherwise be compared against whichever account replaced it.
+
+That permanence needs an escape hatch, or it is a trap: an approved account otherwise accepts only a
+name or description change, and a withdrawn one accepted none, so a tenant that classified the wrong
+account could never configure a replacement for the class. `ChartOfAccountsService.requireAmendable`
+therefore admits exactly one amendment to an `INACTIVE` account — releasing its control
+classification, with nothing else changed, and **only while no journal line has ever posted to the
+account**. The replacement path is deactivate, release, then create and approve the new account.
+
+Both restrictions are load-bearing. Deactivation is a maker-checker transition with its own `HIGH`
+audit event, so a live control account cannot be quietly de-classified out from under the proofs
+that depend on it. And the class is released only from an account that never carried anything,
+because `INV-14` compares the whole sub-ledger aggregate against *the* control account of the class:
+releasing a posted-to account would leave its balance outside the class while the positions behind
+it stayed inside the aggregate, so every later proof would report a `BREAK` of exactly that balance,
+permanently, against a replacement that was never out. A classification that has carried postings
+needs the positions moved and the balance transferred — a migration, not an amendment — and
+`CONTROL_ACCOUNT_HAS_HISTORY` refuses it here rather than letting it be attempted as one.
 
 ### `control_account_reconciliation_run`
 
@@ -1443,6 +1477,7 @@ Deferred, with the issue that creates each:
 | #44 | `posting_rule`, `posting_rule_version`, `posting_rule_leg`, their transition log, and the `posting_request` rule-version foreign key |
 | #45 | The version lifecycle and the deterministic resolver over those tables |
 | #46 | `V9`: the control-account classification, `control_account_reconciliation_run`, `idx_journal_line_subledger`, and the reconciliation proof contract |
+| #91 | `V11`: one control account per class per tenant, so the class the proof query names has one answer |
 | #48 | `V10`: `manual_journal`, `manual_journal_line`, their transition log, and approval through the engine |
 | #47 | `gl_account_daily_balance` and its documented rebuild query |
 | #49, #50, #51 | The read models, using the query patterns and pagination contract |

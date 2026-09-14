@@ -585,9 +585,16 @@ class PostingRuleLifecycleIntegrationTests(
     private fun intent(
         principal: String,
         productClass: String? = null,
+        positionReference: String? = null,
     ) = PostingIntent.Facts(
         "SAVINGS_DEPOSIT",
-        listOf(FinancialFact("PRINCIPAL", MonetaryAmount(BigDecimal(principal), "KES"))),
+        listOf(
+            FinancialFact(
+                "PRINCIPAL",
+                MonetaryAmount(BigDecimal(principal), "KES"),
+                positionReference,
+            ),
+        ),
         productClass,
     )
 

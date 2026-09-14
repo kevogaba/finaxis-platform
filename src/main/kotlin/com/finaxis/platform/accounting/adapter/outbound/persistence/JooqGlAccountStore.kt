@@ -134,6 +134,18 @@ class JooqGlAccountStore(
             .fetchOne()
             ?.let(::toAccount)
 
+    /** Served by `uq_gl_account_control_kind`, which also guarantees the row is unique. */
+    override fun findControlAccountFor(
+        organisationId: UUID,
+        kind: ControlSubledgerKind,
+    ): GlAccount? =
+        selectAccount()
+            .where(GL_ACCOUNT.ORGANISATION_ID.eq(organisationId))
+            .and(GL_ACCOUNT.CONTROL_SUBLEDGER_KIND.eq(kind.name))
+            .and(GL_ACCOUNT.IS_CONTROL_ACCOUNT.isTrue)
+            .fetchOne()
+            ?.let(::toAccount)
+
     override fun ancestorsOf(
         organisationId: UUID,
         accountId: UUID,

@@ -29,6 +29,17 @@ object PostingRulePolicy {
     /** A fact is split across legs without a residual leg, or the shares exceed the whole. */
     const val SPLIT_WITHOUT_RESIDUAL = "accounting.posting_rule_split_without_residual"
 
+    /** A fact's sub-ledger position reference is blank or longer than a journal line can store. */
+    const val SUBLEDGER_REFERENCE_INVALID = "accounting.subledger_reference_invalid"
+
+    /**
+     * `chk_journal_line_subledger_reference`'s upper bound.
+     *
+     * Refused here rather than at the insert: by then the request has been claimed, the period
+     * locked and the accounts read, and the caller gets a constraint name instead of a contract.
+     */
+    const val SUBLEDGER_REFERENCE_MAX_LENGTH = 200
+
     private val ONE_HUNDRED = BigDecimal(100)
 
     /**
@@ -77,10 +88,15 @@ object PostingRulePolicy {
      *
      * Percentages are applied per side of a fact: a fact debited to two accounts and credited to
      * one is three legs, and the residual on each side absorbs that side's rounding.
+     *
+     * Each fact's [FactAmount.positionReference] travels onto every leg derived from it, which is
+     * what puts a product posting into `idx_journal_line_subledger` and makes the `Q6` drill-down
+     * answerable. A leg takes the reference of the fact it draws its amount from, never of the
+     * posting: one posting's legs can move different positions.
      */
     fun allocate(
         legs: List<PostingRuleLeg>,
-        facts: Map<String, MonetaryAmount>,
+        facts: Map<String, FactAmount>,
     ): List<PostingLeg> {
         val consumed = legs.map { it.amountSource }.toSet()
         val unused = facts.keys - consumed
@@ -90,7 +106,9 @@ object PostingRulePolicy {
                 safeDetail = "The posting rule consumes none of: ${unused.sorted()}.",
             )
         }
+        facts.values.forEach { requireStorablePositionReference(it.positionReference) }
         val amounts = mutableMapOf<Int, MonetaryAmount>()
+        val references = mutableMapOf<Int, String?>()
         legs.groupBy { it.amountSource to it.side }.forEach { (key, sideLegs) ->
             val fact =
                 facts[key.first]
@@ -98,7 +116,8 @@ object PostingRulePolicy {
                         code = FACT_MISSING,
                         safeDetail = "The intent supplies no amount for fact ${key.first}.",
                     )
-            val settled = MoneyPolicy.requireSettled(fact)
+            sideLegs.forEach { references[it.legNumber] = fact.positionReference }
+            val settled = MoneyPolicy.requireSettled(fact.amount)
             val nonResidual = sideLegs.filter { !it.isResidual }
             var allocated = BigDecimal.ZERO
             nonResidual.forEach { leg ->
@@ -130,8 +149,34 @@ object PostingRulePolicy {
                     side = leg.side,
                     amount = amounts.getValue(leg.legNumber),
                     narrative = leg.narrative,
+                    subledgerReference = references[leg.legNumber],
                 )
             }
+    }
+
+    /**
+     * A supplied position reference is something `journal_line.subledger_reference` can hold.
+     *
+     * Absent is legitimate - a posting that moves no subsidiary position, which is every manual
+     * journal - but a blank string is not: it would occupy the partial index
+     * `idx_journal_line_subledger` while identifying nothing to drill down to.
+     */
+    private fun requireStorablePositionReference(reference: String?) {
+        if (reference == null) {
+            return
+        }
+        // codePointCount, not length: `chk_journal_line_subledger_reference` counts characters
+        // with char_length(), so measuring UTF-16 units would refuse a reference of supplementary
+        // code points that the column accepts, and the two contracts would disagree.
+        val characters = reference.codePointCount(0, reference.length)
+        if (reference.isBlank() || characters > SUBLEDGER_REFERENCE_MAX_LENGTH) {
+            throw InvalidOperationException(
+                code = SUBLEDGER_REFERENCE_INVALID,
+                safeDetail =
+                    "A sub-ledger position reference is 1 to " +
+                        "$SUBLEDGER_REFERENCE_MAX_LENGTH characters.",
+            )
+        }
     }
 
     /**

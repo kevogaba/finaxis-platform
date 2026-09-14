@@ -29,6 +29,17 @@ class LifecycleAccountingTenantAdapter(
     ): Boolean =
         lifecycleReader.findBranch(organisationId, branchId)?.state == BranchLifecycleState.ACTIVE
 
+    /**
+     * Existence within the tenant, whatever the branch's state.
+     *
+     * `findBranch` is already organisation-scoped, so a non-null answer *is* membership. No state
+     * is consulted on purpose: unlike posting, a historical proof of a closed branch is legitimate.
+     */
+    override fun branchBelongsTo(
+        organisationId: UUID,
+        branchId: UUID,
+    ): Boolean = lifecycleReader.findBranch(organisationId, branchId) != null
+
     override fun functionalCurrencyOf(organisationId: UUID): String? =
         bootstrapStore.baseCurrencyCode(organisationId)
 }

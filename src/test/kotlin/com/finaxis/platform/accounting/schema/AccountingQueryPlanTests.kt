@@ -157,6 +157,34 @@ class AccountingQueryPlanTests(
     }
 
     @Test
+    fun `Q6 the lines that moved one subsidiary position are one partial-index range scan`() {
+        // The reconciliation drill-down: a break in a control account is only investigable if the
+        // GL lines of one sub-ledger position can be found without reading the ledger. `V9` built
+        // idx_journal_line_subledger for this and nothing could populate it until issue #91 gave
+        // FinancialFact a position reference; this is the plan that index exists to produce.
+        val plan =
+            explain(
+                """
+                SELECT id, posting_date, direction, functional_amount, journal_entry_id
+                FROM journal_line
+                WHERE organisation_id = ? AND source_module = ? AND subledger_reference = ?
+                  AND posting_date BETWEEN ? AND ?
+                ORDER BY posting_date DESC, id DESC
+                LIMIT 100
+                """.trimIndent(),
+                organisationId,
+                "savings",
+                "SAV-1",
+                LedgerVolumeFixture.START,
+                LedgerVolumeFixture.START.plusYears(1),
+            )
+
+        assertNoSeqScan(plan)
+        assertUsesIndex(plan, "idx_journal_line_subledger")
+        assertBlocksUnder(plan, Q6_BUDGET)
+    }
+
+    @Test
     fun `the header-versus-lines proof stays inside its period bound`() {
         // Not a foundation budget line of its own - it is the operational check, bounded by
         // tenant and date so it can run per period on a very large table - but it must not
@@ -252,6 +280,7 @@ class AccountingQueryPlanTests(
         /** Budgets, as `docs/architecture/accounting-foundation.md` states them. */
         const val Q1_BUDGET = 200
         const val Q5_BUDGET = 50
+        const val Q6_BUDGET = 500
         const val Q7_BUDGET = 200
 
         /** One page of a hundred rows into an account that holds a few hundred lines. */

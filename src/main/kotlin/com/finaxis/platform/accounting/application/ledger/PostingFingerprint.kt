@@ -26,7 +26,11 @@ import java.util.UUID
  * description is not a different financial fact. Each fact's amount is fed through
  * [com.finaxis.platform.accounting.domain.MoneyPolicy.requireSettled] before hashing, so two
  * requests that name the same amount at a different scale - `500.0` against `500.00` - collapse to
- * the same fingerprint instead of a spurious conflict.
+ * the same fingerprint instead of a spurious conflict. Each fact's
+ * [com.finaxis.platform.accounting.application.posting.FinancialFact.positionReference] is hashed
+ * with it: it is an identifier of the subsidiary position the amount moved, not a description of
+ * it, so the same source reference re-presented against a different position is a materially
+ * different posting and must conflict rather than quietly return the first request's receipt.
  *
  * Every field is fed through [MessageDigest.updateField], which precedes each value with a marker
  * byte and, when present, a fixed-width byte-length before the value's own bytes. That makes the
@@ -71,12 +75,30 @@ object PostingFingerprint {
         // consistently on every attempt requires the fingerprint to see both occurrences, not
         // collapse them first.
         request.financialFacts
-            .map { fact -> fact.code to MoneyPolicy.requireSettled(fact.amount) }
-            .sortedWith(compareBy({ it.first }, { it.second.amount.toPlainString() }))
-            .forEach { (code, settled) ->
+            .map { fact ->
+                Triple(fact.code, MoneyPolicy.requireSettled(fact.amount), fact.positionReference)
+            }.sortedWith(
+                compareBy(
+                    { it.first },
+                    { it.second.amount.toPlainString() },
+                    // The currency belongs in the key for the same reason the amount does: two
+                    // facts of one code settle to the same plain string in different currencies
+                    // (500.000000 KES and 500.000000 USD), and without this they tie, keep input
+                    // order, and hash in that order.
+                    { it.second.currency },
+                    // The reference's key is prefixed rather than coalesced to "". Coalescing
+                    // would give an absent reference and an empty one the same key, and
+                    // `sortedWith` is stable, so the two would keep *input* order - while
+                    // `updateField` tells them apart by its marker byte. The same facts in two
+                    // orders would then hash differently, which is what sorting is here to
+                    // prevent. The prefix is injective: null is "0" and nothing else can be.
+                    { fact -> fact.third?.let { "1$it" } ?: "0" },
+                ),
+            ).forEach { (code, settled, positionReference) ->
                 digest.updateField(code)
                 digest.updateField(settled.amount.toPlainString())
                 digest.updateField(settled.currency)
+                digest.updateField(positionReference)
             }
         return digest.digest().joinToString("") { "%02x".format(it) }
     }

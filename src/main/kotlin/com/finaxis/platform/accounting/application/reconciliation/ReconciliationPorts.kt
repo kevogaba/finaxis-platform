@@ -97,6 +97,33 @@ interface ReconciliationRunStore {
 }
 
 /**
+ * The identity of the database snapshot both sides of a proof are read from.
+ *
+ * A reconciliation compares two numbers that must describe one instant. Under `READ COMMITTED` they
+ * do not: the general-ledger aggregate and the provider's aggregate are separate statement
+ * snapshots, and a posting committing between them is either invented as a `BREAK` or, worse, used
+ * to cancel a real one into a `MATCHED`. The proof therefore runs at `REPEATABLE READ`, where one
+ * snapshot serves the whole transaction.
+ *
+ * The implementation is responsible for proving that isolation actually took effect - Spring
+ * silently ignores an isolation attribute when the method joins a transaction that is already
+ * open - and for returning a token another connection can adopt. On PostgreSQL that is an exported
+ * snapshot, valid while this transaction remains open, which is what makes
+ * [com.finaxis.platform.accounting.SubledgerProofQuery.snapshotId] an obligation a provider outside
+ * this transaction can actually honour rather than an opaque correlation id.
+ */
+fun interface ProofSnapshot {
+    /**
+     * The current transaction's snapshot identity.
+     *
+     * Throws [com.finaxis.platform.common.application.ConflictException] with
+     * [com.finaxis.platform.accounting.application.posting.PostingErrorCodes
+     * .RECONCILIATION_SNAPSHOT_UNAVAILABLE] when the transaction cannot offer a stable one.
+     */
+    fun currentSnapshotId(): String
+}
+
+/**
  * The general-ledger side of a proof: the signed functional balance of one account as of a date,
  * optionally within one branch.
  *

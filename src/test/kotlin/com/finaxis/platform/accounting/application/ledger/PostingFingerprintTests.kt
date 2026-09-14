@@ -115,11 +115,83 @@ class PostingFingerprintTests {
         assertNotEquals(base, fingerprint(facts = listOf(fact("PRINCIPAL", "500.00", "UGX"))))
     }
 
+    /**
+     * A position reference identifies the subsidiary position an amount moved; it is not a
+     * description of it. Re-presenting the same source reference against a different position is a
+     * materially different posting, so it must conflict rather than replay the first receipt.
+     */
+    @Test
+    fun `a different position reference is a different fingerprint`() {
+        val base =
+            fingerprint(facts = listOf(fact("PRINCIPAL", "500.00", positionReference = "SAV-1")))
+
+        assertNotEquals(base, fingerprint(facts = listOf(fact("PRINCIPAL", "500.00"))))
+        assertNotEquals(
+            base,
+            fingerprint(facts = listOf(fact("PRINCIPAL", "500.00", positionReference = "SAV-2"))),
+        )
+        assertEquals(
+            base,
+            fingerprint(facts = listOf(fact("PRINCIPAL", "500.00", positionReference = "SAV-1"))),
+        )
+    }
+
     @Test
     fun `financial facts in a different order are the same fingerprint`() {
         val facts = listOf(fact("PRINCIPAL", "500.00"), fact("FEE", "50.00"))
 
         assertEquals(fingerprint(facts = facts), fingerprint(facts = facts.reversed()))
+    }
+
+    /**
+     * The order-independence above has to hold for the case the sort key can collapse.
+     *
+     * An absent position reference and an empty one are different bytes to the digest - the marker
+     * byte tells them apart - so they must also be different to the comparator. Coalescing null to
+     * `""` while sorting made them equal keys, and a stable sort then preserved input order, so the
+     * same two facts presented in two orders produced two fingerprints: a faithful retry reported
+     * as a conflict. Duplicate codes are deliberately not collapsed here (the resolver refuses them
+     * later, and refusing consistently needs the digest to see both), which is what makes this
+     * reachable at all.
+     */
+    @Test
+    fun `an absent and an empty position reference sort deterministically`() {
+        val facts =
+            listOf(
+                fact("PRINCIPAL", "500.00", positionReference = null),
+                fact("PRINCIPAL", "500.00", positionReference = ""),
+            )
+
+        assertEquals(fingerprint(facts = facts), fingerprint(facts = facts.reversed()))
+        assertNotEquals(
+            fingerprint(facts = facts),
+            fingerprint(facts = listOf(facts[0], facts[0])),
+        )
+    }
+
+    /**
+     * Regression for the fact sort key stopping at the amount.
+     *
+     * Two facts of one code in different currencies settle to the same plain string, so with only
+     * `(code, amount)` in the comparator they tie, keep the caller's order, and hash in it - the
+     * order-dependence the sort exists to remove. The digest itself has always distinguished them,
+     * which is what makes the tie a defect rather than a harmless one: the same two facts supplied
+     * in the other order would produce a different fingerprint and a faithful retry would be
+     * refused as a `POSTING_REQUEST_CONFLICT`.
+     */
+    @Test
+    fun `financial facts differing only in currency sort deterministically`() {
+        val facts =
+            listOf(
+                fact("PRINCIPAL", "500.00", currency = "KES"),
+                fact("PRINCIPAL", "500.00", currency = "USD"),
+            )
+
+        assertEquals(fingerprint(facts = facts), fingerprint(facts = facts.reversed()))
+        assertNotEquals(
+            fingerprint(facts = facts),
+            fingerprint(facts = listOf(facts[0], facts[0])),
+        )
     }
 
     /**
@@ -207,5 +279,6 @@ class PostingFingerprintTests {
         code: String,
         amount: String,
         currency: String = "KES",
-    ) = FinancialFact(code, MonetaryAmount(BigDecimal(amount), currency))
+        positionReference: String? = null,
+    ) = FinancialFact(code, MonetaryAmount(BigDecimal(amount), currency), positionReference)
 }

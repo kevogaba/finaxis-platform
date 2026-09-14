@@ -217,6 +217,26 @@ ledger total in this scope as of this date"*, one aggregate back, nothing else c
 no provider is reported as `accounting.subledger_provider_missing` rather than silently matched.
 End-of-day and period-close orchestration hooks in by calling `run`; nothing here schedules it.
 
+Three properties of that port are contract rather than convention, and each closes a way a proof
+could record a verdict that means nothing:
+
+- **One snapshot, both sides.** `run` is `REPEATABLE READ`, and `SubledgerProofQuery.snapshotId`
+  carries a PostgreSQL exported snapshot the provider is obliged to read from — automatically if it
+  reads on accounting's transaction, by `SET TRANSACTION SNAPSHOT` if it reads on a connection of
+  its own. Under `READ COMMITTED` the two aggregates are separate snapshots, and a posting landing
+  between them invents a `BREAK` or, worse, offsets a real one into a `MATCHED`. `ProofSnapshot`
+  asks the database what isolation is actually in force rather than trusting the annotation, which
+  Spring drops silently when the method joins a transaction already open.
+- **The name is checked at startup.** `SubledgerProofProvider.PROVIDER_NAME_PATTERN` is
+  `chk_control_account_reconciliation_run_provider` verbatim, and
+  `SubledgerProofProviderRegistry` refuses a malformed name — or two providers claiming one
+  class — when the context builds. A provider called `Savings Ledger` otherwise starts, answers
+  both reads and fails at the insert.
+- **The scope is validated before either read.** An unknown branch is
+  `accounting.branch_not_in_organisation` up front, through
+  `AccountingTenantLookup.branchBelongsTo`. Existence, not postability: a proof is of a date that
+  has happened, so a branch closed since then is a legitimate subject of one.
+
 ## Manual journals
 
 `ManualJournalService` is the one legitimate way to name general-ledger accounts by hand, and the
