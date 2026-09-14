@@ -9,8 +9,10 @@ deployment, not a Coolify-native build from source.
 ## One-time Coolify application setup
 
 - **Resource type:** Docker Image.
-- **Image:** `ghcr.io/finaxis/platform:main-jvm` — the floating tag CI pushes on every merge to
-  `main`. `ghcr.io/finaxis/platform:sha-<short-sha>-run<run-number>-jvm` tags are also pushed,
+- **Image:** `ghcr.io/kevogaba/finaxis-platform:main-jvm` — the floating tag CI pushes on every
+  merge to `main`. The namespace is the GitHub account owning this repository, not a project
+  name: GHCR scopes every package to an owner and refuses a push anywhere else.
+  `…:sha-<short-sha>-run<run-number>-jvm` tags are also pushed,
   immutable, and are the rollback target if `main-jvm` ever needs to roll back to a specific
   build. The run number is part of the tag because re-running the workflow for the *same* commit
   with different repository variables — the documented way to flip a CI-build-time switch below

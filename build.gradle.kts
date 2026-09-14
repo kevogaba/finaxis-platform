@@ -573,10 +573,13 @@ tasks.named<BootBuildImage>("bootBuildImage") {
     // The two images have to be separately addressable for a deployment to publish both and choose
     // at run time, so the JVM one carries a `-jvm` tag. FINAXIS_IMAGE_NAME overrides the whole
     // reference for a registry that names things differently.
+    //
+    // The namespace is the GitHub account that owns this repository, not a project name: GHCR
+    // scopes every package to an owner and refuses a push to any other namespace.
     val imageTagSuffix = if (nativeImageEnabled) "" else "-jvm"
     imageName =
         System.getenv("FINAXIS_IMAGE_NAME")?.takeIf(String::isNotBlank)
-            ?: "ghcr.io/finaxis/platform:${project.version}$imageTagSuffix"
+            ?: "ghcr.io/kevogaba/finaxis-platform:${project.version}$imageTagSuffix"
     // The buildpacks download the Liberica NIK toolchain from inside the build container. Behind a
     // TLS-inspecting egress proxy those downloads are re-signed with a private CA the container
     // does not trust, and the build fails on certificate verification. Point

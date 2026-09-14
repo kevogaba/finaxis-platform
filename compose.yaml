@@ -105,7 +105,7 @@ services:
   # `image` profile so `docker compose up` still starts infrastructure only:
   #
   #   docker compose --profile image up platform                                  # native
-  #   FINAXIS_IMAGE=ghcr.io/finaxis/platform:0.0.1-SNAPSHOT-jvm \
+  #   FINAXIS_IMAGE=ghcr.io/kevogaba/finaxis-platform:0.0.1-SNAPSHOT-jvm \
   #     docker compose --profile image up platform                                # JVM
   #   ./scripts/local-smoke.sh
   #
@@ -122,7 +122,7 @@ services:
   # unlike `bootRun` this container derives nothing from compose - the FINAXIS_* variables are the
   # only configuration it has. See docs/operations/native-image-deployment.md.
   platform:
-    image: '${FINAXIS_IMAGE:-ghcr.io/finaxis/platform:0.0.1-SNAPSHOT}'
+    image: '${FINAXIS_IMAGE:-ghcr.io/kevogaba/finaxis-platform:0.0.1-SNAPSHOT}'
     profiles:
       - image
     network_mode: host

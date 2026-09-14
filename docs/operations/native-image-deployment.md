@@ -6,7 +6,7 @@ What the switch changes is what consumes that output:
 
 | | Native image | JVM image |
 | --- | --- | --- |
-| Tag | `ghcr.io/finaxis/platform:<version>` | `…:<version>-jvm` |
+| Tag | `ghcr.io/kevogaba/finaxis-platform:<version>` | `…:<version>-jvm` |
 | Built by | `bootBuildImage` | `FINAXIS_NATIVE_IMAGE=false ./gradlew bootBuildImage` |
 | Contains | A self-contained executable, no JVM | An AOT-processed jar on Liberica JDK 25 |
 | Build time | ~13 minutes, ~10 GB of memory | ~1.5 minutes |
@@ -453,7 +453,7 @@ uses, so `./scripts/local-smoke.sh` works against either.
 Point it at a different tag with `FINAXIS_IMAGE`:
 
 ```bash
-FINAXIS_IMAGE=ghcr.io/finaxis/platform:1.2.3 docker compose --profile image up platform
+FINAXIS_IMAGE=ghcr.io/kevogaba/finaxis-platform:1.2.3 docker compose --profile image up platform
 ```
 
 ## Verifying the image
