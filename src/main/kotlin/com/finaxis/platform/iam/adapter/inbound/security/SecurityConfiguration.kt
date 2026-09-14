@@ -53,6 +53,7 @@ class SecurityConfiguration(
     private val rateLimitFilter: RateLimitFilter,
     private val corsProperties: CorsProperties,
     private val securityHeadersProperties: SecurityHeadersProperties,
+    private val apiDocsProperties: ApiDocsProperties,
     private val problemWriter: ApiProblemWriter,
 ) {
     /**
@@ -78,7 +79,24 @@ class SecurityConfiguration(
                     }
                 securityHeadersProperties.contentSecurityPolicy
                     .takeIf(String::isNotBlank)
-                    ?.let { contentSecurityPolicy ->
+                    ?.let { configuredContentSecurityPolicy ->
+                        // A configured CSP this strict (production's default is `default-src
+                        // 'none'`) blocks Scalar outright: its HTML loads a same-origin JS bundle
+                        // fine under 'self', but also carries an inline
+                        // `<script>Scalar.createApiReference(...)</script>` initializer with no
+                        // nonce hook (see ScalarHtmlRenderer in com.scalar.maven:scalar-core) and
+                        // fetches the OpenAPI document itself, which default-src 'none' also
+                        // blocks. Exposing the docs publicly therefore trades the operator's
+                        // configured CSP for one scoped to what Scalar needs, everywhere - not
+                        // just on `/scalar/**` - which is the honest cost of "docs are public" and
+                        // is why this is documented in production-hardening.md rather than done
+                        // silently.
+                        val contentSecurityPolicy =
+                            if (apiDocsProperties.publicAccessEnabled) {
+                                DOCS_CONTENT_SECURITY_POLICY
+                            } else {
+                                configuredContentSecurityPolicy
+                            }
                         headers.contentSecurityPolicy { csp ->
                             csp.policyDirectives(contentSecurityPolicy)
                         }
@@ -87,12 +105,8 @@ class SecurityConfiguration(
                 sessions.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
             }.authorizeHttpRequests { requests ->
                 requests
-                    .requestMatchers(
-                        "/actuator/health",
-                        "/scalar/**",
-                        "/v3/api-docs/**",
-                        "/swagger-ui/**",
-                    ).permitAll()
+                    .requestMatchers(*publicPaths().toTypedArray())
+                    .permitAll()
                     .anyRequest()
                     .authenticated()
             }.oauth2ResourceServer { resourceServer -> resourceServer.jwt { } }
@@ -104,6 +118,22 @@ class SecurityConfiguration(
             .addFilterAfter(rateLimitFilter, ActiveOrganisationContextFilter::class.java)
         return http.build()
     }
+
+    /**
+     * Paths reachable without authentication: `/actuator/health` always (Coolify's deploy health
+     * check), plus the Scalar UI and OpenAPI document only while
+     * [ApiDocsProperties.publicAccessEnabled] is true. When false, those three paths simply fall
+     * through to `anyRequest().authenticated()` instead of being permitted.
+     */
+    private fun publicPaths(): List<String> =
+        buildList {
+            add("/actuator/health")
+            if (apiDocsProperties.publicAccessEnabled) {
+                add("/scalar/**")
+                add("/v3/api-docs/**")
+                add("/swagger-ui/**")
+            }
+        }
 
     /**
      * Provides no registered CORS mapping until a deployment explicitly enables one.
@@ -124,6 +154,15 @@ class SecurityConfiguration(
                 )
             }
         }
+
+    private companion object {
+        // 'unsafe-inline' on script-src and style-src is required for Scalar's own HTML - not a
+        // choice this codebase gets to avoid, see the comment where this constant is used.
+        const val DOCS_CONTENT_SECURITY_POLICY =
+            "default-src 'none'; script-src 'self' 'unsafe-inline'; " +
+                "style-src 'self' 'unsafe-inline'; connect-src 'self'; " +
+                "img-src 'self' data:; font-src 'self' data:"
+    }
 }
 
 /** Writes unauthenticated Spring Security failures through the public API problem contract. */

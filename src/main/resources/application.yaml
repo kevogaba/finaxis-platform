@@ -179,6 +179,13 @@ management:
       probes:
         enabled: true
       show-details: when_authorized
+  health:
+    mail:
+      # This indicator dials the configured SMTP host regardless of `finaxis.email.enabled` and
+      # reflects a best-effort downstream integration, not whether the app can serve traffic. It
+      # must never gate /actuator/health, which is exactly the path Coolify polls to decide
+      # whether a deploy succeeded.
+      enabled: false
   info:
     java:
       enabled: true
@@ -372,6 +379,8 @@ finaxis:
       enabled: false
     headers:
       hsts-enabled: false
+    api-docs:
+      public-access-enabled: ${FINAXIS_API_DOCS_PUBLIC_ACCESS_ENABLED:true}
 
 springdoc:
   swagger-ui:

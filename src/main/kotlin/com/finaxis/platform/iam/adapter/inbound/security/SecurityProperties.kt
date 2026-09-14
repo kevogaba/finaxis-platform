@@ -47,3 +47,18 @@ data class SecurityHeadersProperties(
     val hstsEnabled: Boolean = false,
     val contentSecurityPolicy: String = "",
 )
+
+/**
+ * Controls whether the API documentation surface (Scalar UI and the OpenAPI document) is
+ * reachable without authentication.
+ *
+ * springdoc/Scalar themselves stay enabled unconditionally; gating unauthenticated access here
+ * instead, at the always-registered `SecurityConfiguration.securityFilterChain` bean, keeps the
+ * toggle live at container restart under this repository's AOT-frozen `bootBuildImage` builds
+ * (see `docs/superpowers/specs/2026-09-06-production-readiness-coolify-deployment-design.md`).
+ */
+@ConfigurationProperties(prefix = "finaxis.security.api-docs")
+@Validated
+data class ApiDocsProperties(
+    val publicAccessEnabled: Boolean = true,
+)
