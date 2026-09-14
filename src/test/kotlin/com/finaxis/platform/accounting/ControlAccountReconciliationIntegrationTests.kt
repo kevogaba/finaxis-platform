@@ -350,7 +350,7 @@ class ControlAccountReconciliationIntegrationTests(
                 withRequestContext { reconciliation.run(runCommand(tenant)) }
             }
 
-        assertEquals(ReconciliationStatus.MATCHED, run?.status)
+        assertEquals(ReconciliationStatus.MATCHED, run.status)
     }
 
     @Test

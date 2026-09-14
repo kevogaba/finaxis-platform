@@ -20,6 +20,7 @@ import com.finaxis.platform.accounting.domain.PostingSide
 import com.finaxis.platform.accounting.schema.JournalSchemaFixture
 import com.finaxis.platform.accounting.support.FinancialTransactionAtomicityFixture
 import com.finaxis.platform.accounting.support.FoundationAtomicityProbes
+import com.finaxis.platform.accounting.support.LockOverlapProbe
 import com.finaxis.platform.common.application.ApplicationException
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
@@ -30,6 +31,7 @@ import com.finaxis.platform.common.context.RequestContext
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.context.TenantContext
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.persistence.AdvisoryLockNamespace
 import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_PERIOD
 import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_YEAR
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
@@ -58,10 +60,14 @@ import java.time.OffsetDateTime
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -87,6 +93,7 @@ class JournalReversalIntegrationTests(
     private val schema = JournalSchemaFixture(dsl)
     private val transactions = TransactionTemplate(transactionManager)
     private val fx = JournalReversalFixture(dsl, engine, tenants, schema, transactions)
+    private val probe = LockOverlapProbe(dsl)
 
     @Test
     fun `a reversal exactly offsets the original and leaves its rows untouched`() {
@@ -171,7 +178,7 @@ class JournalReversalIntegrationTests(
     }
 
     @Test
-    fun `a journal is reversed at most once, sequentially and under concurrency`() {
+    fun `a journal is reversed at most once, sequentially`() {
         val tenant = fx.provisionTenant("reversal-once")
         val original = fx.postOriginal(tenant)
         fx.inContext(tenant, tenant.checker) {
@@ -189,39 +196,50 @@ class JournalReversalIntegrationTests(
                 }
             }
         assertEquals(PostingErrorCodes.JOURNAL_ALREADY_REVERSED, sequential.code)
+        assertEquals(1, fx.reversalsOf(tenant, original.journalEntryId))
+    }
 
-        // Two checkers race to reverse a fresh journal. The advisory lock serialises them; the
-        // loser then finds the winner's row and is refused with the named conflict, never with a
-        // unique violation, and exactly one reversal exists.
+    /**
+     * Two checkers race to reverse a fresh journal.
+     *
+     * Releasing them from one latch would prove only that they started together - the first could
+     * commit before the second issued a statement, leaving the sequential path above as the only
+     * thing actually exercised, and the scenario green with `PostgresJournalReversalLock` deleted.
+     *
+     * So the overlap is established first: a third transaction takes the reversal's own advisory
+     * key and holds it, both racers are proved to be parked on that exact key at the same moment,
+     * and only then is the key released. Both are then demonstrably inside their transactions
+     * together. The advisory lock serialises them; the loser finds the winner's row and is refused
+     * with the named conflict, never with a unique violation, and exactly one reversal exists.
+     */
+    @Test
+    fun `a journal is reversed at most once by two overlapping reversers`() {
+        val tenant = fx.provisionTenant("reversal-once-concurrent")
         val racedOriginal = fx.postOriginal(tenant, reference = "dep-race")
-        val start = CountDownLatch(1)
+        val reversalKey = fx.reversalLockKey(tenant, racedOriginal.journalEntryId)
+        val keyHeld = CountDownLatch(1)
+        val releaseKey = CountDownLatch(1)
         val outcomes =
-            Executors.newFixedThreadPool(2).use { executor ->
-                val futures =
-                    (1..2).map {
-                        executor.submit<Result<PostingReceipt>> {
-                            assertTrue(start.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS))
-                            runCatching {
-                                fx.inContext(tenant, tenant.checker) {
-                                    postingService.reverse(
-                                        fx.command(
-                                            tenant,
-                                            racedOriginal.journalEntryId,
-                                            reason = "Race",
-                                        ),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                start.countDown()
-                futures.map {
-                    try {
-                        it.get(FUTURE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                    } catch (ex: ExecutionException) {
-                        Result.failure(ex.cause ?: ex)
-                    }
-                }
+            Executors.newVirtualThreadPerTaskExecutor().use { executor ->
+                val holder = executor.submit { holdReversalKey(reversalKey, keyHeld, releaseKey) }
+                assertTrue(keyHeld.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+                val racers =
+                    (1..2).map { executor.submitReversal(tenant, racedOriginal.journalEntryId) }
+
+                probe.awaitBlockedOnAdvisoryKey(
+                    AdvisoryLockNamespace.ACCOUNTING_JOURNAL_REVERSAL,
+                    reversalKey,
+                    waiters = 2,
+                )
+                assertEquals(
+                    0,
+                    fx.reversalsOf(tenant, racedOriginal.journalEntryId),
+                    "neither racer got past the advisory lock while it was held elsewhere",
+                )
+
+                releaseKey.countDown()
+                holder.get(FUTURE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                racers.map { it.outcome() }
             }
         assertEquals(1, outcomes.count { it.isSuccess }, "exactly one reversal wins: $outcomes")
         val loser = outcomes.single { it.isFailure }.exceptionOrNull()
@@ -231,6 +249,113 @@ class JournalReversalIntegrationTests(
             (loser as ApplicationException).code,
         )
         assertEquals(1, fx.reversalsOf(tenant, racedOriginal.journalEntryId))
+    }
+
+    /** Holds the journal-reversal advisory key open until [release], so a reverser parks on it. */
+    private fun holdReversalKey(
+        objectId: Int,
+        held: CountDownLatch,
+        release: CountDownLatch,
+    ) {
+        transactions.execute {
+            fx.takeReversalLock(objectId)
+            held.countDown()
+            assertTrue(release.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        }
+    }
+
+    /** Submits one racing reversal, capturing its refusal rather than letting it escape. */
+    private fun ExecutorService.submitReversal(
+        tenant: JournalReversalFixture.Tenant,
+        journalEntryId: UUID,
+    ) = submit<Result<PostingReceipt>> {
+        runCatching {
+            fx.inContext(tenant, tenant.checker) {
+                postingService.reverse(fx.command(tenant, journalEntryId, reason = "Race"))
+            }
+        }
+    }
+
+    /** Unwraps the executor's own wrapper so the caller sees the failure the service raised. */
+    private fun Future<Result<PostingReceipt>>.outcome() =
+        try {
+            get(FUTURE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        } catch (ex: ExecutionException) {
+            Result.failure(ex.cause ?: ex)
+        }
+
+    @Test
+    fun `a reversal that rolls back leaves the journal reversible and the waiter wins`() {
+        // The other side of the advisory lock, and the one nothing covered: the first claimant
+        // rolls back while a second reverser is parked on its key. `pg_advisory_xact_lock` is
+        // released by rollback exactly as by commit, so the waiter wakes, finds no reversal, and
+        // becomes the one that writes it. A journal whose only reversal attempt rolled back must
+        // stay reversible - otherwise a failed correction would strand it forever.
+        val tenant = fx.provisionTenant("reversal-rollback")
+        val original = fx.postOriginal(tenant, reference = "dep-rollback")
+        val reversalKey = fx.reversalLockKey(tenant, original.journalEntryId)
+        val reversalApplied = CountDownLatch(1)
+        val releaseRollback = CountDownLatch(1)
+        val waiterReturned = AtomicBoolean()
+
+        val winner =
+            Executors.newVirtualThreadPerTaskExecutor().use { executor ->
+                val abandoned =
+                    executor.submit {
+                        fx.inContext(tenant, tenant.checker) {
+                            // `reverse` is @Transactional REQUIRED, so it joins this transaction
+                            // and rolls back with it - which is what makes the abandonment real
+                            // rather than simulated.
+                            transactions.execute { status ->
+                                postingService.reverse(
+                                    fx.command(tenant, original.journalEntryId, reason = "Aborted"),
+                                )
+                                reversalApplied.countDown()
+                                assertTrue(
+                                    releaseRollback.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                                )
+                                status.setRollbackOnly()
+                            }
+                        }
+                    }
+                assertTrue(reversalApplied.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+                val waiter =
+                    executor.submit<PostingReceipt> {
+                        fx
+                            .inContext(tenant, tenant.checker) {
+                                postingService.reverse(
+                                    fx.command(tenant, original.journalEntryId, reason = "Retry"),
+                                )
+                            }.also { waiterReturned.set(true) }
+                    }
+
+                probe.awaitBlockedOnAdvisoryKey(
+                    AdvisoryLockNamespace.ACCOUNTING_JOURNAL_REVERSAL,
+                    reversalKey,
+                )
+                assertFalse(
+                    waiterReturned.get(),
+                    "the second reverser returned before the first rolled back, so it never " +
+                        "waited on the abandoned attempt this scenario is about",
+                )
+
+                releaseRollback.countDown()
+                abandoned.get(FUTURE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                waiter.get(FUTURE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            }
+
+        assertEquals(
+            1,
+            fx.reversalsOf(tenant, original.journalEntryId),
+            "the abandoned attempt left nothing behind and the waiter wrote the one reversal",
+        )
+        assertEquals(
+            original.journalEntryId,
+            assertNotNull(journals.findJournalEntry(tenant.organisationId, winner.journalEntryId))
+                .reversesJournalEntryId,
+            "the surviving reversal is the waiter's, and it reverses the original",
+        )
     }
 
     @Test
@@ -389,7 +514,7 @@ class JournalReversalIntegrationTests(
                         debit = "110.00",
                         corrects = original.postingRequestId,
                     )
-                }!!
+                }
             }
 
         assertEquals(

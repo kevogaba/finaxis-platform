@@ -395,6 +395,62 @@ class PostingEngineTests {
     }
 
     @Test
+    fun `a line stored in a different fiscal period from its header rolls the posting back`() {
+        // A line can balance to the last cent and still be wrong. `journal_line` denormalises the
+        // period, and the reporting reads group on that column directly, so a line filed against
+        // another period is money that reconciles here and lands in the wrong month downstream.
+        // No schema constraint catches it: the foreign key ties a line to a *valid* period, never
+        // to *its header's*.
+        journals.storeLineAs = { it.copy(fiscalPeriodId = uuidV7()) }
+
+        val failure =
+            assertFailsWith<IllegalStateException> { engine.post(request(), explicit(legs())) }
+
+        assertTrue(
+            failure.message.orEmpty().contains("disagree with their header on fiscal period"),
+            failure.message,
+        )
+        assertTrue(
+            journals.requests.none { it.status == PostingRequestStatus.POSTED },
+            "the request must not be marked posted when verification fails",
+        )
+    }
+
+    @Test
+    fun `a line stored against a different branch from its header rolls the posting back`() {
+        // Branch is the nullable dimension, so it is the one a value-by-value comparison in Kotlin
+        // gets wrong: the check has to be NULL-safe in both directions.
+        journals.storeLineAs = { it.copy(branchId = null) }
+
+        val failure =
+            assertFailsWith<IllegalStateException> { engine.post(request(), explicit(legs())) }
+
+        assertTrue(
+            failure.message.orEmpty().contains("disagree with their header on branch"),
+            failure.message,
+        )
+    }
+
+    @Test
+    fun `every dimension a line diverges on is named in the failure`() {
+        journals.storeLineAs = {
+            it.copy(
+                fiscalPeriodId = uuidV7(),
+                postingDate = it.postingDate.plusDays(1),
+                functionalCurrencyCode = "USD",
+            )
+        }
+
+        val failure =
+            assertFailsWith<IllegalStateException> { engine.post(request(), explicit(legs())) }
+
+        val message = failure.message.orEmpty()
+        assertTrue(message.contains("fiscal period"), message)
+        assertTrue(message.contains("posting date"), message)
+        assertTrue(message.contains("functional currency"), message)
+    }
+
+    @Test
     fun `a header that does not match its stored lines rolls the posting back`() {
         // The INV-4 enforcement point: what the database holds, not what the engine believes it
         // wrote. The store drops a line to simulate a defect between the two.
@@ -796,6 +852,12 @@ class PostingEngineTests {
         val lines = mutableListOf<NewJournalLine>()
         val reversedJournalIds = mutableSetOf<UUID>()
         var dropLastLine = false
+
+        /**
+         * Rewrites each line on its way into the store, so a test can make what the database holds
+         * disagree with the header the engine built - the defect `INV-4` exists to catch.
+         */
+        var storeLineAs: (NewJournalLine) -> NewJournalLine = { it }
         private val committed = mutableSetOf<UUID>()
 
         fun commitClaims() = committed.addAll(requests.map { it.id })
@@ -836,18 +898,30 @@ class PostingEngineTests {
         }
 
         override fun insertJournalLines(lines: List<NewJournalLine>) {
-            this.lines += if (dropLastLine) lines.dropLast(1) else lines
+            val kept = if (dropLastLine) lines.dropLast(1) else lines
+            this.lines += kept.map(storeLineAs)
         }
 
         override fun sumLines(
             organisationId: UUID,
             journalEntryId: UUID,
+            header: JournalLineDimensions,
         ): JournalTotals {
             val mine = lines.filter { it.journalEntryId == journalEntryId }
             return JournalTotals(
                 mine.filter { it.leg.side == PostingSide.DEBIT }.sumOf { it.functionalAmount },
                 mine.filter { it.leg.side == PostingSide.CREDIT }.sumOf { it.functionalAmount },
                 mine.size,
+                DivergentLineCounts(
+                    branch = mine.count { it.branchId != header.branchId },
+                    fiscalPeriod = mine.count { it.fiscalPeriodId != header.fiscalPeriodId },
+                    postingDate = mine.count { it.postingDate != header.postingDate },
+                    currency = mine.count { it.leg.amount.currency != header.currencyCode },
+                    functionalCurrency =
+                        mine.count {
+                            it.functionalCurrencyCode != header.functionalCurrencyCode
+                        },
+                ),
             )
         }
 

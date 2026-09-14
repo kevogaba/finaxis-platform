@@ -224,7 +224,7 @@ class PostingRuleLifecycleIntegrationTests(
                             intent = intent("1000.00"),
                         ),
                     )
-                }!!
+                }
             }
         val again =
             withRequestContext {

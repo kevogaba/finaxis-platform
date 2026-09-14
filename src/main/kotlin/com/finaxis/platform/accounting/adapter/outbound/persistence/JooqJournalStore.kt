@@ -1,7 +1,9 @@
 package com.finaxis.platform.accounting.adapter.outbound.persistence
 
+import com.finaxis.platform.accounting.application.ledger.DivergentLineCounts
 import com.finaxis.platform.accounting.application.ledger.ExistingPostingRequest
 import com.finaxis.platform.accounting.application.ledger.JournalEntryView
+import com.finaxis.platform.accounting.application.ledger.JournalLineDimensions
 import com.finaxis.platform.accounting.application.ledger.JournalLineView
 import com.finaxis.platform.accounting.application.ledger.JournalReadStore
 import com.finaxis.platform.accounting.application.ledger.JournalStore
@@ -21,6 +23,7 @@ import com.finaxis.platform.jooq.tables.references.JOURNAL_ENTRY
 import com.finaxis.platform.jooq.tables.references.JOURNAL_LINE
 import com.finaxis.platform.jooq.tables.references.POSTING_REQUEST
 import org.jooq.DSLContext
+import org.jooq.Field
 import org.jooq.impl.DSL
 import org.springframework.stereotype.Component
 import org.springframework.transaction.support.TransactionSynchronizationManager
@@ -200,12 +203,17 @@ class JooqJournalStore(
 
     /**
      * The `INV-4` verification read: what the database holds, not what the engine believes it
-     * wrote. `FILTER` aggregates in one statement, so the two totals and the count come from the
-     * same snapshot.
+     * wrote. `FILTER` aggregates in one statement, so the totals, the count and the per-dimension
+     * divergence counts all come from the same snapshot.
+     *
+     * Each dimension is counted with `IS DISTINCT FROM`, which is NULL-safe in both directions:
+     * `branch_id` is nullable, so a plain `<>` would let a NULL line pass against a non-NULL
+     * header and vice versa - exactly the mismatch worth catching.
      */
     override fun sumLines(
         organisationId: UUID,
         journalEntryId: UUID,
+        header: JournalLineDimensions,
     ): JournalTotals {
         val debit =
             DSL
@@ -215,10 +223,24 @@ class JooqJournalStore(
             DSL
                 .sum(JOURNAL_LINE.FUNCTIONAL_AMOUNT)
                 .filterWhere(JOURNAL_LINE.DIRECTION.eq(PostingSide.CREDIT.name))
+        val divergentBranch = countDiverging(JOURNAL_LINE.BRANCH_ID, header.branchId)
+        val divergentPeriod = countDiverging(JOURNAL_LINE.FISCAL_PERIOD_ID, header.fiscalPeriodId)
+        val divergentDate = countDiverging(JOURNAL_LINE.POSTING_DATE, header.postingDate)
+        val divergentCurrency = countDiverging(JOURNAL_LINE.CURRENCY_CODE, header.currencyCode)
+        val divergentFunctional =
+            countDiverging(JOURNAL_LINE.FUNCTIONAL_CURRENCY_CODE, header.functionalCurrencyCode)
         val row =
             dsl
-                .select(debit, credit, DSL.count())
-                .from(JOURNAL_LINE)
+                .select(
+                    debit,
+                    credit,
+                    DSL.count(),
+                    divergentBranch,
+                    divergentPeriod,
+                    divergentDate,
+                    divergentCurrency,
+                    divergentFunctional,
+                ).from(JOURNAL_LINE)
                 .where(JOURNAL_LINE.ORGANISATION_ID.eq(organisationId))
                 .and(JOURNAL_LINE.JOURNAL_ENTRY_ID.eq(journalEntryId))
                 .fetchOne()!!
@@ -226,8 +248,22 @@ class JooqJournalStore(
             debitFunctional = row.value1() ?: BigDecimal.ZERO,
             creditFunctional = row.value2() ?: BigDecimal.ZERO,
             lineCount = row.value3(),
+            divergentLines =
+                DivergentLineCounts(
+                    branch = row.value4(),
+                    fiscalPeriod = row.value5(),
+                    postingDate = row.value6(),
+                    currency = row.value7(),
+                    functionalCurrency = row.value8(),
+                ),
         )
     }
+
+    /** `count(*) FILTER (WHERE field IS DISTINCT FROM expected)`, NULL-safe on both sides. */
+    private fun <T> countDiverging(
+        field: Field<T>,
+        expected: T?,
+    ) = DSL.count().filterWhere(field.isDistinctFrom(expected))
 
     override fun markPosted(
         organisationId: UUID,
