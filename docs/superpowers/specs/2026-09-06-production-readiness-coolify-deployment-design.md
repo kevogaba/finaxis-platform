@@ -173,7 +173,7 @@ real DSN is supplied as a Coolify secret.
 
 ## CI: GHCR push and tagging
 
-`container-image.yml`'s `jvm-image` job already builds `ghcr.io/finaxis/platform:0.0.1-SNAPSHOT-jvm`
+`container-image.yml`'s `jvm-image` job already builds `ghcr.io/kevogaba/finaxis-platform:0.0.1-SNAPSHOT-jvm`
 into the local Docker daemon via `bootBuildImage` (no Dockerfile; `docker/build-push-action`, which
 Coolify's own example workflow uses, does not apply here). Add, after the existing build step:
 
@@ -181,14 +181,14 @@ Coolify's own example workflow uses, does not apply here). Add, after the existi
 2. Authenticate to GHCR: `docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}`
    (or `docker/login-action`).
 3. Tag the already-built local image with two additional references and push both:
-   - `ghcr.io/finaxis/platform:sha-<short-sha>-jvm` — immutable, the rollback target.
-   - `ghcr.io/finaxis/platform:main-jvm` — floating; this is what the Coolify application tracks.
+   - `ghcr.io/kevogaba/finaxis-platform:sha-<short-sha>-jvm` — immutable, the rollback target.
+   - `ghcr.io/kevogaba/finaxis-platform:main-jvm` — floating; this is what the Coolify application tracks.
 4. Keep the existing "Report the built image" step; it still reads the locally-built tag.
 
 Only the JVM variant joins this automated path, per the existing workflow's own reasoning (native
 OOMs on a standard GitHub-hosted runner) and the earlier decision to track JVM only in Coolify.
 The `native-image` job is untouched (still `workflow_dispatch`-only, still builds
-`ghcr.io/finaxis/platform:<version>` with no `-jvm` suffix, still not pushed).
+`ghcr.io/kevogaba/finaxis-platform:<version>` with no `-jvm` suffix, still not pushed).
 
 If the OTel per-signal repo variables above are adopted, thread them into the `jvm-image` job's
 `Build the JVM image` step alongside the existing `FINAXIS_NATIVE_IMAGE: 'false'`.
@@ -213,7 +213,7 @@ silently ignored one.
 ## Coolify application configuration (operator-side, documented not automated)
 
 - Resource type: **Docker Image**, not a Coolify-native build — Coolify pulls
-  `ghcr.io/finaxis/platform:main-jvm` rather than building from source.
+  `ghcr.io/kevogaba/finaxis-platform:main-jvm` rather than building from source.
 - **The Coolify host itself needs `docker login ghcr.io`** with a `read:packages` PAT, configured
   once in Coolify's registry credentials — GHCR packages are private by default, and this is the
   most common cause of "webhook fired, nothing deployed."
