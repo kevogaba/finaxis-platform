@@ -112,6 +112,14 @@ jobs:
       - name: Report the built image
         run: docker images ghcr.io/finaxis/platform --format '{{.Repository}}:{{.Tag}} {{.Size}}'
 
+      - name: Deploy to Coolify
+        # The application's own deploy webhook URL and a Coolify API token, both from its Coolify
+        # UI - see docs/operations/coolify-deployment.md. `--fail` turns a webhook error (bad
+        # token, unreachable host) into a failed CI run instead of a silently ignored one.
+        run: |
+          curl --fail --request GET '${{ secrets.COOLIFY_WEBHOOK }}' \
+            --header 'Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}'
+
   native-image:
     # Manual only, because a GitHub-hosted standard runner cannot build it.
     #
