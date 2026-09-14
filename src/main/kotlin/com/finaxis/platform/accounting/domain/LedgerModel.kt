@@ -50,3 +50,19 @@ data class PostingLeg(
     val narrative: String? = null,
     val subledgerReference: String? = null,
 )
+
+/**
+ * One financial fact as the allocation rules see it: an amount, and the subsidiary-ledger position
+ * that amount moved.
+ *
+ * The domain counterpart of
+ * [com.finaxis.platform.accounting.application.posting.FinancialFact], so
+ * [PostingRulePolicy.allocate] can carry [positionReference] onto every leg it derives from this
+ * fact without the domain depending on the application layer. Two facts of one posting can name
+ * different positions - a principal repayment and the interest accrued on it - which is why the
+ * reference belongs on the fact rather than on the posting as a whole.
+ */
+data class FactAmount(
+    val amount: MonetaryAmount,
+    val positionReference: String? = null,
+)

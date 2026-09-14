@@ -83,6 +83,105 @@ class PostingRulePolicyTests {
     }
 
     @Test
+    fun `a fact's position reference reaches every leg derived from that fact, and only those`() {
+        val legs =
+            PostingRulePolicy.allocate(
+                listOf(
+                    leg(1, PostingSide.DEBIT, cash),
+                    leg(2, PostingSide.CREDIT, fee, source = "FEE"),
+                    leg(3, PostingSide.CREDIT, liability, percentage = "40"),
+                    leg(4, PostingSide.CREDIT, liability, residual = true),
+                ),
+                mapOf(
+                    "PRINCIPAL" to kes("100.00", positionReference = "SAV-0001"),
+                    "FEE" to kes("100.00"),
+                ),
+            )
+
+        // Both credit legs of PRINCIPAL carry it, the split and the residual alike, and the debit
+        // leg of the same fact does too: the reference identifies the position, not the direction.
+        assertEquals(
+            listOf("SAV-0001", null, "SAV-0001", "SAV-0001"),
+            legs.map { it.subledgerReference },
+        )
+    }
+
+    @Test
+    fun `a position reference the journal line could not store is refused before anything posts`() {
+        val legs = listOf(leg(1, PostingSide.DEBIT, cash), leg(2, PostingSide.CREDIT, liability))
+
+        val blank =
+            assertFailsWith<InvalidOperationException> {
+                PostingRulePolicy.allocate(
+                    legs,
+                    mapOf("PRINCIPAL" to kes("1.00", positionReference = "   ")),
+                )
+            }
+        assertEquals(PostingRulePolicy.SUBLEDGER_REFERENCE_INVALID, blank.code)
+
+        val tooLong =
+            assertFailsWith<InvalidOperationException> {
+                PostingRulePolicy.allocate(
+                    legs,
+                    mapOf(
+                        "PRINCIPAL" to
+                            kes(
+                                "1.00",
+                                positionReference =
+                                    "S".repeat(
+                                        PostingRulePolicy.SUBLEDGER_REFERENCE_MAX_LENGTH + 1,
+                                    ),
+                            ),
+                    ),
+                )
+            }
+        assertEquals(PostingRulePolicy.SUBLEDGER_REFERENCE_INVALID, tooLong.code)
+
+        // Exactly at the bound is storable, so the check is a bound and not an off-by-one.
+        PostingRulePolicy.allocate(
+            legs,
+            mapOf(
+                "PRINCIPAL" to
+                    kes(
+                        "1.00",
+                        positionReference =
+                            "S".repeat(PostingRulePolicy.SUBLEDGER_REFERENCE_MAX_LENGTH),
+                    ),
+            ),
+        )
+    }
+
+    /**
+     * The bound counts what the column counts.
+     *
+     * `chk_journal_line_subledger_reference` is `char_length(...) BETWEEN 1 AND 200`, and
+     * PostgreSQL's `char_length` counts characters. A supplementary character - anything outside
+     * the Basic Multilingual Plane, which every emoji is - is one character there and two UTF-16
+     * units in a Kotlin `String`, so measuring `length` would refuse at 100 of them a reference the
+     * column stores happily, and the contract the caller reads would not be the one enforced.
+     */
+    @Test
+    fun `a position reference is bounded in characters rather than UTF-16 units`() {
+        val legs = listOf(leg(1, PostingSide.DEBIT, cash), leg(2, PostingSide.CREDIT, liability))
+        val maximal = "\uD83C\uDFE6".repeat(PostingRulePolicy.SUBLEDGER_REFERENCE_MAX_LENGTH)
+
+        PostingRulePolicy.allocate(
+            legs,
+            mapOf("PRINCIPAL" to kes("1.00", positionReference = maximal)),
+        )
+
+        val overLong = maximal + "\uD83C\uDFE6"
+        val tooLong =
+            assertFailsWith<InvalidOperationException> {
+                PostingRulePolicy.allocate(
+                    legs,
+                    mapOf("PRINCIPAL" to kes("1.00", positionReference = overLong)),
+                )
+            }
+        assertEquals(PostingRulePolicy.SUBLEDGER_REFERENCE_INVALID, tooLong.code)
+    }
+
+    @Test
     fun `a version needs both sides and a residual wherever a fact is split`() {
         val oneSided =
             assertFailsWith<InvalidOperationException> {
@@ -229,7 +328,10 @@ class PostingRulePolicyTests {
         selector = PostingRuleSelector("E", productClass, currencyCode),
     )
 
-    private fun kes(amount: String) = MonetaryAmount(BigDecimal(amount), "KES")
+    private fun kes(
+        amount: String,
+        positionReference: String? = null,
+    ) = FactAmount(MonetaryAmount(BigDecimal(amount), "KES"), positionReference)
 
     private fun selected(
         candidates: List<PostingRule>,

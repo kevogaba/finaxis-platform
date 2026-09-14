@@ -83,6 +83,31 @@ immutable record (the journal being reversed, the approved manual journal's own 
 reference can never legitimately name a second, different amount regardless of what the fingerprint
 covers.
 
+**Each fact's position reference is hashed with its amount** (issue #91, which added
+`FinancialFact.positionReference`). It is an *identifier* of the subsidiary-ledger position the
+money moved, not a description of the posting, so it belongs with the amount rather than with the
+narratives this digest deliberately excludes. The failure it prevents is concrete: a module retries
+a deposit under the same source reference after correcting the member's account number, the
+fingerprints match, the request replays, and the ledger keeps the deposit against the wrong position
+with no error raised anywhere — and the `Q6` drill-down the reference exists for then points at an
+account that never received the money. It satisfies this ADR's binding constraint, that the digest
+cover only inputs known before the claim: the reference arrives on `PostingIntent.Facts` and is
+never resolved. One consequence is worth stating because it is easy to get wrong when sorting: an
+absent reference and an empty one are distinct to the length-prefixed encoding below, so they must
+be distinct to the sort comparator too, or the same facts in two orders hash differently.
+
+**This changed the digest for any request carrying financial facts**, including when every reference
+is absent, because the field is written unconditionally and an absent one still contributes its
+marker byte. The field schema stays fixed on purpose — omitting the field when null would make the
+stream variable-arity and reduce the injectivity argument below from "by construction" to an
+argument about what values happen to be possible. The change is safe to make without versioning the
+fingerprint *only because nothing populates `financialFacts` yet*: no product module exists, so
+`PostingIntent.Facts` has no production caller, and reversal and manual journals leave the list
+empty and hash exactly as before. Once a product module posts, this reasoning expires: a further
+change to the composition then needs the fingerprint versioned and existing rows compared with the
+algorithm that wrote them, because a mismatch turns a faithful retry into a
+`POSTING_REQUEST_CONFLICT` rather than a replayed receipt.
+
 **The encoding is length-prefixed and binary, not delimiter-joined.** Each field is fed to the
 digest as a one-byte null/present marker, then - when present - a fixed 4-byte big-endian length,
 then the UTF-8 bytes. For a fixed field schema this is injective by construction: no value can be

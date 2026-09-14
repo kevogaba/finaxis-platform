@@ -293,6 +293,20 @@ The classification carries an obligation, which is the point of naming it at all
 control account must equal the aggregate of the subsidiary ledger it controls, at every business
 date, and that equality is *proven* rather than assumed (`INV-14`).
 
+**One control account per class per tenant** (`uq_gl_account_control_kind`, `V11`). A
+`SubledgerProofQuery` names the class rather than the account, because choosing general-ledger
+accounts is accounting's job and not a product module's (`INV-11`); a second control account of the
+same class would therefore be proven against an aggregate that is not its own. The port is widened
+with a partition key when a product module genuinely splits one class across accounts — widening a
+port later is available in a way narrowing one is not.
+
+A mis-classification is recoverable while it is still cheap: a withdrawn control account that was
+never posted to may release its class, and the replacement is then created and approved normally.
+Once a line has posted to it the class stays put, because a released account's balance would sit
+outside the class while the sub-ledger positions behind it stayed inside the aggregate — a
+permanent false `BREAK` on every later proof. See the `uq_gl_account_control_kind` section of
+[the accounting ERD](../database/accounting-erd.md).
+
 ### Derived Balances And Rollups
 
 Every balance, every rollup, every reporting aggregate is a **projection over immutable journal

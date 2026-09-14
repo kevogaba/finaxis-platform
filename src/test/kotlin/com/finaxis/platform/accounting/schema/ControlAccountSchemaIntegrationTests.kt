@@ -69,6 +69,31 @@ class ControlAccountSchemaIntegrationTests(
     }
 
     @Test
+    fun `one control account per class per tenant, and ordinary accounts are unaffected`() {
+        val tenant = fixture.createTenant("control-unique")
+        val other = fixture.createTenant("control-unique-other")
+        fixture.insertControlAccount(
+            tenant.organisationId,
+            "2100",
+            "LIABILITY",
+            ControlSubledgerKind.SAVINGS_DEPOSITS,
+        )
+
+        // A second SAVINGS_DEPOSITS control account would be proven against the same whole-class
+        // aggregate as the first, so at least one of the two verdicts could only ever be wrong.
+        assertViolates("uq_gl_account_control_kind") {
+            insertAccount(tenant.organisationId, "2101", control = true, kind = "SAVINGS_DEPOSITS")
+        }
+
+        // A different class in the same tenant, the same class in another tenant, and any number
+        // of ordinary accounts all remain legal: the index is partial and tenant-scoped.
+        insertAccount(tenant.organisationId, "2200", control = true, kind = "SHARE_CAPITAL")
+        insertAccount(other.organisationId, "2100", control = true, kind = "SAVINGS_DEPOSITS")
+        insertAccount(tenant.organisationId, "3000", control = false, kind = null)
+        insertAccount(tenant.organisationId, "3001", control = false, kind = null)
+    }
+
+    @Test
     fun `a reconciliation run is consistent evidence`() {
         val tenant = fixture.createTenant("recon-schema")
         val control =

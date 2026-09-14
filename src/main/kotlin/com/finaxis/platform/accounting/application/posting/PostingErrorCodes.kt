@@ -127,6 +127,23 @@ object PostingErrorCodes {
     /** A control account is postable, names one sub-ledger kind, and refuses manual posting. */
     const val CONTROL_ACCOUNT_INVALID = "accounting.control_account_invalid"
 
+    /** The organisation already has a control account for that sub-ledger class. */
+    const val CONTROL_ACCOUNT_DUPLICATE = "accounting.control_account_duplicate"
+
+    /** A control account with posted journal lines cannot give up its sub-ledger class. */
+    const val CONTROL_ACCOUNT_HAS_HISTORY = "accounting.control_account_has_history"
+
+    /** The branch named by a reconciliation scope does not belong to the organisation. */
+    const val BRANCH_NOT_IN_ORGANISATION = "accounting.branch_not_in_organisation"
+
+    /**
+     * The proof could not take a snapshot both of its sides can be read from.
+     *
+     * Raised when the transaction running a reconciliation is not `REPEATABLE READ`, so the
+     * general-ledger balance and the sub-ledger aggregate could observe different states.
+     */
+    const val RECONCILIATION_SNAPSHOT_UNAVAILABLE = "accounting.reconciliation_snapshot_unavailable"
+
     /** A reconciliation proves a date that has happened, not one that has not. */
     const val RECONCILIATION_DATE_IN_FUTURE = "accounting.reconciliation_date_in_future"
 

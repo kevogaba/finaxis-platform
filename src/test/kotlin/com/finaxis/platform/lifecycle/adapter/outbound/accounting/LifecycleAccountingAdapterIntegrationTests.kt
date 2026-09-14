@@ -4,10 +4,12 @@ import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.accounting.AccountingBusinessDateLookup
 import com.finaxis.platform.accounting.AccountingTenantLookup
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.application.BusinessDateService
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.application.StartCobCommand
+import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.withRequestContext
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
@@ -91,6 +93,48 @@ class LifecycleAccountingAdapterIntegrationTests(
         val organisationId = fixture.createActiveOrganisation("accounting-branch", ACTOR_ID)
 
         assertFalse(tenantLookup.isBranchPostable(organisationId, uuidV7()))
+    }
+
+    /**
+     * The distinction issue #91 added `branchBelongsTo` for: membership is not postability.
+     *
+     * A reconciliation proves a date that has already happened, so a branch closed since then is a
+     * legitimate subject of one. If this method ever collapses back onto the ACTIVE check, a
+     * historical proof of a closed branch starts being refused for a reason that is not true.
+     */
+    @Test
+    fun `a closed branch still belongs to its organisation even though it cannot be posted to`() {
+        val organisationId = fixture.createActiveOrganisation("accounting-branch-scope", ACTOR_ID)
+        val branchId =
+            requireNotNull(
+                dsl
+                    .select(BRANCH.ID)
+                    .from(BRANCH)
+                    .where(BRANCH.ORGANISATION_ID.eq(organisationId))
+                    .and(BRANCH.BRANCH_CODE.eq("HEAD_OFFICE"))
+                    .fetchOne(BRANCH.ID),
+            )
+
+        assertTrue(tenantLookup.isBranchPostable(organisationId, branchId))
+        assertTrue(tenantLookup.branchBelongsTo(organisationId, branchId))
+
+        dsl
+            .update(BRANCH)
+            .set(BRANCH.STATUS, BranchLifecycleState.CLOSED.name)
+            .where(BRANCH.ID.eq(branchId))
+            .execute()
+
+        assertFalse(tenantLookup.isBranchPostable(organisationId, branchId))
+        assertTrue(
+            tenantLookup.branchBelongsTo(organisationId, branchId),
+            "a closed branch is still a branch of this organisation, and a proof of a date it " +
+                "was open is still a legitimate question",
+        )
+
+        // Membership is tenant-scoped both ways: another tenant's branch, and no branch at all.
+        val elsewhere = fixture.createActiveOrganisation("accounting-branch-other", ACTOR_ID)
+        assertFalse(tenantLookup.branchBelongsTo(elsewhere, branchId))
+        assertFalse(tenantLookup.branchBelongsTo(organisationId, uuidV7()))
     }
 
     private companion object {

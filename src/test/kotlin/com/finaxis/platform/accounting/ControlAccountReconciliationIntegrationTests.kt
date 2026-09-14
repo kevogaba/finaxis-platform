@@ -38,6 +38,7 @@ import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_YEAR
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
+import com.finaxis.platform.jooq.tables.references.CONTROL_ACCOUNT_RECONCILIATION_RUN
 import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.JOURNAL_ENTRY
 import com.finaxis.platform.jooq.tables.references.JOURNAL_LINE
@@ -49,6 +50,8 @@ import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.withRequestContext
 import org.jooq.DSLContext
+import org.jooq.impl.DSL
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.TestConfiguration
@@ -56,6 +59,7 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestConstructor
 import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.TransactionDefinition
 import org.springframework.transaction.support.TransactionTemplate
 import java.math.BigDecimal
 import java.time.LocalDate
@@ -92,17 +96,29 @@ class ControlAccountReconciliationIntegrationTests(
     private val tenants = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
     private val schema = JournalSchemaFixture(dsl)
     private val transactions = TransactionTemplate(transactionManager)
+    private val newTransaction =
+        TransactionTemplate(transactionManager).apply {
+            propagationBehavior = TransactionDefinition.PROPAGATION_REQUIRES_NEW
+        }
+
+    /** The provider bean is shared, so one test's interleaving must not reach the next. */
+    @BeforeEach
+    fun resetProvider() {
+        savings.reset()
+    }
 
     @TestConfiguration(proxyBeanMethods = false)
     class TestProviders {
         @Bean
-        fun fakeSavingsLedger() = FakeSavingsLedger()
+        fun fakeSavingsLedger(dsl: DSLContext) = FakeSavingsLedger(dsl)
     }
 
     @Test
     fun `a control account is created through the chart service, classification enforced`() {
         val tenant = provisionTenant("control-classify")
 
+        // SHARE_CAPITAL rather than SAVINGS_DEPOSITS: the fixture already gave this tenant its one
+        // deposits control account, and a tenant has at most one control account per class.
         val control =
             withRequestContext {
                 chart.create(
@@ -110,16 +126,16 @@ class ControlAccountReconciliationIntegrationTests(
                         organisationId = tenant.organisationId,
                         actorId = MAKER,
                         code = AccountCode("2110"),
-                        name = "Member deposits control",
-                        accountClass = AccountClass.LIABILITY,
+                        name = "Member share capital control",
+                        accountClass = AccountClass.EQUITY,
                         usage = AccountUsage.POSTABLE,
                         isControlAccount = true,
-                        controlSubledgerKind = ControlSubledgerKind.SAVINGS_DEPOSITS,
+                        controlSubledgerKind = ControlSubledgerKind.SHARE_CAPITAL,
                     ),
                 )
             }
         assertTrue(control.isControlAccount)
-        assertEquals(ControlSubledgerKind.SAVINGS_DEPOSITS, control.controlSubledgerKind)
+        assertEquals(ControlSubledgerKind.SHARE_CAPITAL, control.controlSubledgerKind)
 
         // A control account can never take a manual entry, and a header can never be one.
         val manual =
@@ -232,6 +248,178 @@ class ControlAccountReconciliationIntegrationTests(
     }
 
     @Test
+    fun `both sides of a proof read one snapshot, and the provider is told which`() {
+        val tenant = provisionTenant("control-snapshot")
+        post(tenant, "dep-1", "500.00")
+        savings.balance = BigDecimal("-500.00")
+
+        val run = withRequestContext { reconciliation.run(runCommand(tenant)) }
+        assertEquals(ReconciliationStatus.MATCHED, run.status)
+
+        // The provider ran inside accounting's own transaction, so it inherited the snapshot the
+        // general-ledger aggregate was read from - which is only a guarantee if that transaction's
+        // snapshot cannot move under it. READ COMMITTED here would mean the two numbers the row
+        // records were never true at the same instant.
+        assertEquals("repeatable read", savings.observedIsolation)
+
+        // And it was handed a snapshot identity it could adopt had it read elsewhere. Exported
+        // snapshots are opaque, so the contract is that one exists and is not blank.
+        val query = assertNotNull(savings.lastQuery)
+        assertTrue(query.snapshotId.isNotBlank(), "the provider was given a snapshot to adopt")
+        assertEquals(tenant.organisationId, query.organisationId)
+        assertEquals(ControlSubledgerKind.SAVINGS_DEPOSITS, query.kind)
+
+        // And the run row says which snapshot it was, so the evidence describes its own
+        // provenance rather than asking a reader to take the two numbers on trust.
+        assertEquals(query.snapshotId, run.detail["snapshotId"])
+    }
+
+    /**
+     * The regression the whole snapshot contract exists for.
+     *
+     * A sub-ledger that moves in lockstep with its control account is always reconciled - unless
+     * the two sides are read at different instants. A posting committing between them is then
+     * counted by whichever side read later, and the run records a difference that was never true.
+     * With one snapshot the interleaved posting is invisible to both sides, and the proof still
+     * matches; under `READ COMMITTED` this test records a `BREAK` of exactly the amount that
+     * committed mid-proof.
+     */
+    @Test
+    fun `a posting committing between the two reads changes neither side of the proof`() {
+        val tenant = provisionTenant("control-straddle")
+        post(tenant, "dep-1", "1000.00")
+        savings.mirrorsAccount = tenant.controlAccountId
+        savings.duringAggregate = { postInNewTransaction(tenant, "dep-straddle", "500.00") }
+
+        val run = withRequestContext { reconciliation.run(runCommand(tenant)) }
+
+        assertEquals(ReconciliationStatus.MATCHED, run.status)
+        assertEquals(BigDecimal("-1000.000000"), run.glBalance)
+        assertEquals(BigDecimal("-1000.000000"), run.subledgerBalance)
+
+        // The interleaved posting is real and committed - it simply belongs to a later proof.
+        savings.duringAggregate = null
+        val after = withRequestContext { reconciliation.run(runCommand(tenant)) }
+        assertEquals(BigDecimal("-1500.000000"), after.glBalance)
+        assertEquals(ReconciliationStatus.MATCHED, after.status)
+    }
+
+    /**
+     * A published error code nothing can raise is worse than no code at all.
+     *
+     * Spring drops a declared isolation level without a word when the method joins a transaction
+     * that is already open, so `@Transactional(isolation = REPEATABLE_READ)` is a request and not
+     * a guarantee. `ProofSnapshot` asks PostgreSQL what is actually in force; this is the call that
+     * proves the refusal fires rather than a torn proof being recorded as evidence.
+     */
+    @Test
+    fun `a proof refuses to run inside a transaction whose snapshot can move under it`() {
+        val tenant = provisionTenant("control-outer-transaction")
+
+        val failure =
+            assertFailsWith<ConflictException> {
+                transactions.execute {
+                    withRequestContext { reconciliation.run(runCommand(tenant)) }
+                }
+            }
+
+        assertEquals(PostingErrorCodes.RECONCILIATION_SNAPSHOT_UNAVAILABLE, failure.code)
+        assertEquals(0, runRowCount(tenant), "a refused proof records no evidence")
+    }
+
+    /**
+     * The guard asks for a stable snapshot, not for one named level.
+     *
+     * `SERIALIZABLE` holds one snapshot for the life of the transaction as `REPEATABLE READ` does,
+     * and adds predicate locking on top; refusing it would reject a caller whose guarantee is
+     * strictly stronger than the one the proof demands - and a tenant who raised the isolation of
+     * the whole application, which #108 proposes doing, would find reconciliation the one thing
+     * that stopped working.
+     */
+    @Test
+    fun `a proof runs inside an outer serializable transaction`() {
+        val tenant = provisionTenant("control-outer-serializable")
+        savings.balance = BigDecimal.ZERO
+        val serializable =
+            TransactionTemplate(transactionManager).apply {
+                isolationLevel = TransactionDefinition.ISOLATION_SERIALIZABLE
+            }
+
+        val run =
+            serializable.execute {
+                withRequestContext { reconciliation.run(runCommand(tenant)) }
+            }
+
+        assertEquals(ReconciliationStatus.MATCHED, run?.status)
+    }
+
+    @Test
+    fun `a scope naming a branch of another organisation is refused before either side is read`() {
+        val tenant = provisionTenant("control-branch-scope")
+        val elsewhere = provisionTenant("control-branch-other")
+        savings.balance = BigDecimal.ZERO
+        val runsBefore = runRowCount(tenant)
+
+        val unknown =
+            assertFailsWith<InvalidOperationException> {
+                withRequestContext {
+                    reconciliation.run(runCommand(tenant, branchId = elsewhere.branchId))
+                }
+            }
+        assertEquals(PostingErrorCodes.BRANCH_NOT_IN_ORGANISATION, unknown.code)
+
+        val absent =
+            assertFailsWith<InvalidOperationException> {
+                withRequestContext { reconciliation.run(runCommand(tenant, branchId = uuidV7())) }
+            }
+        assertEquals(PostingErrorCodes.BRANCH_NOT_IN_ORGANISATION, absent.code)
+
+        // Refused up front, so nothing was computed, no provider was asked about a scope that does
+        // not exist, and no half-formed evidence reached the table.
+        assertEquals(runsBefore, runRowCount(tenant))
+    }
+
+    @Test
+    fun `a tenant has at most one control account per sub-ledger class`() {
+        val tenant = provisionTenant("control-one-per-class")
+
+        val second =
+            assertFailsWith<ConflictException> {
+                withRequestContext {
+                    chart.create(
+                        CreateGlAccountCommand(
+                            organisationId = tenant.organisationId,
+                            actorId = MAKER,
+                            code = AccountCode("2199"),
+                            name = "Second deposits control",
+                            accountClass = AccountClass.LIABILITY,
+                            usage = AccountUsage.POSTABLE,
+                            isControlAccount = true,
+                            controlSubledgerKind = ControlSubledgerKind.SAVINGS_DEPOSITS,
+                        ),
+                    )
+                }
+            }
+        assertEquals(PostingErrorCodes.CONTROL_ACCOUNT_DUPLICATE, second.code)
+
+        // Another class is free, because the query a provider answers names the class.
+        withRequestContext {
+            chart.create(
+                CreateGlAccountCommand(
+                    organisationId = tenant.organisationId,
+                    actorId = MAKER,
+                    code = AccountCode("3100"),
+                    name = "Share capital control",
+                    accountClass = AccountClass.EQUITY,
+                    usage = AccountUsage.POSTABLE,
+                    isControlAccount = true,
+                    controlSubledgerKind = ControlSubledgerKind.SHARE_CAPITAL,
+                ),
+            )
+        }
+    }
+
+    @Test
     fun `a break is resolved by a different actor with a reason, and the sign-off is audited`() {
         val tenant = provisionTenant("control-resolve")
         post(tenant, "dep-1", "100.00")
@@ -337,22 +525,84 @@ class ControlAccountReconciliationIntegrationTests(
 
     // ---- helpers ------------------------------------------------------------------------------
 
-    /** The stand-in for a product module's subsidiary ledger. Answers whatever the test sets. */
-    class FakeSavingsLedger : SubledgerProofProvider {
+    /**
+     * The stand-in for a product module's subsidiary ledger. Answers whatever the test sets, and
+     * records what accounting asked it, so the port's own obligations can be asserted from the
+     * provider's side rather than inferred from the run row.
+     */
+    class FakeSavingsLedger(
+        private val dsl: DSLContext,
+    ) : SubledgerProofProvider {
         var balance: BigDecimal = BigDecimal.ZERO
+
+        var lastQuery: SubledgerProofQuery? = null
+            private set
+
+        /**
+         * The isolation the provider itself observed, read on accounting's own connection.
+         *
+         * This is the half of the snapshot guarantee a run row cannot show: a provider reading in
+         * accounting's transaction inherits its snapshot, and that is only worth anything if the
+         * transaction is one whose snapshot does not move.
+         */
+        var observedIsolation: String? = null
+            private set
+
+        /**
+         * Runs inside `aggregate`, between accounting's two reads. The interleaving seam.
+         *
+         * A test uses it to commit a posting mid-proof, which is the exact hazard the snapshot
+         * exists to close and which no assertion about the run row alone can reach.
+         */
+        var duringAggregate: (() -> Unit)? = null
+
+        /**
+         * When set, the provider reports this general-ledger account's own total instead of
+         * [balance] - a sub-ledger that moves in lockstep with the control account, which is what
+         * a real one does. It reads on accounting's connection, so what it sees *is* the snapshot
+         * question.
+         */
+        var mirrorsAccount: UUID? = null
 
         override val providerName = "savings-fake"
 
         override fun supports(kind: ControlSubledgerKind) =
             kind == ControlSubledgerKind.SAVINGS_DEPOSITS
 
-        override fun aggregate(query: SubledgerProofQuery) =
-            SubledgerAggregate(
-                balance,
+        override fun aggregate(query: SubledgerProofQuery): SubledgerAggregate {
+            lastQuery = query
+            observedIsolation =
+                dsl.fetchValue(
+                    DSL.field("current_setting('transaction_isolation')", String::class.java),
+                )
+            duringAggregate?.invoke()
+            val account = mirrorsAccount
+            return SubledgerAggregate(
+                if (account == null) balance else mirroredBalance(query.organisationId, account),
                 query.currencyCode,
                 positionCount = 2,
                 detail = mapOf("newestPosition" to "SAV-0002"),
             )
+        }
+
+        /** Resets every hook, so one test's interleaving cannot leak into the next. */
+        fun reset() {
+            balance = BigDecimal.ZERO
+            duringAggregate = null
+            mirrorsAccount = null
+        }
+
+        private fun mirroredBalance(
+            organisationId: UUID,
+            accountId: UUID,
+        ): BigDecimal =
+            dsl
+                .select(
+                    DSL.coalesce(DSL.sum(JOURNAL_LINE.SIGNED_FUNCTIONAL_AMOUNT), BigDecimal.ZERO),
+                ).from(JOURNAL_LINE)
+                .where(JOURNAL_LINE.ORGANISATION_ID.eq(organisationId))
+                .and(JOURNAL_LINE.GL_ACCOUNT_ID.eq(accountId))
+                .fetchOne(0, BigDecimal::class.java) ?: BigDecimal.ZERO
     }
 
     private data class Tenant(
@@ -405,6 +655,13 @@ class ControlAccountReconciliationIntegrationTests(
         )
     }
 
+    /** How much evidence this tenant's control account has accumulated so far. */
+    private fun runRowCount(tenant: Tenant): Int =
+        dsl.fetchCount(
+            CONTROL_ACCOUNT_RECONCILIATION_RUN,
+            CONTROL_ACCOUNT_RECONCILIATION_RUN.ORGANISATION_ID.eq(tenant.organisationId),
+        )
+
     private fun openPeriodCovering(
         organisationId: UUID,
         date: LocalDate,
@@ -442,6 +699,26 @@ class ControlAccountReconciliationIntegrationTests(
         tenant: Tenant,
         reference: String,
         amount: String,
+    ) = post(tenant, reference, amount, transactions)
+
+    /**
+     * The same deposit, on a transaction of its own that commits immediately.
+     *
+     * `REQUIRES_NEW` suspends whatever transaction the caller is in and takes a second connection,
+     * so a posting made from inside a running proof genuinely commits underneath it - which is the
+     * only way to reproduce the interleaving the snapshot contract exists to survive.
+     */
+    private fun postInNewTransaction(
+        tenant: Tenant,
+        reference: String,
+        amount: String,
+    ) = post(tenant, reference, amount, newTransaction)
+
+    private fun post(
+        tenant: Tenant,
+        reference: String,
+        amount: String,
+        template: TransactionTemplate,
     ) {
         RequestContexts.with(
             RequestContext(
@@ -451,7 +728,7 @@ class ControlAccountReconciliationIntegrationTests(
             ),
         ) {
             withRequestContext {
-                transactions.execute {
+                template.execute {
                     engine.post(
                         LedgerPostingRequest(
                             context =

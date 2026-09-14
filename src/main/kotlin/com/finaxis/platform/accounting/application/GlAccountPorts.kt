@@ -44,6 +44,19 @@ interface GlAccountStore {
     ): GlAccount?
 
     /**
+     * Finds the tenant's control account for one subsidiary-ledger class, or null.
+     *
+     * At most one can exist: `uq_gl_account_control_kind` is unique. A
+     * [com.finaxis.platform.accounting.SubledgerProofQuery] names the class rather than the
+     * account, so a second control account of the same class would be proven against an aggregate
+     * that is not its own (`INV-14`). Served by that index.
+     */
+    fun findControlAccountFor(
+        organisationId: UUID,
+        kind: ControlSubledgerKind,
+    ): GlAccount?
+
+    /**
      * Returns [accountId]'s ancestors, nearest parent first, in **one** statement.
      *
      * A recursive CTE rather than a loop of parent lookups: the loop is the N+1 issue #37 forbids,

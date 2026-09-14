@@ -6,7 +6,7 @@ import com.finaxis.platform.accounting.application.ledger.ResolvedLegs
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.application.posting.PostingIntent
 import com.finaxis.platform.accounting.domain.AccountingContext
-import com.finaxis.platform.accounting.domain.MonetaryAmount
+import com.finaxis.platform.accounting.domain.FactAmount
 import com.finaxis.platform.accounting.domain.PostingRule
 import com.finaxis.platform.accounting.domain.PostingRulePolicy
 import com.finaxis.platform.accounting.domain.PostingRuleVersion
@@ -59,7 +59,7 @@ class RuleBackedPostingLegResolver(
      * `associate` would silently keep the last one, so two `PRINCIPAL` facts would post one of the
      * two amounts with nothing to say the other was dropped.
      */
-    private fun factsByCode(intent: PostingIntent.Facts): Map<String, MonetaryAmount> {
+    private fun factsByCode(intent: PostingIntent.Facts): Map<String, FactAmount> {
         val duplicates =
             intent.facts
                 .groupingBy { it.code }
@@ -72,7 +72,9 @@ class RuleBackedPostingLegResolver(
                 safeDetail = "The intent supplies ${duplicates.sorted()} more than once.",
             )
         }
-        return intent.facts.associate { it.code to it.amount }
+        return intent.facts.associate {
+            it.code to FactAmount(it.amount, it.positionReference)
+        }
     }
 
     private fun selectRule(

@@ -17,6 +17,7 @@ fourteen migrations were collapsed and why that reset was safe.
 | `V8__accounting_posting_rules.sql` | Versioned, effective-dated posting rules: `posting_rule`, `posting_rule_version`, `posting_rule_leg`, their transition log, and the `posting_request` rule-version foreign key — see [the accounting schema](accounting-erd.md) |
 | `V9__accounting_control_accounts_and_reconciliation.sql` | The control-account classification on `gl_account`, the `control_account_reconciliation_run` evidence table, and the sub-ledger drill-down index on `journal_line` — see [the accounting schema](accounting-erd.md) |
 | `V10__accounting_manual_journals.sql` | The manual-journal draft aggregate: `manual_journal`, `manual_journal_line` and their transition log — see [the accounting schema](accounting-erd.md) |
+| `V11__accounting_control_account_uniqueness.sql` | `uq_gl_account_control_kind` replacing the non-unique `idx_gl_account_control`: one control account per sub-ledger class per tenant, because the sub-ledger proof asks about a class rather than an account — see [the accounting schema](accounting-erd.md) |
 
 `V1`–`V3` will never be edited again. Every future change is a forward-only `V4+` migration.
 

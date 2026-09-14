@@ -4,6 +4,7 @@ import com.finaxis.platform.accounting.AccountingBusinessDate
 import com.finaxis.platform.accounting.AccountingBusinessDateLookup
 import com.finaxis.platform.accounting.AccountingPermissionGuard
 import com.finaxis.platform.accounting.AccountingTenantLookup
+import com.finaxis.platform.accounting.ControlSubledgerKind
 import com.finaxis.platform.accounting.application.FiscalPeriodStateStore
 import com.finaxis.platform.accounting.application.GlAccountPage
 import com.finaxis.platform.accounting.application.GlAccountStore
@@ -603,6 +604,7 @@ class PostingEngineTests {
     private class FakeTenantLookup : AccountingTenantLookup {
         var organisationPostable = true
         var branchPostable = true
+        var branchKnown = true
         var functionalCurrency: String? = "KES"
 
         override fun isOrganisationPostable(organisationId: UUID) = organisationPostable
@@ -611,6 +613,11 @@ class PostingEngineTests {
             organisationId: UUID,
             branchId: UUID,
         ) = branchPostable
+
+        override fun branchBelongsTo(
+            organisationId: UUID,
+            branchId: UUID,
+        ) = branchKnown
 
         override fun functionalCurrencyOf(organisationId: UUID) = functionalCurrency
     }
@@ -707,6 +714,13 @@ class PostingEngineTests {
             organisationId: UUID,
             code: AccountCode,
         ) = accounts.values.firstOrNull { it.code == code }
+
+        override fun findControlAccountFor(
+            organisationId: UUID,
+            kind: ControlSubledgerKind,
+        ) = accounts.values.firstOrNull {
+            it.organisationId == organisationId && it.controlSubledgerKind == kind
+        }
 
         override fun ancestorsOf(
             organisationId: UUID,

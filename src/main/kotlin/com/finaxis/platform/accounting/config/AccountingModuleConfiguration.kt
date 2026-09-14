@@ -3,6 +3,7 @@ package com.finaxis.platform.accounting.config
 import com.finaxis.platform.accounting.AccountingBusinessDateLookup
 import com.finaxis.platform.accounting.AccountingPermissionGuard
 import com.finaxis.platform.accounting.AccountingTenantLookup
+import com.finaxis.platform.accounting.SubledgerProofProvider
 import com.finaxis.platform.accounting.adapter.outbound.context.RequestContextAccountingLookup
 import com.finaxis.platform.accounting.application.FiscalPeriodStateChangeGuard
 import com.finaxis.platform.accounting.application.FiscalPeriodStateStore
@@ -17,6 +18,7 @@ import com.finaxis.platform.accounting.application.ledger.PostingEngine
 import com.finaxis.platform.accounting.application.ledger.PostingLegResolver
 import com.finaxis.platform.accounting.application.port.outbound.AccountingContextLookup
 import com.finaxis.platform.accounting.application.posting.PostingService
+import com.finaxis.platform.accounting.application.reconciliation.SubledgerProofProviderRegistry
 import com.finaxis.platform.accounting.application.rules.PostingRuleStore
 import com.finaxis.platform.accounting.application.rules.RuleBackedPostingLegResolver
 import com.finaxis.platform.common.audit.AuditService
@@ -101,6 +103,18 @@ class AccountingModuleConfiguration {
         rules: PostingRuleStore,
         tenants: AccountingTenantLookup,
     ): PostingLegResolver = RuleBackedPostingLegResolver(rules, tenants)
+
+    /**
+     * The sub-ledger proof providers, validated once at startup.
+     *
+     * Declared here rather than annotated because its whole purpose is to be constructed with the
+     * full set of providers and refuse a malformed or contested registration before anything runs;
+     * a bean method is where Spring hands that set over. An empty list is legitimate - no product
+     * module exists yet - and a control class with no provider is reported per run.
+     */
+    @Bean
+    fun subledgerProofProviderRegistry(providers: List<SubledgerProofProvider>) =
+        SubledgerProofProviderRegistry(providers)
 
     /** The public posting API product modules consume. */
     @Bean

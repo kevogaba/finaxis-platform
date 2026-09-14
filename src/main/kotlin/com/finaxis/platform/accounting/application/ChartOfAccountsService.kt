@@ -85,9 +85,10 @@ class ChartOfAccountsService(
             )
         requireManualPostingMatchesUsage(candidate)
         requireControlClassificationConsistent(candidate)
+        requireControlClassUnclaimed(candidate, currentAccountId = null)
         validatePlacement(candidate, existing = false)
 
-        return translatingDuplicateCode {
+        return translatingUniqueViolation {
             writes.create(
                 NewGlAccount(
                     organisationId = candidate.organisationId,
@@ -154,21 +155,25 @@ class ChartOfAccountsService(
         // "Has been used" is both halves now: children beneath it, or a journal line posted to it.
         // Either freezes the code, class and usage, because either means history was recorded
         // against them. An account with lines can still be re-parented, renamed and described.
+        // Posted history is read on its own rather than short-circuited behind hasChildren,
+        // because requireAmendable needs the answer too: it is what decides whether a withdrawn
+        // control account may still give up its class.
+        val posted = accounts.hasJournalLines(command.organisationId, command.accountId)
         ChartHierarchyPolicy.requireStructurallyMutable(
             current,
             proposed,
-            accounts.hasChildren(command.organisationId, command.accountId) ||
-                accounts.hasJournalLines(command.organisationId, command.accountId),
+            accounts.hasChildren(command.organisationId, command.accountId) || posted,
         )
         if (proposed.code != current.code) {
             requireCodeAvailable(command.organisationId, proposed.code)
         }
-        requireAmendable(current, proposed)
+        requireAmendable(current, proposed, posted)
         requireManualPostingMatchesUsage(proposed)
         requireControlClassificationConsistent(proposed)
+        requireControlClassUnclaimed(proposed, currentAccountId = current.id)
         validatePlacement(proposed, existing = true)
 
-        if (!translatingDuplicateCode { writes.update(proposed, command.actorId) }) {
+        if (!translatingUniqueViolation { writes.update(proposed, command.actorId) }) {
             // The row version moved, so something else changed this account between the read and
             // the write - most likely an approval. Reporting it as a conflict is what stops the
             // stale snapshot being written over the change that won.
@@ -309,11 +314,13 @@ class ChartOfAccountsService(
      * - `ACTIVE` — the name and description only. Neither changes what posts to the account or
      *   where it rolls up, so neither needs a second pair of eyes; everything else does, and gets
      *   there by `DEACTIVATE` plus a fresh account, which is also what keeps history readable.
-     * - `INACTIVE` — nothing. It has been withdrawn.
+     * - `INACTIVE` — nothing, except releasing a control classification nothing was ever posted
+     *   against; see [clearsControlClassification].
      */
     private fun requireAmendable(
         current: GlAccount,
         proposed: GlAccount,
+        posted: Boolean,
     ) {
         if (current.status == GlAccountStatus.DRAFT) {
             return
@@ -323,6 +330,12 @@ class ChartOfAccountsService(
         if (current.status == GlAccountStatus.ACTIVE && presentationOnly) {
             return
         }
+        if (current.status == GlAccountStatus.INACTIVE &&
+            clearsControlClassification(current, proposed)
+        ) {
+            requireNoPostedHistory(current, posted)
+            return
+        }
         throw ConflictException(
             code = NOT_AMENDABLE,
             safeDetail =
@@ -330,8 +343,66 @@ class ChartOfAccountsService(
                     "An approved account accepts only a name or description change; " +
                         "deactivate it and create its replacement instead."
                 } else {
-                    "A ${current.status} general-ledger account cannot be amended."
+                    "A ${current.status} general-ledger account accepts no change except " +
+                        "releasing its control-account classification."
                 },
+        )
+    }
+
+    /**
+     * The one amendment a withdrawn account still accepts: giving up its sub-ledger class.
+     *
+     * `uq_gl_account_control_kind` holds the class for the life of the row, and it has to: a
+     * `SubledgerProofQuery` names the class rather than the account, so a second classified account
+     * — even a deactivated one — could be proven against an aggregate that is not its own. Without
+     * this escape hatch that permanence became a trap, because an approved account otherwise takes
+     * only a name or description change and a withdrawn one took none at all: a tenant that
+     * classified the wrong account could never configure a replacement for that class.
+     *
+     * So the class is released rather than reassigned, and only from `INACTIVE`. Withdrawing the
+     * account first is the control: deactivation is a maker-checker transition with its own `HIGH`
+     * audit event, so a live control account cannot be quietly de-classified out from under the
+     * proofs that depend on it. The replacement is then created and approved as any other account.
+     *
+     * Releasing the class is the **only** thing this permits: the proposal must equal the stored
+     * account with the classification removed and nothing else touched, so a withdrawn account
+     * cannot use the escape hatch to change its code, class or usage on the way out. And it is
+     * permitted only while nothing has posted to the account - [requireNoPostedHistory].
+     */
+    private fun clearsControlClassification(
+        current: GlAccount,
+        proposed: GlAccount,
+    ): Boolean =
+        current.isControlAccount &&
+            proposed == current.copy(isControlAccount = false, controlSubledgerKind = null)
+
+    /**
+     * The escape hatch is for a mis-classification caught before it carried anything.
+     *
+     * `INV-14` compares a class's whole sub-ledger aggregate against *the* control account of that
+     * class, which `findControlAccountFor` resolves to one row. Releasing the class from an account
+     * that has posted lines leaves that balance outside the class while the sub-ledger positions
+     * behind it stay inside the aggregate, so every later proof reports a `BREAK` of exactly the
+     * released account's balance - permanently, and against a replacement that was never out.
+     *
+     * So a classification that has carried postings stays on the account that carried them. A
+     * tenant in that position needs the positions moved and the balance transferred, which is a
+     * migration rather than an amendment, and refusing here is what stops it being attempted as
+     * one. Catching the mis-classification while the account is still unposted remains cheap.
+     */
+    private fun requireNoPostedHistory(
+        current: GlAccount,
+        posted: Boolean,
+    ) {
+        if (!posted) {
+            return
+        }
+        throw ConflictException(
+            code = PostingErrorCodes.CONTROL_ACCOUNT_HAS_HISTORY,
+            safeDetail =
+                "Account ${current.code.value} has posted journal lines, so it keeps its " +
+                    "control classification: releasing it would leave that balance outside " +
+                    "the class and every later reconciliation of the class would break.",
         )
     }
 
@@ -382,26 +453,64 @@ class ChartOfAccountsService(
     }
 
     /**
-     * Runs a write, turning a `uq_gl_account_organisation_code` violation into the published
-     * conflict.
+     * Runs a write, turning a `uq_gl_account_organisation_code` or `uq_gl_account_control_kind`
+     * violation into the published conflict for whichever index the database named.
      *
-     * [requireCodeAvailable] is a courtesy, not the check. Two requests creating or renaming to the
-     * same code can both see `findByCode` return nothing and both proceed; the loser then fails the
-     * unique index. Without this translation it reaches the caller as an infrastructure exception —
-     * a 500 — for a case the contract documents as `accounting.gl_account_duplicate_code`. The
-     * database is the authority on uniqueness; the precheck only makes the common case a friendlier
-     * error than a constraint name.
+     * [requireCodeAvailable] and [requireControlClassUnclaimed] are courtesies, not the checks. Two
+     * requests creating or renaming to the same code, or classifying two accounts as the control
+     * account for one sub-ledger class, can both see their lookup return nothing and both proceed;
+     * the loser then fails the unique index. Without this translation it reaches the caller as an
+     * infrastructure exception — a 500 — for a case the contract documents by name. The database is
+     * the authority on uniqueness; the prechecks only make the common case a friendlier error than
+     * a constraint name.
      */
-    private fun <T> translatingDuplicateCode(write: () -> T): T =
+    private fun <T> translatingUniqueViolation(write: () -> T): T =
         try {
             write()
         } catch (ex: DuplicateKeyException) {
+            val control =
+                generateSequence<Throwable>(ex) { it.cause }
+                    .any { it.message?.contains(CONTROL_KIND_INDEX) == true }
+            if (control) {
+                throw ConflictException(
+                    code = PostingErrorCodes.CONTROL_ACCOUNT_DUPLICATE,
+                    safeDetail =
+                        "This organisation already has a control account for that sub-ledger " +
+                            "class.",
+                    cause = ex,
+                )
+            }
             throw ConflictException(
                 code = DUPLICATE_CODE,
                 safeDetail = "An account with that code already exists in this organisation.",
                 cause = ex,
             )
         }
+
+    /**
+     * Refuses a second control account for a sub-ledger class the tenant has already classified.
+     *
+     * A [com.finaxis.platform.accounting.SubledgerProofQuery] names the class, not the account, so
+     * two control accounts of one class would both be proven against the same whole-class
+     * aggregate and at least one verdict would be silently wrong. `uq_gl_account_control_kind`
+     * enforces it; this states it first, and names the account already holding the class so the
+     * caller can act on the answer.
+     */
+    private fun requireControlClassUnclaimed(
+        candidate: GlAccount,
+        currentAccountId: UUID?,
+    ) {
+        val kind = candidate.controlSubledgerKind ?: return
+        val holder = accounts.findControlAccountFor(candidate.organisationId, kind)
+        if (holder != null && holder.id != currentAccountId) {
+            throw ConflictException(
+                code = PostingErrorCodes.CONTROL_ACCOUNT_DUPLICATE,
+                safeDetail =
+                    "Account ${holder.code.value} is already this organisation's $kind control " +
+                        "account.",
+            )
+        }
+    }
 
     private fun requireCodeAvailable(
         organisationId: UUID,
@@ -432,6 +541,12 @@ class ChartOfAccountsService(
         const val STALE_ACCOUNT = "accounting.gl_account_stale"
         const val INVALID_PAGE_SIZE = "accounting.gl_account_invalid_page_size"
         const val NOT_AMENDABLE = "accounting.gl_account_not_amendable"
+
+        /**
+         * The index name PostgreSQL puts in the violation message, so the translation can tell a
+         * duplicate control class from a duplicate account code.
+         */
+        const val CONTROL_KIND_INDEX = "uq_gl_account_control_kind"
 
         /**
          * Stands in while the candidate is validated, and is never written.

@@ -21,6 +21,20 @@ interface AccountingTenantLookup {
     ): Boolean
 
     /**
+     * Returns whether [branchId] is a branch of [organisationId] at all, whatever its state.
+     *
+     * Existence, deliberately not postability. Reconciliation is historical: a branch closed last
+     * year is a legitimate subject of a proof of a date on which it was open, so reusing
+     * [isBranchPostable] there would refuse a question the ledger can answer. A scope naming a
+     * branch that does not exist is a different thing entirely and is refused before either side
+     * of a proof is read, rather than surfacing as a foreign-key violation on the evidence insert.
+     */
+    fun branchBelongsTo(
+        organisationId: UUID,
+        branchId: UUID,
+    ): Boolean
+
+    /**
      * Returns the organisation's functional currency - `organisation.base_currency_code` - or null
      * when the organisation does not exist.
      *

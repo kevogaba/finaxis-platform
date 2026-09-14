@@ -4,6 +4,7 @@ import com.finaxis.platform.accounting.AccountingBusinessDateLookup
 import com.finaxis.platform.accounting.AccountingPermissionGuard
 import com.finaxis.platform.accounting.AccountingTenantLookup
 import com.finaxis.platform.accounting.ControlSubledgerKind
+import com.finaxis.platform.accounting.SubledgerAggregate
 import com.finaxis.platform.accounting.SubledgerProofProvider
 import com.finaxis.platform.accounting.SubledgerProofQuery
 import com.finaxis.platform.accounting.application.GlAccountStore
@@ -22,6 +23,7 @@ import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.audit.AuditSeverity
 import com.finaxis.platform.common.web.pagination.PaginationProperties
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Isolation
 import org.springframework.transaction.annotation.Transactional
 import java.math.BigDecimal
 import java.time.Clock
@@ -49,10 +51,12 @@ import java.util.UUID
  * [run].
  */
 @Service
+@Suppress("LongParameterList")
 class ControlAccountReconciliationService(
     private val accounts: GlAccountStore,
     private val ledger: LedgerBalanceQuery,
-    private val providers: List<SubledgerProofProvider>,
+    private val providers: SubledgerProofProviderRegistry,
+    private val snapshots: ProofSnapshot,
     private val runs: ReconciliationRunStore,
     private val tenants: AccountingTenantLookup,
     private val businessDates: AccountingBusinessDateLookup,
@@ -61,8 +65,18 @@ class ControlAccountReconciliationService(
     private val pagination: PaginationProperties,
     private val clock: Clock,
 ) {
-    /** Runs one proof and records it, matched or broken. */
-    @Transactional
+    /**
+     * Runs one proof and records it, matched or broken.
+     *
+     * `REPEATABLE READ`, because the two numbers this compares have to describe one instant. Under
+     * the repository's default `READ COMMITTED` the general-ledger aggregate and the provider's
+     * aggregate are separate snapshots, and a posting committing between them fabricates a `BREAK`
+     * or - the worse direction - offsets a real one into a `MATCHED` that is recorded as evidence.
+     * [ProofSnapshot] both proves the isolation took effect, which a Spring annotation alone does
+     * not when this method joins an outer transaction, and yields the identity a provider reading
+     * outside this transaction adopts.
+     */
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
     fun run(command: RunReconciliationCommand): ReconciliationRun {
         permissions.requireTenantPermission(
             command.actorId,
@@ -70,12 +84,14 @@ class ControlAccountReconciliationService(
             AccountingPermissions.RECONCILIATION_RUN,
         )
         requireNotInTheFuture(command.organisationId, command.asOfDate)
+        requireBranchInOrganisation(command.organisationId, command.branchId)
         val account = requireControlAccount(command.organisationId, command.accountId)
         val kind = requireNotNull(account.controlSubledgerKind)
         val currency = requireFunctionalCurrency(command.organisationId)
-        val provider = requireProvider(kind)
+        val provider = providers.providerFor(kind)
         requireTolerance(command.tolerance)
 
+        val snapshotId = snapshots.currentSnapshotId()
         val glBalance =
             ledger.signedBalanceAsOf(
                 command.organisationId,
@@ -83,23 +99,7 @@ class ControlAccountReconciliationService(
                 command.branchId,
                 command.asOfDate,
             )
-        val aggregate =
-            provider.aggregate(
-                SubledgerProofQuery(
-                    organisationId = command.organisationId,
-                    branchId = command.branchId,
-                    kind = kind,
-                    asOfDate = command.asOfDate,
-                    currencyCode = currency,
-                ),
-            )
-        if (aggregate != null && aggregate.currencyCode != currency) {
-            throw InvalidOperationException(
-                code = PostingErrorCodes.CURRENCY_NOT_SUPPORTED,
-                safeDetail =
-                    "The sub-ledger reported ${aggregate.currencyCode}; the ledger is $currency.",
-            )
-        }
+        val aggregate = askProvider(provider, command, kind, currency, snapshotId)
         val subledgerBalance = storableBalance(aggregate?.balance ?: BigDecimal.ZERO)
         val matched = (glBalance - subledgerBalance).abs() <= command.tolerance
 
@@ -118,10 +118,14 @@ class ControlAccountReconciliationService(
                 provider = provider.providerName,
                 detail =
                     buildMap {
-                        // Provider detail first, then the typed count: a provider that happens to
-                        // use the same key must not be able to contradict its own aggregate.
+                        // Provider detail first, then accounting's own facts: a provider that
+                        // happens to use the same key must not be able to contradict them.
                         aggregate?.detail?.let(::putAll)
                         put("positionCount", aggregate?.positionCount ?: 0L)
+                        // The snapshot both balances were read from, so the row is evidence that
+                        // describes its own provenance. Without it a reader can see two numbers
+                        // and has to take on trust that they were ever true at the same instant.
+                        put("snapshotId", snapshotId)
                     },
                 actorId = command.actorId,
             ),
@@ -305,19 +309,62 @@ class ControlAccountReconciliationService(
         }
     }
 
-    private fun requireProvider(kind: ControlSubledgerKind): SubledgerProofProvider {
-        val supporting = providers.filter { it.supports(kind) }
-        if (supporting.isEmpty()) {
-            throw ConflictException(
-                code = PostingErrorCodes.SUBLEDGER_PROVIDER_MISSING,
-                safeDetail = "No module answers for the $kind subsidiary ledger yet.",
+    /**
+     * Asks the owning module for its aggregate, in the scope and on the snapshot the proof read.
+     *
+     * A provider answering in another currency is refused rather than converted: the run row stores
+     * one currency for both balances, so a converted aggregate would be evidence about a number
+     * nobody reported.
+     */
+    private fun askProvider(
+        provider: SubledgerProofProvider,
+        command: RunReconciliationCommand,
+        kind: ControlSubledgerKind,
+        currency: String,
+        snapshotId: String,
+    ): SubledgerAggregate? {
+        val aggregate =
+            provider.aggregate(
+                SubledgerProofQuery(
+                    organisationId = command.organisationId,
+                    branchId = command.branchId,
+                    kind = kind,
+                    asOfDate = command.asOfDate,
+                    currencyCode = currency,
+                    snapshotId = snapshotId,
+                ),
+            )
+        if (aggregate != null && aggregate.currencyCode != currency) {
+            throw InvalidOperationException(
+                code = PostingErrorCodes.CURRENCY_NOT_SUPPORTED,
+                safeDetail =
+                    "The sub-ledger reported ${aggregate.currencyCode}; the ledger is $currency.",
             )
         }
-        check(supporting.size == 1) {
-            "control class $kind is claimed by ${supporting.map { it.providerName }}; " +
-                "ownership of a subsidiary ledger must be exclusive"
+        return aggregate
+    }
+
+    /**
+     * A scope names a branch of this organisation, or it names nothing at all.
+     *
+     * Existence, not postability: a proof is of a date that has happened, so a branch closed since
+     * then is a legitimate subject of one. Checked before either side is read, so an unknown branch
+     * is a named refusal rather than a foreign-key violation raised at the very end, after both
+     * aggregates have been computed and a provider has been asked about a scope that never existed.
+     */
+    private fun requireBranchInOrganisation(
+        organisationId: UUID,
+        branchId: UUID?,
+    ) {
+        if (branchId == null) {
+            return
         }
-        return supporting.single()
+        if (!tenants.branchBelongsTo(organisationId, branchId)) {
+            throw InvalidOperationException(
+                code = PostingErrorCodes.BRANCH_NOT_IN_ORGANISATION,
+                safeDetail = "The branch does not belong to this organisation.",
+            )
+        }
     }
 
     private fun requireTolerance(tolerance: BigDecimal) {

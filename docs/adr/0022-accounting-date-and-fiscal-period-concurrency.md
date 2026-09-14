@@ -23,7 +23,9 @@ sites: a blocking `pg_advisory_xact_lock` serialising tenant-settings writers, a
 single-`bigint` key space via `hashtextextended(text, 0)`, so nothing structurally separates a
 settings key from an idempotency key today. There are no `FOR UPDATE`/`FOR SHARE` statements
 anywhere, and no explicit isolation levels — everything runs at PostgreSQL's default READ
-COMMITTED.
+COMMITTED. (That last was true when this ADR was written. Issue #91 has since made the
+control-account proof `REPEATABLE READ`; see the consequences below for why that does not touch
+this protocol.)
 
 ## Decision
 
@@ -94,6 +96,17 @@ cannot collide with either existing call site by construction rather than by has
 **The protocol depends on READ COMMITTED.** Anyone raising the isolation level for an unrelated
 reason would silently break the posting-versus-close guarantee. The named test is the guard, and
 this ADR is the explanation the test points at.
+
+**One path has since raised it, deliberately, and it is not this one.** Issue #91 made
+`ControlAccountReconciliationService.run` `REPEATABLE READ`, because a proof compares two
+aggregates that have to describe one instant and per-statement snapshots are exactly what makes
+them describe two. That is the opposite requirement to the protocol above, and the two do not meet:
+a proof takes no fiscal-period lock, performs no lock-then-re-read, and posts nothing — it reads
+`journal_line` and asks a `SubledgerProofProvider`, then writes one evidence row. `the locking read
+runs at READ COMMITTED` still asserts the posting path's isolation and still guards it. This is the
+review this ADR asked for, recorded rather than waved through: **raising isolation on a path that
+locks a fiscal period and re-reads it remains forbidden**; raising it on a read-only proof that does
+neither is what `INV-14` requires. See `docs/architecture/accounting-module-boundary.md`.
 
 **A long posting transaction delays a close.** `FOR SHARE` means a close waits for every in-flight
 posting. That is the intended trade — a close that raced past an in-flight posting would be worse —
