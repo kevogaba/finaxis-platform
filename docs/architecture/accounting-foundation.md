@@ -173,8 +173,11 @@ Currency is `CHAR(3)` with `CHECK (currency_code ~ '^[A-Z]{3}$')` — the same r
 schema already applies to `organisation.base_currency_code`.
 
 **There is deliberately no `currency` reference table.** Validation stays where it already lives:
-`java.util.Currency.getAvailableCurrencies()`, used by `TenantSettingCatalog` for the
-`base_currency` tenant setting. A second source of truth for currency codes is a bug factory — it
+`java.util.Currency`, reached through `MoneyPolicy` - `requireCurrency` where a code merely has to
+be known, and `requireSettlementCurrency` where a code is being *chosen* as a unit for future
+postings and must therefore also have a minor unit. Both supply points for a tenant's functional
+currency use the latter: organisation provisioning (create and amend) and the `base_currency` tenant
+setting through `TenantSettingCatalog`. A second source of truth for currency codes is a bug factory — it
 has to be seeded, migrated, kept in step with a standard that already ships with the JDK, and
 reconciled with the JDK's view every time the two disagree.
 
@@ -702,6 +705,16 @@ engine (#41): lifecycle asks accounting, through an accounting-declared `Account
 query port, whether the tenant has posted, from the two places the functional currency can
 change — the organisation update and the `base_currency` tenant setting — and refuses the change
 when it has.
+
+That question and the answer's use must be serialised against the posting it is asking about.
+Reading it and writing the setting are one transaction; a tenant's first posting is another; and at
+`READ COMMITTED` neither sees the other, so both could commit and leave the tenant declaring a
+currency its immutable lines were never written under. Lifecycle therefore calls
+`AccountingLedgerActivity.lockFunctionalCurrencyForChange` immediately *before* asking — the
+adjacency is the fix — and a posting takes the same tenant-scoped lock **shared** as the first thing
+it does. The window was only ever a tenant's *first* posting, after which the currency is frozen for
+good; but the ledger is the one place the platform cannot go back and repair. The lock ordering that
+keeps this deadlock-free is stated in `docs/adr/0023-posting-idempotency-and-account-locking.md`.
 A tenant
 that genuinely needs to redenominate needs a versioned conversion and revaluation boundary, which
 is a separate design and is explicitly out of scope here — recorded so that a later change does not

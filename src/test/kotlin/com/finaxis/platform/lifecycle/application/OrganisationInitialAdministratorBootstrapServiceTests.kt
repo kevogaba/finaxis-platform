@@ -432,7 +432,7 @@ private class BootstrapProvisioningFake(
     OrganisationQueryStore,
     BranchLifecycleStore,
     BranchAssignmentStore {
-    val settings = mutableMapOf<UUID, Map<String, String>>()
+    val settings = mutableMapOf<UUID, Map<String, StoredSetting>>()
     val businessDates = mutableMapOf<UUID, LocalDate>()
     val headOffices = mutableSetOf<UUID>()
     val headOfficeIds = mutableMapOf<UUID, UUID>()
@@ -458,11 +458,10 @@ private class BootstrapProvisioningFake(
 
     override fun saveSettings(
         organisationId: UUID,
-        settings: Map<String, String>,
+        settings: List<StoredSetting>,
         actorId: UUID,
     ) {
-        this.settings[organisationId] =
-            settings
+        this.settings[organisationId] = settings.associateBy(StoredSetting::key)
     }
 
     override fun ensureBusinessDate(

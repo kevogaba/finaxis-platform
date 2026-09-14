@@ -340,7 +340,7 @@ private class FakeOrganisationLifecycleStoreForBusinessDate :
 
     override fun saveSettings(
         organisationId: UUID,
-        settings: Map<String, String>,
+        settings: List<StoredSetting>,
         actorId: UUID,
     ) = Unit
 

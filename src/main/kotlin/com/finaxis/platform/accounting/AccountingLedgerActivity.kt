@@ -18,4 +18,21 @@ import java.util.UUID
 interface AccountingLedgerActivity {
     /** True when at least one journal has been posted for the organisation. */
     fun hasPostedJournals(organisationId: UUID): Boolean
+
+    /**
+     * Serialises this transaction's currency change against the tenant's first posting, and must
+     * be called immediately before [hasPostedJournals] on any path going on to change the currency.
+     *
+     * Without it the freeze is a check-then-write across two transactions that cannot see each
+     * other: the settings transaction is told no journal exists, the posting transaction inserts
+     * the first one, and both commit - leaving an immutable ledger written under an answer about a
+     * currency the tenant no longer declares. The window is only ever a tenant's *first* posting,
+     * but the ledger is the one place the platform cannot go back and fix.
+     *
+     * Blocks until postings in flight for this tenant have finished, and is released when the
+     * caller's transaction ends, so a refused or failed change frees it with no unlock to forget.
+     * Separate from [hasPostedJournals] rather than folded into it so that the lock is visible at
+     * the call site, and so a future read-only caller is not silently made to take it.
+     */
+    fun lockFunctionalCurrencyForChange(organisationId: UUID)
 }

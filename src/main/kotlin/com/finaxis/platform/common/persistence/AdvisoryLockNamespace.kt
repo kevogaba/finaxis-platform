@@ -54,6 +54,25 @@ object AdvisoryLockNamespace {
     const val ACCOUNTING_JOURNAL_REVERSAL: Int = 4
 
     /**
+     * Changing a tenant's functional currency, against that tenant's first posting.
+     *
+     * Keyed on the organisation, and the one namespace here taken in **two modes**: a posting takes
+     * it `SHARED`, a `base_currency` change takes it `EXCLUSIVE`. Without the shared mode a
+     * tenant-wide lock on the posting path would serialise every posting in the tenant, which is
+     * the throughput cliff `docs/adr/0022-...` rejects; with it, postings do not wait on each
+     * other. They do queue behind a *pending* exclusive request, because PostgreSQL conflicts a
+     * request against the waiting queue as well as the granted locks - which is why the change's
+     * wait is bounded rather than indefinite.
+     *
+     * It is the first lock `PostingEngine.postNew` takes, and no lock class that precedes it in a
+     * posting - the reversal advisory lock, a `manual_journal` row, the `posting_request` row of
+     * the claim - is ever acquired by the currency-change flow. That, and not "it is always
+     * first", is what makes it acyclic; `docs/adr/0023-...` states the full chain and what a future
+     * flow must re-check.
+     */
+    const val ACCOUNTING_TENANT_FUNCTIONAL_CURRENCY: Int = 5
+
+    /**
      * The `objid` for a two-int advisory lock, derived in the JVM so a caller never has to
      * round-trip to the database for a lock key.
      *

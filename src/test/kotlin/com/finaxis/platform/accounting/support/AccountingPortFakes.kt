@@ -18,6 +18,7 @@
 package com.finaxis.platform.accounting.support
 
 import com.finaxis.platform.accounting.AccountingPermissionGuard
+import com.finaxis.platform.accounting.application.FunctionalCurrencyLock
 import com.finaxis.platform.accounting.application.ledger.JournalEntryView
 import com.finaxis.platform.accounting.application.ledger.JournalLineView
 import com.finaxis.platform.accounting.application.ledger.JournalReadStore
@@ -695,3 +696,76 @@ private fun <T> List<T>.newestFirst(id: (T) -> UUID): List<T> =
 /** Normalises an amount to `NUMERIC(23, 6)`, which is what a row read back would carry. */
 private fun atStorageScale(value: BigDecimal): BigDecimal =
     value.setScale(MoneyPolicy.STORAGE_SCALE, MoneyPolicy.ROUNDING)
+
+/**
+ * One ordered record of every lock a posting takes, shared by the fakes that take them.
+ *
+ * Ordering is the whole of the deadlock argument in ADR 0023: the tenant-currency lock must be a
+ * strict *prefix* of a posting's lock chain, so that no flow can ever acquire it and a period or
+ * account lock in the opposite order. A suite cannot prove a prefix by asking each fake what it
+ * saw - two independent recorders share no ordering information at all, and asserting "the currency
+ * lock was taken" and "the period lock was taken" is satisfied just as well by the reverse
+ * sequence. Appending to one journal is what makes the order a fact rather than an inference.
+ */
+internal class PostingLockJournal {
+    private val entries = mutableListOf<String>()
+
+    /** Every lock acquired through a fake wired to this journal, in acquisition order. */
+    val acquisitions: List<String> get() = entries.toList()
+
+    /** Appends one acquisition. Callers use the labels on this class's companion. */
+    fun record(label: String) {
+        entries += label
+    }
+
+    /** Forgets everything recorded so far, for a test that asserts about a second call. */
+    fun clear() = entries.clear()
+
+    companion object {
+        /** The tenant functional-currency lock, taken shared by a posting. */
+        const val CURRENCY_SHARED = "currency:shared"
+
+        /** The tenant functional-currency lock, taken exclusive by a base-currency change. */
+        const val CURRENCY_EXCLUSIVE = "currency:exclusive"
+
+        /** The fiscal-period row lock a posting takes before its legs are resolved. */
+        const val PERIOD = "period"
+
+        /** One GL account row lock; a posting takes one per distinct account its legs name. */
+        const val ACCOUNT = "account"
+    }
+}
+
+/**
+ * Records the tenant-currency lock a posting takes, so a suite can assert it was taken - and taken
+ * first, before the period and account locks, which is the property that keeps it deadlock-free.
+ *
+ * [acquisitions] answers *which mode* was used. Ordering against the other locks is answered by
+ * [journal], which a suite shares with its period and account fakes; a caller that only cares about
+ * the mode can let it default and ignore it.
+ */
+internal class RecordingFunctionalCurrencyLock(
+    private val journal: PostingLockJournal = PostingLockJournal(),
+) : FunctionalCurrencyLock {
+    /** Every acquisition in call order, shared and exclusive alike. */
+    val acquisitions = mutableListOf<CurrencyLockMode>()
+
+    override fun lockForPosting(organisationId: UUID) {
+        acquisitions += CurrencyLockMode.SHARED
+        journal.record(PostingLockJournal.CURRENCY_SHARED)
+    }
+
+    override fun lockForCurrencyChange(organisationId: UUID) {
+        acquisitions += CurrencyLockMode.EXCLUSIVE
+        journal.record(PostingLockJournal.CURRENCY_EXCLUSIVE)
+    }
+}
+
+/** Which mode a recorded tenant-currency lock acquisition used. */
+internal enum class CurrencyLockMode {
+    /** Taken by a posting; does not conflict with another posting. */
+    SHARED,
+
+    /** Taken by a base-currency change; conflicts with postings and with itself. */
+    EXCLUSIVE,
+}

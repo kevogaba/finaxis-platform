@@ -49,6 +49,13 @@ data class CreateTenantDraftRequest(
     @field:NotNull
     @field:Valid
     val admin: InitialAdminDto,
+    @field:Schema(
+        description =
+            "Tenant settings to seed, validated against the same catalogue as " +
+                "PUT /api/v1/tenant/settings/{key}: an unknown key or a value that fails its " +
+                "type rule is rejected with 422.",
+        example = """{"base_currency":"KES"}""",
+    )
     val initialSettings: Map<String, String> = emptyMap(),
     @field:JsonFormat(pattern = "dd-MM-yyyy")
     @field:Schema(example = "18-07-2026", type = "string")
@@ -72,11 +79,14 @@ data class AmendTenantDraftRequest(
     @field:Schema(example = "REG-123456")
     val registrationNumber: String? = null,
     @field:NotBlank
-    @field:Pattern(regexp = "^[A-Z]{2}$")
+    @field:Pattern(regexp = "^[A-Z]{2}$", message = "Country code must be 2 uppercase ISO letters.")
     @field:Schema(example = "KE")
     val countryCode: String,
     @field:NotBlank
-    @field:Pattern(regexp = "^[A-Z]{3}$")
+    @field:Pattern(
+        regexp = "^[A-Z]{3}$",
+        message = "Currency code must be 3 uppercase ISO letters.",
+    )
     @field:Schema(example = "KES")
     val baseCurrencyCode: String,
     @field:NotBlank

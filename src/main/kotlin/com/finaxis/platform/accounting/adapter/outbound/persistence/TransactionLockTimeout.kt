@@ -35,9 +35,15 @@ class TransactionLockTimeout(
             "SET LOCAL is discarded outside a transaction, so a lock timeout set here would " +
                 "silently not apply."
         }
-        require(!timeout.isNegative && !timeout.isZero) {
-            "A zero lock timeout disables the bound rather than tightening it."
+        // Not `isZero`: PostgreSQL's unit here is milliseconds, and `toMillis()` truncates, so a
+        // positive sub-millisecond duration such as `500us` converts to 0 - which PostgreSQL reads
+        // as "no timeout at all", the exact opposite of what the caller asked for. The bound has to
+        // be expressible in the unit it is sent in.
+        val millis = timeout.toMillis()
+        require(!timeout.isNegative && millis >= 1) {
+            "A lock timeout below one millisecond truncates to zero, which disables the bound " +
+                "rather than tightening it."
         }
-        dsl.execute("SET LOCAL lock_timeout = ${timeout.toMillis()}")
+        dsl.execute("SET LOCAL lock_timeout = $millis")
     }
 }

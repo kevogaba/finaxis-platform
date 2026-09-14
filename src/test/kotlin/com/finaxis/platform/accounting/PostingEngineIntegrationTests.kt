@@ -2,6 +2,7 @@ package com.finaxis.platform.accounting
 
 import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.accounting.application.ChartOfAccountsService
+import com.finaxis.platform.accounting.application.FunctionalCurrencyLock
 import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.PostingPeriodResolver
 import com.finaxis.platform.accounting.application.UpdateGlAccountCommand
@@ -13,6 +14,7 @@ import com.finaxis.platform.accounting.application.ledger.NewJournalLine
 import com.finaxis.platform.accounting.application.ledger.PostingEngine
 import com.finaxis.platform.accounting.application.ledger.ResolvedLegs
 import com.finaxis.platform.accounting.application.port.outbound.AccountingContextLookup
+import com.finaxis.platform.accounting.application.port.outbound.PostingMetadataLookup
 import com.finaxis.platform.accounting.application.posting.FinancialFact
 import com.finaxis.platform.accounting.application.posting.PostFinancialFactsCommand
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
@@ -31,15 +33,18 @@ import com.finaxis.platform.accounting.schema.JournalSchemaFixture
 import com.finaxis.platform.accounting.support.AtomicityProbe
 import com.finaxis.platform.accounting.support.FinancialTransactionAtomicityFixture
 import com.finaxis.platform.accounting.support.FoundationAtomicityProbes
+import com.finaxis.platform.accounting.support.LockOverlapProbe
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.context.ActorContext
 import com.finaxis.platform.common.context.BranchContext
+import com.finaxis.platform.common.context.CorrelationContext
 import com.finaxis.platform.common.context.RequestContext
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.context.TenantContext
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.persistence.AdvisoryLockNamespace
 import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_PERIOD
 import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_YEAR
 import com.finaxis.platform.jooq.tables.references.BRANCH
@@ -65,9 +70,15 @@ import java.time.Clock
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -92,6 +103,8 @@ class PostingEngineIntegrationTests(
     private val journals: JournalStore,
     private val ledger: JournalReadStore,
     private val contextLookup: AccountingContextLookup,
+    private val metadata: PostingMetadataLookup,
+    private val currencyLock: FunctionalCurrencyLock,
     private val tenantLookup: AccountingTenantLookup,
     private val periodResolver: PostingPeriodResolver,
     private val accounts: GlAccountStore,
@@ -106,6 +119,7 @@ class PostingEngineIntegrationTests(
     private val tenants = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
     private val schema = JournalSchemaFixture(dsl)
     private val transactions = TransactionTemplate(transactionManager)
+    private val probe = LockOverlapProbe(dsl)
 
     @Test
     fun `a balanced posting is written once, invisibly until commit, with a gapless number`() {
@@ -237,30 +251,47 @@ class PostingEngineIntegrationTests(
     }
 
     @Test
-    fun `a header that disagrees with its stored lines is rolled back by the verification read`() {
-        // The INV-4 enforcement point against real rows. A store that drops a line stands in for a
-        // defect between the engine's in-memory set and what reached the database; the header
-        // CHECKs cannot see it, the verification read must. Built from the real beans plus the
-        // faulty store, so everything else is the production path.
+    fun `a journal whose stored lines disagree with its header is rolled back`() {
+        // The INV-4 enforcement point against real rows, in both of its halves. A store that
+        // corrupts the lines on the way in stands in for a defect between the engine's in-memory
+        // set and what reached the database; the header CHECKs cannot see it, the verification read
+        // must. Built from the real beans plus the faulty store, so everything else - and in
+        // particular the SQL that does the counting - is the production path.
+        //
+        // Money is the half a dropped line proves. The other half is the dimensions `journal_line`
+        // denormalises - branch, fiscal period, posting date and both currency codes - which the
+        // reporting reads filter and group on directly, and which nothing in the schema defends:
+        // the foreign keys tie a line to a *valid* branch and period, never to *its header's*. A
+        // line that balanced but landed in the wrong period is invisible to every CHECK and wrong
+        // in every report, and these counts are the only thing that sees it.
+        //
+        // The null branch is the case that holds the production predicate to `IS DISTINCT FROM`.
+        // `branch_id <> '<header branch>'` is NULL for a line carrying no branch, so a plain `<>`
+        // would not count that line, the divergence count would stay zero, and the posting would
+        // commit with a line no branch report will ever show.
+        //
+        // Every case rolls back whole: the harness re-reads `posting_request`, `journal_entry`,
+        // `journal_line` and the JOURNAL counter from a second connection, so "left the request
+        // unposted" is asserted rather than assumed.
         val tenant = provisionTenant("engine-verification")
-        val faulty =
-            PostingEngine(
-                contextLookup,
-                tenantLookup,
-                periodResolver,
-                accounts,
-                LineDroppingJournalStore(journals),
-                ledger,
-                numbers,
-                clock,
-            )
-        val harness = harness(tenant)
+        // A real period, in a fiscal year of its own so it overlaps nothing:
+        // `fk_journal_line_fiscal_period` would refuse an invented id, and the posting would then
+        // fail for a reason that says nothing about the verification read.
+        val other = openPeriodCovering(tenant.organisationId, tenant.businessDate.plusYears(1))
 
-        val failure =
-            harness.assertRollsBackAtomically(IllegalStateException::class) {
-                inContext(tenant) { post(tenant, engine = faulty) }
-            }
-        assertTrue(failure.message.orEmpty().contains("does not match its lines"), failure.message)
+        assertLineDefectRefused(tenant, "does not match its lines") { it.dropLast(1) }
+        assertLineDefectRefused(tenant, "header on fiscal period") {
+            it.map { line -> line.copy(fiscalPeriodId = other) }
+        }
+        assertLineDefectRefused(tenant, "header on posting date") {
+            it.map { line -> line.copy(postingDate = line.postingDate.minusDays(1)) }
+        }
+        assertLineDefectRefused(tenant, "header on functional currency") {
+            it.map { line -> line.copy(functionalCurrencyCode = "USD") }
+        }
+        assertLineDefectRefused(tenant, "header on branch") {
+            it.map { line -> line.copy(branchId = null) }
+        }
     }
 
     @Test
@@ -356,6 +387,66 @@ class PostingEngineIntegrationTests(
         }
     }
 
+    /**
+     * The freeze is a check-then-write across two transactions, and this proves the lock closes it.
+     *
+     * A tenant's very first posting is held open, past the point where it has taken the shared
+     * tenant-currency lock. A base-currency change is then started and proved - out of PostgreSQL's
+     * own lock catalogue - to be parked on that exact key rather than sailing past a ledger it
+     * cannot yet see. Only when the posting commits is the change allowed to proceed, and it now
+     * finds the journal and is refused.
+     *
+     * Without the lock the change would read `journal_entry`, find nothing, and commit alongside a
+     * posting it never saw, leaving the tenant declaring a currency its immutable lines were never
+     * written under.
+     */
+    @Test
+    fun `a base-currency change waits for a tenant's first posting rather than racing it`() {
+        val tenant = provisionTenant("engine-currency-race")
+        val currencyKey = AdvisoryLockNamespace.objectId(tenant.organisationId.toString())
+        val postingApplied = CountDownLatch(1)
+        val releasePosting = CountDownLatch(1)
+        val changeReturned = AtomicBoolean()
+
+        val failure =
+            Executors.newVirtualThreadPerTaskExecutor().use { executor ->
+                val posting =
+                    executor.submit {
+                        inContext(tenant) {
+                            transactions.execute {
+                                post(tenant, reference = "dep-currency-race")
+                                postingApplied.countDown()
+                                assertTrue(releasePosting.await(LATCH_TIMEOUT, TimeUnit.SECONDS))
+                            }
+                        }
+                    }
+                assertTrue(postingApplied.await(LATCH_TIMEOUT, TimeUnit.SECONDS))
+
+                val change =
+                    executor.submit<ConflictException> {
+                        assertFailsWith<ConflictException> {
+                            withRequestContext { setBaseCurrency(tenant, "USD") }
+                        }.also { changeReturned.set(true) }
+                    }
+
+                probe.awaitBlockedOnAdvisoryKey(
+                    AdvisoryLockNamespace.ACCOUNTING_TENANT_FUNCTIONAL_CURRENCY,
+                    currencyKey,
+                )
+                assertFalse(
+                    changeReturned.get(),
+                    "the change resolved while the first posting was still uncommitted, so it " +
+                        "never waited and the race is still open",
+                )
+
+                releasePosting.countDown()
+                posting.get(FUTURE_TIMEOUT, TimeUnit.SECONDS)
+                change.get(FUTURE_TIMEOUT, TimeUnit.SECONDS)
+            }
+
+        assertEquals(PostingErrorCodes.FUNCTIONAL_CURRENCY_FROZEN, failure.code)
+    }
+
     @Test
     fun `the functional currency is frozen once a journal is posted`() {
         val tenant = provisionTenant("engine-currency-freeze")
@@ -375,6 +466,45 @@ class PostingEngineIntegrationTests(
                 }
             }
         assertEquals(PostingErrorCodes.FUNCTIONAL_CURRENCY_FROZEN, failure.code)
+    }
+
+    @Test
+    fun `the request id of the originating request is recorded on the posting it produced`() {
+        // The lineage issue #94 asks for: from an HTTP request id to the posting it caused. The
+        // engine observes the ambient request rather than being told, so no product module has to
+        // carry a value it does not hold.
+        val tenant = provisionTenant("engine-request-id")
+
+        val receipt =
+            inContext(tenant, requestId = "req-a1b2c3") {
+                transactions.execute { post(tenant, reference = "dep-req-id") }
+            }
+
+        assertEquals(
+            "req-a1b2c3",
+            dsl
+                .select(POSTING_REQUEST.REQUEST_ID)
+                .from(POSTING_REQUEST)
+                .where(POSTING_REQUEST.ID.eq(receipt.postingRequestId))
+                .fetchOne(POSTING_REQUEST.REQUEST_ID),
+        )
+    }
+
+    @Test
+    fun `a posting with no ambient request records no request id`() {
+        val tenant = provisionTenant("engine-no-request-id")
+
+        val receipt =
+            inContext(tenant) { transactions.execute { post(tenant, reference = "dep-no-req") } }
+
+        assertNull(
+            dsl
+                .select(POSTING_REQUEST.REQUEST_ID)
+                .from(POSTING_REQUEST)
+                .where(POSTING_REQUEST.ID.eq(receipt.postingRequestId))
+                .fetchOne(POSTING_REQUEST.REQUEST_ID),
+            "request_id is nullable precisely so a background posting can leave it empty",
+        )
     }
 
     @Test
@@ -559,6 +689,7 @@ class PostingEngineIntegrationTests(
     /** Installs the ambient request context the engine reconciles the caller's claim against. */
     private fun <T> inContext(
         tenant: Tenant,
+        requestId: String? = null,
         block: () -> T,
     ): T =
         RequestContexts.with(
@@ -566,6 +697,13 @@ class PostingEngineIntegrationTests(
                 tenant = TenantContext(tenant.organisationId),
                 branch = BranchContext(tenant.branchId),
                 actor = ActorContext(ACTOR, null, null, null),
+                correlation =
+                    requestId?.let {
+                        CorrelationContext(
+                            requestId = it,
+                            correlationId = it,
+                        )
+                    },
             ),
         ) {
             withRequestContext(block)
@@ -639,18 +777,66 @@ class PostingEngineIntegrationTests(
                 .fetchOne(REFERENCE_SEQUENCE.NEXT_VALUE) ?: 0L
         }
 
-    /** Writes every line but the last, standing in for a defect between engine and database. */
-    private class LineDroppingJournalStore(
+    /**
+     * Writes the lines [corrupt] returns instead of the ones the engine prepared, standing in for a
+     * defect between the engine's in-memory set and what reaches `journal_line`.
+     *
+     * One seam covers both halves of the verification read: dropping a line breaks the totals and
+     * the count, while rewriting a denormalised column on every line leaves those intact and breaks
+     * only the agreement with the header.
+     */
+    private class FaultyLineJournalStore(
         private val delegate: JournalStore,
+        private val corrupt: (List<NewJournalLine>) -> List<NewJournalLine>,
     ) : JournalStore by delegate {
         override fun insertJournalLines(lines: List<NewJournalLine>) =
-            delegate.insertJournalLines(lines.dropLast(1))
+            delegate.insertJournalLines(corrupt(lines))
+    }
+
+    /** The production engine with one port swapped, so every other collaborator stays real. */
+    private fun engineWith(store: JournalStore) =
+        PostingEngine(
+            contextLookup,
+            metadata,
+            tenantLookup,
+            currencyLock,
+            periodResolver,
+            accounts,
+            store,
+            ledger,
+            numbers,
+            clock,
+        )
+
+    /**
+     * Posts through a store that applies [corrupt] and asserts the verification read refused it
+     * with a message containing [expected], having committed nothing.
+     */
+    private fun assertLineDefectRefused(
+        tenant: Tenant,
+        expected: String,
+        corrupt: (List<NewJournalLine>) -> List<NewJournalLine>,
+    ) {
+        val faulty = engineWith(FaultyLineJournalStore(journals, corrupt))
+        val failure =
+            try {
+                harness(tenant).assertRollsBackAtomically(IllegalStateException::class) {
+                    inContext(tenant) { post(tenant, engine = faulty) }
+                }
+            } catch (accepted: AssertionError) {
+                // Names the case, because the cases run in sequence and the harness's own message
+                // - "expected IllegalStateException, completed successfully" - does not say which.
+                throw AssertionError("the \"$expected\" line defect was not refused", accepted)
+            }
+        assertTrue(failure.message.orEmpty().contains(expected), failure.message)
     }
 
     private companion object {
         /** The `V3` bootstrap administrator; `audit_event.actor_user_id` is a real foreign key. */
         val ACTOR: UUID = UUID.fromString("11111111-1111-1111-1111-111111111111")
         const val FAKE_SUBLEDGER_CODE = "TEST_SUBLEDGER"
+        const val LATCH_TIMEOUT = 10L
+        const val FUTURE_TIMEOUT = 60L
 
         @Suppress("unused")
         val UNUSED_TABLES = listOf(JOURNAL_ENTRY, JOURNAL_LINE)

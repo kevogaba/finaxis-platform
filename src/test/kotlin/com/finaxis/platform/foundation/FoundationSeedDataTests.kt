@@ -1,12 +1,15 @@
 package com.finaxis.platform.foundation
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.accounting.domain.MoneyPolicy
+import com.finaxis.platform.common.application.InvalidOperationException
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestConstructor
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -16,6 +19,85 @@ import kotlin.test.assertTrue
 class FoundationSeedDataTests(
     private val jdbcTemplate: JdbcTemplate,
 ) {
+    /**
+     * The data check that stands in for an ISO 4217 `CHECK` constraint, which SQL cannot express.
+     *
+     * ADR 0019 rules a currency reference table out on purpose - "a second source of truth for
+     * currency codes is a bug factory, and a table would have to be maintained against a standard
+     * that already ships with the JDK" - so there is nothing for a constraint to reference, and
+     * the JDK's set drifts between releases anyway. The boundaries that *supply* the value
+     * validate it (provisioning and the `base_currency` setting, both through [MoneyPolicy]);
+     * this covers the rows `V1`-`V3` wrote before those boundaries existed, and it is the one
+     * check that also fails the day a JDK upgrade withdraws a code a seeded tenant is denominated
+     * in - which a constraint written today could never notice.
+     */
+    @Test
+    fun `every migration-seeded base currency is a code java util Currency knows`() {
+        val seeded = seededBaseCurrencies()
+
+        assertEquals(setOf("PLATFORM", "FINAXIS-LOCAL"), seeded.keys)
+        seeded.forEach { (tenantCode, currencyCode) ->
+            assertEquals(
+                currencyCode,
+                MoneyPolicy.requireCurrency(currencyCode).currencyCode,
+                "$tenantCode is denominated in a code the JDK does not know",
+            )
+        }
+    }
+
+    @Test
+    fun `every seeded organisation that can post is denominated in a settlement currency`() {
+        val seeded = seededBaseCurrencies()
+
+        // PLATFORM is the one deliberate exception, and XXX is deliberately what ISO 4217 means by
+        // it: "no currency". It is written by V2 rather than provisioned, so it never passes the
+        // boundary that enforces this rule; and it is a scope holder rather than a ledger, which is
+        // what the two assertions below check. Requiring a minor unit of it would demand a
+        // denomination for an organisation that can never hold an amount.
+        //
+        // Note the exemption is NOT that it owns no branch - journal_entry.branch_id is nullable,
+        // so a posting does not need one. What actually stops it is that it has no chart of
+        // accounts to name legs against and no fiscal period to post into.
+        assertEquals("XXX", seeded.getValue("PLATFORM"))
+        assertFailsWith<InvalidOperationException> {
+            MoneyPolicy.requireSettlementCurrency(seeded.getValue("PLATFORM"))
+        }
+        assertEquals(
+            0L,
+            jdbcTemplate.queryForObject(
+                """
+                SELECT (SELECT COUNT(*) FROM gl_account
+                        WHERE organisation_id = '00000000-0000-0000-0000-000000000000')
+                     + (SELECT COUNT(*) FROM accounting_fiscal_period
+                        WHERE organisation_id = '00000000-0000-0000-0000-000000000000')
+                """.trimIndent(),
+                Long::class.java,
+            ),
+            "PLATFORM is exempt only because it has no chart of accounts and no fiscal period, " +
+                "so no posting can resolve legs or a period for it",
+        )
+
+        (seeded - "PLATFORM").forEach { (tenantCode, currencyCode) ->
+            assertEquals(
+                currencyCode,
+                MoneyPolicy.requireSettlementCurrency(currencyCode).currencyCode,
+                "$tenantCode could be activated and then never post in $currencyCode",
+            )
+        }
+    }
+
+    private fun seededBaseCurrencies(): Map<String, String> =
+        jdbcTemplate
+            .queryForList(
+                """
+                SELECT tenant_code, base_currency_code
+                FROM organisation
+                WHERE tenant_code IN ('PLATFORM', 'FINAXIS-LOCAL')
+                """.trimIndent(),
+            ).associate { row ->
+                (row["tenant_code"] as String) to (row["base_currency_code"] as String).trim()
+            }
+
     @Test
     fun `platform reference data contains the exact permission catalogue`() {
         val actual =

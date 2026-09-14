@@ -1,8 +1,8 @@
 package com.finaxis.platform.lifecycle.domain
 
+import com.finaxis.platform.accounting.domain.MoneyPolicy
 import com.finaxis.platform.common.application.InvalidOperationException
 import java.time.ZoneId
-import java.util.Currency
 
 /** Storage/validation kind of a tenant setting value. */
 enum class TenantSettingValueType { STRING, BOOLEAN, INT, TIMEZONE, CURRENCY }
@@ -102,7 +102,7 @@ object TenantSettingCatalog {
             TenantSettingValueType.BOOLEAN -> canonicalizeBoolean(key, trimmed)
             TenantSettingValueType.INT -> canonicalizeInt(key, trimmed)
             TenantSettingValueType.TIMEZONE -> canonicalizeTimezone(key, trimmed)
-            TenantSettingValueType.CURRENCY -> canonicalizeCurrency(key, trimmed)
+            TenantSettingValueType.CURRENCY -> canonicalizeCurrency(trimmed)
         }
     }
 
@@ -145,17 +145,16 @@ object TenantSettingCatalog {
         return value
     }
 
-    private fun canonicalizeCurrency(
-        key: String,
-        value: String,
-    ): String {
-        val upper = value.uppercase()
-        val valid = Currency.getAvailableCurrencies().any { it.currencyCode == upper }
-        if (!valid) {
-            throw InvalidOperationException(
-                safeDetail = "Setting $key must be a valid ISO 4217 currency code.",
-            )
-        }
-        return upper
-    }
+    /**
+     * Canonicalizes a currency setting by asking the ledger, which is the only currency authority.
+     *
+     * This previously checked membership of `Currency.getAvailableCurrencies()` itself. That was a
+     * second reading of the same JDK table, and it accepted codes with no minor unit - `XXX` and
+     * the metals - which no amount can be settled in, so a tenant could be left with a base
+     * currency it could never post in. [MoneyPolicy.requireSettlementCurrency] answers both
+     * questions at once and throws `accounting.currency_invalid`, the same code a posting would
+     * report for the same string, rather than the catalog's generic `invalid_operation`.
+     */
+    private fun canonicalizeCurrency(value: String): String =
+        MoneyPolicy.requireSettlementCurrency(value.uppercase()).currencyCode
 }

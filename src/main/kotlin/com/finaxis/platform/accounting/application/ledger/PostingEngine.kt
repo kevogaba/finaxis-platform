@@ -1,11 +1,13 @@
 package com.finaxis.platform.accounting.application.ledger
 
 import com.finaxis.platform.accounting.AccountingTenantLookup
+import com.finaxis.platform.accounting.application.FunctionalCurrencyLock
 import com.finaxis.platform.accounting.application.GlAccountPostingPolicy
 import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.PostingPeriodResolver
 import com.finaxis.platform.accounting.application.ResolvedPostingPeriod
 import com.finaxis.platform.accounting.application.port.outbound.AccountingContextLookup
+import com.finaxis.platform.accounting.application.port.outbound.PostingMetadataLookup
 import com.finaxis.platform.accounting.application.posting.FinancialFact
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.application.posting.PostingReceipt
@@ -97,7 +99,9 @@ fun interface LegProvider {
  * since been deactivated, a posting rule that has since changed, or a tenant that has since been
  * suspended can never turn a successful retry into a spurious failure (see
  * `docs/adr/0023-posting-idempotency-and-account-locking.md`). Only a request the claim finds
- * genuinely new - [postNew] - runs the state that *can* drift, in this order: tenant and branch
+ * genuinely new - [postNew] - runs the state that *can* drift, in this order: the tenant's
+ * functional-currency lock, taken shared and first so that a tenant's very first posting cannot
+ * interleave with a change to the currency it is denominated in; tenant and branch
  * postability; the period lock, which takes the shared lock issue #35 requires before the legs are
  * resolved, because the rule version depends on the posting date; a lock on every distinct account
  * the legs reference, in ascending id order, which is what closes the account-eligibility race
@@ -106,7 +110,9 @@ fun interface LegProvider {
  */
 class PostingEngine(
     private val contextLookup: AccountingContextLookup,
+    private val metadata: PostingMetadataLookup,
     private val tenants: AccountingTenantLookup,
+    private val currency: FunctionalCurrencyLock,
     private val periods: PostingPeriodResolver,
     private val accounts: GlAccountStore,
     private val journals: JournalStore,
@@ -172,6 +178,11 @@ class PostingEngine(
         legs: LegProvider,
         postingRequestId: UUID,
     ): PostingReceipt {
+        // First lock of the chain, and shared, so postings do not wait on each other. It is a
+        // genuinely new posting that can be a tenant's first, and therefore the one a concurrent
+        // base_currency change must not interleave with; a replay takes no lock here at all.
+        currency.lockForPosting(context.organisationId)
+        requireFunctionalCurrencyUnchanged(context.organisationId, functionalCurrency)
         requireTenantPostable(context)
         val period = periods.lockAndValidate(context.organisationId, context.actorId, dates)
         val resolved = legs.legsFor(period.dates)
@@ -319,6 +330,37 @@ class PostingEngine(
         }
     }
 
+    /**
+     * Re-reads the functional currency under the lock and refuses a posting that raced a change.
+     *
+     * The currency is read *before* the claim, because the idempotency fingerprint is computed from
+     * it - and that read is necessarily unlocked, since the claim is what a replay is answered
+     * from and a replay must take no tenant-wide lock. So a `base_currency` change can still commit
+     * between that read and this lock, and without this check the tenant's very first journal would
+     * be denominated in the currency it declared a moment ago rather than the one it declares now:
+     * the same divergence the lock exists to prevent, approached from the other side.
+     *
+     * Refusing is the only honest answer. The claim row already carries the pre-lock currency, so
+     * this posting cannot adopt the new one without contradicting its own fingerprint; rolling back
+     * takes the claim with it, and the retry fingerprints against the currency that won. Reachable
+     * only for a tenant's first posting - after that the currency is frozen and a change is refused
+     * outright.
+     */
+    private fun requireFunctionalCurrencyUnchanged(
+        organisationId: UUID,
+        readBeforeLock: String,
+    ) {
+        val underLock = requireFunctionalCurrency(organisationId)
+        if (underLock != readBeforeLock) {
+            throw ConflictException(
+                code = PostingErrorCodes.FUNCTIONAL_CURRENCY_CHANGED,
+                safeDetail =
+                    "The organisation's functional currency changed while this posting was " +
+                        "being recorded; retry it.",
+            )
+        }
+    }
+
     private fun requireFunctionalCurrency(organisationId: UUID): String =
         tenants.functionalCurrencyOf(organisationId)
             ?: throw ConflictException(
@@ -439,6 +481,21 @@ class PostingEngine(
         }
     }
 
+    /**
+     * The claim row, including the two lineage columns - which come from different places on
+     * purpose.
+     *
+     * `correlation_id` is read off the caller's [AccountingContext]: it is part of what the caller
+     * *asserts* about the posting, and a product module that wants to correlate a posting with work
+     * it did elsewhere is entitled to say so. `request_id` is read from the ambient context
+     * instead, because it is a fact about the request that happens to be in flight and nothing a
+     * savings deposit knows or should be asked to supply. Putting it on `AccountingContext` would
+     * oblige every product module to pass a value it does not hold, which in practice means null
+     * and a lineage that is still broken.
+     *
+     * Null here for any posting with no request behind it - a background job, a broker listener -
+     * which is why the column is nullable.
+     */
     private fun newRequest(
         request: LedgerPostingRequest,
         context: AccountingContext,
@@ -460,7 +517,7 @@ class PostingEngine(
         narrative = request.narrative,
         actorId = context.actorId,
         correlationId = context.correlationId,
-        requestId = null,
+        requestId = metadata.currentRequestId(),
     )
 
     /**
