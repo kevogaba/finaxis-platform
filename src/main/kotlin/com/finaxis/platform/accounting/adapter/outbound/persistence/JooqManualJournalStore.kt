@@ -57,6 +57,7 @@ class JooqManualJournalStore(
             .set(MANUAL_JOURNAL.ORGANISATION_ID, journal.organisationId)
             .set(MANUAL_JOURNAL.BRANCH_ID, journal.branchId)
             .set(MANUAL_JOURNAL.TITLE, journal.title)
+            .set(MANUAL_JOURNAL.EXTERNAL_REFERENCE, journal.externalReference)
             .set(MANUAL_JOURNAL.NARRATIVE, journal.narrative)
             .set(MANUAL_JOURNAL.STATUS, ManualJournalStatus.DRAFT.name)
             .set(MANUAL_JOURNAL.TRANSACTION_DATE, journal.transactionDate)
@@ -82,6 +83,7 @@ class JooqManualJournalStore(
             .update(MANUAL_JOURNAL)
             .set(MANUAL_JOURNAL.BRANCH_ID, content.branchId)
             .set(MANUAL_JOURNAL.TITLE, content.title)
+            .set(MANUAL_JOURNAL.EXTERNAL_REFERENCE, content.externalReference)
             .set(MANUAL_JOURNAL.NARRATIVE, content.narrative)
             .set(MANUAL_JOURNAL.TRANSACTION_DATE, content.transactionDate)
             .set(MANUAL_JOURNAL.VALUE_DATE, content.valueDate)
@@ -195,6 +197,7 @@ class JooqManualJournalStore(
             organisationId = record.organisationId!!,
             branchId = record.branchId,
             title = record.title!!,
+            externalReference = record.externalReference,
             narrative = record.narrative!!,
             status = ManualJournalStatus.valueOf(record.status!!),
             statusReason = record.statusReason,

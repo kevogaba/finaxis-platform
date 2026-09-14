@@ -2,6 +2,7 @@ package com.finaxis.platform.accounting.adapter.outbound.persistence
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.accounting.ControlSubledgerKind
+import com.finaxis.platform.accounting.application.SnapshotIsolationGuard
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.application.reconciliation.LedgerBalanceQuery
 import com.finaxis.platform.accounting.application.reconciliation.NewReconciliationRun
@@ -72,10 +73,11 @@ class JooqLedgerBalanceQuery(
 @Component
 class PostgresProofSnapshot(
     private val dsl: DSLContext,
-) : ProofSnapshot {
-    override fun currentSnapshotId(): String {
+) : ProofSnapshot,
+    SnapshotIsolationGuard {
+    override fun requireStableSnapshot(operation: String) {
         check(TransactionSynchronizationManager.isActualTransactionActive()) {
-            "Exporting a proof snapshot needs an active transaction."
+            "$operation from one snapshot needs an active transaction."
         }
         val isolation =
             dsl.fetchValue(
@@ -87,12 +89,15 @@ class PostgresProofSnapshot(
         // demanded. Anything weaker - READ COMMITTED, READ UNCOMMITTED - is refused.
         if (STABLE_SNAPSHOT_ISOLATIONS.none { it.equals(isolation, ignoreCase = true) }) {
             throw ConflictException(
-                code = PostingErrorCodes.RECONCILIATION_SNAPSHOT_UNAVAILABLE,
+                code = PostingErrorCodes.SNAPSHOT_ISOLATION_UNAVAILABLE,
                 safeDetail =
-                    "A reconciliation must read both of its sides from one snapshot; this " +
-                        "transaction is $isolation.",
+                    "$operation must read from one snapshot; this transaction is $isolation.",
             )
         }
+    }
+
+    override fun currentSnapshotId(): String {
+        requireStableSnapshot("A reconciliation")
         return requireNotNull(
             dsl.fetchValue(DSL.field("pg_export_snapshot()", String::class.java)),
         ) {

@@ -3,6 +3,7 @@ package com.finaxis.platform.accounting.application.manual
 import com.finaxis.platform.accounting.AccountingPermissionGuard
 import com.finaxis.platform.accounting.application.GlAccountPostingPolicy
 import com.finaxis.platform.accounting.application.GlAccountStore
+import com.finaxis.platform.accounting.application.SnapshotIsolationGuard
 import com.finaxis.platform.accounting.application.ledger.LedgerPostingRequest
 import com.finaxis.platform.accounting.application.ledger.PostingEngine
 import com.finaxis.platform.accounting.application.ledger.ResolvedLegs
@@ -38,6 +39,7 @@ import com.finaxis.platform.common.transitions.TransitionException
 import com.finaxis.platform.common.transitions.TransitionExecution
 import com.finaxis.platform.common.transitions.TransitionExecutor
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Isolation
 import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
 
@@ -71,6 +73,7 @@ class ManualJournalService(
     private val permissions: AccountingPermissionGuard,
     private val transitions: TransitionExecutor,
     private val auditService: AuditService,
+    private val snapshots: SnapshotIsolationGuard,
 ) {
     /** Creates a draft with its lines. */
     @Transactional
@@ -87,6 +90,7 @@ class ManualJournalService(
                     organisationId = command.context.organisationId,
                     branchId = command.content.branchId ?: command.context.branchId,
                     title = command.content.title,
+                    externalReference = command.content.externalReference,
                     narrative = command.content.narrative,
                     transactionDate = command.content.transactionDate,
                     valueDate = command.content.valueDate,
@@ -106,11 +110,23 @@ class ManualJournalService(
             journal.id,
             command.content.narrative,
             AuditSeverity.HIGH,
+            externalReferenceMetadata(journal),
         )
         return journal
     }
 
-    /** Replaces a draft's header and lines. Refused once submitted. */
+    /**
+     * Replaces a draft's header and lines. Refused once submitted, and refused from a stale view.
+     *
+     * The amendment carries the row version the maker read, and it is compared against the version
+     * under the header's lock. An earlier revision compared the locked row's version against
+     * itself, which is always equal: two makers editing from one earlier view merely serialised,
+     * and the second silently overwrote the first's whole header and line set while
+     * `MANUAL_JOURNAL_STALE` advertised a protection that could never fire.
+     *
+     * The comparison runs before [validateContent] and before any line is touched, so a refused
+     * amendment leaves the draft and its `row_version` exactly as they were.
+     */
     @Transactional
     fun amend(command: AmendManualJournalCommand): ManualJournal {
         permissions.requireTenantPermission(
@@ -127,6 +143,7 @@ class ManualJournalService(
                     "Only a DRAFT manual journal can be amended; this one is ${current.status}.",
             )
         }
+        ManualJournalPolicy.requireCurrentVersion(current, command.expectedRowVersion)
         validateContent(command.context.organisationId, command.content)
         journals.replaceLines(
             command.context.organisationId,
@@ -138,17 +155,31 @@ class ManualJournalService(
                 command.context.organisationId,
                 current.id,
                 command.content,
-                current.rowVersion,
+                command.expectedRowVersion,
                 command.context.actorId,
             )
         ) {
-            throw ConflictException(
-                code = PostingErrorCodes.MANUAL_JOURNAL_STALE,
-                safeDetail =
-                    "The manual journal changed while it was being amended; reload and retry.",
-            )
+            // Defence in depth rather than a reachable branch: the caller holds the header's row
+            // lock and has already compared the version under it, so the predicate cannot fail
+            // here. Kept so the port's compare-and-set stays honest for any future caller that
+            // does not hold the lock, and raised through the same helper so the two refusals
+            // cannot answer a retrying caller differently.
+            throw ManualJournalPolicy.staleEdit()
         }
-        return requireNotNull(journals.find(command.context.organisationId, current.id))
+        val amended = requireNotNull(journals.find(command.context.organisationId, current.id))
+        audit(
+            command.context.copy(branchId = amended.branchId),
+            AccountingAuditActions.JOURNAL_AMEND_MANUAL,
+            amended.id,
+            command.content.narrative,
+            AuditSeverity.HIGH,
+            externalReferenceMetadata(amended) +
+                mapOf(
+                    "amendedFromRowVersion" to command.expectedRowVersion,
+                    "lineCount" to command.content.lines.size,
+                ),
+        )
+        return amended
     }
 
     /** Submits a draft for approval. The maker's act. */
@@ -204,10 +235,11 @@ class ManualJournalService(
             posted.id,
             command.reason,
             AuditSeverity.CRITICAL,
-            mapOf(
-                "journalEntryId" to receipt.journalEntryId.toString(),
-                "entryNumber" to receipt.journalReference,
-            ),
+            externalReferenceMetadata(posted) +
+                mapOf(
+                    "journalEntryId" to receipt.journalEntryId.toString(),
+                    "entryNumber" to receipt.journalReference,
+                ),
         )
         return ManualJournalApproval(posted, receipt)
     }
@@ -247,8 +279,21 @@ class ManualJournalService(
         )
     }
 
-    /** Reads one manual journal with its lines, permission-gated and tenant-scoped. */
-    @Transactional(readOnly = true)
+    /**
+     * Reads one manual journal with its lines, permission-gated and tenant-scoped.
+     *
+     * `REPEATABLE READ`, because the header and the lines are two statements and this is the
+     * representation a checker reviews before approving. Under the repository's default
+     * `READ COMMITTED` an amendment committing between them pairs an old header - old title, old
+     * narrative, old row version - with a new line set, and a checker could approve amounts they
+     * never saw beside a reason that no longer describes them. The tear is one-directional, since
+     * the header is read first, which makes it quiet rather than harmless.
+     *
+     * [SnapshotIsolationGuard] asks the database what isolation is actually in force: Spring drops
+     * a declared isolation level without a word when the method joins a transaction that is already
+     * open, so the annotation on its own is a request and not a guarantee.
+     */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     fun get(
         organisationId: UUID,
         journalId: UUID,
@@ -259,6 +304,7 @@ class ManualJournalService(
             organisationId,
             AccountingPermissions.JOURNAL_VIEW,
         )
+        snapshots.requireStableSnapshot("Reading a manual journal")
         val journal = journals.find(organisationId, journalId) ?: throw notFound()
         return ManualJournalDetail(journal, journals.findLines(organisationId, journalId))
     }
@@ -415,12 +461,8 @@ class ManualJournalService(
         organisationId: UUID,
         content: ManualJournalDraftContent,
     ) {
-        if (content.narrative.isBlank() || content.title.isBlank()) {
-            throw InvalidOperationException(
-                code = PostingErrorCodes.MANUAL_JOURNAL_REASON_REQUIRED,
-                safeDetail = "A manual journal needs a title and a reason.",
-            )
-        }
+        ManualJournalPolicy.requireNarrated(content.title, content.narrative)
+        ManualJournalPolicy.requireStorableExternalReference(content.externalReference)
         validateLines(organisationId, content.lines)
     }
 
@@ -433,8 +475,8 @@ class ManualJournalService(
         organisationId: UUID,
         lines: List<ManualJournalLine>,
     ) {
-        requireContiguous(lines)
-        requireSettledAmounts(lines)
+        ManualJournalPolicy.requireContiguous(lines)
+        ManualJournalPolicy.requireSettledAmounts(lines)
         lines.map { it.accountId }.distinct().forEach { accountId ->
             val account =
                 accounts.findById(organisationId, accountId)
@@ -444,48 +486,7 @@ class ManualJournalService(
                     )
             GlAccountPostingPolicy.requireManualPostingAllowed(account)
         }
-        requireBalanced(lines)
-    }
-
-    private fun requireContiguous(lines: List<ManualJournalLine>) {
-        val contiguous = lines.map { it.lineNumber }.toSet() == (1..lines.size).toSet()
-        if (lines.size > MAXIMUM_LINES) {
-            throw InvalidOperationException(
-                code = PostingErrorCodes.MANUAL_JOURNAL_LINES_INVALID,
-                safeDetail = "A manual journal carries at most $MAXIMUM_LINES lines.",
-            )
-        }
-        if (lines.size < MINIMUM_LINES || !contiguous) {
-            throw InvalidOperationException(
-                code = PostingErrorCodes.MANUAL_JOURNAL_LINES_INVALID,
-                safeDetail =
-                    "A manual journal needs at least two lines numbered 1..n without gaps.",
-            )
-        }
-    }
-
-    /**
-     * Every line is a settled amount before it reaches the draft table.
-     *
-     * `manual_journal_line.amount` is `NUMERIC(23, 6)`, so PostgreSQL would silently round a value
-     * carrying more precision and approval would then accept the rounded number as valid. Settling
-     * here means the maker's amount is either stored exactly or refused, never quietly changed.
-     */
-    private fun requireSettledAmounts(lines: List<ManualJournalLine>) {
-        lines.forEach { line ->
-            MoneyPolicy.requireSettled(MonetaryAmount(line.amount, line.currencyCode))
-        }
-    }
-
-    private fun requireBalanced(lines: List<ManualJournalLine>) {
-        val debit = lines.filter { it.side == PostingSide.DEBIT }.sumOf { it.amount }
-        val credit = lines.filter { it.side == PostingSide.CREDIT }.sumOf { it.amount }
-        if (debit.compareTo(credit) != 0) {
-            throw InvalidOperationException(
-                code = PostingErrorCodes.UNBALANCED_POSTING,
-                safeDetail = "Debit and credit totals must be equal.",
-            )
-        }
+        ManualJournalPolicy.requireBalanced(lines)
     }
 
     private fun requireReason(command: ManualJournalTransitionCommand) {
@@ -522,6 +523,17 @@ class ManualJournalService(
         )
     }
 
+    /**
+     * The external reference, for the audit event and nowhere else in the ledger.
+     *
+     * `journal_entry` has no such column and `V7` is frozen; inventing one would put the same fact
+     * in two places with no rule about which wins. The posted journal already names the draft it
+     * came from, so the reference stays answerable by a join - and the audit trail, which is where
+     * an investigator starting from *"who authorised this"* actually looks, carries it directly.
+     */
+    private fun externalReferenceMetadata(journal: ManualJournal): Map<String, Any?> =
+        journal.externalReference?.let { mapOf("externalReference" to it) } ?: emptyMap()
+
     private fun notFound() =
         ResourceNotFoundException(
             code = PostingErrorCodes.MANUAL_JOURNAL_NOT_FOUND,
@@ -535,14 +547,6 @@ class ManualJournalService(
         const val SOURCE_MODULE = "accounting"
         const val SOURCE_TYPE = "MANUAL_JOURNAL"
         const val EVENT_CODE = "MANUAL_JOURNAL"
-        const val MINIMUM_LINES = 2
-
-        /**
-         * An adjustment a human keyed and a checker reads. The cap keeps creation's per-account
-         * lookups, the batch insert, and the reads that load the whole set under a row lock all
-         * bounded, which the repository requires of every accounting query.
-         */
-        const val MAXIMUM_LINES = 200
     }
 }
 
@@ -552,10 +556,18 @@ data class CreateManualJournalCommand(
     val content: ManualJournalDraftContent,
 )
 
-/** Replaces a draft's content. */
+/**
+ * Replaces a draft's content.
+ *
+ * [expectedRowVersion] is the `rowVersion` the caller read before editing, and it is required.
+ * An optional one would leave the lost-update hole open for any caller that omitted it, and
+ * `MANUAL_JOURNAL_STALE` would stay a promise rather than a guarantee. It sits before [content] so
+ * a positional call written against the old shape fails to compile rather than binding silently.
+ */
 data class AmendManualJournalCommand(
     val context: AccountingContext,
     val journalId: UUID,
+    val expectedRowVersion: Long,
     val content: ManualJournalDraftContent,
 )
 

@@ -36,6 +36,7 @@ import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
 import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.JOURNAL_ENTRY
 import com.finaxis.platform.jooq.tables.references.JOURNAL_LINE
+import com.finaxis.platform.jooq.tables.references.MANUAL_JOURNAL
 import com.finaxis.platform.jooq.tables.references.MANUAL_JOURNAL_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.MEMBERSHIP_PERMISSION
 import com.finaxis.platform.jooq.tables.references.PERMISSION
@@ -180,10 +181,12 @@ internal class ManualJournalFixture(
         debit: String,
         credit: String = debit,
         title: String = "Adjustment",
+        externalReference: String? = null,
         debitAccount: UUID = tenant.expenseAccountId,
         creditAccount: UUID = tenant.cashAccountId,
     ) = ManualJournalDraftContent(
         title = title,
+        externalReference = externalReference,
         narrative = "Correct a mis-posting",
         branchId = tenant.branchId,
         transactionDate = null,
@@ -247,6 +250,20 @@ internal class ManualJournalFixture(
     fun journalCount(tenant: Tenant) =
         dsl.fetchCount(JOURNAL_ENTRY, JOURNAL_ENTRY.ORGANISATION_ID.eq(tenant.organisationId))
 
+    /** The draft's row version as it stands now, which is what an amendment must be prepared on. */
+    fun currentRowVersion(
+        tenant: Tenant,
+        journalId: UUID,
+    ): Long =
+        requireNotNull(
+            dsl
+                .select(MANUAL_JOURNAL.ROW_VERSION)
+                .from(MANUAL_JOURNAL)
+                .where(MANUAL_JOURNAL.ORGANISATION_ID.eq(tenant.organisationId))
+                .and(MANUAL_JOURNAL.ID.eq(journalId))
+                .fetchOne(MANUAL_JOURNAL.ROW_VERSION),
+        )
+
     fun setPeriodStatus(
         tenant: Tenant,
         status: String,
@@ -279,6 +296,26 @@ internal class ManualJournalFixture(
             .fetch(AUDIT_EVENT.ACTION)
             .filterNotNull()
             .sorted()
+
+    /**
+     * The metadata of every audit event for [action], newest last.
+     *
+     * Read as raw JSON rather than parsed: the assertion is that a fact reached the audit trail at
+     * all, and a test that deserialises into a shape of its own stops failing when the production
+     * shape changes underneath it.
+     */
+    fun auditMetadata(
+        tenant: Tenant,
+        action: String,
+    ) = dsl
+        .select(AUDIT_EVENT.METADATA_JSONB)
+        .from(AUDIT_EVENT)
+        .where(AUDIT_EVENT.ORGANISATION_ID.eq(tenant.organisationId))
+        .and(AUDIT_EVENT.ACTION.eq(action))
+        .orderBy(AUDIT_EVENT.ID)
+        .fetch(AUDIT_EVENT.METADATA_JSONB)
+        .filterNotNull()
+        .map { it.data() }
 
     fun newChecker(label: String): UUID {
         val now = OffsetDateTime.now()

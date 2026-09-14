@@ -12,6 +12,7 @@ data class NewManualJournal(
     val organisationId: UUID,
     val branchId: UUID?,
     val title: String,
+    val externalReference: String?,
     val narrative: String,
     val transactionDate: LocalDate?,
     val valueDate: LocalDate?,
@@ -19,9 +20,16 @@ data class NewManualJournal(
     val actorId: UUID,
 )
 
-/** The editable content of a draft: header fields and the whole line set. */
+/**
+ * The editable content of a draft: header fields and the whole line set.
+ *
+ * [externalReference] has no default. A document number that a caller can silently omit is a
+ * document number that is missing from half the drafts for no recorded reason, which is the
+ * situation issue #92 exists to end; a caller with nothing to cite passes `null` and says so.
+ */
 data class ManualJournalDraftContent(
     val title: String,
+    val externalReference: String?,
     val narrative: String,
     val branchId: UUID?,
     val transactionDate: LocalDate?,
