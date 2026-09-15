@@ -170,7 +170,19 @@ data class PostingRuleSelector(
     ): Boolean =
         this.eventCode == eventCode &&
             (this.productClass == null || this.productClass == productClass) &&
-            (this.currencyCode == null || this.currencyCode == currencyCode)
+            governsCurrency(currencyCode)
+
+    /**
+     * Whether the currency dimension admits [currencyCode]: null means *any*, otherwise its own.
+     *
+     * One dimension of [matches], named separately because it is the one dimension a caller does
+     * not choose. `PostingLegResolver` always passes the tenant's functional currency, so a rule
+     * pinned to any other currency is well formed, allocates perfectly, and can never be selected
+     * until multi-currency posting exists. Selection reports that only by finding no rule at all,
+     * which is why an operation that bypasses selection has to ask the question for itself.
+     */
+    fun governsCurrency(currencyCode: String): Boolean =
+        this.currencyCode == null || this.currencyCode == currencyCode
 }
 
 /** One approved-or-proposed set of legs for a rule, effective from a date. */

@@ -4,8 +4,10 @@ import com.finaxis.platform.accounting.AccountingPermissionGuard
 import com.finaxis.platform.accounting.AccountingTenantLookup
 import com.finaxis.platform.accounting.application.GlAccountPostingPolicy
 import com.finaxis.platform.accounting.application.GlAccountStore
+import com.finaxis.platform.accounting.application.SnapshotIsolationGuard
 import com.finaxis.platform.accounting.application.ledger.PostingLegResolver
 import com.finaxis.platform.accounting.application.ledger.PostingLegsPolicy
+import com.finaxis.platform.accounting.application.posting.FinancialFact
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.application.posting.PostingIntent
 import com.finaxis.platform.accounting.domain.AccountingAuditActions
@@ -38,13 +40,15 @@ import com.finaxis.platform.common.transitions.TransitionExecution
 import com.finaxis.platform.common.transitions.TransitionExecutor
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Isolation
 import org.springframework.transaction.annotation.Transactional
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.util.UUID
 
 /**
- * Posting rules and their versions: creation, drafting, maker-checker lifecycle, and dry run.
+ * Posting rules and their versions: creation, drafting, maker-checker lifecycle, and the two read
+ * operations that answer "what would this post".
  *
  * The lifecycle follows the chart-of-accounts service exactly, because it is the same control:
  * approval requires `posting_rule.approve` and an actor who is not the version's most recent
@@ -61,6 +65,16 @@ import java.util.UUID
  * Dry run resolves an intent through the same [PostingLegResolver] the engine uses **and then
  * validates the legs through the same [PostingLegsPolicy]**, in a read-only transaction that
  * writes nothing - which is the whole point. See [dryRun] for what it deliberately does not check.
+ *
+ * [previewVersion] answers the neighbouring question, and is a **separate operation rather than a
+ * flag on [dryRun]**, because the two questions have different answers and a caller must never
+ * confuse them. [dryRun] asks *what is in force*: it selects the rule from the intent's event and
+ * product class and the version from the posting date, so only an approved version can ever answer
+ * it. [previewVersion] asks *what would this named version do*, allocating the legs of a version
+ * the caller names and reporting the selector it belongs to rather than obeying it - which is the
+ * only way a checker can see a `DRAFT` or `PENDING_APPROVAL` version's legs before approving them
+ * (issue #95). One operation with a flag would have one return type whose meaning depended on an
+ * argument, and a reader of the result could no longer tell which question had been asked.
  */
 @Service
 @Suppress("TooManyFunctions")
@@ -73,6 +87,7 @@ class PostingRuleService(
     private val auditService: AuditService,
     private val resolver: PostingLegResolver,
     private val tenants: AccountingTenantLookup,
+    private val snapshots: SnapshotIsolationGuard,
 ) {
     /** Creates a rule with no versions yet. */
     @Transactional
@@ -319,7 +334,13 @@ class PostingRuleService(
             // "1000.000000" for every caller, for no gain: the settled legs differ from these
             // only in scale, and the scale a journal stores is the store's business.
             legs = resolved.legs,
-            problem = settlementProblem(organisationId, resolved.legs, command.mode),
+            problem =
+                settlementProblem(
+                    organisationId,
+                    functionalCurrency(organisationId),
+                    resolved.legs,
+                    command.mode,
+                ),
         )
     }
 
@@ -330,13 +351,17 @@ class PostingRuleService(
      * The account lookup is memoised per distinct id, so a rule with several legs on one account
      * reads it once - the dry run has no lock to amortise the reads against, unlike the engine,
      * whose `lockAccounts` already distinct-ed the ids before it locked them.
+     *
+     * [currency] arrives from the caller rather than being read here, because
+     * [previewVersion] needs the tenant's functional currency for its own answer as well and one
+     * read serving both keeps its `REPEATABLE READ` statement count down.
      */
     private fun settlementProblem(
         organisationId: UUID,
+        currency: String,
         legs: List<PostingLeg>,
         mode: PostingRuleDryRunMode,
     ): PostingRuleDryRunProblem? {
-        val currency = functionalCurrency(organisationId)
         val accountOf = memoisedAccountLookup(organisationId)
         if (mode == PostingRuleDryRunMode.STRICT) {
             PostingLegsPolicy.settle(legs, currency, accountOf)
@@ -366,6 +391,88 @@ class PostingRuleService(
                 code = PostingErrorCodes.FUNCTIONAL_CURRENCY_UNAVAILABLE,
                 safeDetail = "The organisation has no functional currency.",
             )
+
+    /**
+     * Allocates the legs of the version the caller **names**, bypassing rule selection entirely.
+     *
+     * The operation issue #95 asks for. [dryRun] can only ever answer for an approved version,
+     * because it reaches its version through [PostingRuleVersion.governs], which requires
+     * [PostingRuleVersionStatus.isApproved] - correctly, since a dry run asks what is in force.
+     * That left the configuration a checker most wants to test, the one awaiting their approval,
+     * unreachable: a checker approved on the legs and percentages alone. This answers the other
+     * question instead of blurring the first one.
+     *
+     * **It takes facts, not a [PostingIntent.Facts].** `eventCode` and `productClass` are consumed
+     * only by [PostingRulePolicy.select], and the posting date only by [PostingRuleVersion.governs]
+     * - both of which this bypasses - while [PostingRulePolicy.allocate] takes legs and facts and
+     * nothing else. Accepting them would be worse than redundant: a caller could supply an event
+     * code contradicting the rule the version belongs to, and the preview would answer for a
+     * fiction. They are read from the version's own rule and **reported** on
+     * [PostingRuleVersionPreview.selector] instead.
+     *
+     * **Every status is previewable**, `DRAFT` and `PENDING_APPROVAL` for the checker, `ACTIVE` to
+     * see what is in force without asserting a posting date, and `SUPERSEDED` or `RETIRED`
+     * forensically - "what would the version that governed last March have posted for these
+     * amounts" is a question an auditor asks and no other operation answers. Confusing a closed
+     * version's answer with today's is the real risk, and it is closed by returning the whole
+     * [PostingRuleVersion]: its status and its window arrive beside the legs, so a caller that
+     * displays the legs without the status has ignored something it was handed, rather than never
+     * having been told.
+     *
+     * The legs are judged by the pass [dryRun] runs - [PostingRulePolicy.requireWellFormed] first,
+     * the same check [approve] runs, so a half-finished draft gives the checker the answer
+     * submission would rather than partial legs, and then [PostingLegsPolicy] through
+     * [settlementProblem], honouring [PostingRuleDryRunMode]. A currency mismatch or a deactivated
+     * account is exactly what an approval should surface, and this is the moment before it.
+     * Well-formedness and allocation throw in **both** modes, as they do for [dryRun]: a version
+     * whose legs cannot be allocated has no legs for a [PostingRuleVersionPreview] to carry.
+     *
+     * `REPEATABLE READ`, for the reason
+     * [com.finaxis.platform.accounting.application.manual.ManualJournalService.get] holds it: this
+     * issues several statements - the version, its rule, its legs, the accounts - and under the
+     * repository's default `READ COMMITTED` an amendment committing between them would pair one
+     * version's metadata with another version's legs. [SnapshotIsolationGuard] asks the database
+     * what isolation is actually in force, because `@Transactional(isolation = ...)` is a request
+     * and not a guarantee.
+     *
+     * **No lock is taken**, deliberately: a preview must not serialise against the accounts it
+     * reads. An account this reports as postable can therefore be deactivated a moment later, and
+     * [approve] revalidates every account under [GlAccountStore.lockForPosting] precisely because
+     * of that. A preview is evidence for an approver, never a guarantee to build an approval gate
+     * on.
+     *
+     * A version id belonging to another tenant is refused exactly as one that does not exist,
+     * because the read is tenant-scoped and the miss raises the one not-found this service has.
+     */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    fun previewVersion(command: PreviewPostingRuleVersionCommand): PostingRuleVersionPreview {
+        permissions.requireTenantPermission(
+            command.actorId,
+            command.organisationId,
+            AccountingPermissions.POSTING_RULE_VIEW,
+        )
+        snapshots.requireStableSnapshot("Previewing a posting-rule version")
+        val version =
+            rules.findVersion(command.organisationId, command.versionId) ?: throw notFound()
+        // `fk_posting_rule_version_rule` keeps the rule inside the same tenant as its versions, so
+        // a version whose rule this tenant does not hold is a broken database, not a bad request.
+        val rule =
+            checkNotNull(rules.findRule(command.organisationId, version.ruleId)) {
+                "version ${version.id} names rule ${version.ruleId}, absent from the tenant"
+            }
+        val ruleLegs = rules.findLegs(command.organisationId, version.id)
+        PostingRulePolicy.requireWellFormed(ruleLegs)
+        val legs = PostingRulePolicy.allocate(ruleLegs, factsByCode(command.facts))
+        val currency = functionalCurrency(command.organisationId)
+        return PostingRuleVersionPreview(
+            version = version,
+            rule = rule,
+            functionalCurrency = currency,
+            selectorMatchesFunctionalCurrency = rule.selector.governsCurrency(currency),
+            legs = legs,
+            problem = settlementProblem(command.organisationId, currency, legs, command.mode),
+        )
+    }
 
     /** Reads one version, permission-gated and tenant-scoped. */
     @Transactional(readOnly = true)
@@ -853,6 +960,72 @@ data class PostingRuleDryRunProblem(
  */
 data class PostingRuleDryRunResult(
     val postingRuleVersionId: UUID,
+    val legs: List<PostingLeg>,
+    val problem: PostingRuleDryRunProblem? = null,
+)
+
+/**
+ * Asks what one named posting-rule version would post, without selecting or posting.
+ *
+ * [versionId] names the version outright, which is what lets a `DRAFT` or `PENDING_APPROVAL`
+ * version be tested at all. It is read tenant-scoped against [organisationId], so an id from
+ * another tenant is refused exactly as one that does not exist.
+ *
+ * [facts] and not a [PostingIntent.Facts]: the event code and product class of an intent drive
+ * rule *selection*, which this operation bypasses, so accepting them would let a caller describe
+ * an event the named version's rule does not answer and receive a confident reply about nothing.
+ * They are reported back on [PostingRuleVersionPreview.rule], read from the rule itself.
+ *
+ * [mode] behaves as it does for [PostingRuleDryRunCommand] - the eligibility pass throws or reports
+ * - but **it defaults the other way, to [PostingRuleDryRunMode.REPORT_PROBLEM]**, because the two
+ * operations answer to different people. [dryRun] mimics a posting, so throwing what the posting
+ * would throw is the honest default. A named `DRAFT` version cannot post at all, so there is no
+ * posting here to mimic; the caller is a checker deciding whether to approve, and throwing would
+ * hand them an exception and no legs - hiding the very thing they opened the preview to look at.
+ * A caller that wants the posting's own refusal asks for [PostingRuleDryRunMode.STRICT].
+ */
+data class PreviewPostingRuleVersionCommand(
+    val organisationId: UUID,
+    val actorId: UUID,
+    val versionId: UUID,
+    val facts: List<FinancialFact>,
+    val mode: PostingRuleDryRunMode = PostingRuleDryRunMode.REPORT_PROBLEM,
+)
+
+/**
+ * What one named posting-rule version would post for the facts it was asked about.
+ *
+ * [version] arrives **whole**, not as an id, and that is deliberate. A preview is meaningful for
+ * every status, so a caller can hold the legs of a `SUPERSEDED` or `RETIRED` version, and the only
+ * defence against reading them as what is in force is that the status and the effective window
+ * come back beside them.
+ *
+ * [selectorMatchesFunctionalCurrency] is what bypassing selection costs and this type repays.
+ * Selection judges the rule's selector against the tenant's functional currency, so a rule pinned
+ * to `USD` in a `KES` tenant is well formed, allocates perfectly and can never fire; [dryRun]
+ * catches that only by accident, as `POSTING_RULE_NOT_FOUND` from finding no rule at all. Read it
+ * precisely: **it judges the selector's currency dimension against [functionalCurrency] and
+ * nothing else.** It is not a reachability verdict. It stays true for a rule
+ * [PostingRulePolicy.select] would refuse as `accounting.posting_rule_ambiguous`, for a rule whose
+ * event code no product module emits, and for a version whose window covers no date a posting
+ * could carry. False means the version can certainly never be selected; true means only that this
+ * one way of never being selected does not apply.
+ *
+ * [rule] comes back whole rather than as its selector alone, for the same reason [version] does:
+ * the row is read anyway, and a caller naming the version it previewed - "rule `SAVINGS-DEPOSIT`,
+ * version 3" - would otherwise need an operation that does not exist, since nothing else reads a
+ * rule by one of its versions.
+ *
+ * [legs] are the allocated legs at the minor-unit scale [PostingRulePolicy.allocate] produced, not
+ * the storage-scale copies the eligibility pass validated - the same choice
+ * [PostingRuleDryRunResult] makes, so the two operations' legs compare directly. [problem] is null
+ * unless the command asked for [PostingRuleDryRunMode.REPORT_PROBLEM] and a defect was found.
+ */
+data class PostingRuleVersionPreview(
+    val version: PostingRuleVersion,
+    val rule: PostingRule,
+    val functionalCurrency: String,
+    val selectorMatchesFunctionalCurrency: Boolean,
     val legs: List<PostingLeg>,
     val problem: PostingRuleDryRunProblem? = null,
 )

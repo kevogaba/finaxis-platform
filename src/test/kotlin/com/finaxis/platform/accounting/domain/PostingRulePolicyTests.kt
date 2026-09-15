@@ -7,7 +7,9 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class PostingRulePolicyTests {
     private val cash = uuidV7()
@@ -248,6 +250,36 @@ class PostingRulePolicyTests {
         // Two rules pinning one dimension each is a configuration defect, not a coin toss.
         assertIs<RuleSelection.Ambiguous>(
             PostingRulePolicy.select(listOf(byProduct, byCurrency), "E", "SAVINGS:REGULAR", "KES"),
+        )
+    }
+
+    @Test
+    fun `the currency dimension admits anything when unpinned and only its own when pinned`() {
+        assertTrue(
+            PostingRuleSelector("E").governsCurrency("KES"),
+            "an unpinned currency dimension means any currency",
+        )
+        assertTrue(
+            PostingRuleSelector("E", currencyCode = "KES").governsCurrency("KES"),
+            "a pinned dimension admits the currency it pins",
+        )
+        assertFalse(
+            PostingRuleSelector("E", currencyCode = "USD").governsCurrency("KES"),
+            "a rule pinned to USD can never be selected by a tenant that posts in KES",
+        )
+
+        // It judges one dimension, never reachability, and the caller that reports it -
+        // PostingRuleVersionPreview.selectorMatchesFunctionalCurrency - is named for that
+        // narrowness. Two rules pinning one dimension each are ambiguous and both still pass here.
+        val byProduct = rule("PROD", productClass = "SAVINGS:REGULAR")
+        val byCurrency = rule("CCY", currencyCode = "KES")
+        assertIs<RuleSelection.Ambiguous>(
+            PostingRulePolicy.select(listOf(byProduct, byCurrency), "E", "SAVINGS:REGULAR", "KES"),
+            "the pair is a configuration defect selection refuses",
+        )
+        assertTrue(
+            byCurrency.selector.governsCurrency("KES"),
+            "and the currency dimension of one of them is still, correctly, satisfied",
         )
     }
 

@@ -8,6 +8,7 @@ import com.finaxis.platform.accounting.application.rules.PostingRuleDryRunComman
 import com.finaxis.platform.accounting.application.rules.PostingRuleDryRunMode
 import com.finaxis.platform.accounting.application.rules.PostingRuleService
 import com.finaxis.platform.accounting.application.rules.PostingRuleVersionTransitionCommand
+import com.finaxis.platform.accounting.application.rules.PreviewPostingRuleVersionCommand
 import com.finaxis.platform.accounting.domain.AccountResolution
 import com.finaxis.platform.accounting.domain.AccountingContext
 import com.finaxis.platform.accounting.domain.AccountingPermissions
@@ -149,12 +150,19 @@ internal class PostingRuleFixture(
             }
         }
 
-    /** Creates the next `DRAFT` version of [rule], effective from [from]. */
+    /**
+     * Creates the next `DRAFT` version of [rule], effective from [from].
+     *
+     * [versionLegs] defaults to the well-formed pair or triple [legs] builds. It is explicit only
+     * where a suite needs a draft that creation accepts and approval would not - `createVersion`
+     * checks numbering, field storability and account postability, never the debit-credit shape.
+     */
     fun draftVersion(
         tenant: Tenant,
         from: LocalDate,
         feeShare: String? = null,
         rule: UUID = tenant.ruleId,
+        versionLegs: List<PostingRuleLeg> = legs(tenant, feeShare),
     ) = withRequestContext {
         rules.createVersion(
             CreatePostingRuleVersionCommand(
@@ -162,17 +170,30 @@ internal class PostingRuleFixture(
                 actorId = MAKER,
                 ruleId = rule,
                 effectiveFrom = from,
-                legs = legs(tenant, feeShare),
+                legs = versionLegs,
             ),
         )
     }
+
+    /** Two debit legs and no credit: storable as a draft, refused by submission and by preview. */
+    fun oneSidedLegs(tenant: Tenant) =
+        listOf(
+            leg(1, PostingSide.DEBIT, tenant.cashAccountId),
+            leg(2, PostingSide.DEBIT, tenant.feeAccountId),
+        )
+
+    /** Submits as the maker, leaving the version `PENDING_APPROVAL` for a checker to look at. */
+    fun submit(
+        tenant: Tenant,
+        version: PostingRuleVersion,
+    ) = withRequestContext { rules.submit(transition(tenant, version.id, MAKER)) }
 
     /** Submits as the maker and approves as the tenant's checker, so the version activates. */
     fun activate(
         tenant: Tenant,
         version: PostingRuleVersion,
     ): PostingRuleVersion {
-        withRequestContext { rules.submit(transition(tenant, version.id, MAKER)) }
+        submit(tenant, version)
         return withRequestContext { rules.approve(transition(tenant, version.id, tenant.checker)) }
     }
 
@@ -272,6 +293,30 @@ internal class PostingRuleFixture(
             intent(principal, currency = currency),
             postingDate,
             mode,
+        ),
+    )
+
+    /**
+     * Asks what the version [versionId] names would post for [principal], selecting nothing.
+     *
+     * The facts come from [intent] so that a preview and a dry run of the same amount are asked
+     * the same question; the event code and product class that intent also carries are dropped,
+     * because preview bypasses the selection that would have consumed them.
+     */
+    fun preview(
+        tenant: Tenant,
+        versionId: UUID,
+        principal: String,
+        actor: UUID = MAKER,
+        currency: String = FUNCTIONAL_CURRENCY,
+        mode: PostingRuleDryRunMode = PostingRuleDryRunMode.REPORT_PROBLEM,
+    ) = rules.previewVersion(
+        PreviewPostingRuleVersionCommand(
+            organisationId = tenant.organisationId,
+            actorId = actor,
+            versionId = versionId,
+            facts = intent(principal, currency = currency).facts,
+            mode = mode,
         ),
     )
 
