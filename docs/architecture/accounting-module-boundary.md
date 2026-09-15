@@ -205,8 +205,35 @@ governed is refused by name with `POSTING_RULE_WINDOW_INVALID` instead of arrivi
 violation and a 500. Only an open-ended head can be closed to make room for a successor; a window
 already closed by an earlier supersession or by retirement is settled history. Legs and
 `effective_from` are editable in `DRAFT` only.
-`PostingRuleService.dryRun` resolves an intent through the same resolver in a read-only transaction
-and returns the legs it would post, so an administrator can test a configuration without a journal.
+
+`PostingRuleService.dryRun` resolves an intent through the same resolver **and judges the legs
+through the same `PostingLegsPolicy` the engine uses**, in a read-only transaction, so an
+administrator can test a configuration without a journal and get the answer a posting would give.
+It used to stop at resolution, which made the method's name a half-truth: facts denominated in a
+currency the tenant does not post in, or a rule naming an account deactivated since its version was
+approved, dry-ran clean and posted red (issue #95). `PostingLegsPolicy` is a pure object - no store,
+no lock, no bean - holding the minimum-leg count, per-leg amount settlement, the functional-currency
+check, account postability and the balance, in that order; the engine hands it the accounts it has
+already locked, the dry run hands it an unlocked read memoised per account id.
+
+**This is a behaviour change.** `dryRun` can now raise `accounting.currency_not_supported`,
+`accounting.account_not_postable` and `accounting.unbalanced_posting` where it previously returned
+legs, so any caller that read a green dry run as "the configuration resolves" will see new failures.
+No published API contract moves with it: there is no REST adapter for posting rules yet (#52), so
+the only callers are in-process. `PostingRuleDryRunCommand.mode` chooses how a defect is delivered -
+`STRICT` (the default) throws exactly what the posting would throw, `REPORT_PROBLEM` returns it on
+`PostingRuleDryRunResult.problem` instead. Lenient reports the **first** problem, not all of them:
+there is one validator and it stops at the first defect, which is the price of the dry run and the
+posting sharing a single validation path. It covers the eligibility pass only - a rule that does not
+resolve, or resolves ambiguously, still throws in either mode, because there is then no version and
+no legs for a result to carry.
+
+What the dry run deliberately does **not** judge is where and when the posting would happen. Tenant
+and branch postability, fiscal-period status and posting-date admissibility stay with the engine,
+because each of them would refuse a preview an administrator is entitled to take: a tenant is not
+yet `ACTIVE` while its accounting is being configured, a period's status is decided only under the
+posting lock, and a rule taking effect tomorrow - or a preview at close of business - would be
+refused on its posting date. Those are properties of a posting, not of the configuration under test.
 
 ## Control accounts and reconciliation
 

@@ -2,7 +2,6 @@ package com.finaxis.platform.accounting.application.ledger
 
 import com.finaxis.platform.accounting.AccountingTenantLookup
 import com.finaxis.platform.accounting.application.FunctionalCurrencyLock
-import com.finaxis.platform.accounting.application.GlAccountPostingPolicy
 import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.PostingPeriodResolver
 import com.finaxis.platform.accounting.application.ResolvedPostingPeriod
@@ -16,11 +15,9 @@ import com.finaxis.platform.accounting.domain.AccountingDates
 import com.finaxis.platform.accounting.domain.AccountingSourceReference
 import com.finaxis.platform.accounting.domain.GlAccount
 import com.finaxis.platform.accounting.domain.JournalEntryType
-import com.finaxis.platform.accounting.domain.MoneyPolicy
 import com.finaxis.platform.accounting.domain.PostingDateRequest
 import com.finaxis.platform.accounting.domain.PostingLeg
 import com.finaxis.platform.accounting.domain.PostingRequestStatus
-import com.finaxis.platform.accounting.domain.PostingSide
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
@@ -105,7 +102,9 @@ fun interface LegProvider {
  * postability; the period lock, which takes the shared lock issue #35 requires before the legs are
  * resolved, because the rule version depends on the posting date; a lock on every distinct account
  * the legs reference, in ascending id order, which is what closes the account-eligibility race
- * from the posting side (`docs/adr/0023-...`); and the in-memory balance check. The verification
+ * from the posting side (`docs/adr/0023-...`); and the in-memory eligibility pass over the legs -
+ * currency, account postability and the balance - which is [PostingLegsPolicy], shared verbatim
+ * with the administrator's dry run so the two cannot disagree (issue #95). The verification
  * read happens after the lines, before return, because a row-level `CHECK` cannot sum children.
  */
 class PostingEngine(
@@ -187,8 +186,11 @@ class PostingEngine(
         val period = periods.lockAndValidate(context.organisationId, context.actorId, dates)
         val resolved = legs.legsFor(period.dates)
         val lockedAccounts = lockAccounts(context.organisationId, resolved.legs)
-        val settled = settleLegs(resolved.legs, functionalCurrency, lockedAccounts)
-        val totals = requireBalanced(settled)
+        // [lockAccounts] has already refused every account it could not read, so this map is total
+        // over the legs and [PostingLegsPolicy]'s missing-account branch cannot fire here. That
+        // branch exists for the dry run, which looks accounts up without locking them.
+        val settled =
+            PostingLegsPolicy.settle(resolved.legs, functionalCurrency, lockedAccounts::get)
 
         return writeJournal(
             Prepared(
@@ -196,7 +198,6 @@ class PostingEngine(
                 context = context,
                 period = period,
                 settled = settled,
-                totals = totals,
                 functionalCurrency = functionalCurrency,
                 postingRuleVersionId = resolved.postingRuleVersionId,
             ),
@@ -225,13 +226,7 @@ class PostingEngine(
                 newJournalEntry(prepared, postingRequestId, entryNumber, postedAt),
             )
         journals.insertJournalLines(newJournalLines(prepared, journalEntryId))
-        verifyHeaderAgainstLines(
-            context.organisationId,
-            journalEntryId,
-            prepared,
-            prepared.totals,
-            settled.size,
-        )
+        verifyHeaderAgainstLines(context.organisationId, journalEntryId, prepared)
         journals.markPosted(
             context.organisationId,
             postingRequestId,
@@ -246,7 +241,7 @@ class PostingEngine(
             journalReference = entryNumber.toString(),
             businessDate = period.dates.businessDate,
             postedAt = postedAt,
-            lineCount = settled.size,
+            lineCount = settled.legs.size,
         )
     }
 
@@ -266,9 +261,9 @@ class PostingEngine(
         dates = prepared.period.dates,
         currencyCode = prepared.functionalCurrency,
         functionalCurrencyCode = prepared.functionalCurrency,
-        totalDebitFunctional = prepared.totals.debit,
-        totalCreditFunctional = prepared.totals.credit,
-        lineCount = prepared.settled.size,
+        totalDebitFunctional = prepared.settled.totalDebit,
+        totalCreditFunctional = prepared.settled.totalCredit,
+        lineCount = prepared.settled.legs.size,
         narrative = prepared.request.narrative,
         postedAt = postedAt,
         actorId = prepared.context.actorId,
@@ -277,7 +272,7 @@ class PostingEngine(
     private fun newJournalLines(
         prepared: Prepared,
         journalEntryId: UUID,
-    ) = prepared.settled.mapIndexed { index, leg ->
+    ) = prepared.settled.legs.mapIndexed { index, leg ->
         NewJournalLine(
             organisationId = prepared.context.organisationId,
             journalEntryId = journalEntryId,
@@ -288,6 +283,8 @@ class PostingEngine(
             postingDate = prepared.period.dates.postingDate,
             functionalCurrencyCode = prepared.functionalCurrency,
             functionalAmount = leg.amount.amount,
+            // `1` because that is the truth for these postings, not a placeholder: a leg reaches
+            // here only after [PostingLegsPolicy] refused every currency but the functional one.
             exchangeRate = UNITY,
             sourceModule = prepared.request.source.sourceModule,
             actorId = prepared.context.actorId,
@@ -396,52 +393,6 @@ class PostingEngine(
                         safeDetail = "A referenced general-ledger account does not exist.",
                     )
             }
-
-    /**
-     * Validates every leg against its locked account and returns them at storage scale.
-     *
-     * Single-currency for now, and deliberately so: ADR 0019 ships no rate table, so a leg in any
-     * currency but the functional one is refused rather than converted at a silent rate of one.
-     * The rate column is written as `1` because that is the truth for these postings, not a
-     * placeholder.
-     */
-    private fun settleLegs(
-        legs: List<PostingLeg>,
-        functionalCurrency: String,
-        lockedAccounts: Map<UUID, GlAccount>,
-    ): List<PostingLeg> {
-        if (legs.size < MINIMUM_LEGS) {
-            throw InvalidOperationException(
-                code = PostingErrorCodes.UNBALANCED_POSTING,
-                safeDetail = "A journal needs at least two legs.",
-            )
-        }
-        return legs.map { leg ->
-            val amount = MoneyPolicy.requireSettled(leg.amount)
-            if (amount.currency != functionalCurrency) {
-                throw InvalidOperationException(
-                    code = PostingErrorCodes.CURRENCY_NOT_SUPPORTED,
-                    safeDetail =
-                        "Postings are accepted in the functional currency $functionalCurrency " +
-                            "only; no exchange rate is configured.",
-                )
-            }
-            GlAccountPostingPolicy.requirePostable(lockedAccounts.getValue(leg.accountId))
-            leg.copy(amount = amount)
-        }
-    }
-
-    private fun requireBalanced(legs: List<PostingLeg>): Totals {
-        val debit = legs.filter { it.side == PostingSide.DEBIT }.sumOf { it.amount.amount }
-        val credit = legs.filter { it.side == PostingSide.CREDIT }.sumOf { it.amount.amount }
-        if (debit.compareTo(credit) != 0 || debit.signum() <= 0) {
-            throw InvalidOperationException(
-                code = PostingErrorCodes.UNBALANCED_POSTING,
-                safeDetail = "Debit and credit totals must be equal and positive.",
-            )
-        }
-        return Totals(debit, credit)
-    }
 
     /**
      * Refuses a correction that names a target this tenant does not hold, or whose journal has not
@@ -589,17 +540,18 @@ class PostingEngine(
         organisationId: UUID,
         journalEntryId: UUID,
         prepared: Prepared,
-        totals: Totals,
-        lineCount: Int,
     ) {
+        val settled = prepared.settled
+        val lineCount = settled.legs.size
         val stored = journals.sumLines(organisationId, journalEntryId, headerDimensions(prepared))
         check(
-            stored.debitFunctional.compareTo(totals.debit) == 0 &&
-                stored.creditFunctional.compareTo(totals.credit) == 0 &&
+            stored.debitFunctional.compareTo(settled.totalDebit) == 0 &&
+                stored.creditFunctional.compareTo(settled.totalCredit) == 0 &&
                 stored.lineCount == lineCount,
         ) {
-            "journal_entry $journalEntryId header (${totals.debit}/${totals.credit}/$lineCount) " +
-                "does not match its lines (${stored.debitFunctional}/${stored.creditFunctional}/" +
+            "journal_entry $journalEntryId header (${settled.totalDebit}/" +
+                "${settled.totalCredit}/$lineCount) does not match its lines " +
+                "(${stored.debitFunctional}/${stored.creditFunctional}/" +
                 "${stored.lineCount}); the posting is rolled back"
         }
         val mismatched = stored.divergentLines.mismatched
@@ -626,24 +578,17 @@ class PostingEngine(
         }
     }
 
-    private data class Totals(
-        val debit: BigDecimal,
-        val credit: BigDecimal,
-    )
-
     /** Everything validated after the claim, handed to the write step as one value. */
     private data class Prepared(
         val request: LedgerPostingRequest,
         val context: AccountingContext,
         val period: ResolvedPostingPeriod,
-        val settled: List<PostingLeg>,
-        val totals: Totals,
+        val settled: SettledLegs,
         val functionalCurrency: String,
         val postingRuleVersionId: UUID?,
     )
 
     private companion object {
-        const val MINIMUM_LEGS = 2
         val UNITY: BigDecimal = BigDecimal.ONE
     }
 }

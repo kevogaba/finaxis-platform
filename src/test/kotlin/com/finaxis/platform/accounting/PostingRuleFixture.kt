@@ -5,6 +5,7 @@ import com.finaxis.platform.accounting.application.posting.PostingIntent
 import com.finaxis.platform.accounting.application.rules.CreatePostingRuleCommand
 import com.finaxis.platform.accounting.application.rules.CreatePostingRuleVersionCommand
 import com.finaxis.platform.accounting.application.rules.PostingRuleDryRunCommand
+import com.finaxis.platform.accounting.application.rules.PostingRuleDryRunMode
 import com.finaxis.platform.accounting.application.rules.PostingRuleService
 import com.finaxis.platform.accounting.application.rules.PostingRuleVersionTransitionCommand
 import com.finaxis.platform.accounting.domain.AccountResolution
@@ -26,6 +27,7 @@ import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_YEAR
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
+import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.JOURNAL_ENTRY
 import com.finaxis.platform.jooq.tables.references.MEMBERSHIP_PERMISSION
 import com.finaxis.platform.jooq.tables.references.PERMISSION
@@ -220,16 +222,25 @@ internal class PostingRuleFixture(
         return actor
     }
 
+    /**
+     * A `SAVINGS_DEPOSIT` intent of one `PRINCIPAL` fact.
+     *
+     * [currency] defaults to the tenant's functional currency, which is what every case but one
+     * wants. The exception is issue #95's first defect: facts supplied in a currency the tenant
+     * does not post in used to dry-run clean and post red, and stating that needs an intent whose
+     * amount is denominated elsewhere.
+     */
     fun intent(
         principal: String,
         productClass: String? = null,
         positionReference: String? = null,
+        currency: String = FUNCTIONAL_CURRENCY,
     ) = PostingIntent.Facts(
         "SAVINGS_DEPOSIT",
         listOf(
             FinancialFact(
                 "PRINCIPAL",
-                MonetaryAmount(BigDecimal(principal), "KES"),
+                MonetaryAmount(BigDecimal(principal), currency),
                 positionReference,
             ),
         ),
@@ -241,14 +252,42 @@ internal class PostingRuleFixture(
         actor: UUID,
     ) = AccountingContext(tenant.organisationId, tenant.branchId, actor)
 
+    /**
+     * Asks what a posting of [principal] would do on [postingDate].
+     *
+     * [currency] and [mode] exist for issue #95: the first denominates the facts somewhere other
+     * than the tenant's functional currency, and the second asks for a defect as data instead of
+     * as a throw. Both default to what every pre-existing caller already asked for.
+     */
     fun dryRun(
         tenant: Tenant,
         principal: String,
         postingDate: LocalDate,
         actor: UUID = MAKER,
+        currency: String = FUNCTIONAL_CURRENCY,
+        mode: PostingRuleDryRunMode = PostingRuleDryRunMode.STRICT,
     ) = rules.dryRun(
-        PostingRuleDryRunCommand(context(tenant, actor), intent(principal), postingDate),
+        PostingRuleDryRunCommand(
+            context(tenant, actor),
+            intent(principal, currency = currency),
+            postingDate,
+            mode,
+        ),
     )
+
+    /** Withdraws an account from use, as an administrator would after a version was approved. */
+    fun deactivateAccount(
+        tenant: Tenant,
+        accountId: UUID,
+    ) {
+        dsl
+            .update(GL_ACCOUNT)
+            .set(GL_ACCOUNT.STATUS, "INACTIVE")
+            .set(GL_ACCOUNT.UPDATED_AT, OffsetDateTime.now())
+            .where(GL_ACCOUNT.ORGANISATION_ID.eq(tenant.organisationId))
+            .and(GL_ACCOUNT.ID.eq(accountId))
+            .execute()
+    }
 
     /** Runs [block] with the tenant, branch and actor bound, as the engine needs. */
     fun <T> inContext(
@@ -396,6 +435,9 @@ internal class PostingRuleFixture(
     }
 
     companion object {
+        /** The functional currency every organisation this fixture provisions is denominated in. */
+        const val FUNCTIONAL_CURRENCY = "KES"
+
         /** The `V3` bootstrap administrator, and the maker of every version here. */
         val MAKER: UUID = UUID.fromString("11111111-1111-1111-1111-111111111111")
 
