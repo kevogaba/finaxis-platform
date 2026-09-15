@@ -150,7 +150,7 @@ class PostingEngineIntegrationTests(
 
         // Numbering is gapless and per tenant: the next journal takes two.
         val next =
-            inContext(tenant) { transactions.execute { post(tenant, reference = "dep-2") }!! }
+            inContext(tenant) { transactions.execute { post(tenant, reference = "dep-2") } }
         assertEquals("2", next.journalReference)
     }
 
@@ -268,12 +268,12 @@ class PostingEngineIntegrationTests(
         val tenant = provisionTenant("engine-retry")
         val harness = harness(tenant)
         val first =
-            inContext(tenant) { transactions.execute { post(tenant, reference = "dep-7") }!! }
+            inContext(tenant) { transactions.execute { post(tenant, reference = "dep-7") } }
         val after = harness.snapshot()
 
         // The retry after a lost response: same reference, same request.
         val replay =
-            inContext(tenant) { transactions.execute { post(tenant, reference = "dep-7") }!! }
+            inContext(tenant) { transactions.execute { post(tenant, reference = "dep-7") } }
         assertEquals(first, replay, "a retry returns the receipt of the journal already posted")
         assertEquals(after, harness.snapshot(), "a retry writes nothing and burns no number")
 

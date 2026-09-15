@@ -197,8 +197,7 @@ class SubledgerPositionReferenceIntegrationTests(
                                 ),
                         ),
                     )
-                }!!
-                .journalEntryId
+                }.journalEntryId
         }
 
     private fun linesForPosition(

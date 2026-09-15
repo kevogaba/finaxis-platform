@@ -30,6 +30,7 @@ import com.finaxis.platform.common.context.RequestContext
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.context.TenantContext
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.persistence.AdvisoryLockNamespace
 import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_PERIOD
 import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_YEAR
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
@@ -164,7 +165,7 @@ internal class JournalReversalFixture(
         debit: String = "500.00",
     ): PostingReceipt =
         inContext(tenant, MAKER) {
-            transactions.execute { postExplicit(tenant, reference, debit) }!!
+            transactions.execute { postExplicit(tenant, reference, debit) }
         }
 
     fun postExplicit(
@@ -257,6 +258,31 @@ internal class JournalReversalFixture(
                 .and(JOURNAL_LINE.JOURNAL_ENTRY_ID.eq(journalEntryId))
                 .orderBy(JOURNAL_LINE.LINE_NUMBER)
                 .fetch { it.toString() }
+
+    /**
+     * The `objid` of the advisory lock [PostgresJournalReversalLock] takes for this journal.
+     *
+     * Derived exactly as production derives it - `AdvisoryLockNamespace.objectId` over the same
+     * `"$organisationId:$journalEntryId"` string. Deriving it any other way, in particular with
+     * SQL's `hashtextextended`, yields a different key and silently loses the mutual exclusion the
+     * scenarios using it are trying to observe.
+     */
+    fun reversalLockKey(
+        tenant: Tenant,
+        journalEntryId: UUID,
+    ) = AdvisoryLockNamespace.objectId("${tenant.organisationId}:$journalEntryId")
+
+    /**
+     * Takes the journal-reversal advisory lock for [objectId] on the calling transaction, so a
+     * test can hold the key a reverser needs and watch the reverser park on it.
+     */
+    fun takeReversalLock(objectId: Int) {
+        dsl.execute(
+            "select pg_advisory_xact_lock(?, ?)",
+            AdvisoryLockNamespace.ACCOUNTING_JOURNAL_REVERSAL,
+            objectId,
+        )
+    }
 
     fun reversalsOf(
         tenant: Tenant,

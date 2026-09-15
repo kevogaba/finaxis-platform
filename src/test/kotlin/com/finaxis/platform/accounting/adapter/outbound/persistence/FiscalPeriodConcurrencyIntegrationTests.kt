@@ -6,6 +6,7 @@ import com.finaxis.platform.accounting.application.FiscalPeriodStateStore
 import com.finaxis.platform.accounting.application.PostingPeriodResolver
 import com.finaxis.platform.accounting.domain.FiscalPeriodKey
 import com.finaxis.platform.accounting.domain.FiscalPeriodStatus
+import com.finaxis.platform.accounting.support.LockOverlapProbe
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import org.jooq.DSLContext
@@ -54,6 +55,7 @@ class FiscalPeriodConcurrencyIntegrationTests(
 ) {
     private val fixture = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
     private val transactions = TransactionTemplate(transactionManager)
+    private val probe = LockOverlapProbe(dsl)
     private val calendar = FiscalCalendarFixture(dsl)
 
     @Test
@@ -492,25 +494,7 @@ class FiscalPeriodConcurrencyIntegrationTests(
      *
      * Polls rather than sleeps a fixed interval: the loop ends as soon as the wait is observable.
      */
-    private fun awaitBlockedOnLock() {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS)
-        while (System.nanoTime() < deadline) {
-            val waiting =
-                dsl.fetchValue(
-                    "select count(*) from pg_stat_activity " +
-                        "where datname = current_database() " +
-                        "and wait_event_type = 'Lock' and pid <> pg_backend_pid()",
-                )
-            if ((waiting as? Number)?.toLong()?.let { it > 0L } == true) {
-                return
-            }
-            Thread.onSpinWait()
-        }
-        throw AssertionError(
-            "no backend ever blocked on a lock: the contending statement was never obstructed, " +
-                "so this scenario would pass without the production lock",
-        )
-    }
+    private fun awaitBlockedOnLock() = probe.awaitAnyBackendBlocked()
 
     private fun openPeriod(label: String): FiscalPeriodKey {
         val organisationId = fixture.createActiveOrganisation("period-$label", ACTOR_ID)

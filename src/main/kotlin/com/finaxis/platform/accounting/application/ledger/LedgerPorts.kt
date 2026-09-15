@@ -98,11 +98,53 @@ data class NewJournalLine(
     val actorId: UUID,
 )
 
+/**
+ * The dimensions every line of a journal copies from the header it belongs to.
+ *
+ * `journal_line` denormalises branch, fiscal period, posting date and both currency codes so the
+ * reporting reads can filter and group on the line alone, without joining the header back in. That
+ * duplication is only safe while the copies agree, and nothing in the schema enforces it: the
+ * foreign keys tie a line to a *valid* branch and period, not to *its header's* branch and period.
+ */
+data class JournalLineDimensions(
+    val branchId: UUID?,
+    val fiscalPeriodId: UUID,
+    val postingDate: java.time.LocalDate,
+    val currencyCode: String,
+    val functionalCurrencyCode: String,
+)
+
+/**
+ * How many stored lines disagree with their header, one count per denormalised dimension.
+ *
+ * Counted per dimension rather than as a single flag so a failure can name what diverged, which is
+ * the difference between a diagnosable defect and a rolled-back transaction with no explanation.
+ */
+data class DivergentLineCounts(
+    val branch: Int,
+    val fiscalPeriod: Int,
+    val postingDate: Int,
+    val currency: Int,
+    val functionalCurrency: Int,
+) {
+    /** The dimensions at least one line got wrong, named for a failure message. */
+    val mismatched: List<String>
+        get() =
+            buildList {
+                if (branch > 0) add("branch")
+                if (fiscalPeriod > 0) add("fiscal period")
+                if (postingDate > 0) add("posting date")
+                if (currency > 0) add("currency")
+                if (functionalCurrency > 0) add("functional currency")
+            }
+}
+
 /** What the database says a journal's lines sum to, read back inside the posting transaction. */
 data class JournalTotals(
     val debitFunctional: BigDecimal,
     val creditFunctional: BigDecimal,
     val lineCount: Int,
+    val divergentLines: DivergentLineCounts,
 )
 
 /** A posting request as its callers see it: the durable lineage and where it got to. */
@@ -186,10 +228,21 @@ interface JournalStore {
     /** Inserts every line in one statement. */
     fun insertJournalLines(lines: List<NewJournalLine>)
 
-    /** Re-reads the lines of a journal and sums them, for the `INV-4` verification read. */
+    /**
+     * Re-reads the lines of a journal for the `INV-4` verification read: sums them, counts them,
+     * and counts those whose denormalised dimensions disagree with [header].
+     *
+     * The header is passed in rather than its dimensions being read back out, because the
+     * comparison is `IS DISTINCT FROM` and belongs in the same statement as the aggregates: a
+     * nullable branch makes a value-by-value comparison in Kotlin get NULL wrong, and comparing
+     * every line against one expected value detects lines disagreeing with *each other* as a
+     * by-product. Answering it in the aggregate the read already performs costs one extra column
+     * per dimension - no extra statement, no extra scan, and the same snapshot.
+     */
     fun sumLines(
         organisationId: UUID,
         journalEntryId: UUID,
+        header: JournalLineDimensions,
     ): JournalTotals
 
     /**

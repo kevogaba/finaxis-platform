@@ -20,6 +20,7 @@ import com.finaxis.platform.accounting.domain.PostingLeg
 import com.finaxis.platform.accounting.domain.PostingRequestStatus
 import com.finaxis.platform.accounting.domain.PostingSide
 import com.finaxis.platform.accounting.schema.JournalSchemaFixture
+import com.finaxis.platform.accounting.support.LockOverlapProbe
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
@@ -54,8 +55,11 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -81,6 +85,7 @@ class PostingIdempotencyIntegrationTests(
     private val tenants = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
     private val schema = JournalSchemaFixture(dsl)
     private val transactions = TransactionTemplate(transactionManager)
+    private val probe = LockOverlapProbe(dsl)
 
     // Correction lineage needs a reversal, and a reversal needs a checker distinct from the maker
     // who posted the original (`journal.self_reversal`) - reused rather than re-implemented, so
@@ -91,8 +96,8 @@ class PostingIdempotencyIntegrationTests(
     fun `a sequential duplicate returns the same receipt and one financial effect`() {
         val tenant = provisionTenant("idem-sequential")
 
-        val first = inContext(tenant) { transactions.execute { post(tenant, "dep-1") }!! }
-        val second = inContext(tenant) { transactions.execute { post(tenant, "dep-1") }!! }
+        val first = inContext(tenant) { transactions.execute { post(tenant, "dep-1") } }
+        val second = inContext(tenant) { transactions.execute { post(tenant, "dep-1") } }
 
         assertEquals(first, second)
         assertEquals(1, journalCount(tenant))
@@ -100,24 +105,59 @@ class PostingIdempotencyIntegrationTests(
 
     @Test
     fun `concurrent duplicates produce exactly one committed posting`() {
-        // Two real transactions on two connections, released together. One inserts; the other
-        // waits on the uncommitted row at the unique index, then observes the committed request
-        // and replays it. Neither aborts, and neither sees a unique violation.
+        // Two real transactions on two connections that demonstrably OVERLAP. The first claims the
+        // source reference and is held open, uncommitted; the second is then proved - out of
+        // PostgreSQL's own lock catalogue - to be parked behind it *on posting_request* before the
+        // first is allowed to commit. Only then does the loser observe the committed request and
+        // replay it. Neither aborts, and neither sees a unique violation.
+        //
+        // The relation is part of the proof, not decoration: the holder's open transaction also
+        // holds the tenant's reference_sequence counter row and its own uncommitted journal rows,
+        // so "blocked behind the holder" alone would be satisfied by a duplicate that contended at
+        // none of the things this scenario is about.
+        //
+        // Releasing both from one latch would prove only simultaneous start: the scheduler could
+        // let the first commit before the second issued a statement, degrading this to the
+        // sequential replay two tests above already cover.
         val tenant = provisionTenant("idem-concurrent")
-        val start = CountDownLatch(1)
+        val claimApplied = CountDownLatch(1)
+        val releaseClaim = CountDownLatch(1)
+        val holderPid = AtomicInteger()
+        val duplicateReturned = AtomicBoolean()
+
         val receipts =
-            Executors.newFixedThreadPool(2).use { executor ->
-                val futures =
-                    (1..2).map {
-                        executor.submit<PostingReceipt> {
-                            assertTrue(start.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS))
-                            inContext(
-                                tenant,
-                            ) { transactions.execute { post(tenant, "dep-race") }!! }
+            Executors.newVirtualThreadPerTaskExecutor().use { executor ->
+                val holder =
+                    executor.submit<PostingReceipt> {
+                        inContext(tenant) {
+                            transactions.execute {
+                                val receipt = post(tenant, "dep-race")
+                                holderPid.set(probe.currentBackendPid())
+                                claimApplied.countDown()
+                                assertTrue(
+                                    releaseClaim.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                                )
+                                receipt
+                            }
                         }
                     }
-                start.countDown()
-                futures.map { it.get(FUTURE_TIMEOUT_SECONDS, TimeUnit.SECONDS) }
+                assertTrue(claimApplied.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+                val duplicate =
+                    executor.submit<PostingReceipt> {
+                        inContext(tenant) { transactions.execute { post(tenant, "dep-race") } }
+                            .also { duplicateReturned.set(true) }
+                    }
+
+                probe.awaitClaimBlockedBehind(holderPid.get())
+                assertFalse(
+                    duplicateReturned.get(),
+                    "the duplicate returned while the first claim was still uncommitted, so the " +
+                        "two never overlapped",
+                )
+
+                releaseClaim.countDown()
+                listOf(holder, duplicate).map { it.get(FUTURE_TIMEOUT_SECONDS, TimeUnit.SECONDS) }
             }
 
         assertEquals(receipts[0], receipts[1], "both callers hold the receipt of the one journal")
@@ -126,14 +166,85 @@ class PostingIdempotencyIntegrationTests(
     }
 
     @Test
+    fun `a duplicate that waited on a claim that rolled back becomes the winner`() {
+        // The mirror of the case above, and the one branch `ON CONFLICT` has that nothing else
+        // reaches. The first claimant rolls back while the duplicate is parked behind it, so the
+        // speculative row dies and the waiter's own `ON CONFLICT ... DO NOTHING RETURNING id`
+        // returns a row: it becomes the claimant rather than the replayer, and never takes the
+        // `FOR UPDATE` re-read whose `checkNotNull` would fire if the two branches disagreed.
+        //
+        // The wait is proved on `posting_request` specifically, for the same reason as above: a
+        // duplicate parked on the counter row or on an uncommitted journal row would satisfy a
+        // bare "blocked behind the holder" identically, and would be a different scenario - one
+        // that never reached the claim whose rollback this test is entirely about.
+        val tenant = provisionTenant("idem-rollback")
+        val claimApplied = CountDownLatch(1)
+        val releaseClaim = CountDownLatch(1)
+        val holderPid = AtomicInteger()
+        val duplicateReturned = AtomicBoolean()
+
+        val receipt =
+            Executors.newVirtualThreadPerTaskExecutor().use { executor ->
+                val holder =
+                    executor.submit {
+                        inContext(tenant) {
+                            transactions.execute { status ->
+                                post(tenant, "dep-rollback")
+                                holderPid.set(probe.currentBackendPid())
+                                claimApplied.countDown()
+                                assertTrue(
+                                    releaseClaim.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                                )
+                                status.setRollbackOnly()
+                            }
+                        }
+                    }
+                assertTrue(claimApplied.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+                val duplicate =
+                    executor.submit<PostingReceipt> {
+                        inContext(tenant) { transactions.execute { post(tenant, "dep-rollback") } }
+                            .also { duplicateReturned.set(true) }
+                    }
+
+                probe.awaitClaimBlockedBehind(holderPid.get())
+                assertFalse(
+                    duplicateReturned.get(),
+                    "the duplicate returned before the first claim rolled back, so it never " +
+                        "waited on the claim this scenario is about",
+                )
+
+                releaseClaim.countDown()
+                holder.get(FUTURE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                duplicate.get(FUTURE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            }
+
+        assertEquals(1, journalCount(tenant), "the rolled-back attempt left no journal behind")
+        assertEquals(
+            1,
+            dsl.fetchCount(
+                POSTING_REQUEST,
+                POSTING_REQUEST.ORGANISATION_ID.eq(tenant.organisationId),
+            ),
+            "the rolled-back claim left no posting_request behind",
+        )
+        assertEquals(
+            "1",
+            receipt.journalReference,
+            "the rolled-back attempt burnt no gapless number: reference_sequence is a counter " +
+                "row, so its bump rolls back with everything else",
+        )
+    }
+
+    @Test
     fun `a retry after a lost post-commit response resolves to the existing journal`() {
         // The client posted, the transaction committed, the response never arrived. The retry is
         // an ordinary second call with the same durable identity.
         val tenant = provisionTenant("idem-retry")
-        val committed = inContext(tenant) { transactions.execute { post(tenant, "dep-lost") }!! }
+        val committed = inContext(tenant) { transactions.execute { post(tenant, "dep-lost") } }
         val storedBefore = journalIds(tenant)
 
-        val retried = inContext(tenant) { transactions.execute { post(tenant, "dep-lost") }!! }
+        val retried = inContext(tenant) { transactions.execute { post(tenant, "dep-lost") } }
 
         assertEquals(committed.journalEntryId, retried.journalEntryId)
         assertEquals(storedBefore, journalIds(tenant))
@@ -182,7 +293,7 @@ class PostingIdempotencyIntegrationTests(
                         entityId = entityId,
                         narrative = "First",
                     )
-                }!!
+                }
             }
         inContext(tenant) { transactions.execute { post(tenant, "dep-l2", entityId = entityId) } }
 
@@ -262,7 +373,7 @@ class PostingIdempotencyIntegrationTests(
     fun `lineage reads are permission gated and tenant scoped`() {
         val tenant = provisionTenant("idem-lineage-auth")
         val other = provisionTenant("idem-lineage-other")
-        val receipt = inContext(tenant) { transactions.execute { post(tenant, "dep-auth") }!! }
+        val receipt = inContext(tenant) { transactions.execute { post(tenant, "dep-auth") } }
 
         assertFailsWith<ForbiddenOperationException> {
             lineage.findBySource(
@@ -283,7 +394,7 @@ class PostingIdempotencyIntegrationTests(
         // the period between the original post and its retry must not turn the retry into
         // `accounting.fiscal_period_closed` (issue #89's core claim-ordering guarantee).
         val tenant = provisionTenant("idem-period-closed")
-        val original = inContext(tenant) { transactions.execute { post(tenant, "dep-x") }!! }
+        val original = inContext(tenant) { transactions.execute { post(tenant, "dep-x") } }
 
         dsl
             .update(ACCOUNTING_FISCAL_PERIOD)
@@ -291,7 +402,7 @@ class PostingIdempotencyIntegrationTests(
             .where(ACCOUNTING_FISCAL_PERIOD.ORGANISATION_ID.eq(tenant.organisationId))
             .execute()
 
-        val retried = inContext(tenant) { transactions.execute { post(tenant, "dep-x") }!! }
+        val retried = inContext(tenant) { transactions.execute { post(tenant, "dep-x") } }
 
         assertEquals(original.journalEntryId, retried.journalEntryId)
         assertEquals(1, journalCount(tenant))
@@ -303,7 +414,7 @@ class PostingIdempotencyIntegrationTests(
         // so deactivating a referenced account between the original post and its retry must not
         // turn the retry into `accounting.account_not_postable`.
         val tenant = provisionTenant("idem-account-inactive")
-        val original = inContext(tenant) { transactions.execute { post(tenant, "dep-x") }!! }
+        val original = inContext(tenant) { transactions.execute { post(tenant, "dep-x") } }
 
         dsl
             .update(GL_ACCOUNT)
@@ -311,7 +422,7 @@ class PostingIdempotencyIntegrationTests(
             .where(GL_ACCOUNT.ID.eq(tenant.debitAccountId))
             .execute()
 
-        val retried = inContext(tenant) { transactions.execute { post(tenant, "dep-x") }!! }
+        val retried = inContext(tenant) { transactions.execute { post(tenant, "dep-x") } }
 
         assertEquals(original.journalEntryId, retried.journalEntryId)
         assertEquals(1, journalCount(tenant))
@@ -324,7 +435,7 @@ class PostingIdempotencyIntegrationTests(
         // landing between the original post and its retry - which must not become
         // `accounting.organisation_not_postable`.
         val tenant = provisionTenant("idem-org-suspended")
-        val original = inContext(tenant) { transactions.execute { post(tenant, "dep-x") }!! }
+        val original = inContext(tenant) { transactions.execute { post(tenant, "dep-x") } }
 
         dsl
             .update(ORGANISATION)
@@ -332,7 +443,7 @@ class PostingIdempotencyIntegrationTests(
             .where(ORGANISATION.ID.eq(tenant.organisationId))
             .execute()
 
-        val retried = inContext(tenant) { transactions.execute { post(tenant, "dep-x") }!! }
+        val retried = inContext(tenant) { transactions.execute { post(tenant, "dep-x") } }
 
         assertEquals(original.journalEntryId, retried.journalEntryId)
         assertEquals(1, journalCount(tenant))
@@ -356,7 +467,7 @@ class PostingIdempotencyIntegrationTests(
     @Test
     fun `a correction naming a target that was never reversed is refused`() {
         val tenant = provisionTenant("idem-correction-unreversed")
-        val original = inContext(tenant) { transactions.execute { post(tenant, "dep-original") }!! }
+        val original = inContext(tenant) { transactions.execute { post(tenant, "dep-original") } }
 
         val failure =
             assertFailsWith<ConflictException> {
@@ -390,7 +501,7 @@ class PostingIdempotencyIntegrationTests(
                         debit = "110.00",
                         corrects = original.postingRequestId,
                     )
-                }!!
+                }
             }
 
         assertEquals(

@@ -31,6 +31,7 @@ import com.finaxis.platform.accounting.domain.PostingRuleSelector
 import com.finaxis.platform.accounting.domain.PostingRuleVersionStatus
 import com.finaxis.platform.accounting.domain.PostingSide
 import com.finaxis.platform.accounting.schema.JournalSchemaFixture
+import com.finaxis.platform.accounting.support.LockOverlapProbe
 import com.finaxis.platform.common.context.ActorContext
 import com.finaxis.platform.common.context.BranchContext
 import com.finaxis.platform.common.context.RequestContext
@@ -98,6 +99,7 @@ class GlAccountPostingLockConcurrencyIntegrationTests(
     private val tenants = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
     private val schema = JournalSchemaFixture(dsl)
     private val transactions = TransactionTemplate(transactionManager)
+    private val probe = LockOverlapProbe(dsl)
 
     @Test
     fun `L1 two postings hold the shared account lock on the same account at the same time`() {
@@ -705,25 +707,7 @@ class GlAccountPostingLockConcurrencyIntegrationTests(
      *
      * Polls rather than sleeps a fixed interval: the loop ends as soon as the wait is observable.
      */
-    private fun awaitBlockedOnLock() {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS)
-        while (System.nanoTime() < deadline) {
-            val waiting =
-                dsl.fetchValue(
-                    "select count(*) from pg_stat_activity " +
-                        "where datname = current_database() " +
-                        "and wait_event_type = 'Lock' and pid <> pg_backend_pid()",
-                )
-            if ((waiting as? Number)?.toLong()?.let { it > 0L } == true) {
-                return
-            }
-            Thread.onSpinWait()
-        }
-        throw AssertionError(
-            "no backend ever blocked on a lock: the contending statement was never obstructed, " +
-                "so this scenario would pass without the production lock",
-        )
-    }
+    private fun awaitBlockedOnLock() = probe.awaitAnyBackendBlocked()
 
     private companion object {
         /** The V3 bootstrap administrator: `audit_event.actor_user_id` is a real foreign key. */

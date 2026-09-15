@@ -217,6 +217,7 @@ class PostingEngine(
         verifyHeaderAgainstLines(
             context.organisationId,
             journalEntryId,
+            prepared,
             prepared.totals,
             settled.size,
         )
@@ -518,14 +519,23 @@ class PostingEngine(
      * database actually holds and compares them with the header before the transaction can commit.
      * A mismatch is a defect in this engine or its store, never a caller error, so it is a
      * `check` - the transaction rolls back and the journal never becomes visible.
+     *
+     * Money is not the only thing a line copies from its header. `journal_line` also denormalises
+     * branch, fiscal period, posting date and both currency codes, and the reporting reads filter
+     * and group on those columns directly rather than joining the header back in - so a line that
+     * balanced but landed in the wrong period or branch would be invisible here and wrong
+     * everywhere downstream. The schema cannot catch it: the foreign keys tie a line to a *valid*
+     * period and branch, never to *its header's*. Verifying them costs one extra aggregate column
+     * each in a statement this already runs.
      */
     private fun verifyHeaderAgainstLines(
         organisationId: UUID,
         journalEntryId: UUID,
+        prepared: Prepared,
         totals: Totals,
         lineCount: Int,
     ) {
-        val stored = journals.sumLines(organisationId, journalEntryId)
+        val stored = journals.sumLines(organisationId, journalEntryId, headerDimensions(prepared))
         check(
             stored.debitFunctional.compareTo(totals.debit) == 0 &&
                 stored.creditFunctional.compareTo(totals.credit) == 0 &&
@@ -535,7 +545,22 @@ class PostingEngine(
                 "does not match its lines (${stored.debitFunctional}/${stored.creditFunctional}/" +
                 "${stored.lineCount}); the posting is rolled back"
         }
+        val mismatched = stored.divergentLines.mismatched
+        check(mismatched.isEmpty()) {
+            "journal_entry $journalEntryId has lines that disagree with their header on " +
+                "${mismatched.joinToString()}; the posting is rolled back"
+        }
     }
+
+    /** The dimensions the header was built from, which every line must have copied. */
+    private fun headerDimensions(prepared: Prepared) =
+        JournalLineDimensions(
+            branchId = prepared.context.branchId,
+            fiscalPeriodId = prepared.period.period.key.fiscalPeriodId,
+            postingDate = prepared.period.dates.postingDate,
+            currencyCode = prepared.functionalCurrency,
+            functionalCurrencyCode = prepared.functionalCurrency,
+        )
 
     private fun requireActiveTransaction() {
         check(TransactionSynchronizationManager.isActualTransactionActive()) {

@@ -573,6 +573,16 @@ What actually enforces it, in order:
    commit, re-sums `journal_line` for the entry and compares it with the header. A mismatch throws
    and the transaction rolls back, so the entry never becomes visible. This is the enforcement
    point; issue #41 owns it and must not treat it as optional.
+
+   The same read also proves the four dimensions a line **denormalises** from its header - branch,
+   fiscal period, posting date and both currency codes - agree with it, counted per dimension in
+   the same aggregate so a failure names what diverged. Money is not the only thing a line copies:
+   the reporting reads filter and group on those columns directly rather than joining the header
+   back in, so a line that balanced to the cent but was filed against another period would satisfy
+   every check above and be wrong in every report below. No schema constraint can catch it, because
+   the foreign keys tie a line to a *valid* period and branch, never to *its header's*. The
+   comparison is `IS DISTINCT FROM`, because `branch_id` is nullable; comparing every line against
+   one header value also detects lines that disagree with *each other*.
 3. **The header `CHECK` constraints** cover what a single row can: totals greater than zero, and
    debit total equal to credit total.
 4. **The header-versus-lines proof query** is a *detector* for operational assurance and for tests —

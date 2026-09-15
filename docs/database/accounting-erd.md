@@ -959,6 +959,12 @@ engine's verification read inside the posting transaction — see
 [enforcing the balance invariant](../architecture/accounting-foundation.md#enforcing-the-balance-invariant)
 — and *detected* after the fact by the header-versus-lines proof query.
 
+That same verification read also proves each line's denormalised `branch_id`, `fiscal_period_id`,
+`posting_date`, `currency_code` and `functional_currency_code` match the header's. The foreign keys
+below tie a line to a *valid* branch and period, never to *its header's*, so nothing in this schema
+forbids a balanced journal whose lines are filed against another period — which the reporting reads
+would then group wrongly, since they read those columns off the line rather than joining the header.
+
 | Index | Definition | Justifying query |
 | --- | --- | --- |
 | `uq_journal_entry_reversal_once` | `UNIQUE (organisation_id, reverses_journal_entry_id) WHERE reverses_journal_entry_id IS NOT NULL` | At most one reversal per journal (`INV-6`), and *"has this journal been reversed"* in one lookup |
