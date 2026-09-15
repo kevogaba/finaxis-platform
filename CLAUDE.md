@@ -80,6 +80,15 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   only ever be proven against an aggregate that is not its own
 - `V12__accounting_manual_journal_external_reference.sql` — `manual_journal.external_reference`:
   one bounded column, so a document number has somewhere to live other than inside the narrative
+- `V13__accounting_journal_line_append_guard.sql` — `fn_journal_line_append_guard` and
+  `trg_journal_line_append_guard`, **the repository's first and only trigger**: an
+  `AFTER INSERT … FOR EACH STATEMENT` guard on `journal_line` refusing any statement that leaves a
+  journal holding more lines than its header's `line_count` declares. It closes the late append
+  `REVOKE UPDATE, DELETE` cannot reach; because `line_count` is itself mutable, it is complete only
+  once #54 lands. A trigger is admitted here only against the five conditions in
+  `docs/adr/0024-journal-line-append-guard-and-trigger-policy.md` — the old "this repository has
+  zero triggers" rule is withdrawn, and `V7`'s frozen header comment saying otherwise is superseded
+  by `V13`'s own header
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -104,9 +113,9 @@ See `docs/database/foundation-schema.md`, `docs/adr/0010-...`, and `docs/adr/001
 and `docs/architecture/accounting-foundation.md` holds the invariants. `V6` created the fiscal
 calendar and the chart of accounts from it, `V7` the journal tables, `V8` the posting-rule tables,
 `V9` control accounts and their reconciliation evidence, `V10` manual-journal drafts, `V11` the
-one-control-account-per-class uniqueness, and `V12` the manual-journal external reference; the
-projection table is still design-only. Do not invent accounting tables or columns outside those
-documents.
+one-control-account-per-class uniqueness, `V12` the manual-journal external reference, and `V13`
+the journal-line append guard; the projection table is still design-only. Do not invent accounting
+tables or columns outside those documents.
 
 ## Authorization
 

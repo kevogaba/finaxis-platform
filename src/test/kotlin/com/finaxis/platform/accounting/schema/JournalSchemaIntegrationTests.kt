@@ -190,6 +190,16 @@ class JournalSchemaIntegrationTests(
         val otherJournalId = fixture.insertBalancedJournal(other)
 
         // A line naming another tenant's account, journal or period.
+        //
+        // Each of these appends line 3 to a journal that already holds the two its header
+        // declares, so V13's trg_journal_line_append_guard would refuse them too. The foreign key
+        // is what comes back because PostgreSQL queues an immediate RI check as each row is
+        // inserted and queues the AFTER ... FOR EACH STATEMENT event only when the statement
+        // finishes, so the key always fires first. Declaring any of these keys
+        // DEFERRABLE INITIALLY DEFERRED - or deferring one with SET CONSTRAINTS - would move its
+        // check past the guard, and these three assertions would start reporting the guard's
+        // message instead of the constraint they name. Merely marking a key DEFERRABLE does not:
+        // it stays INITIALLY IMMEDIATE.
         assertViolates("fk_journal_line_account") {
             fixture.insertJournalLine(
                 tenant,

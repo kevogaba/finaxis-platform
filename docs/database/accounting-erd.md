@@ -30,6 +30,7 @@ sentence.
 | `V10` | `manual_journal`, `manual_journal_line`, one transition log | #48 |
 | `V11` | `uq_gl_account_control_kind` replacing `idx_gl_account_control` | #91 |
 | `V12` | `manual_journal.external_reference` | #92 |
+| `V13` | `fn_journal_line_append_guard` and `trg_journal_line_append_guard` on `journal_line` | #95 |
 | Then | `gl_account_daily_balance` | #47 |
 
 Issue #34's permission migration carries no accounting tables — only reference data.
@@ -89,8 +90,8 @@ exist yet, and accounting holds no foreign key into them.
 | `gl_account_transition_log` | Authoritative, append-only | Accounting | #36 |
 | `fiscal_period_transition_log` | Authoritative, append-only | Accounting | #36 |
 | `posting_request` | Authoritative | Accounting | #40 |
-| `journal_entry` | Authoritative, **immutable** | Accounting | #40 |
-| `journal_line` | Authoritative, **immutable** | Accounting | #40 |
+| `journal_entry` | Authoritative, **no update, no delete** | Accounting | #40 |
+| `journal_line` | Authoritative, **no update, no delete, no late append** | Accounting | #40 |
 | `posting_rule` | Authoritative | Accounting | #44 |
 | `posting_rule_version` | Authoritative | Accounting | #44 |
 | `posting_rule_leg` | Authoritative | Accounting | #44 |
@@ -101,6 +102,13 @@ exist yet, and accounting holds no foreign key into them.
 | `manual_journal_transition_log` | Authoritative, append-only | Accounting | #48 |
 | `gl_account_daily_balance` | **Projection**, rebuildable | Accounting | #47 |
 | savings, loan, share and teller positions | Authoritative | **Product-owned-future** | Out of Phase B |
+
+*"No update, no delete"* is the accurate claim about the journal tables, not *"immutable"*. A
+**new** `journal_entry` can always be inserted — a reversal is exactly that — and until `V13`
+nothing stopped a **line** being added to a journal that had already committed.
+[`trg_journal_line_append_guard`](#trg_journal_line_append_guard) is what closes the second case;
+the first is the ledger working as designed. See
+[audit columns and immutability](#audit-columns-and-immutability).
 
 ## Identifier conventions
 
@@ -386,6 +394,11 @@ Issue #54 revokes `UPDATE` and `DELETE` on `journal_entry` and `journal_line` fr
 role, so a design that took a row lock on a journal — to guard against a concurrent second
 reversal, say — would work in every test and fail on the day the privilege model it exists for is
 switched on.
+
+`V13`'s append guard inherits that constraint. It cannot take `SELECT … FOR UPDATE` on the header it
+counts against, so its count is evaluated with no lock at all — limit (b) under
+[`trg_journal_line_append_guard`](#trg_journal_line_append_guard). The same revoke that makes the
+append guard matter is what makes the lock that would harden it unavailable.
 
 Every serialisation the engine needs is therefore taken on a **mutable** row or an advisory lock:
 `reference_sequence` for the gapless number, `posting_request` under `FOR UPDATE` for the
@@ -822,6 +835,11 @@ date column follows [the period selector](#the-period-selector), and every paren
 composite foreign key on `(organisation_id, <parent_id>)` with the `uq_<table>_organisation_id`
 target declared in the same `CREATE TABLE`.
 
+One later migration belongs to this section rather than to one of its own: `V13`'s
+[`trg_journal_line_append_guard`](#trg_journal_line_append_guard) is issue #95's, but it guards
+`journal_line` and is specified here, after what `V7` proves, so that everything constraining a
+journal reads in one place.
+
 ### `posting_request`
 
 The durable identity of one business transaction's accounting effect: what asked for the posting,
@@ -907,8 +925,11 @@ rule version"* first has an answer. This table receives one row per financial tr
 
 ### `journal_entry`
 
-The balanced header. Immutable once committed: no `updated_at`, no `updated_by`, no `row_version`,
-and `REVOKE UPDATE, DELETE` under issue #54.
+The balanced header. Never updated and never deleted once committed: no `updated_at`, no
+`updated_by`, no `row_version`, and `REVOKE UPDATE, DELETE` under issue #54. `line_count` is
+nonetheless a plain mutable column until that revoke lands, which is precisely what bounds `V13`'s
+append guard — see limit (a) under
+[`trg_journal_line_append_guard`](#trg_journal_line_append_guard).
 
 | Column | Type | Null | Meaning |
 | --- | --- | --- | --- |
@@ -979,7 +1000,10 @@ query that would filter by period filters by the indexed date instead; and branc
 One debit or credit against one GL account. The largest table in the schema — roughly 800,000
 rows a day at the design envelope — and the one every aggregate reads, so it deliberately
 denormalises `branch_id`, `fiscal_period_id`, `posting_date` and the currency codes from its
-header. That is safe **only because** the row is append-only under a hard no-update rule.
+header. That is safe **only because** the row is never updated and never deleted, and — from `V13`
+— because [`trg_journal_line_append_guard`](#trg_journal_line_append_guard) stops a line being
+added to a journal that has already committed. A late append would otherwise change a journal's
+balance without any of the copied dimensions being re-checked against the header.
 
 | Column | Type | Null | Meaning |
 | --- | --- | --- | --- |
@@ -1051,6 +1075,266 @@ afterwards, including the `V3` bootstrap tenant that had none.
 `AccountingQueryPlanTests` seeds the fixture the foundation specifies and asserts the Q1 and Q5
 plans against their shared-block budgets, which is what makes the index choices above a test
 rather than a paragraph.
+
+### `trg_journal_line_append_guard`
+
+Issue #54's `REVOKE UPDATE, DELETE` stops a committed journal being altered or removed. It does not
+stop one being **appended to**. A transaction holding only `INSERT` on `journal_line` can add a
+third line to a journal that committed yesterday with two: the header is never written, so no
+protected row is touched, and the journal's balance and its line count change anyway.
+`PostingEngine.verifyHeaderAgainstLines` cannot catch it, because that read runs inside the
+transaction that creates the journal and is never run again; the header-versus-lines proof query
+would only *detect* it, after the fact.
+
+`V13` closes it with the repository's first and only trigger. It is statement-level, reads the
+inserted rows from a transition table, and holds exactly one predicate. This is the whole of it, and
+`V13` transcribes it verbatim:
+
+```sql
+CREATE FUNCTION fn_journal_line_append_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    SECURITY INVOKER
+    SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+    offending_entry UUID;
+    declared_count INTEGER;
+    present_count BIGINT;
+BEGIN
+    -- One set-based pass over the statement's own rows: count what each journal it touched now
+    -- holds, and stop at the first journal holding more than its header declares. LIMIT 1 because
+    -- the statement is refused whole - naming one offender is enough to diagnose it, and finding
+    -- the rest costs a full aggregate over every journal the statement touched.
+    SELECT counted.journal_entry_id, entry.line_count, counted.present
+      INTO offending_entry, declared_count, present_count
+    FROM (
+        SELECT line.organisation_id, line.journal_entry_id, count(*) AS present
+        FROM journal_line line
+        WHERE (line.organisation_id, line.journal_entry_id) IN (
+            SELECT touched.organisation_id, touched.journal_entry_id FROM inserted touched
+        )
+        GROUP BY line.organisation_id, line.journal_entry_id
+    ) counted
+    JOIN journal_entry entry
+      ON entry.organisation_id = counted.organisation_id
+     AND entry.id = counted.journal_entry_id
+    WHERE counted.present > entry.line_count
+    LIMIT 1;
+
+    IF FOUND THEN
+        RAISE EXCEPTION
+            'journal_entry % declares line_count % but now holds % journal_line rows; a '
+            'committed journal cannot grow a line'
+            , offending_entry, declared_count, present_count
+        USING ERRCODE = 'check_violation',
+              HINT = 'Correction is a new REVERSAL entry, never an append to an existing journal.';
+    END IF;
+
+    -- AFTER STATEMENT: the return value is ignored, and NULL is the convention for saying so.
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER trg_journal_line_append_guard
+    AFTER INSERT ON journal_line
+    REFERENCING NEW TABLE AS inserted
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION fn_journal_line_append_guard();
+
+COMMENT ON FUNCTION fn_journal_line_append_guard() IS
+    'Refuses an INSERT that would leave any journal holding more journal_line rows than its '
+    'header''s line_count declares. Statement-level and set-based: it reads the statement''s NEW '
+    'TABLE once, never once per row. Raises check_violation (23514) so the failure lands in the '
+    'same class as the CHECK constraints beside it; Spring renders that as '
+    'DataIntegrityViolationException. SECURITY INVOKER, and search_path pinned so a temporary '
+    'table cannot shadow journal_line and be counted in its place.';
+COMMENT ON TRIGGER trg_journal_line_append_guard ON journal_line IS
+    'The only trigger in this schema, and the prevention half of journal immutability that issue '
+    '#54''s REVOKE UPDATE, DELETE cannot cover: a revoke stops a committed journal being changed '
+    'or removed, not a later transaction appending a line to it. Bounded deliberately - it does '
+    'not stop a NEW journal_entry being written, because a reversal is exactly that, and it is '
+    'airtight against an actor who can also UPDATE line_count only once #54 has landed.';
+```
+
+**`V13` proves the ledger clean before it installs the guard over it.** `CREATE TRIGGER` does not
+evaluate the rows already in the table — measured on `postgres:18.4`, a journal declaring
+`line_count` 2 while holding three lines accepts the trigger without complaint — so a violation
+that predates the migration would sit underneath a guard asserting it cannot happen. That is this
+migration's own failure arriving one day early, and exactly the "claims more than it closes"
+problem the limits below are written to avoid. So `V13` opens with a `DO` block counting journals
+whose lines exceed their header's `line_count`, using **the guard's own predicate** so the two
+cannot disagree about what a violation is, and raises if it finds any. An *under*-count journal is
+not a violation and does not block the deploy, consistent with `<=`.
+
+It fails the deployment rather than warning, deliberately: the alternative is to install the guard,
+report nothing, and let `INV-5` assert about a ledger nobody verified. The repair is not automated,
+also deliberately — reconciling a journal whose lines disagree with its header is an accounting
+decision about which row is wrong and what a correcting reversal should say, not something a
+migration may guess at. The message names the total and the first offender so an investigation has
+somewhere to start. Production cannot have produced such a journal, because `writeJournal` writes
+exactly `line_count` lines, re-reads them through `verifyHeaderAgainstLines` and only then marks
+the request `POSTED`, all in one transaction; the check is expected to pass everywhere, and on a
+fresh database it reads an empty table.
+
+**The failure is `check_violation`, SQLSTATE 23514.** Not the plpgsql default `raise_exception`
+(`P0001`). This is a check a row-level `CHECK` cannot express and it belongs in the same class as
+the `CHECK` constraints it sits beside, so Spring renders it as `DataIntegrityViolationException`
+like every other constraint failure in this schema rather than as an `UncategorizedSQLException`.
+Nothing translates it into an API error, on purpose: no endpoint inserts a journal line, so
+tripping this guard is an engine or store defect rather than a caller mistake — the same category
+as `verifyHeaderAgainstLines`' own check, which is an `IllegalStateException` and a 500.
+
+**`SECURITY INVOKER` and a pinned `search_path`, both written out rather than left to a default.**
+The function only reads two tables the caller has just written to, so `DEFINER` would confer
+nothing the caller does not already hold — and would be inert today anyway, because the application
+connects as the initdb bootstrap superuser, which owns every table. `SET search_path = pg_catalog,
+public, pg_temp` is not decoration: PostgreSQL searches the temporary schema before everything else
+for relations unless `pg_temp` is named explicitly, so without the pin a caller could
+`CREATE TEMP TABLE journal_line` and have the guard count an empty decoy while the real append
+proceeded. Naming `pg_temp` last moves it out of that implicit first position, and `pg_catalog`
+first fixes `count()` and `format()` as well. The transition table is resolved by the executor
+rather than through `search_path`, so the pin does not affect it.
+
+**It lives in `public`, beside the tables it guards.** `V6` installed `btree_gist` into a dedicated
+`extensions` schema because jOOQ codegen reads `inputSchema = "public"` with no excludes and would
+generate the extension's routines into `com.finaxis.platform.jooq` on every build. A trigger
+function does not have that problem: jOOQ's `includeTriggerRoutines` defaults to `false` and
+`PostgresDatabase` applies it by excluding `pg_proc` rows whose `prorettype` is `trigger`, so a
+function that `RETURNS trigger` is invisible to codegen wherever it lives. That is also why the
+guard is a trigger function rather than the `SECURITY DEFINER` helper the issue first proposed: a
+helper returning `void` would generate.
+
+**Statement-level, not row-level.** The engine writes all of a journal's lines in one statement, so
+the guard runs once per posting rather than once per line, and the transition table hands it the set
+of journals the statement touched with no per-row accumulation. `RETURN NULL` is correct: an
+`AFTER … FOR EACH STATEMENT` trigger's return value is ignored, and `NULL` is the convention for
+saying so.
+
+**The cost, bounded honestly.** For an ordinary two-line posting the recount is one index range scan
+against `uq_journal_line_entry_number (organisation_id, journal_entry_id, line_number)`, which
+covers the count's whole predicate and which the schema already carries for Q5. A bulk statement
+does not pay that per journal: it pays one grouped pass plus the transition table the executor
+materialises, measured at roughly 5% on the 200,000-line query-plan seed (14.4s to 15.2s on
+`postgres:18.4`). Neither shape scans the largest table in the schema.
+
+**`<=`, not `=`, and the choice is load-bearing.** The trigger refuses only `present > line_count`.
+Under an equality predicate a statement inserting the first line of a two-line journal fails at
+once, because 1 ≠ 2 — and every fixture that builds a journal row by row does exactly that:
+`JournalSchemaFixture.insertBalancedJournal` writes the header and then each line as its own
+auto-commit statement, and `JournalSchemaIntegrationTests`, `JooqJournalStoreIntegrationTests`,
+`ManualJournalSchemaIntegrationTests` and `ControlAccountReplacementIntegrationTests` all go
+through it. An under-count is the normal intermediate state of a journal being built.
+(`AccountingQueryPlanTests`' 200,000-line seed is the opposite shape — one set-based statement
+carrying all four lines of each journal against a header declaring four — so it passes either
+predicate and is not evidence either way.) Nothing is lost by the weaker form: for every journal the
+engine commits, `<=` and `=` coincide, because `writeJournal` inserts the header, inserts the lines,
+re-reads them through `verifyHeaderAgainstLines` and only then calls `markPosted`, all inside one
+transaction, so a committed journal holding **fewer** lines than it declares is unreachable. `<=` is
+the weakest predicate that still refuses the append, which is the one to choose: a stronger one buys
+nothing the verification read does not already prove, and costs the fixtures. The extra line still
+trips the guard when it arrives.
+
+**Why no `CHECK`, unique index or foreign key can express this.** The predicate compares an
+aggregate over one table with a column on another table's row. A `CHECK` sees exactly one row, and
+PostgreSQL rejects a `CHECK` containing a subquery outright. `uq_journal_line_entry_number` already
+prevents a duplicate ordinal, but the appended line simply takes `line_number = 3` and violates
+nothing; no index can express a bound whose value lives on another table's row. A foreign key
+relates a row to a row and carries no cardinality bound in either direction, and `EXCLUDE` compares
+*pairs* of rows, not counts. `line_count` cannot be made a generated column computed from the
+lines, because a generated column may reference only the row being written. So it is a trigger or
+nothing, which is why [ADR 0024](../adr/0024-journal-line-append-guard-and-trigger-policy.md)
+exists and states what a trigger has to meet to be admitted here.
+
+**Four limits, stated because a guard described as closing more than it closes is worse than no
+guard.**
+
+**(a) `line_count` is mutable, so `V13` is complete only with #54.** `journal_entry.line_count` is a
+plain column, and deliberately has no `updated_at` to betray a write. A role that can `INSERT` a
+`journal_line` **and** `UPDATE journal_entry` can set `line_count = 3` first and then append, and
+the guard sees 3 ≤ 3 and permits it. What `V13` closes is the append an actor holding only
+**`INSERT`** can perform — an append every actor can perform today, because no revoke has landed
+yet. Issue #54's `REVOKE UPDATE, DELETE ON journal_entry` closes the rest. The two are
+complementary, neither is sufficient alone, and `V13` is **not** independent of #54.
+
+And a `REVOKE` alone will not be enough for #54 either. PostgreSQL does not consult privileges for
+a table's owner, and a superuser bypasses them outright, so revoking `UPDATE` from the role that
+owns `journal_entry` changes nothing — and that is the role the application connects as today.
+**#54 has to move the application off the owning role, or its revoke is inert.** Until it does, the
+same connection that can raise `line_count` can also `ALTER TABLE journal_line DISABLE TRIGGER` and
+remove this guard outright, which is why nothing here describes the committed journal as immutable.
+
+**(d) The guard fires on `INSERT` only.** `UPDATE journal_line SET journal_entry_id = …` moves a
+line from one journal to another and trips nothing; `DELETE` removes one silently. Neither is an
+append and both are squarely what #54's `REVOKE UPDATE, DELETE` is for, but a reader taking "a
+committed journal cannot grow a line" as an unqualified claim should know where the sentence
+stops.
+
+**(b) No lock is taken on the header, so a residual concurrency window exists in theory.** The count
+is evaluated once per statement with no lock on `journal_entry`. Under `READ COMMITTED`, if a
+journal were ever committed holding *fewer* lines than it declares, two concurrent transactions
+could each append one, each see its own count satisfied, and both commit — leaving the journal over
+its declared count. Production cannot reach it, for the reason given above: `writeJournal`'s
+verification read and `markPosted` share a transaction, so no under-count journal is ever committed.
+Closing it properly would need `SELECT … FOR UPDATE` on the header, which serialises every posting
+in a tenant behind its own header row for no invariant production can violate — and which the same
+revoke that makes this guard matter would take away, per [serialisation never relies on a row lock
+over the immutable tables](#serialisation-never-relies-on-a-row-lock-over-the-immutable-tables). The
+residual is recorded, not fixed.
+
+**(c) A new `journal_entry` is not blocked, deliberately.** Nothing here prevents a later
+transaction inserting a *new* journal, with or without lines. That is the ledger working as
+designed: a reversal is exactly that. It also means `V13` does not make the ledger physically
+immutable. It closes one hole — lines appended to a journal that already exists — and the claim
+this document makes is bounded to that.
+
+### What `V13` proves before it merges
+
+`JournalLineAppendGuardIntegrationTests` is a sibling of `JournalSchemaIntegrationTests` rather than
+more cases inside it, because the production shapes need the posting engine and the two classes
+together would cross Detekt's `LargeClass` ceiling. It proves the defect itself — a later
+transaction appending a line to a journal that already holds the lines its header declares is
+refused — and then every legitimate write shape the guard must leave alone: a journal built a line
+at a time up to its declared count, the engine's own one-statement write, a set-based statement
+feeding several journals at once (refused **whole** when one of them overshoots, with none of its
+rows surviving), and a reversal writing an entirely new journal in a later transaction.
+
+A trigger has no `pg_constraint` row, so `JournalSchemaFixture.assertViolates` — which matches a
+constraint name in the failure's cause chain — has no name to match and is deliberately not used
+there. Each refusal is asserted on both halves of what this specification promises instead: SQLSTATE
+`23514`, which is what makes Spring render it as a `DataIntegrityViolationException` rather than an
+uncategorised failure, and the raised message naming the journal that overshot. That is why the
+message has to stay stable enough to assert, and why it names the journal, its declared `line_count`
+and the count actually present.
+
+Three properties behaviour alone cannot see are asserted against the catalogue directly: that the
+guard is the only trigger on `journal_line`, statement-level and declared with a transition table;
+that its function is `SECURITY INVOKER`, pins its `search_path` and returns `trigger`; and, as a
+behavioural companion to the pin, that a temporary table named `journal_line` cannot shadow the
+table the guard counts. Two of the three limits above ship as passing tests that record them:
+raising `line_count` first lets the append through — limit (a), the residual #54 closes — and a
+reversal is permitted — limit (c). Limit (b) is a concurrency residual production cannot reach and
+is recorded rather than tested.
+
+Two properties the guard leans on are load-bearing and easy to lose silently. **The guard does not
+displace a foreign-key rejection**: the cross-tenant cases in `JournalSchemaIntegrationTests` each
+add a third line to a two-line journal and keep asserting `fk_journal_line_account`,
+`fk_journal_line_entry` and `fk_journal_line_fiscal_period`, because PostgreSQL queues an immediate
+referential-integrity check as each row is inserted and queues the statement-level event only when
+the statement finishes, so the key always fires first. Declaring any of those keys
+`DEFERRABLE INITIALLY DEFERRED` would move its check past the guard and those three assertions would
+start reporting the guard's message instead. **A header written by the same statement is visible to
+the guard**: `AccountingQueryPlanTests`' seed writes headers and lines in one set-based statement
+and is accepted, which is only possible because an `AFTER … FOR EACH STATEMENT` trigger reads a
+snapshot that already includes the statement's own header rows. Without that the
+`JOIN journal_entry` would match nothing and the guard would silently permit everything.
+
+One existing test changed rather than gained coverage. `JooqJournalStoreIntegrationTests`' batched
+line read built its journals at the fixture's default `line_count` of 2 and then wrote three lines
+into each; the guard refuses that, and the headers now declare the lines they really hold. That is
+the guard working on a fixture that was describing itself wrongly, not a concession to it.
+
+`FinancialTransactionAtomicityFixture` needs no new probe: the trigger's only effects are raising or
+not raising, so there is no durable write for a probe to observe.
 
 ## Column definitions for the issue #44 tables
 
@@ -1441,12 +1725,31 @@ only — no `updated_at`, no `updated_by`, no `row_version` — following the `b
 precedent. The absence is the point: there is no column for an update to maintain, so the schema
 itself says the row is append-only.
 
-Application-level immutability is backed physically by
+Application-level no-update and no-delete are backed physically by
 `REVOKE UPDATE, DELETE ON journal_entry, journal_line FROM <application role>`, which is
-declarative and visible in `\dp`. A trigger was rejected: this repository has zero triggers, and
-invisible PL/pgSQL business logic is the opposite of the declarative-`CHECK` culture `V1`
-established. The least-privilege role is an operations prerequisite tracked by issue #54; until it
-exists the guarantee is application-level plus tests.
+declarative and visible in `\dp`. The least-privilege role is an operations prerequisite tracked
+by issue #54; until it exists that half of the guarantee is application-level plus tests.
+
+`REVOKE UPDATE, DELETE` does not close **append**. It constrains what may happen to a row that
+exists and says nothing about new rows. A transaction holding only `INSERT` can add a third line
+to a journal that committed yesterday declaring two, changing the journal's balance and its line
+count without writing a single protected row, and `PostingEngine.verifyHeaderAgainstLines` cannot
+see it because that read runs inside the transaction that creates the journal and never runs
+again. `V13` closes that case with
+[`trg_journal_line_append_guard`](#trg_journal_line_append_guard), specified there with its three
+limits and argued in [ADR 0024](../adr/0024-journal-line-append-guard-and-trigger-policy.md).
+
+The blanket *"this repository has zero triggers"* rejection an earlier revision of this paragraph
+carried is **withdrawn**. It was a count standing in for an argument. The argument it stood in for
+— that invisible PL/pgSQL business logic is the opposite of the declarative-`CHECK` culture `V1`
+established — is answered by the narrow shape ADR 0024 fixes: a trigger here may only refuse,
+never compute or write, and only for a property no `CHECK`, index, `EXCLUDE` or foreign key can
+express. A `BEFORE UPDATE OR DELETE` trigger over these tables is still rejected, because `REVOKE`
+says the same thing declaratively and reads out of `\dp` without anyone opening a function body.
+
+Neither mechanism makes the ledger physically immutable, and this document does not claim that it
+does. A **new** `journal_entry` remains insertable by design — a reversal is exactly that. What is
+closed is update, delete and late append to a journal that already exists.
 
 ## Indexing
 
@@ -1508,4 +1811,5 @@ Deferred, with the issue that creates each:
 | #48 | `V10`: `manual_journal`, `manual_journal_line`, their transition log, and approval through the engine |
 | #47 | `gl_account_daily_balance` and its documented rebuild query |
 | #49, #50, #51 | The read models, using the query patterns and pagination contract |
-| #54 | The `REVOKE UPDATE, DELETE` operational prerequisite |
+| #54 | The `REVOKE UPDATE, DELETE` operational prerequisite; also what completes `V13`'s append guard, because `line_count` is mutable until it lands |
+| #95 | `V13`: `trg_journal_line_append_guard` and `fn_journal_line_append_guard`, and ADR 0024's standard for admitting a trigger at all |
