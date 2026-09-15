@@ -42,4 +42,14 @@ class LifecycleAccountingTenantAdapter(
 
     override fun functionalCurrencyOf(organisationId: UUID): String? =
         bootstrapStore.baseCurrencyCode(organisationId)
+
+    /**
+     * The locking read accounting decides a journal's currency from, delegated unchanged.
+     *
+     * Deliberately a second port method rather than a flag on the first. The two have different
+     * preconditions - this one requires an active transaction and leaves a lock behind - and a
+     * boolean parameter would let a read-side caller acquire that lock by accident.
+     */
+    override fun functionalCurrencyForPosting(organisationId: UUID): String? =
+        bootstrapStore.lockBaseCurrencyCode(organisationId)
 }

@@ -3,6 +3,7 @@ package com.finaxis.platform.architecture
 import com.tngtech.archunit.base.DescribedPredicate
 import com.tngtech.archunit.core.domain.JavaClass
 import com.tngtech.archunit.core.domain.JavaClasses
+import com.tngtech.archunit.core.domain.JavaModifier
 import com.tngtech.archunit.core.importer.ClassFileImporter
 import com.tngtech.archunit.core.importer.ImportOption
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
@@ -176,10 +177,74 @@ class AccountingBoundaryRuleTests {
             ).check(productionClasses)
     }
 
+    @Test
+    fun `no bean accounting exposes declares a generic method`() {
+        // Spring Modulith advises every type a module EXPOSES with ModuleEntryInterceptor, which
+        // renders the invoked method's signature to name its observation. DefaultObservedModule
+        // .render calls FormattableType.of(resolvableType.resolve()), and ResolvableType.resolve()
+        // answers null for an unresolvable type variable — so the first call to a generic method on
+        // an exposed bean dies with `NullPointerException: Cannot invoke "java.lang.Class
+        // .getTypeName()" because "type" is null`, inside the interceptor, before any application
+        // code runs.
+        //
+        // That is a defect in Spring Modulith 2.1.0 rather than in the method, and it is still
+        // ours to avoid: spring-boot-starter-opentelemetry is a runtime dependency, so the
+        // interceptor is live in production and not merely under test. It is also invisible to
+        // every unit test, because it only exists once the bean is proxied in a running context.
+        //
+        // PostingTransactionBoundary.execute was first written as `fun <T : Any> execute(...)` in
+        // the exposed posting package and failed exactly this way. The generic seam moved to
+        // application.ledger, which the module does not expose and Modulith therefore does not
+        // advise, and PostingTransactions took its place with no type parameters anywhere. This
+        // rule is the only thing standing between that and a silent reintroduction.
+        val exposedBeans =
+            productionClasses
+                .filter { it.packageName in EXPOSED_PACKAGES }
+                .filter { it.isMetaAnnotatedWith(SPRING_COMPONENT) }
+
+        val offenders =
+            exposedBeans
+                .flatMap { type ->
+                    type.methods
+                        .filter { it.modifiers.contains(JavaModifier.PUBLIC) }
+                        .filter { it.typeParameters.isNotEmpty() }
+                        .map { "${type.simpleName}.${it.name} declares ${it.typeParameters}" }
+                }.sorted()
+
+        assertEquals(
+            emptyList(),
+            offenders,
+            "a generic method on a bean accounting exposes throws NullPointerException inside " +
+                "Spring Modulith's ModuleEntryInterceptor on its first call; keep the generic " +
+                "signature in a package the module does not expose: $offenders",
+        )
+
+        // Non-vacuity, per `the accounting table rule guards tables that are actually generated`
+        // above: this rule matches on a package and an annotation, so a rename or a move empties
+        // the subject set and turns it green while proving nothing.
+        assertEquals(
+            true,
+            exposedBeans.any { it.simpleName == "PostingTransactions" },
+            "the rule must actually be scanning accounting's exposed beans; " +
+                "PostingTransactions was not among ${exposedBeans.map { it.simpleName }}",
+        )
+    }
+
     private companion object {
         const val ROOT = "com.finaxis.platform"
         const val ACCOUNTING = "com.finaxis.platform.accounting.."
         const val ACCOUNTING_SOURCE_ROOT = "src/main/kotlin/com/finaxis/platform/accounting"
+
+        /** The packages accounting declares as `@NamedInterface`, and therefore exposes. */
+        val EXPOSED_PACKAGES =
+            setOf(
+                "com.finaxis.platform.accounting.application.posting",
+                "com.finaxis.platform.accounting.domain",
+            )
+
+        /** Spring's stereotype meta-annotation; only beans are advised by Modulith. */
+        val SPRING_COMPONENT: Class<out Annotation> =
+            org.springframework.stereotype.Component::class.java
 
         /** `Double`/`Float` as a declared type, a constructor call, or a conversion. */
         val FLOATING_POINT =

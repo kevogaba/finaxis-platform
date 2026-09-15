@@ -620,24 +620,59 @@ class ManualJournalIntegrationTests(
             )
         val before = harness.snapshot()
 
-        // A failure after approval must undo the draft's status, its transition log, the audit
-        // event, the posting request, the journal, its lines and the gapless number together.
-        harness.assertRollsBackAtomically(IllegalStateException::class) {
-            fx.inContext(tenant, tenant.checker) {
-                manual.approve(
-                    ManualJournalTransitionCommand(fx.context(tenant, tenant.checker), draft.id),
-                )
-                error("simulated failure after the draft posted")
+        // The failure this scenario used to inject - `error(...)` after `approve` returned, inside
+        // the harness's own `TransactionTemplate` - can no longer reach the approval's transaction,
+        // and keeping it would have been worse than losing it. `approve` now opens its own
+        // `SERIALIZABLE` transaction through `PostingTransactionBoundary`, which refuses to run
+        // inside a caller's, so the injected `IllegalStateException` would in fact have been the
+        // boundary's `check` firing before the draft was touched at all, and every probe would have
+        // read "unchanged" for the wrong reason. There is no seam left to inject through either:
+        // the body is a private `approveInTransaction`, deliberately, so that nothing but the
+        // boundary can open the transaction it runs in.
+        //
+        // What is still provable from outside is the either-or itself, so both halves are asserted.
+        // The refusal half is a closed period, the latest refusal the approval can raise:
+        // `PostingEngine` writes its `posting_request` claim before it resolves the period, so a
+        // durable row is in flight that the rollback has to take with it - this is not a scenario
+        // that passes because nothing was ever attempted.
+        fx.setPeriodStatus(tenant, "CLOSED")
+        val refused =
+            assertFailsWith<ConflictException> {
+                fx.inContext(tenant, tenant.checker) {
+                    manual.approve(
+                        ManualJournalTransitionCommand(
+                            fx.context(tenant, tenant.checker),
+                            draft.id,
+                        ),
+                    )
+                }
             }
-        }
-
-        assertEquals(before, harness.snapshot())
+        assertEquals(
+            PostingErrorCodes.PERIOD_CLOSED,
+            refused.code,
+            "the refusal must still be the period's, not the isolation guard's or the boundary's",
+        )
+        assertEquals(before, harness.snapshot(), "a refused approval leaves nothing behind")
         assertEquals(
             ManualJournalStatus.PENDING_APPROVAL,
             withRequestContext {
                 manual.get(tenant.organisationId, draft.id, ManualJournalFixture.MAKER)
             }.journal.status,
             "the draft is still awaiting its checker",
+        )
+
+        // And the commit half: the draft's status, its transition log, the audit event, the posting
+        // request, the journal, its lines and the gapless number all move on the one approval.
+        fx.setPeriodStatus(tenant, "OPEN")
+        fx.inContext(tenant, tenant.checker) {
+            manual.approve(
+                ManualJournalTransitionCommand(fx.context(tenant, tenant.checker), draft.id),
+            )
+        }
+        val after = harness.snapshot()
+        assertTrue(
+            before.all { (probe, value) -> after.getValue(probe) > value },
+            "every probe advanced on the one approval: $before -> $after",
         )
     }
 

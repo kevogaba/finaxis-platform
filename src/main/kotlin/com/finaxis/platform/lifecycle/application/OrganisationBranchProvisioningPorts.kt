@@ -51,6 +51,24 @@ interface OrganisationBootstrapStore {
     /** Returns the organisation's base currency code, or null when it does not exist. */
     fun baseCurrencyCode(organisationId: UUID): String?
 
+    /**
+     * The same code, read under a shared lock on the organisation row, for a caller that is about
+     * to write something denominated in it.
+     *
+     * Accounting asks this - through `AccountingTenantLookup.functionalCurrencyForPosting` - once
+     * its posting holds the tenant-currency lock, because [baseCurrencyCode] cannot answer the
+     * question it is actually asking. A posting runs at `SERIALIZABLE`, so every plain read in it
+     * comes from one snapshot: a base-currency change that commits after that snapshot is simply
+     * invisible, and the journal is written in the superseded code. A read that locks the row
+     * either answers from a row this transaction holds or fails outright, and failing is the
+     * correct outcome - the caller's retry then reads at a fresh snapshot.
+     *
+     * Requires an active transaction; the lock is held to its end. Lifecycle's own provisioning
+     * does not need it: the column is written only while the organisation is a draft, before
+     * anything can be denominated in it.
+     */
+    fun lockBaseCurrencyCode(organisationId: UUID): String?
+
     /** Creates (or finds) the head-office branch in [BranchLifecycleState.DRAFT]. */
     fun ensureHeadOfficeDraft(organisationId: UUID): HeadOfficeDraftResult
 

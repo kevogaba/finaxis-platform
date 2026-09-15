@@ -267,7 +267,10 @@ class PostingPeriodResolverTests {
             postingDate: LocalDate,
         ) = covering
 
-        override fun lockForPosting(key: FiscalPeriodKey) = locked
+        override fun lockCoveringForPosting(
+            organisationId: UUID,
+            postingDate: LocalDate,
+        ) = locked
 
         override fun lockForStateChange(key: FiscalPeriodKey) = locked
 

@@ -30,6 +30,7 @@ import com.finaxis.platform.accounting.domain.PostingLeg
 import com.finaxis.platform.accounting.domain.PostingRequestStatus
 import com.finaxis.platform.accounting.domain.PostingSide
 import com.finaxis.platform.accounting.support.CurrencyLockMode
+import com.finaxis.platform.accounting.support.PermissiveSnapshots
 import com.finaxis.platform.accounting.support.PostingLockJournal
 import com.finaxis.platform.accounting.support.RecordingFunctionalCurrencyLock
 import com.finaxis.platform.common.application.ConflictException
@@ -103,6 +104,7 @@ class PostingEngineTests {
             journals,
             numbers,
             clock,
+            PermissiveSnapshots(),
         )
 
     @BeforeEach
@@ -173,7 +175,13 @@ class PostingEngineTests {
         // and without the re-read this tenant's very first journal would be denominated in the
         // currency it declared a moment ago while it now declares another: the same divergence,
         // approached from the other side.
-        tenants.functionalCurrencyAfterFirstRead = "USD"
+        //
+        // Against the real adapter the re-read is a LOCKING read, and at SERIALIZABLE it aborts
+        // the transaction rather than ever returning a different value - which is what actually
+        // closes the window, and is proved in FunctionalCurrencyFreezeIntegrationTests. What is
+        // asserted here is the engine's own statement of the invariant: handed two currencies, it
+        // refuses and writes nothing rather than picking one.
+        tenants.functionalCurrencyUnderLock = "USD"
 
         val failure =
             assertFailsWith<ConflictException> { engine.post(request(), explicit(legs())) }
@@ -768,11 +776,16 @@ class PostingEngineTests {
         var functionalCurrency: String? = "KES"
 
         /**
-         * What the *next* read returns, so a test can move the currency between the engine's
-         * unlocked read and its re-read under the lock - the interleaving the freeze must refuse.
+         * What the read *under the lock* returns, so a test can move the currency between the
+         * engine's unlocked pre-claim read and its locking re-read - the interleaving the freeze
+         * must refuse.
+         *
+         * Against the real adapter this divergence is unreachable at `SERIALIZABLE`, because the
+         * locking read aborts the transaction instead of returning the newer value. It is still
+         * worth driving here: the comparison is the engine's statement of the invariant, and an
+         * in-memory port is the only place the two reads can be made to disagree at all.
          */
-        var functionalCurrencyAfterFirstRead: String? = null
-        private var currencyReads = 0
+        var functionalCurrencyUnderLock: String? = null
 
         override fun isOrganisationPostable(organisationId: UUID) = organisationPostable
 
@@ -786,11 +799,10 @@ class PostingEngineTests {
             branchId: UUID,
         ) = branchKnown
 
-        override fun functionalCurrencyOf(organisationId: UUID): String? {
-            currencyReads += 1
-            val after = functionalCurrencyAfterFirstRead
-            return if (after != null && currencyReads > 1) after else functionalCurrency
-        }
+        override fun functionalCurrencyOf(organisationId: UUID): String? = functionalCurrency
+
+        override fun functionalCurrencyForPosting(organisationId: UUID): String? =
+            functionalCurrencyUnderLock ?: functionalCurrency
     }
 
     private inner class FakeFiscalPeriodStateStore(
@@ -807,7 +819,10 @@ class PostingEngineTests {
             postingDate: LocalDate,
         ) = covering
 
-        override fun lockForPosting(key: FiscalPeriodKey): FiscalPeriodSnapshot? {
+        override fun lockCoveringForPosting(
+            organisationId: UUID,
+            postingDate: LocalDate,
+        ): FiscalPeriodSnapshot? {
             lockRequests++
             journal.record(PostingLockJournal.PERIOD)
             return locked

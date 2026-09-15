@@ -11,6 +11,13 @@ decision 0020 records still stands, its rejection of a `BEFORE UPDATE OR DELETE`
 journal tables included. What changes is the *reason* that rejection was given, and the categorical
 rule three documents had drawn out of it.
 
+One paragraph below is corrected by
+[ADR 0025](0025-serializable-posting-and-the-covering-period-lock.md): the residual-window
+consequence reasoned *"under `READ COMMITTED`"* about a posting path that now runs at
+`SERIALIZABLE`. Condition five of the standard this record sets — *a guard's limits are written
+down wherever the guarantee is claimed* — applies to this record's own limits too, so the paragraph
+is amended here rather than left to be read against a protocol that has changed.
+
 ## Context
 
 Issue #54 will `REVOKE UPDATE, DELETE ON journal_entry, journal_line` from a least-privilege
@@ -206,7 +213,12 @@ is evaluated once per statement with no lock on the header row. Under `READ COMM
 journal were ever committed holding fewer lines than it declares, two concurrent transactions could
 each append one, each observe its own count satisfied, and both commit — leaving the journal over
 its declared count. This was reproduced deliberately against a hand-made under-count journal, so
-the window is real rather than notional. What makes it unreachable in production is that
+the window is real rather than notional. The posting path has since moved off `READ COMMITTED` —
+[ADR 0025](0025-serializable-posting-and-the-covering-period-lock.md) raises it to `SERIALIZABLE`,
+where the two appenders have a read-write dependency on the count each other writes to and one
+aborts with `40001` — but that narrows the window to writers outside the posting path rather than
+closing it, and a migration or repair script issuing an `INSERT` at the default level is still
+inside it. What makes it unreachable in production is that
 `writeJournal`'s verification read and `markPosted` share a transaction and no under-count journal
 is ever committed. It is recorded because the fix would be `SELECT … FOR UPDATE` on the header, and
 that lock is precisely what #54's revoke makes unavailable — `SELECT … FOR UPDATE` requires the

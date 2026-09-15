@@ -132,6 +132,8 @@ class KeycloakUserProvisioningHandlerTests {
 
             override fun baseCurrencyCode(organisationId: UUID): String = "KES"
 
+            override fun lockBaseCurrencyCode(organisationId: UUID): String = "KES"
+
             override fun ensureHeadOfficeDraft(organisationId: UUID): HeadOfficeDraftResult =
                 HeadOfficeDraftResult(uuidV7(), true)
 

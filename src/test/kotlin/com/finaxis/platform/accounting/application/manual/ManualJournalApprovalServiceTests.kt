@@ -13,6 +13,7 @@ import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.audit.AuditSeverity
 import org.junit.jupiter.api.Test
+import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -209,6 +210,35 @@ class ManualJournalApprovalServiceTests : ManualJournalServiceTestFixture() {
         assertTrue(postings.posted.isEmpty())
         assertTrue(transitionLogs.isEmpty())
         assertTrue(auditEvents.isEmpty())
+    }
+
+    @Test
+    fun `approval refuses to run inside a transaction its caller already opened`() {
+        // Approval owns its transaction now, because the posting engine refuses anything below
+        // SERIALIZABLE and a caller's own transaction would be joined at whatever level it opened
+        // at - silently, since Spring does not validate an existing transaction against the
+        // joiner's attributes. The refusal is the only thing that makes that misuse visible, so it
+        // is asserted here rather than left to the boundary's own suite: this service is the
+        // caller that would suffer it, and the fixture would otherwise be free to drift back to
+        // raising the transaction flag around every test and never exercise the real shape again.
+        val journal = seed(status = ManualJournalStatus.PENDING_APPROVAL)
+        makers.performedBy(journal.id, ManualJournalTransition.SUBMIT, MAKER)
+
+        TransactionSynchronizationManager.setActualTransactionActive(true)
+        val refused =
+            try {
+                assertFailsWith<IllegalStateException> { service.approve(move(journal, CHECKER)) }
+            } finally {
+                TransactionSynchronizationManager.setActualTransactionActive(false)
+            }
+
+        assertTrue(
+            refused.message.orEmpty().contains("must own its transaction"),
+            "the refusal must name the reason, not merely fail: $refused",
+        )
+        // Refused before the engine is entered, so nothing was claimed and nothing moved.
+        assertTrue(postings.requests.isEmpty())
+        assertTrue(journals.statusMoves.isEmpty())
     }
 
     @Test

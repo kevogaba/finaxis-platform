@@ -5,8 +5,10 @@ import com.finaxis.platform.accounting.application.ChartOfAccountsService
 import com.finaxis.platform.accounting.application.CreateGlAccountCommand
 import com.finaxis.platform.accounting.application.ledger.LedgerPostingRequest
 import com.finaxis.platform.accounting.application.ledger.PostingEngine
+import com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary
 import com.finaxis.platform.accounting.application.ledger.ResolvedLegs
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
+import com.finaxis.platform.accounting.application.posting.PostingReceipt
 import com.finaxis.platform.accounting.application.reconciliation.ControlAccountReconciliationService
 import com.finaxis.platform.accounting.application.reconciliation.ListReconciliationRunsQuery
 import com.finaxis.platform.accounting.application.reconciliation.ReconciliationStatus
@@ -65,6 +67,8 @@ import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
@@ -88,6 +92,7 @@ class ControlAccountReconciliationIntegrationTests(
     private val reconciliation: ControlAccountReconciliationService,
     private val chart: ChartOfAccountsService,
     private val engine: PostingEngine,
+    private val postings: PostingTransactionBoundary,
     private val savings: FakeSavingsLedger,
     private val dsl: DSLContext,
     private val transactionManager: PlatformTransactionManager,
@@ -95,11 +100,12 @@ class ControlAccountReconciliationIntegrationTests(
 ) {
     private val tenants = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
     private val schema = JournalSchemaFixture(dsl)
+
+    /**
+     * For the proof, never for a posting: the refusal scenarios need a transaction the guard will
+     * reject, which is precisely what a template opened at the server default is.
+     */
     private val transactions = TransactionTemplate(transactionManager)
-    private val newTransaction =
-        TransactionTemplate(transactionManager).apply {
-            propagationBehavior = TransactionDefinition.PROPAGATION_REQUIRES_NEW
-        }
 
     /** The provider bean is shared, so one test's interleaving must not reach the next. */
     @BeforeEach
@@ -289,7 +295,7 @@ class ControlAccountReconciliationIntegrationTests(
         val tenant = provisionTenant("control-straddle")
         post(tenant, "dep-1", "1000.00")
         savings.mirrorsAccount = tenant.controlAccountId
-        savings.duringAggregate = { postInNewTransaction(tenant, "dep-straddle", "500.00") }
+        savings.duringAggregate = { postFromAnotherThread(tenant, "dep-straddle", "500.00") }
 
         val run = withRequestContext { reconciliation.run(runCommand(tenant)) }
 
@@ -694,32 +700,18 @@ class ControlAccountReconciliationIntegrationTests(
             .execute()
     }
 
-    /** A deposit: cash debited, the savings control account credited. */
-    private fun post(
-        tenant: Tenant,
-        reference: String,
-        amount: String,
-    ) = post(tenant, reference, amount, transactions)
-
     /**
-     * The same deposit, on a transaction of its own that commits immediately.
+     * A deposit: cash debited, the savings control account credited.
      *
-     * `REQUIRES_NEW` suspends whatever transaction the caller is in and takes a second connection,
-     * so a posting made from inside a running proof genuinely commits underneath it - which is the
-     * only way to reproduce the interleaving the snapshot contract exists to survive.
+     * Through [PostingTransactionBoundary], which is the only way a posting runs at all now - the
+     * engine refuses any transaction below `SERIALIZABLE`. A template this suite opened for itself
+     * would be a second, unverified answer to the question of what isolation a posting runs at.
      */
-    private fun postInNewTransaction(
-        tenant: Tenant,
-        reference: String,
-        amount: String,
-    ) = post(tenant, reference, amount, newTransaction)
-
     private fun post(
         tenant: Tenant,
         reference: String,
         amount: String,
-        template: TransactionTemplate,
-    ) {
+    ): PostingReceipt =
         RequestContexts.with(
             RequestContext(
                 tenant = TenantContext(tenant.organisationId),
@@ -728,7 +720,7 @@ class ControlAccountReconciliationIntegrationTests(
             ),
         ) {
             withRequestContext {
-                template.execute {
+                postings.execute("Posting a reconciliation scenario's deposit") {
                     engine.post(
                         LedgerPostingRequest(
                             context =
@@ -760,7 +752,28 @@ class ControlAccountReconciliationIntegrationTests(
                 }
             }
         }
-    }
+
+    /**
+     * The same deposit, committed by another thread while the caller's transaction stays open.
+     *
+     * `REQUIRES_NEW` used to do this: it suspended the caller's transaction and took a second
+     * connection. It is no longer available, because a posting now owns its transaction and
+     * [PostingTransactionBoundary] refuses to start one inside another - joining would drop the
+     * declared `SERIALIZABLE` silently, which is the wiring defect the check exists to catch. A
+     * second thread keeps the one property this scenario actually needs: the posting runs on its
+     * own connection and genuinely commits underneath a proof that is still open, which is the
+     * only way to reproduce the interleaving the snapshot contract exists to survive.
+     */
+    private fun postFromAnotherThread(
+        tenant: Tenant,
+        reference: String,
+        amount: String,
+    ): PostingReceipt =
+        Executors.newVirtualThreadPerTaskExecutor().use { executor ->
+            executor
+                .submit<PostingReceipt> { post(tenant, reference, amount) }
+                .get(INTERLEAVED_POST_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        }
 
     private fun runCommand(
         tenant: Tenant,
@@ -878,6 +891,13 @@ class ControlAccountReconciliationIntegrationTests(
     private companion object {
         val MAKER: UUID = UUID.fromString("11111111-1111-1111-1111-111111111111")
         val STRANGER: UUID = UUID.fromString("33333333-3333-3333-3333-333333333333")
+
+        /**
+         * Generous, and absolute rather than a sleep: the interleaved posting is awaited from
+         * inside a proof that holds a connection, so a hang here means a lock cycle rather than a
+         * slow machine, and a bound is what turns that into a failure instead of a stuck build.
+         */
+        const val INTERLEAVED_POST_TIMEOUT_SECONDS = 30L
 
         @Suppress("unused")
         val GL_ACCOUNT_TABLE = GL_ACCOUNT

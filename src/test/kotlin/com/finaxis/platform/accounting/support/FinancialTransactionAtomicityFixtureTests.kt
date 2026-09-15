@@ -19,6 +19,11 @@ import kotlin.test.assertTrue
  * database. Every other test in this area is a `@SpringBootTest`, which exercises the harness only
  * incidentally and would not distinguish a harness defect from a production one.
  *
+ * `assertLeavesNoTrace` is covered here rather than only in an integration test because it is the
+ * one entry point that opens no transaction: nothing rolls its operation back, so the probe
+ * comparison *is* the proof, and an implementation that skipped or short-circuited that comparison
+ * would still look green everywhere it was used.
+ *
  * No database is involved: the probes here ignore the `DSLContext` they are handed, so a
  * connection-less jOOQ context suffices. The database-backed behaviour is covered by
  * `FinancialTransactionAtomicityIntegrationTests`.
@@ -64,6 +69,57 @@ class FinancialTransactionAtomicityFixtureTests {
         // Asserted so the duplicate-name guard cannot be implemented in a way that also treats
         // "no probes" as an error, which would make the harness awkward to extend incrementally.
         assertEquals(emptyMap(), fixtureOf().snapshot())
+    }
+
+    @Test
+    fun `assertLeavesNoTrace fails when a probe advances across the operation`() {
+        // The new entry point runs the operation with no transaction around it, so nothing rolls
+        // back for it and the probe comparison is the entire proof. The fixture's own suite
+        // already refuses to let a vacuous pass hide behind a duplicate probe name; this path
+        // must not be the exception, and "it never actually compares" is the way it would be.
+        var rows = 3L
+        val fixture = fixtureOf(AtomicityProbe("journal_entry") { rows })
+
+        val failure =
+            assertFailsWith<AssertionError> {
+                fixture.assertLeavesNoTrace(emptyMap()) { rows += 1L }
+            }
+
+        assertTrue(
+            failure.message.orEmpty().contains("journal_entry"),
+            "the failure must name the probe that moved, not merely report a mismatch",
+        )
+    }
+
+    @Test
+    fun `assertLeavesNoTrace accepts the movement a caller declared`() {
+        // The twin of the test above: without it, an implementation that always failed would pass
+        // that one, and the entry point would be unusable for the committed case it also serves.
+        var rows = 3L
+        val fixture = fixtureOf(AtomicityProbe("journal_entry") { rows })
+
+        fixture.assertLeavesNoTrace(mapOf("journal_entry" to 2L)) { rows += 2L }
+    }
+
+    @Test
+    fun `assertLeavesNoTrace compares the probes before it rethrows the operation's failure`() {
+        // A refused operation is the dominant use, so the probes must be compared on the failing
+        // path too. Were the throwable to escape first, every rollback proof written against this
+        // entry point would assert only that the refusal happened.
+        var rows = 3L
+        val fixture = fixtureOf(AtomicityProbe("journal_entry") { rows })
+
+        val failure =
+            assertFailsWith<AssertionError> {
+                fixture.assertLeavesNoTrace(emptyMap()) {
+                    rows += 1L
+                    error("the operation was refused after writing")
+                }
+            }
+
+        // Had the operation's own IllegalStateException escaped first, the expected AssertionError
+        // would never have been raised and this assertion would have reported that instead.
+        assertTrue(failure.message.orEmpty().contains("journal_entry"))
     }
 
     private fun fixtureOf(vararg probes: AtomicityProbe) =

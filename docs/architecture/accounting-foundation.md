@@ -29,6 +29,7 @@ authority and this document defers to it.
 | [ADR 0020](../adr/0020-immutable-ledger-and-reversal-only-correction.md) | Immutable journals, reversal-only correction, ledger architecture |
 | [ADR 0017](../adr/0017-bian-semantic-reference-architecture.md) | BIAN as semantic reference, not deployment blueprint |
 | [ADR 0024](../adr/0024-journal-line-append-guard-and-trigger-policy.md) | The journal-line append guard, and when a database trigger is justified |
+| [ADR 0025](../adr/0025-serializable-posting-and-the-covering-period-lock.md) | Serializable posting, and the covering-period lock |
 | [Accounting schema](../database/accounting-erd.md) | Tables, columns, constraints, indexes |
 
 ## Scope And Non-Goals
@@ -725,18 +726,37 @@ change — the organisation update and the `base_currency` tenant setting — an
 when it has.
 
 That question and the answer's use must be serialised against the posting it is asking about.
-Reading it and writing the setting are one transaction; a tenant's first posting is another; and at
-`READ COMMITTED` neither sees the other, so both could commit and leave the tenant declaring a
-currency its immutable lines were never written under. Lifecycle therefore calls
+Reading it and writing the setting are one transaction; a tenant's first posting is another; and
+nothing about snapshot visibility makes either see the other, so both could commit and leave the
+tenant declaring a currency its immutable lines were never written under. Lifecycle therefore calls
 `AccountingLedgerActivity.lockFunctionalCurrencyForChange` immediately *before* asking — the
 adjacency is the fix — and a posting takes the same tenant-scoped lock **shared** as the first thing
-it does. The window was only ever a tenant's *first* posting, after which the currency is frozen for
-good; but the ledger is the one place the platform cannot go back and repair. The lock ordering that
-keeps this deadlock-free is stated in `docs/adr/0023-posting-idempotency-and-account-locking.md`.
-A tenant
-that genuinely needs to redenominate needs a versioned conversion and revaluation boundary, which
-is a separate design and is explicitly out of scope here — recorded so that a later change does not
-mistake silence for permission.
+it does. **The advisory lock is what makes this correct, and raising the posting path to
+`SERIALIZABLE` has not made it redundant.** An advisory lock does not participate in MVCC, so it
+carries neither an `EvalPlanQual` re-read nor a serialization failure with it: a serializable
+posting that takes the lock and then plainly re-reads the currency was measured returning its own
+snapshot's stale value and committing on it. The lock serialises the two sides; the isolation level
+does not.
+
+The posting's own read of the currency is the other half, and it is **closed** rather than
+outstanding. Because the engine re-reads the currency under the lock and compares it with the
+pre-claim read the fingerprint was computed from, raising the path to `SERIALIZABLE` would have made
+both reads answer from one snapshot and the comparison a tautology. So that re-read is a *locking*
+read — `AccountingTenantLookup.functionalCurrencyForPosting`, a `FOR SHARE` on the organisation row,
+measured to raise `40001` in exactly the interleaving a plain re-read commits through — and the
+posting aborts and is retried against the currency that won. The row lock closes the posting's read;
+the advisory lock closes the change's read; both are needed. The measurements are in
+[ADR 0025](../adr/0025-serializable-posting-and-the-covering-period-lock.md), which also records why
+this landed with the isolation raise instead of after it; issue #121 holds the original analysis and
+remains the pointer to it. The window was only ever a tenant's *first* posting, after which the
+currency is frozen for good — but the ledger is the one place the platform cannot go back and
+repair, which is why "rare" was not treated as "closed". The lock ordering that keeps both classes
+deadlock-free, and the argument that the new one adds no cycle, are stated in
+`docs/adr/0023-posting-idempotency-and-account-locking.md`.
+
+A tenant that genuinely needs to redenominate needs a versioned conversion and revaluation boundary,
+which is a separate design and is explicitly out of scope here — recorded so that a later change
+does not mistake silence for permission.
 
 Three consequences are worth stating so nobody re-derives them later:
 
@@ -969,6 +989,8 @@ worse than no design record at all.
   reference architecture
 - [ADR 0024](../adr/0024-journal-line-append-guard-and-trigger-policy.md) — the journal-line
   append guard, and the standard a database trigger must meet here
+- [ADR 0025](../adr/0025-serializable-posting-and-the-covering-period-lock.md) — serializable
+  posting, the covering-period lock, and what the isolation level does not supply
 - [Financial transaction atomicity](financial-transaction-atomicity.md) — the implementer's guide
 - [BIAN service landscape](bian-service-landscape.md) — module-to-Service-Domain mapping
 - [Foundation schema](../database/foundation-schema.md) — the conventions accounting inherits

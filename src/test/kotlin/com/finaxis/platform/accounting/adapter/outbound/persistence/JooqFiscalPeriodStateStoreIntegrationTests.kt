@@ -126,7 +126,7 @@ class JooqFiscalPeriodStateStoreIntegrationTests(
         assertEquals(true, moved)
         assertEquals(
             FiscalPeriodStatus.CLOSED,
-            requireNotNull(transactions.execute { periods.lockForPosting(key) }).status,
+            requireNotNull(periods.findById(key)).status,
         )
         assertEquals(
             listOf(ACTOR_ID, 1L),
@@ -157,7 +157,7 @@ class JooqFiscalPeriodStateStoreIntegrationTests(
         assertEquals(false, moved, "a forged tenant key must move nothing")
         assertEquals(
             FiscalPeriodStatus.OPEN,
-            requireNotNull(transactions.execute { periods.lockForPosting(key) }).status,
+            requireNotNull(periods.findById(key)).status,
             "the owner's period must be untouched",
         )
     }

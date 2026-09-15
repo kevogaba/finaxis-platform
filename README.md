@@ -271,5 +271,6 @@ the top of the stack. Merge bottom-up, rebasing the remainder after each merge.
 | [0022](docs/adr/0022-accounting-date-and-fiscal-period-concurrency.md) | Accounting date semantics and fiscal-period concurrency |
 | [0023](docs/adr/0023-posting-idempotency-and-account-locking.md) | Posting idempotency claim ordering and posting-time account locking |
 | [0024](docs/adr/0024-journal-line-append-guard-and-trigger-policy.md) | Journal-line append guard, and when a database trigger is justified |
+| [0025](docs/adr/0025-serializable-posting-and-the-covering-period-lock.md) | Serializable posting, and the covering-period lock |
 
 Historical planning, specification, and audit artifacts are archived under `docs/archive/`.

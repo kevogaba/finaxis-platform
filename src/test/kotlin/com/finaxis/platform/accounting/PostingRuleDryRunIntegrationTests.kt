@@ -2,6 +2,7 @@ package com.finaxis.platform.accounting
 
 import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.accounting.PostingRuleFixture.Companion.MAKER
+import com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary
 import com.finaxis.platform.accounting.application.posting.PostFinancialFactsCommand
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.application.posting.PostingService
@@ -19,8 +20,6 @@ import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestConstructor
-import org.springframework.transaction.PlatformTransactionManager
-import org.springframework.transaction.support.TransactionTemplate
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
@@ -40,6 +39,14 @@ import kotlin.test.assertNull
  * What the dry run still does not judge is deliberate and stated in `dryRun`'s own documentation:
  * tenant postability, fiscal-period status and posting-date admissibility belong to the engine,
  * because each of them would refuse a preview an administrator is entitled to take.
+ *
+ * The posting half of each pair enters through [PostingTransactionBoundary], because the engine
+ * refuses a transaction below `SERIALIZABLE` and a bare `TransactionTemplate` opens at the server
+ * default. That refusal is an `accounting.snapshot_isolation_unavailable` `ConflictException`, so
+ * it could never be mistaken for the `InvalidOperationException` these tests expect - but it would
+ * have turned every pair red for a reason that has nothing to do with currencies or withdrawn
+ * accounts. The assertions that matter are still the shared *code* and the shared detail: the pair
+ * only means anything while both halves refuse for the same reason.
  */
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -48,10 +55,9 @@ class PostingRuleDryRunIntegrationTests(
     rules: PostingRuleService,
     private val postingService: PostingService,
     dsl: DSLContext,
-    transactionManager: PlatformTransactionManager,
+    private val postingTransactions: PostingTransactionBoundary,
     organisationProvisioningService: OrganisationProvisioningService,
 ) {
-    private val transactions = TransactionTemplate(transactionManager)
     private val fx =
         PostingRuleFixture(
             dsl,
@@ -213,13 +219,18 @@ class PostingRuleDryRunIntegrationTests(
         assertEquals(0, fx.journalCount(tenant), "a dry run persists nothing")
     }
 
-    /** Posts the same intent the dry run was asked about, so the two answers can be compared. */
+    /**
+     * Posts the same intent the dry run was asked about, so the two answers can be compared.
+     *
+     * Owns its transaction rather than joining one, which is what the boundary requires and what a
+     * product module does; the refusal under test is raised inside it and rolls it back.
+     */
     private fun post(
         tenant: PostingRuleFixture.Tenant,
         principal: String,
         currency: String = PostingRuleFixture.FUNCTIONAL_CURRENCY,
     ) = fx.inContext(tenant, MAKER) {
-        transactions.execute {
+        postingTransactions.execute("A savings deposit under comparison") {
             postingService.post(
                 PostFinancialFactsCommand(
                     context = fx.context(tenant, MAKER),

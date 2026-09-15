@@ -3,6 +3,7 @@ package com.finaxis.platform.accounting.schema
 import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.accounting.JournalReversalFixture
 import com.finaxis.platform.accounting.application.ledger.PostingEngine
+import com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary
 import com.finaxis.platform.accounting.application.posting.PostingService
 import com.finaxis.platform.jooq.tables.references.JOURNAL_ENTRY
 import com.finaxis.platform.jooq.tables.references.JOURNAL_LINE
@@ -57,10 +58,21 @@ class JournalLineAppendGuardIntegrationTests(
     private val dsl: DSLContext,
     private val postingService: PostingService,
     engine: PostingEngine,
+    postings: PostingTransactionBoundary,
     transactionManager: PlatformTransactionManager,
     organisationProvisioningService: OrganisationProvisioningService,
 ) {
     private val fixture = JournalSchemaFixture(dsl)
+
+    /**
+     * For the fixture writes only: a header, a line, a decoy, a trigger disabled and rolled back.
+     *
+     * None of that is a posting, so none of it needs - or may have - the posting path's
+     * `SERIALIZABLE` boundary. The one production write here goes through [fx], which owns the
+     * [PostingTransactionBoundary] instead, and the two are kept apart deliberately: routing plain
+     * `INSERT`s through the posting boundary would say this suite's fixture shapes are postings,
+     * which is the opposite of what the guard tests are about.
+     */
     private val transactions = TransactionTemplate(transactionManager)
     private val fx =
         JournalReversalFixture(
@@ -68,7 +80,7 @@ class JournalLineAppendGuardIntegrationTests(
             engine,
             TenantAdminOrganisationFixture(organisationProvisioningService, dsl),
             fixture,
-            transactions,
+            postings,
         )
 
     @Test

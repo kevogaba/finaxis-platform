@@ -4,6 +4,7 @@ import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.accounting.application.ledger.JournalReadStore
 import com.finaxis.platform.accounting.application.ledger.LedgerPostingRequest
 import com.finaxis.platform.accounting.application.ledger.PostingEngine
+import com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary
 import com.finaxis.platform.accounting.application.ledger.ResolvedLegs
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.application.posting.PostingReceipt
@@ -52,7 +53,6 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestConstructor
 import org.springframework.transaction.PlatformTransactionManager
-import org.springframework.transaction.support.TransactionTemplate
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.OffsetDateTime
@@ -73,13 +73,18 @@ import kotlin.test.assertTrue
  *
  * Extracted from the test class rather than duplicated into the second one, so the two suites
  * prove different things about one fixture instead of drifting apart.
+ *
+ * [postings] is the production [PostingTransactionBoundary], not a `TransactionTemplate` a suite
+ * built for itself. The engine refuses any transaction below `SERIALIZABLE`, and a template a
+ * suite raised on its own would be a second, unverified answer to the question of what isolation a
+ * posting runs at - green here while production entered through the boundary, or the reverse.
  */
 internal class JournalReversalFixture(
     private val dsl: DSLContext,
     private val engine: PostingEngine,
     private val tenants: TenantAdminOrganisationFixture,
     private val schema: JournalSchemaFixture,
-    private val transactions: TransactionTemplate,
+    private val postings: PostingTransactionBoundary,
 ) {
     data class Tenant(
         val organisationId: UUID,
@@ -159,13 +164,16 @@ internal class JournalReversalFixture(
             .id!!
     }
 
+    /** Posts the journal a scenario is about to reverse, in a transaction the boundary owns. */
     fun postOriginal(
         tenant: Tenant,
         reference: String = "dep-${uuidV7()}",
         debit: String = "500.00",
     ): PostingReceipt =
         inContext(tenant, MAKER) {
-            transactions.execute { postExplicit(tenant, reference, debit) }
+            postings.execute("Posting a reversal scenario's original") {
+                postExplicit(tenant, reference, debit)
+            }
         }
 
     fun postExplicit(
