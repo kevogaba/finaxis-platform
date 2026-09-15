@@ -186,13 +186,14 @@ class PostingRuleService(
         }
 
     /**
-     * Approves and activates a submitted version, superseding the rule's current head.
+     * Approves and activates a submitted version, making room for it among the approved windows.
      *
-     * Refuses the actor who submitted it. Supersession happens here and nowhere else: the previous
+     * Refuses the actor who submitted it. Supersession happens here and nowhere else: an open-ended
      * `ACTIVE` version's window is closed the day before the new one's `effective_from`, so the two
-     * never govern the same date. A successor that would start before the current head began is
-     * refused, because closing the head's window would leave dates it already governed with no
-     * version.
+     * never govern the same date. A successor that would start before that head began is refused,
+     * because closing the head's window would leave dates it already governed with no version - and
+     * so is one that would reach back into a window already closed by an earlier supersession or by
+     * retirement, which no amount of closing can make room for.
      */
     @Transactional
     fun approve(command: PostingRuleVersionTransitionCommand): PostingRuleVersion {
@@ -210,7 +211,7 @@ class PostingRuleService(
             val legs = rules.findLegs(command.organisationId, version.id)
             PostingRulePolicy.requireWellFormed(legs)
             requirePostableAccounts(command.organisationId, legs, lockAccounts = true)
-            supersedeCurrentHead(command, version)
+            makeRoomFor(command, version)
         }
     }
 
@@ -453,28 +454,41 @@ class PostingRuleService(
     }
 
     /**
-     * Closes the rule's current head the day before [successor] takes effect.
+     * Makes room for [successor] by closing the approved window it would overlap, or refuses it.
      *
-     * A head whose `effective_from` is not before the successor's cannot be closed without leaving
-     * its own dates ungoverned, so a successor may only start after the current head started.
+     * `ex_posting_rule_version_no_overlap` covers `ACTIVE`, `SUPERSEDED` and `RETIRED` alike, so
+     * all three are windows a successor has to be compared against - not the `ACTIVE` head alone.
+     * Looking only for an `ACTIVE` head meant that a rule whose head had been retired skipped the
+     * comparison entirely: the overlap reached the database, where the exclusion constraint refused
+     * it as a `DataIntegrityViolationException` and a 500 rather than the published
+     * `POSTING_RULE_WINDOW_INVALID` this service promises (issue #96).
+     *
+     * A successor activates open-ended, so it overlaps every approved window that had not already
+     * stopped governing before its first day. Exactly one of those can be made room for: an
+     * open-ended head, closed the day before the successor starts. A window that is already closed
+     * - superseded by an earlier successor, or retired deliberately - is settled history, and
+     * re-closing it would rewrite which version governed dates that have already been posted
+     * against.
+     *
+     * The successor is excluded from its own overlap set explicitly. Today it is still
+     * `PENDING_APPROVAL` when this runs - [move] calls its `underLock` block before it writes the
+     * new status - so `isApproved` would exclude it anyway; stating it means a future reordering of
+     * [move] makes every approval refuse itself loudly here rather than silently.
      */
-    private fun supersedeCurrentHead(
+    private fun makeRoomFor(
         command: PostingRuleVersionTransitionCommand,
         successor: PostingRuleVersion,
     ) {
-        val head =
+        check(successor.effectiveTo == null) {
+            "A successor activates open-ended, which is what makes reaching its first day the " +
+                "whole overlap test; version ${successor.id} would activate bounded at " +
+                "${successor.effectiveTo}, so the comparison below would miss a later window"
+        }
+        val overlapped =
             rules
                 .findVersions(command.organisationId, successor.ruleId)
-                .singleOrNull { it.status == PostingRuleVersionStatus.ACTIVE }
-                ?: return
-        if (!head.effectiveFrom.isBefore(successor.effectiveFrom)) {
-            throw ConflictException(
-                code = PostingErrorCodes.POSTING_RULE_WINDOW_INVALID,
-                safeDetail =
-                    "A successor version must take effect after ${head.effectiveFrom}, when the " +
-                        "current version began.",
-            )
-        }
+                .filter { it.id != successor.id && it.governsAnyDateFrom(successor.effectiveFrom) }
+        val head = closableHead(overlapped, successor) ?: return
         move(
             PostingRuleVersionTransitionCommand(
                 organisationId = command.organisationId,
@@ -487,6 +501,48 @@ class PostingRuleService(
             closeOn = successor.effectiveFrom.minusDays(1),
         )
     }
+
+    /**
+     * The single open-ended head among [overlapped], or null when [successor] overlaps nothing.
+     *
+     * Anything else is a conflict the caller may not resolve by closing a window: a head that did
+     * not start before the successor cannot be closed the day before it without ending before it
+     * began, and an already-closed window cannot be closed again at all.
+     */
+    private fun closableHead(
+        overlapped: List<PostingRuleVersion>,
+        successor: PostingRuleVersion,
+    ): PostingRuleVersion? {
+        if (overlapped.isEmpty()) return null
+        // An open-ended approved window is necessarily the ACTIVE head:
+        // chk_posting_rule_version_closed_when_ended gives every SUPERSEDED or RETIRED row an
+        // effective_to. That is what lets the caller hand this straight to a SUPERSEDE transition,
+        // which the lifecycle graph admits from ACTIVE only.
+        val head = overlapped.singleOrNull()?.takeIf { it.effectiveTo == null }
+        if (head == null) {
+            throw ConflictException(
+                code = PostingErrorCodes.POSTING_RULE_WINDOW_INVALID,
+                safeDetail =
+                    "A successor taking effect on ${successor.effectiveFrom} would overlap " +
+                        "${describeWindows(overlapped)}, which the rule has already governed.",
+            )
+        }
+        if (!head.effectiveFrom.isBefore(successor.effectiveFrom)) {
+            throw ConflictException(
+                code = PostingErrorCodes.POSTING_RULE_WINDOW_INVALID,
+                safeDetail =
+                    "A successor version must take effect after ${head.effectiveFrom}, when the " +
+                        "current version began.",
+            )
+        }
+        return head
+    }
+
+    private fun describeWindows(versions: List<PostingRuleVersion>) =
+        versions.sortedBy { it.effectiveFrom }.joinToString(", ") { version ->
+            "version ${version.versionNumber} " +
+                "(${version.effectiveFrom} to ${version.effectiveTo ?: "open-ended"})"
+        }
 
     private fun validateLegs(
         organisationId: UUID,

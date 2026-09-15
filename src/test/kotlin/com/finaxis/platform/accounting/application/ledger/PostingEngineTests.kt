@@ -1109,6 +1109,19 @@ class PostingEngineTests {
             journalEntryId: UUID,
         ): List<JournalLineView> = emptyList()
 
+        override fun findJournalEntriesForRequests(
+            organisationId: UUID,
+            postingRequestIds: Collection<UUID>,
+        ): Map<UUID, JournalEntryView> =
+            postingRequestIds
+                .mapNotNull { findJournalEntryForRequest(organisationId, it) }
+                .associateBy { it.postingRequestId }
+
+        override fun findJournalLinesForEntries(
+            organisationId: UUID,
+            journalEntryIds: Collection<UUID>,
+        ): Map<UUID, List<JournalLineView>> = emptyMap()
+
         private fun toRequestView(stored: StoredRequest) =
             PostingRequestView(
                 id = stored.id,

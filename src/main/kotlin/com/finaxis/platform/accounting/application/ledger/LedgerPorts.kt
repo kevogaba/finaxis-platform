@@ -273,7 +273,13 @@ interface JournalStore {
  * Read port over the journal tables for callers that only look: lineage, reversal, and later the
  * read models. Separate from [JournalStore] so the write port stays small enough to reason about
  * and a reader can be handed nothing that writes.
+ *
+ * Nine reads against Detekt's eight-per-interface ceiling, suppressed rather than split: the last
+ * two are the batched forms of two of the others, and a port that separated "read one" from "read
+ * a page of the same thing" would hand an adapter two interfaces over one table for no reason a
+ * caller could act on.
  */
+@Suppress("TooManyFunctions")
 interface JournalReadStore {
     /** Finds a journal by id within a tenant, or null. */
     fun findJournalEntry(
@@ -327,6 +333,31 @@ interface JournalReadStore {
         organisationId: UUID,
         journalEntryId: UUID,
     ): List<JournalLineView>
+
+    /**
+     * The journals [postingRequestIds] produced, keyed by the request that produced each.
+     *
+     * The batched [findJournalEntryForRequest], for a reader hydrating a whole page of requests at
+     * once. `uq_journal_entry_posting_request` makes the answer at most one journal per request, so
+     * the key is total and nothing is silently dropped; a request with no journal is simply absent.
+     * Bounded by the caller's page size, which is where the ceiling of `INV-15` is checked.
+     */
+    fun findJournalEntriesForRequests(
+        organisationId: UUID,
+        postingRequestIds: Collection<UUID>,
+    ): Map<UUID, JournalEntryView>
+
+    /**
+     * The lines of [journalEntryIds], grouped by journal and in line order within each.
+     *
+     * The batched [findJournalLines], and bounded the same way it is: a page of journals carries
+     * the lines those journals carry, which a reader was going to fetch either way. Batching
+     * changes how many round trips that costs, never how many rows come back.
+     */
+    fun findJournalLinesForEntries(
+        organisationId: UUID,
+        journalEntryIds: Collection<UUID>,
+    ): Map<UUID, List<JournalLineView>>
 }
 
 /**

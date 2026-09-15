@@ -191,6 +191,17 @@ data class PostingRuleVersion(
         status.isApproved &&
             !postingDate.isBefore(effectiveFrom) &&
             (effectiveTo == null || !postingDate.isAfter(effectiveTo))
+
+    /**
+     * Whether any date this version governs falls on [date] or after it.
+     *
+     * The overlap test an open-ended successor needs: a version approving from [date] onwards
+     * collides with this one unless this one had already stopped governing before [date]. Says
+     * nothing about where this version's window *starts*, because a window opening later than
+     * [date] overlaps an open-ended successor just as surely as one already open.
+     */
+    fun governsAnyDateFrom(date: LocalDate): Boolean =
+        status.isApproved && (effectiveTo == null || !effectiveTo.isBefore(date))
 }
 
 /** How a leg finds its account. `FIXED_ACCOUNT` is the only strategy this schema admits. */

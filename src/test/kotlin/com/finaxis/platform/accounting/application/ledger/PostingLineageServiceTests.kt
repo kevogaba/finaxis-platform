@@ -42,6 +42,10 @@ class PostingLineageServiceTests {
     private val permissions = FakeAccountingPermissionGuard()
     private val service = PostingLineageService(journals, permissions, BOUNDS)
 
+    /** The same service under the platform's own bounds, for pages [BOUNDS] is too small for. */
+    private val platform =
+        PostingLineageService(journals, permissions, PaginationProperties())
+
     @Test
     fun `a source reference reads forward to its request, journal and lines`() {
         val request = seedRequest(requestId(1))
@@ -201,7 +205,6 @@ class PostingLineageServiceTests {
         assertEquals(listOf(BOUNDS.defaultPageSize), journals.store.requestedPageSizes)
 
         // The platform's own bounds flow through unchanged, ceiling included.
-        val platform = PostingLineageService(journals, permissions, PaginationProperties())
         platform.listForSourceEntity(entityQuery())
 
         assertEquals(listOf(BOUNDS.defaultPageSize, 25), journals.store.requestedPageSizes)
@@ -313,6 +316,93 @@ class PostingLineageServiceTests {
     }
 
     @Test
+    fun `a page of lineages costs three store reads however many items it carries`() {
+        // Issue #96: hydrating item by item cost 1 + 2N round trips, so a page at the platform
+        // ceiling of a hundred was two hundred and one. The count is the behaviour, not an
+        // implementation detail - it is the only thing that changed and the only thing that can
+        // silently change back.
+        (1..HYDRATED_REQUESTS).forEach { sequence ->
+            val request = seedRequest(requestId(sequence), sourceReference = "L$sequence")
+            seedLines(seedJournal(journalId(sequence), request).id)
+        }
+
+        val page = platform.listForSourceEntity(entityQuery())
+
+        assertEquals(HYDRATED_REQUESTS, page.items.size, "the whole page hydrates in one go")
+        assertEquals(
+            listOf(
+                "listPostingRequestsForEntity",
+                "findJournalEntriesForRequests",
+                "findJournalLinesForEntries",
+            ),
+            journals.methods,
+            "a page of $HYDRATED_REQUESTS lineages must cost exactly three store reads; a " +
+                "findJournalEntryForRequest or findJournalLines in this list is the per-item " +
+                "hydration of issue #96 reintroduced, and it grows with the page size",
+        )
+    }
+
+    @Test
+    fun `a hydrated page keeps its order and gives each item only its own journal's lines`() {
+        val requests =
+            (1..HYDRATION_SHAPES).map { seedRequest(requestId(it), sourceReference = "L$it") }
+        seedLines(seedJournal(journalId(1), requests[0]).id, subledgerReference = "SUB-1")
+        // requests[1] never reached a journal; requests[3]'s journal carries no line. Those are
+        // the two absences the grouped read answers with a missing key rather than an empty list.
+        seedLines(seedJournal(journalId(3), requests[2]).id, subledgerReference = "SUB-3")
+        seedJournal(journalId(4), requests[3])
+
+        val page = platform.listForSourceEntity(entityQuery())
+
+        assertEquals(
+            listOf(requestId(4), requestId(3), requestId(2), requestId(1)),
+            page.items.map { it.request.id },
+            "batching must leave the keyset's newest-request-first order exactly as it was",
+        )
+        assertEquals(
+            listOf(journalId(4), journalId(3), null, journalId(1)),
+            page.items.map { it.journal?.id },
+            "each item keeps its own journal, and a request that has none keeps null",
+        )
+        assertEquals(
+            listOf(1, 2),
+            page.items[1].lines.map { it.lineNumber },
+            "a journal's lines still arrive in ascending line order",
+        )
+        assertEquals(
+            listOf("SUB-3", "SUB-3"),
+            page.items[1].lines.map { it.subledgerReference },
+            "the grouped read must hand each journal its own lines, never another journal's",
+        )
+        assertEquals(
+            listOf("SUB-1", "SUB-1"),
+            page.items[3].lines.map { it.subledgerReference },
+            "the oldest item's lines are its own too, not the ones read for the newest",
+        )
+        assertNull(page.items[2].journal, "a request with no journal carries none")
+        assertTrue(page.items[2].lines.isEmpty(), "and with no journal it carries no lines")
+        assertTrue(
+            page.items[0].lines.isEmpty(),
+            "a journal the grouped read returns no key for reads back as no lines; an absent " +
+                "key and an empty list must mean the same thing to the caller",
+        )
+    }
+
+    @Test
+    fun `an empty page asks for no journals at all`() {
+        val page = service.listForSourceEntity(entityQuery())
+
+        assertTrue(page.items.isEmpty())
+        assertNull(page.nextCursor)
+        assertEquals(
+            listOf("listPostingRequestsForEntity"),
+            journals.methods,
+            "with no requests on the page there is nothing to hydrate, so neither batch read " +
+                "is issued - an empty `IN (...)` is not SQL worth sending",
+        )
+    }
+
+    @Test
     fun `the listing answers for one business entity within one module`() {
         seedRequest(requestId(1), sourceReference = "L1")
         seedRequest(requestId(2), sourceReference = "L2", sourceEntityId = OTHER_ENTITY)
@@ -416,17 +506,29 @@ class PostingLineageServiceTests {
         return journal
     }
 
-    /** Seeds two lines out of line order, so an ordered read back means something. */
-    private fun seedLines(journalEntryId: UUID) {
+    /**
+     * Seeds two lines out of line order, so an ordered read back means something.
+     *
+     * [subledgerReference] marks whose lines these are, which is how a grouped read handing one
+     * journal another journal's lines is told apart from one that grouped them correctly.
+     */
+    private fun seedLines(
+        journalEntryId: UUID,
+        subledgerReference: String? = null,
+    ) {
         journals.store.putLines(
             journalEntryId,
-            listOf(line(2, PostingSide.CREDIT), line(1, PostingSide.DEBIT)),
+            listOf(
+                line(2, PostingSide.CREDIT, subledgerReference),
+                line(1, PostingSide.DEBIT, subledgerReference),
+            ),
         )
     }
 
     private fun line(
         lineNumber: Int,
         side: PostingSide,
+        subledgerReference: String? = null,
     ) = JournalLineView(
         lineNumber = lineNumber,
         accountId = ACCOUNT,
@@ -435,7 +537,7 @@ class PostingLineageServiceTests {
         currencyCode = "KES",
         functionalAmount = AMOUNT,
         narrative = null,
-        subledgerReference = null,
+        subledgerReference = subledgerReference,
     )
 
     private fun sourceQuery(
@@ -486,6 +588,17 @@ class PostingLineageServiceTests {
 
         /** The three public reads, each of which is refused once. */
         const val REFUSED_READS = 3
+
+        /**
+         * Enough items that per-item hydration would cost twenty-one reads rather than three.
+         *
+         * Read under [PaginationProperties]'s own default page size, not [BOUNDS], so the page
+         * holds all of them and the read count is the count for the whole page.
+         */
+        const val HYDRATED_REQUESTS = 10
+
+        /** One request with a journal and lines, one with no journal, and one journal with none. */
+        const val HYDRATION_SHAPES = 4
     }
 }
 
@@ -581,6 +694,22 @@ private class RecordingJournalReadStore : JournalReadStore {
     ): List<JournalLineView> {
         reads += StoreRead("findJournalLines", organisationId)
         return store.findJournalLines(organisationId, journalEntryId)
+    }
+
+    override fun findJournalEntriesForRequests(
+        organisationId: UUID,
+        postingRequestIds: Collection<UUID>,
+    ): Map<UUID, JournalEntryView> {
+        reads += StoreRead("findJournalEntriesForRequests", organisationId)
+        return store.findJournalEntriesForRequests(organisationId, postingRequestIds)
+    }
+
+    override fun findJournalLinesForEntries(
+        organisationId: UUID,
+        journalEntryIds: Collection<UUID>,
+    ): Map<UUID, List<JournalLineView>> {
+        reads += StoreRead("findJournalLinesForEntries", organisationId)
+        return store.findJournalLinesForEntries(organisationId, journalEntryIds)
     }
 }
 

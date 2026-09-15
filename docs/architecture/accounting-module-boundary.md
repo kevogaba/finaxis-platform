@@ -198,7 +198,13 @@ PENDING_APPROVAL → ACTIVE`, rejection back to `DRAFT` with a reason, approval 
 the most recent submitter resolved from `posting_rule_version_transition_log` under the rule's row
 lock, and `posting_rule.create`, `posting_rule.create_version` and `posting_rule.approve` audited.
 Activation supersedes the rule's current head by closing its window the day before the successor
-takes effect, in the same transaction. Legs and `effective_from` are editable in `DRAFT` only.
+takes effect, in the same transaction. The successor is compared against every window
+`ex_posting_rule_version_no_overlap` covers - `ACTIVE`, `SUPERSEDED` and `RETIRED` alike - rather
+than against an `ACTIVE` head alone, so a successor reaching back into a window the rule has already
+governed is refused by name with `POSTING_RULE_WINDOW_INVALID` instead of arriving as an exclusion
+violation and a 500. Only an open-ended head can be closed to make room for a successor; a window
+already closed by an earlier supersession or by retirement is settled history. Legs and
+`effective_from` are editable in `DRAFT` only.
 `PostingRuleService.dryRun` resolves an intent through the same resolver in a read-only transaction
 and returns the legs it would post, so an administrator can test a configuration without a journal.
 
