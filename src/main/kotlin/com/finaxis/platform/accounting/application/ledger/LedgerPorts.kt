@@ -166,6 +166,7 @@ data class PostingRequestView(
     val postedAt: Instant?,
     val requestedBy: UUID?,
     val correlationId: String?,
+    val requestId: String?,
 )
 
 /** A posted journal as the engine and its callers see it. */

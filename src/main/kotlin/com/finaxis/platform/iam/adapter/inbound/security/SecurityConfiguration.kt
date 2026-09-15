@@ -6,6 +6,7 @@ import com.finaxis.platform.common.context.CorrelationContext
 import com.finaxis.platform.common.context.RequestContext
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.context.TenantContext
+import com.finaxis.platform.common.web.api.ApiProblemFactory
 import com.finaxis.platform.common.web.api.ApiProblemWriter
 import com.finaxis.platform.common.web.ratelimit.RateLimitFilter
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
@@ -331,8 +332,16 @@ class ActiveOrganisationContextFilter(
     private fun requestContext(
         principal: AppPrincipal,
         request: HttpServletRequest,
-    ): RequestContext =
-        RequestContext(
+    ): RequestContext {
+        // The platform's request id is whatever ApiProblemFactory resolves - the client header
+        // when one was sent, otherwise a generated id cached on the request attribute. Resolving
+        // it here (rather than reading the raw header) is what makes the id recorded on a posting
+        // the same one returned in the response header, the access log, and any problem document,
+        // including for the majority of callers that send no X-Request-Id at all. This filter runs
+        // inside the security chain and therefore before HttpAccessLogFilter, so this call is
+        // usually the one that generates the id; the attribute cache stops a second one appearing.
+        val requestId = ApiProblemFactory.requestId(request)
+        return RequestContext(
             tenant = TenantContext(principal.organisationId),
             branch = principal.branchId?.let(::BranchContext),
             actor =
@@ -344,12 +353,12 @@ class ActiveOrganisationContextFilter(
                 ),
             correlation =
                 CorrelationContext(
-                    request.getHeader(REQUEST_ID_HEADER),
-                    request.getHeader(CORRELATION_ID_HEADER)
-                        ?: request.getHeader(REQUEST_ID_HEADER),
+                    requestId,
+                    request.getHeader(CORRELATION_ID_HEADER) ?: requestId,
                 ),
             userAgent = request.getHeader(USER_AGENT_HEADER),
         )
+    }
 
     private fun forbidden(
         request: HttpServletRequest,
@@ -360,7 +369,6 @@ class ActiveOrganisationContextFilter(
     }
 
     private companion object {
-        const val REQUEST_ID_HEADER = "X-Request-Id"
         const val CORRELATION_ID_HEADER = "X-Correlation-Id"
         const val USER_AGENT_HEADER = "User-Agent"
     }

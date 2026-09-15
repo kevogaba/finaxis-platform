@@ -98,4 +98,30 @@ object MoneyPolicy {
                 safeDetail = "'$code' is not an ISO 4217 currency code.",
             )
         }
+
+    /**
+     * Resolves [code] as a currency an amount can actually be settled in.
+     *
+     * [requireCurrency] answers only whether the JDK knows the code, and the JDK knows codes that
+     * have no minor unit: `XXX` ("no currency") and the metals `XAU`, `XAG`, `XPD` and `XPT` all
+     * report `defaultFractionDigits == -1`. Such a code passes every syntactic check, so it can be
+     * stored as a tenant's functional currency and the tenant activated - and only then does
+     * [requireSettled] refuse every ordinary amount in it, because `5 XAU` has scale `0` and `0`
+     * exceeds `-1`, while [roundToMinorUnit] would round to tens. That tenant can never post.
+     *
+     * So a currency that cannot carry an amount is refused where the value is **supplied**, not
+     * where it is used. Callers that only need to read an amount's own currency keep
+     * [requireCurrency]; callers that are choosing a unit for future postings use this.
+     */
+    fun requireSettlementCurrency(code: String): Currency {
+        val currency = requireCurrency(code)
+        if (currency.defaultFractionDigits < 0) {
+            throw InvalidOperationException(
+                code = CURRENCY_INVALID,
+                safeDetail =
+                    "'${currency.currencyCode}' has no minor unit and cannot carry an amount.",
+            )
+        }
+        return currency
+    }
 }

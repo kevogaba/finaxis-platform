@@ -7,6 +7,7 @@ import com.finaxis.platform.accounting.SubledgerProofProvider
 import com.finaxis.platform.accounting.adapter.outbound.context.RequestContextAccountingLookup
 import com.finaxis.platform.accounting.application.FiscalPeriodStateChangeGuard
 import com.finaxis.platform.accounting.application.FiscalPeriodStateStore
+import com.finaxis.platform.accounting.application.FunctionalCurrencyLock
 import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.PostingPeriodResolver
 import com.finaxis.platform.accounting.application.ledger.DefaultPostingService
@@ -17,6 +18,7 @@ import com.finaxis.platform.accounting.application.ledger.JournalStore
 import com.finaxis.platform.accounting.application.ledger.PostingEngine
 import com.finaxis.platform.accounting.application.ledger.PostingLegResolver
 import com.finaxis.platform.accounting.application.port.outbound.AccountingContextLookup
+import com.finaxis.platform.accounting.application.port.outbound.PostingMetadataLookup
 import com.finaxis.platform.accounting.application.posting.PostingService
 import com.finaxis.platform.accounting.application.reconciliation.SubledgerProofProviderRegistry
 import com.finaxis.platform.accounting.application.rules.PostingRuleStore
@@ -40,9 +42,19 @@ import java.time.Clock
  */
 @Configuration(proxyBeanMethods = false)
 class AccountingModuleConfiguration {
-    /** Narrow accounting view of the ambient request context. */
+    /**
+     * The one adapter allowed to read the ambient request context, serving both ports over it:
+     * [AccountingContextLookup] for the tenant, branch and actor, and [PostingMetadataLookup] for
+     * the request id a posting records as lineage.
+     *
+     * Declared by its concrete type rather than as two beans, because two bean methods returning
+     * one stateless instance are still two bean *definitions*, and by-type injection of
+     * [PostingMetadataLookup] then fails as ambiguous even though both would resolve to the same
+     * object. One bean is also the truthful shape: there is one thread-local reader here, exactly
+     * as `RequestContextAccountingLookup` claims.
+     */
     @Bean
-    fun accountingContextLookup(): AccountingContextLookup = RequestContextAccountingLookup()
+    fun accountingContextLookup(): RequestContextAccountingLookup = RequestContextAccountingLookup()
 
     /**
      * Resolves and locks the fiscal period a posting commits into.
@@ -75,7 +87,9 @@ class AccountingModuleConfiguration {
     @Bean
     fun postingEngine(
         contextLookup: AccountingContextLookup,
+        metadata: PostingMetadataLookup,
         tenants: AccountingTenantLookup,
+        currency: FunctionalCurrencyLock,
         periods: PostingPeriodResolver,
         accounts: GlAccountStore,
         journals: JournalStore,
@@ -84,7 +98,9 @@ class AccountingModuleConfiguration {
         clock: Clock,
     ) = PostingEngine(
         contextLookup,
+        metadata,
         tenants,
+        currency,
         periods,
         accounts,
         journals,

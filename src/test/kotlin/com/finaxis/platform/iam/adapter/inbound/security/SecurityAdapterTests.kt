@@ -1,5 +1,7 @@
 package com.finaxis.platform.iam.adapter.inbound.security
 
+import com.finaxis.platform.common.context.RequestContext
+import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiJsonCodec
 import com.finaxis.platform.common.web.api.ApiProblemFactory
@@ -390,6 +392,43 @@ class SecurityAdapterTests {
     }
 
     @Test
+    fun `active organisation filter correlates on the resolved request id when none is sent`() {
+        val request = MockHttpServletRequest()
+
+        val correlation = requireNotNull(captureRequestContext(request).correlation)
+
+        val requestId = requireNotNull(correlation.requestId)
+        // Identical to what HttpAccessLogFilter puts on the response header and in the access
+        // log, because both resolve through the same cached request attribute.
+        assertEquals(requestId, ApiProblemFactory.requestId(request))
+        assertEquals(requestId, request.getAttribute(ApiProblemFactory.REQUEST_ID_ATTRIBUTE))
+        assertEquals(requestId, correlation.correlationId)
+    }
+
+    @Test
+    fun `active organisation filter correlates on the client request id when one is sent`() {
+        val request = MockHttpServletRequest()
+        request.addHeader("X-Request-Id", "client-request")
+
+        val correlation = requireNotNull(captureRequestContext(request).correlation)
+
+        assertEquals("client-request", correlation.requestId)
+        assertEquals("client-request", correlation.correlationId)
+        assertEquals("client-request", ApiProblemFactory.requestId(request))
+    }
+
+    @Test
+    fun `active organisation filter keeps an explicit correlation id separate`() {
+        val request = MockHttpServletRequest()
+        request.addHeader("X-Correlation-Id", "saga-1")
+
+        val correlation = requireNotNull(captureRequestContext(request).correlation)
+
+        assertEquals("saga-1", correlation.correlationId)
+        assertEquals(ApiProblemFactory.requestId(request), correlation.requestId)
+    }
+
+    @Test
     fun `active organisation filter rejects context that cannot load principal`() {
         val contextResolver = mock(ActiveOrganisationContextResolver::class.java)
         val loader = mock(AppPrincipalLoader::class.java)
@@ -455,6 +494,26 @@ class SecurityAdapterTests {
         filter.doFilter(request, response, MockFilterChain())
 
         assertEquals(200, response.status)
+    }
+
+    private fun captureRequestContext(request: MockHttpServletRequest): RequestContext {
+        val contextResolver = mock(ActiveOrganisationContextResolver::class.java)
+        val loader = mock(AppPrincipalLoader::class.java)
+        val filter = ActiveOrganisationContextFilter(contextResolver, loader, problemWriter())
+        val context = ActiveOrganisationContext(uuidV7(), uuidV7(), uuidV7())
+        var captured: RequestContext? = null
+
+        SecurityContextHolder.getContext().authentication = jwtAuthentication("subject")
+        `when`(contextResolver.resolve(request)).thenReturn(
+            ActiveOrganisationContextResolution(context),
+        )
+        `when`(loader.load("subject", context)).thenReturn(principal())
+
+        filter.doFilter(request, MockHttpServletResponse()) { _, _ ->
+            captured = RequestContexts.current()
+        }
+
+        return requireNotNull(captured) { "the filter did not install a request context" }
     }
 
     private fun jwtAuthentication(subject: String): JwtAuthenticationToken =

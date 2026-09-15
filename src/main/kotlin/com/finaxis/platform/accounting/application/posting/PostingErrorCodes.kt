@@ -67,6 +67,26 @@ object PostingErrorCodes {
     /** The tenant's functional currency cannot change once a journal has been posted. */
     const val FUNCTIONAL_CURRENCY_FROZEN = "accounting.functional_currency_frozen"
 
+    /**
+     * The base-currency change could not take its exclusive lock within the configured bound.
+     *
+     * Retryable, and deliberately bounded: a queued exclusive request also makes every new posting
+     * for the tenant queue behind it, so a change that cannot get in must give up rather than stall
+     * the ledger.
+     */
+    const val FUNCTIONAL_CURRENCY_LOCK_TIMEOUT = "accounting.functional_currency_lock_timeout"
+
+    /**
+     * The tenant's functional currency changed between this posting reading it and locking it.
+     *
+     * Retryable, and only ever reachable for a tenant's *first* posting, since the currency is
+     * frozen the moment one journal exists. The claim is fingerprinted against the currency read
+     * before the lock, so a posting that finds a different one under the lock cannot go on to use
+     * either value honestly: it rolls back - taking its claim with it - and the retry fingerprints
+     * against the currency that won.
+     */
+    const val FUNCTIONAL_CURRENCY_CHANGED = "accounting.functional_currency_changed"
+
     /** The journal entry does not exist in the tenant. */
     const val JOURNAL_NOT_FOUND = "accounting.journal_not_found"
 

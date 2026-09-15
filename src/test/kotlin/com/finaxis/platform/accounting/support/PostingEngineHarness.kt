@@ -36,6 +36,7 @@ import com.finaxis.platform.accounting.application.ledger.NewPostingRequest
 import com.finaxis.platform.accounting.application.ledger.PostingEngine
 import com.finaxis.platform.accounting.application.ledger.PostingRequestClaim
 import com.finaxis.platform.accounting.application.port.outbound.AccountingContextLookup
+import com.finaxis.platform.accounting.application.port.outbound.PostingMetadataLookup
 import com.finaxis.platform.accounting.domain.AccountClass
 import com.finaxis.platform.accounting.domain.AccountCode
 import com.finaxis.platform.accounting.domain.AccountUsage
@@ -92,11 +93,21 @@ internal class PostingEngineHarness(
     /** The gapless journal counter; set [FakeJournalNumberAllocator.next] to null to break it. */
     val numbers = FakeJournalNumberAllocator()
 
+    /** The ambient request id the engine records as lineage; null for a background posting. */
+    var ambientRequestId: String? = null
+
+    private val metadata = PostingMetadataLookup { ambientRequestId }
+
+    /** The tenant-currency lock, recording what the engine took and in which mode. */
+    val currencyLock = RecordingFunctionalCurrencyLock()
+
     /** The engine under the ports above, ready to post inside an active transaction. */
     val engine =
         PostingEngine(
             contextLookup,
+            metadata,
             tenants,
+            currencyLock,
             PostingPeriodResolver(
                 periods,
                 FixedBusinessDates(businessDate),

@@ -75,6 +75,74 @@ class TenantSettingsServiceTests {
     }
 
     @Test
+    fun `the currency lock is taken before the ledger is asked, on both mutation paths`() {
+        // The whole fix is the adjacency. Asking first and locking afterwards leaves exactly the
+        // window this closes: the tenant's first posting commits between the two, and a change the
+        // guard has already approved is written over a ledger that now exists.
+        activate()
+
+        service.createOrUpdate(
+            CreateOrUpdateTenantSettingCommand(organisationId, "base_currency", "USD", actorId),
+        )
+        assertEquals(
+            listOf("hasPostedJournals", "lockFunctionalCurrencyForChange", "hasPostedJournals"),
+            ledger.calls,
+            "unlocked read first - it can only short-circuit a definitive yes - then the lock, " +
+                "then the re-read this transaction may actually act on",
+        )
+
+        ledger.calls.clear()
+        service.deactivate(DeactivateTenantSettingCommand(organisationId, "base_currency", actorId))
+        assertEquals(
+            listOf("hasPostedJournals", "lockFunctionalCurrencyForChange", "hasPostedJournals"),
+            ledger.calls,
+            "deactivation changes the effective currency too, so it takes the same lock",
+        )
+    }
+
+    @Test
+    fun `an already frozen tenant is refused without ever taking the lock`() {
+        // The lock is only worth taking while the answer can still change. "Has posted" never goes
+        // back to false, so an unlocked yes is already final - and an administrator retrying
+        // against a tenant that has been trading for years must not queue an exclusive request,
+        // because while one is queued every new posting for that tenant queues behind it.
+        activate()
+        ledger.posted = true
+
+        val failure =
+            assertFailsWith<ConflictException> {
+                service.createOrUpdate(
+                    CreateOrUpdateTenantSettingCommand(
+                        organisationId,
+                        "base_currency",
+                        "USD",
+                        actorId,
+                    ),
+                )
+            }
+
+        assertEquals("accounting.functional_currency_frozen", failure.code)
+        assertEquals(
+            listOf("hasPostedJournals"),
+            ledger.calls,
+            "a definitive unlocked answer must not queue an exclusive lock behind live postings",
+        )
+    }
+
+    @Test
+    fun `a setting that is not the base currency neither locks nor asks the ledger`() {
+        // A tenant-wide lock on every setting write would serialise unrelated administration for
+        // no reason; only the one key the freeze governs pays for it.
+        activate()
+
+        service.createOrUpdate(
+            CreateOrUpdateTenantSettingCommand(organisationId, "default_timezone", "UTC", actorId),
+        )
+
+        assertTrue(ledger.calls.isEmpty(), "no lock and no ledger question for an unrelated key")
+    }
+
+    @Test
     fun `createOrUpdate rejects an inactive organisation`() {
         lifecycleStore.states[organisationId] = OrganisationLifecycleState.SUSPENDED
         assertFailsWith<ConflictException> {
@@ -255,7 +323,7 @@ private class FakeLifecycleStoreForSettings : OrganisationLifecycleProvisioningS
 
     override fun saveSettings(
         organisationId: UUID,
-        settings: Map<String, String>,
+        settings: List<StoredSetting>,
         actorId: UUID,
     ) = Unit
 
@@ -374,7 +442,17 @@ private class CapturingPublisherForSettings : TransitionEventPublisher {
 private class FakeLedgerActivity : AccountingLedgerActivity {
     var posted = false
 
-    override fun hasPostedJournals(organisationId: java.util.UUID) = posted
+    /** Each call in order, so a test can prove the lock was taken BEFORE the question was asked. */
+    val calls = mutableListOf<String>()
+
+    override fun hasPostedJournals(organisationId: java.util.UUID): Boolean {
+        calls += "hasPostedJournals"
+        return posted
+    }
+
+    override fun lockFunctionalCurrencyForChange(organisationId: java.util.UUID) {
+        calls += "lockFunctionalCurrencyForChange"
+    }
 }
 
 private class RecordingAuditRepository : AuditEventRepository {

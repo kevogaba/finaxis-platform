@@ -382,6 +382,7 @@ class PostingLineageServiceTests {
                 postedAt = POSTED_AT,
                 requestedBy = ACTOR,
                 correlationId = null,
+                requestId = null,
             )
         journals.store.addRequest(request)
         return request

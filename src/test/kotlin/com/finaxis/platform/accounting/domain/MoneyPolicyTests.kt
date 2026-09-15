@@ -84,6 +84,40 @@ class MoneyPolicyTests {
     }
 
     @Test
+    fun `a settlement currency must be one the JDK knows`() {
+        listOf("ZZZ", "kes", "KE", "XXXX", "").forEach { code ->
+            val failure =
+                assertFailsWith<InvalidOperationException> {
+                    MoneyPolicy.requireSettlementCurrency(code)
+                }
+            assertEquals(MoneyPolicy.CURRENCY_INVALID, failure.code)
+        }
+        assertEquals("KES", MoneyPolicy.requireSettlementCurrency("KES").currencyCode)
+        assertEquals("USD", MoneyPolicy.requireSettlementCurrency("USD").currencyCode)
+        // A zero-decimal currency has a minor unit of zero digits, which is still a minor unit.
+        assertEquals(0, MoneyPolicy.requireSettlementCurrency("JPY").defaultFractionDigits)
+    }
+
+    @Test
+    fun `a settlement currency must have a minor unit, so XXX and the metals are refused`() {
+        // These four ARE known to the JDK, so requireCurrency accepts them - and that is exactly
+        // the trap. Their defaultFractionDigits is -1, so requireSettled refuses any amount whose
+        // scale exceeds -1, which is every ordinary amount: 5 has scale 0. A tenant holding one as
+        // its functional currency validates, activates, and can then never post.
+        listOf("XXX", "XAU", "XAG", "XPT").forEach { code ->
+            assertEquals(-1, MoneyPolicy.requireCurrency(code).defaultFractionDigits)
+            val failure =
+                assertFailsWith<InvalidOperationException> {
+                    MoneyPolicy.requireSettlementCurrency(code)
+                }
+            assertEquals(MoneyPolicy.CURRENCY_INVALID, failure.code)
+        }
+        assertFailsWith<InvalidOperationException> {
+            MoneyPolicy.requireSettled(MonetaryAmount(BigDecimal("5"), "XAU"))
+        }
+    }
+
+    @Test
     fun `intermediate results round half-even at the minor unit`() {
         assertEquals(BigDecimal("2.50"), MoneyPolicy.roundToMinorUnit(BigDecimal("2.505"), "KES"))
         assertEquals(BigDecimal("2.52"), MoneyPolicy.roundToMinorUnit(BigDecimal("2.515"), "KES"))

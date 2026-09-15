@@ -393,6 +393,26 @@ Base path: `/api/v1/platform/tenants`. List filters: `q`, `status`, `country`,
 | POST   | `/{tenant_id}/deprovision`     | Deprovision tenant  | `tenant.deprovision`         | mutation      |
 | POST   | `/{tenant_id}/bootstrap/retry` | Retry bootstrap     | `tenant.bootstrap_retry`     | mutation      |
 
+`base_currency_code` is the tenant's functional currency for every future journal line, so create
+and amend validate it against the ledger's own currency authority and not only against its shape:
+beyond the `^[A-Z]{3}$` pattern the request body enforces as a `400`, it must be an ISO 4217 code
+the JDK knows **and** must have a minor unit, which refuses `XXX` and the metals `XAU`, `XAG`,
+`XPD` and `XPT`. A rejection is `422` with code `accounting.currency_invalid` - deliberately
+accounting's own code, so provisioning and the `base_currency` tenant setting refuse the same string
+identically.
+
+A posting refuses these codes too, but not always under the same code: an unknown code such as
+`ZZZ` fails as `accounting.currency_invalid`, while `XXX` and the metals are known to the JDK and
+instead fail per-amount as `accounting.amount_precision_exceeded`, because no amount can be
+expressed at a minor unit they do not have. Refusing them at provisioning is what stops a tenant
+reaching that state at all.
+
+`initial_settings` is the same tenant-setting surface as `PUT /api/v1/tenant/settings/{key}`, and
+answers to the same catalogue: each key must be one the catalogue defines, each value must satisfy
+that key's type rule, and the value is stored in the catalogue's canonical form under its declared
+`value_type`. An unknown key or an invalid value is `422`, with the key's own error code - so
+`{"base_currency": "XAU"}` is refused here exactly as it is on the settings endpoint.
+
 Tenant draft request and response:
 
 ```json
@@ -412,7 +432,7 @@ Tenant draft request and response:
     "send_application_invite": true
   },
   "initial_settings": {
-    "statement.cutoff_time": "17:00:00"
+    "base_currency": "KES"
   },
   "business_date": "25-07-2026"
 }

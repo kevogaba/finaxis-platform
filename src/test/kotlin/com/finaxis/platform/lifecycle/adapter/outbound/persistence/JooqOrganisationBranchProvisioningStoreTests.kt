@@ -16,6 +16,7 @@ import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStatus
 import com.finaxis.platform.lifecycle.application.InitialAdministratorDraft
 import com.finaxis.platform.lifecycle.application.OrganisationListFilter
+import com.finaxis.platform.lifecycle.application.StoredSetting
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
@@ -58,7 +59,11 @@ class JooqOrganisationBranchProvisioningStoreTests(
         val actorId = uuidV7()
         val trickyValue = """He said "hello\world" and left"""
 
-        store.saveSettings(organisationId, mapOf("greeting" to trickyValue), actorId)
+        store.saveSettings(
+            organisationId,
+            listOf(StoredSetting("greeting", trickyValue, "STRING", false)),
+            actorId,
+        )
 
         val rawJson =
             dsl

@@ -64,6 +64,12 @@ posted?"* before it accepts a `base_currency` setting change - the functional-cu
 accounting foundation requires. Lifecycle already depends on `accounting` for the ports above, so
 no new module edge is created.
 
+The same port also hands lifecycle the lock that makes the answer usable. Asking and then writing
+are one transaction, the tenant's first posting is another, and at `READ COMMITTED` neither sees the
+other - so `lockFunctionalCurrencyForChange` is taken immediately before the question, and a posting
+takes the same tenant-scoped lock shared as the first thing `postNew` does. Lifecycle still reasons
+about nothing but a boolean; the serialisation is accounting's, on accounting's side of the port.
+
 Both provider modules gained `"accounting"` in their `allowedDependencies`. The resulting module
 graph stays acyclic: `iam → lifecycle`, `iam → accounting`, `lifecycle → accounting`,
 `lifecycle → notifications`, everything → `common`, persistence → `jooq`.
@@ -169,7 +175,8 @@ any currency but the functional one, and check every account through `GlAccountP
 prove the set balances in memory; claim the source reference with `INSERT … ON CONFLICT DO
 NOTHING` and answer a duplicate from the locked existing row; allocate the gapless number from
 `reference_sequence`; write the header and the lines; **re-read the lines and compare them with the
-header**, the `INV-4` enforcement point; mark the request `POSTED`.
+header** - the two totals, the line count, and each line's denormalised branch, fiscal period,
+posting date and currency codes - the `INV-4` enforcement point; mark the request `POSTED`.
 
 Every failure before the claim leaves nothing behind. Every failure after it rolls the claim back
 with the caller's transaction, so a rejected request never occupies its source reference.

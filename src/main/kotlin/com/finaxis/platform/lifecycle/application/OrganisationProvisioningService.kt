@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.accounting.domain.MoneyPolicy
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
@@ -20,6 +21,7 @@ import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleTransition
+import com.finaxis.platform.lifecycle.domain.TenantSettingValueType
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
@@ -51,9 +53,20 @@ class OrganisationProvisioningService(
         validateCreate(command)
         validateAdmin(command.admin)
         errorUnless(command.requestedBy != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
+        // Initial settings are a tenant-setting supply point, so they answer to the catalog the
+        // `/settings` endpoint answers to. This used to hand the caller's map straight to the
+        // store, which stamped every row STRING and consulted nothing: `base_currency` could be
+        // set to `XAU` here even though `TenantSettingsService.createOrUpdate` refuses it, leaving
+        // a tenant whose declared base currency no amount can be settled in. Resolved before the
+        // first write, alongside the other validations, so a rejected setting never depends on the
+        // transaction rolling back a draft that should not exist.
+        val settings =
+            command.initialSettings.map { (key, rawValue) ->
+                StoredSetting.fromCatalog(key, rawValue)
+            }
         val organisationId = lifecycleStore.createDraft(command)
         adminBootstrapStore.createDraft(organisationId, command.admin, command.requestedBy)
-        lifecycleStore.saveSettings(organisationId, command.initialSettings, command.requestedBy)
+        lifecycleStore.saveSettings(organisationId, settings, command.requestedBy)
         bootstrapStore.ensureBusinessDate(
             organisationId,
             command.businessDate ?: businessDate(command.timezone),
@@ -401,7 +414,18 @@ class OrganisationProvisioningService(
     }
 
     private companion object {
-        val DEFAULT_SETTINGS = mapOf("settings.operational" to "true")
+        // Not a tenant setting and deliberately not in TenantSettingCatalog: this is the internal
+        // marker row OrganisationSetupRequirement.DEFAULT_SETTINGS looks for, written by the
+        // platform rather than supplied by a caller, so it is constructed here already typed.
+        val DEFAULT_SETTINGS =
+            listOf(
+                StoredSetting(
+                    key = "settings.operational",
+                    value = "true",
+                    valueType = TenantSettingValueType.STRING.name,
+                    sensitive = false,
+                ),
+            )
         const val USER = "USER"
         const val SYSTEM = "SYSTEM"
         const val ORGANISATION = "ORGANISATION"
@@ -411,15 +435,26 @@ class OrganisationProvisioningService(
 }
 
 private val COUNTRY_CODE = Regex("[A-Z]{2}")
-private val CURRENCY_CODE = Regex("[A-Z]{3}")
 private val EMAIL_REGEX = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
 private val PHONE_E164_REGEX = Regex("^\\+[1-9]\\d{1,14}$")
 
+// The base currency is validated by asking the ledger, at both of the two places a draft can
+// supply one. `organisation.base_currency_code` is the functional currency of every journal line
+// the tenant will ever write, so accounting's question is the only useful one here. A local
+// `[A-Z]{3}` regex answered a different question and let `ZZZ` through: the draft validated, the
+// tenant activated, and posting was then impossible in both directions - a leg in a real currency
+// mismatched `ZZZ`, and a `ZZZ` leg was refused as unknown. MoneyPolicy is the single currency
+// authority, so provisioning and the ledger cannot disagree about what a currency is.
+//
+// The error contract is deliberately accounting's `accounting.currency_invalid`, not the generic
+// `invalid_operation` the surrounding errorUnless raises: a caller that sends `ZZZ` to
+// provisioning and to a posting should be told the same thing by both, and the generic code names
+// nothing. The HTTP status is unchanged - both are InvalidOperationException, mapped to 422.
 private fun validateCreate(command: CreateOrganisationDraftCommand) {
     errorUnless(command.tenantCode.isNotBlank(), SafeError.INVALID_OPERATION)
     errorUnless(command.displayName.isNotBlank(), SafeError.INVALID_OPERATION)
     errorUnless(COUNTRY_CODE.matches(command.countryCode), SafeError.INVALID_OPERATION)
-    errorUnless(CURRENCY_CODE.matches(command.baseCurrencyCode), SafeError.INVALID_OPERATION)
+    MoneyPolicy.requireSettlementCurrency(command.baseCurrencyCode)
     validateTimezone(command.timezone)
 }
 
@@ -427,7 +462,7 @@ private fun validateAmend(command: AmendOrganisationDraftCommand) {
     errorUnless(command.tenantCode.isNotBlank(), SafeError.INVALID_OPERATION)
     errorUnless(command.displayName.isNotBlank(), SafeError.INVALID_OPERATION)
     errorUnless(COUNTRY_CODE.matches(command.countryCode), SafeError.INVALID_OPERATION)
-    errorUnless(CURRENCY_CODE.matches(command.baseCurrencyCode), SafeError.INVALID_OPERATION)
+    MoneyPolicy.requireSettlementCurrency(command.baseCurrencyCode)
     validateTimezone(command.timezone)
 }
 

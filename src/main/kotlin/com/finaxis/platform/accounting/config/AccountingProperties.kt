@@ -13,10 +13,26 @@ import java.time.Duration
 @ConfigurationProperties(prefix = "finaxis.accounting")
 data class AccountingProperties(
     val fiscalPeriodCloseLockTimeout: Duration = DEFAULT_CLOSE_LOCK_TIMEOUT,
+    val functionalCurrencyLockTimeout: Duration = DEFAULT_CURRENCY_LOCK_TIMEOUT,
 ) {
     init {
-        require(!fiscalPeriodCloseLockTimeout.isNegative && !fiscalPeriodCloseLockTimeout.isZero) {
-            "The fiscal-period close lock timeout must be positive; zero disables the bound."
+        // At least one millisecond, not merely positive: `SET LOCAL lock_timeout` is expressed in
+        // milliseconds and the conversion truncates, so `500us` would arrive as `0` - which
+        // PostgreSQL reads as no timeout at all. Caught here so a misconfigured deployment fails at
+        // startup rather than the first time something waits on a lock.
+        require(
+            !fiscalPeriodCloseLockTimeout.isNegative &&
+                fiscalPeriodCloseLockTimeout.toMillis() >= 1,
+        ) {
+            "The fiscal-period close lock timeout must be at least 1ms; below that it truncates " +
+                "to zero, which disables the bound."
+        }
+        require(
+            !functionalCurrencyLockTimeout.isNegative &&
+                functionalCurrencyLockTimeout.toMillis() >= 1,
+        ) {
+            "The functional-currency lock timeout must be at least 1ms; below that it truncates " +
+                "to zero, which disables the bound."
         }
     }
 
@@ -27,5 +43,16 @@ data class AccountingProperties(
          * short enough that a close blocked behind a stuck one fails rather than hangs.
          */
         val DEFAULT_CLOSE_LOCK_TIMEOUT: Duration = Duration.ofSeconds(10)
+
+        /**
+         * The bound on a base-currency change's exclusive wait.
+         *
+         * This one is not merely about the waiter. PostgreSQL makes a lock request wait when it
+         * conflicts with the *pending* queue as well as with what is granted, so while this
+         * exclusive request is queued behind an in-flight posting, every **new** posting for the
+         * tenant queues behind it in turn. An unbounded wait here is therefore an unbounded stall
+         * of the tenant's whole posting path, not just of the administrator.
+         */
+        val DEFAULT_CURRENCY_LOCK_TIMEOUT: Duration = Duration.ofSeconds(10)
     }
 }

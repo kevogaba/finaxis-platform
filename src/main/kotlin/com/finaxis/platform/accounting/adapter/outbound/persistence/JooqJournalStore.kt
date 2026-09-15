@@ -423,6 +423,7 @@ class JooqJournalStore(
             postedAt = record.postedAt?.toInstant(),
             requestedBy = record.createdBy,
             correlationId = record.correlationId,
+            requestId = record.requestId,
         )
 
     private fun toView(record: JournalEntryRecord) =

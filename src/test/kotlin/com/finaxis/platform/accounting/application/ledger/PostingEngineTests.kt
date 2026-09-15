@@ -10,6 +10,7 @@ import com.finaxis.platform.accounting.application.GlAccountPage
 import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.PostingPeriodResolver
 import com.finaxis.platform.accounting.application.port.outbound.AccountingContextLookup
+import com.finaxis.platform.accounting.application.port.outbound.PostingMetadataLookup
 import com.finaxis.platform.accounting.application.posting.FinancialFact
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.domain.AccountClass
@@ -28,6 +29,9 @@ import com.finaxis.platform.accounting.domain.MoneyPolicy
 import com.finaxis.platform.accounting.domain.PostingLeg
 import com.finaxis.platform.accounting.domain.PostingRequestStatus
 import com.finaxis.platform.accounting.domain.PostingSide
+import com.finaxis.platform.accounting.support.CurrencyLockMode
+import com.finaxis.platform.accounting.support.PostingLockJournal
+import com.finaxis.platform.accounting.support.RecordingFunctionalCurrencyLock
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
@@ -68,16 +72,25 @@ import kotlin.test.assertTrue
 class PostingEngineTests {
     private val context = AccountingContext(ORGANISATION_ID, BRANCH_ID, ACTOR_ID, "corr-1")
     private val contextLookup = FakeContextLookup(context)
+    private var ambientRequestId: String? = REQUEST_ID
+    private val metadata = PostingMetadataLookup { ambientRequestId }
+
+    // One journal, shared by all three lock-taking fakes, so the order they were taken in is a
+    // recorded fact rather than something inferred from three unrelated counters.
+    private val lockJournal = PostingLockJournal()
+    private val currencyLock = RecordingFunctionalCurrencyLock(lockJournal)
     private val tenants = FakeTenantLookup()
-    private val periods = FakeFiscalPeriodStateStore()
-    private val accounts = FakeGlAccountStore()
+    private val periods = FakeFiscalPeriodStateStore(lockJournal)
+    private val accounts = FakeGlAccountStore(lockJournal)
     private val journals = FakeJournalStore()
     private val numbers = FakeNumberAllocator()
     private val clock = Clock.fixed(NOW, ZoneOffset.UTC)
     private val engine =
         PostingEngine(
             contextLookup,
+            metadata,
             tenants,
+            currencyLock,
             PostingPeriodResolver(
                 periods,
                 FakeBusinessDateLookup(),
@@ -124,6 +137,97 @@ class PostingEngineTests {
         assertEquals(TODAY, receipt.businessDate)
         assertEquals(NOW, receipt.postedAt)
         assertEquals(PostingRequestStatus.POSTED, journals.requests.single().status)
+    }
+
+    @Test
+    fun `a new posting takes the currency lock shared, before the period and account locks`() {
+        // Ordering is the deadlock argument: the currency lock is a strict prefix of the posting's
+        // lock chain, so no future flow can acquire it and a period or account lock in the opposite
+        // order. Shared, so two postings in one tenant never wait on each other.
+        //
+        // Asserted as one observed sequence out of the shared journal, because a prefix is a claim
+        // about order and nothing else. Counting acquisitions per fake instead - "the currency lock
+        // was taken" and "the period lock was taken" - is satisfied just as happily by the reverse
+        // order, which is precisely the arrangement the ADR argues is unsafe.
+        engine.post(request(), explicit(legs()))
+
+        assertEquals(listOf(CurrencyLockMode.SHARED), currencyLock.acquisitions, "shared, not one")
+        assertEquals(
+            listOf(
+                PostingLockJournal.CURRENCY_SHARED,
+                PostingLockJournal.PERIOD,
+                PostingLockJournal.ACCOUNT,
+                PostingLockJournal.ACCOUNT,
+            ),
+            lockJournal.acquisitions,
+            "currency first, then the period, then one lock per account the legs name",
+        )
+    }
+
+    @Test
+    fun `a posting whose currency changed under the lock is refused, not written`() {
+        // The reverse of the race the lock closes, and the one the lock alone does not close. The
+        // currency is read BEFORE the claim, because the idempotency fingerprint is computed from
+        // it - and that read cannot be under the lock, because a replay is answered from the claim
+        // and must take no tenant-wide lock. So a base_currency change can still commit in between,
+        // and without the re-read this tenant's very first journal would be denominated in the
+        // currency it declared a moment ago while it now declares another: the same divergence,
+        // approached from the other side.
+        tenants.functionalCurrencyAfterFirstRead = "USD"
+
+        val failure =
+            assertFailsWith<ConflictException> { engine.post(request(), explicit(legs())) }
+
+        assertEquals(PostingErrorCodes.FUNCTIONAL_CURRENCY_CHANGED, failure.code)
+        assertNothingWritten()
+    }
+
+    @Test
+    fun `a replay takes no currency lock at all`() {
+        // A retry of an already committed posting cannot be a tenant's first, so it has nothing to
+        // serialise against - and making every retry wait on a tenant-wide lock would undo the
+        // "claim first, skip everything" property ADR 0023 exists to protect.
+        engine.post(request(), explicit(legs()))
+        journals.commitClaims()
+        currencyLock.acquisitions.clear()
+        lockJournal.clear()
+
+        engine.post(request(), explicit(legs()))
+
+        assertTrue(currencyLock.acquisitions.isEmpty(), "a replay serialises against nothing")
+        assertTrue(lockJournal.acquisitions.isEmpty(), "and takes no period or account lock either")
+    }
+
+    @Test
+    fun `the ambient request id is recorded on the claim as lineage`() {
+        engine.post(request(), explicit(legs()))
+
+        assertEquals(REQUEST_ID, journals.requests.single().requestId)
+    }
+
+    @Test
+    fun `a posting with no ambient request records no request id`() {
+        // A JobRunr job or a broker listener posts with no request behind it. The column is
+        // nullable for exactly this case, so the engine records null rather than inventing one.
+        ambientRequestId = null
+
+        engine.post(request(), explicit(legs()))
+
+        assertNull(journals.requests.single().requestId)
+    }
+
+    @Test
+    fun `the request id is ambient while the correlation id is the caller's assertion`() {
+        // The two lineage columns come from different places on purpose: a caller may correlate a
+        // posting with its own work, but nothing about a product module knows the id of the HTTP
+        // request in flight - so the engine observes that rather than asking for it.
+        ambientRequestId = "req-other"
+
+        engine.post(request(), explicit(legs()))
+
+        val claim = journals.requests.single()
+        assertEquals("corr-1", claim.correlationId, "the caller's context supplied this")
+        assertEquals("req-other", claim.requestId, "the ambient request supplied this")
     }
 
     @Test
@@ -663,6 +767,13 @@ class PostingEngineTests {
         var branchKnown = true
         var functionalCurrency: String? = "KES"
 
+        /**
+         * What the *next* read returns, so a test can move the currency between the engine's
+         * unlocked read and its re-read under the lock - the interleaving the freeze must refuse.
+         */
+        var functionalCurrencyAfterFirstRead: String? = null
+        private var currencyReads = 0
+
         override fun isOrganisationPostable(organisationId: UUID) = organisationPostable
 
         override fun isBranchPostable(
@@ -675,10 +786,16 @@ class PostingEngineTests {
             branchId: UUID,
         ) = branchKnown
 
-        override fun functionalCurrencyOf(organisationId: UUID) = functionalCurrency
+        override fun functionalCurrencyOf(organisationId: UUID): String? {
+            currencyReads += 1
+            val after = functionalCurrencyAfterFirstRead
+            return if (after != null && currencyReads > 1) after else functionalCurrency
+        }
     }
 
-    private inner class FakeFiscalPeriodStateStore : FiscalPeriodStateStore {
+    private inner class FakeFiscalPeriodStateStore(
+        private val journal: PostingLockJournal,
+    ) : FiscalPeriodStateStore {
         var covering: FiscalPeriodSnapshot? = snapshot(FiscalPeriodStatus.OPEN)
         var locked: FiscalPeriodSnapshot? = snapshot(FiscalPeriodStatus.OPEN)
         var lockRequests = 0
@@ -692,6 +809,7 @@ class PostingEngineTests {
 
         override fun lockForPosting(key: FiscalPeriodKey): FiscalPeriodSnapshot? {
             lockRequests++
+            journal.record(PostingLockJournal.PERIOD)
             return locked
         }
 
@@ -735,7 +853,9 @@ class PostingEngineTests {
         override fun save(event: AuditEvent) = Unit
     }
 
-    private class FakeGlAccountStore : GlAccountStore {
+    private class FakeGlAccountStore(
+        private val journal: PostingLockJournal,
+    ) : GlAccountStore {
         private val accounts = mutableMapOf<UUID, GlAccount>()
         private val activeRuleAccounts = mutableSetOf<UUID>()
 
@@ -798,6 +918,7 @@ class PostingEngineTests {
             accountId: UUID,
         ): GlAccount? {
             postingLockOrder += accountId
+            journal.record(PostingLockJournal.ACCOUNT)
             return findById(organisationId, accountId)
         }
 
@@ -841,6 +962,7 @@ class PostingEngineTests {
             val correctsPostingRequestId: UUID?,
             val narrative: String?,
             val correlationId: String?,
+            val requestId: String?,
             var status: PostingRequestStatus,
             var postedAt: Instant?,
             var postingRuleVersionId: UUID? = null,
@@ -886,6 +1008,7 @@ class PostingEngineTests {
                     correctsPostingRequestId = request.correctsPostingRequestId,
                     narrative = request.narrative,
                     correlationId = request.correlationId,
+                    requestId = request.requestId,
                     status = PostingRequestStatus.PENDING,
                     postedAt = null,
                 )
@@ -1005,6 +1128,7 @@ class PostingEngineTests {
                 postedAt = stored.postedAt,
                 requestedBy = ACTOR_ID,
                 correlationId = stored.correlationId,
+                requestId = stored.requestId,
             )
 
         private fun view(index: Int): JournalEntryView {
@@ -1053,6 +1177,7 @@ class PostingEngineTests {
         val CREDIT_ACCOUNT: UUID = uuidV7()
         val TODAY: LocalDate = LocalDate.of(2026, 8, 15)
         val NOW: Instant = Instant.parse("2026-08-15T10:00:00Z")
+        const val REQUEST_ID = "req-7f3a"
         val SOURCE_1 = AccountingSourceReference("savings", "SAVINGS_DEPOSIT", SOURCE_ID, "dep-1")
         val SOURCE_2 = AccountingSourceReference("savings", "SAVINGS_DEPOSIT", SOURCE_ID, "dep-2")
 

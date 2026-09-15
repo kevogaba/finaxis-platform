@@ -189,7 +189,8 @@ class TenantSettingsService(
      *
      * Journal lines are immutable, so a later line in a different unit would make every balance,
      * header total and daily projection a sum of incompatible units, and no approval repairs that.
-     * Accounting owns the answer; lifecycle only asks. See
+     * Accounting owns the answer; lifecycle only asks - and asks under accounting's own lock, so
+     * the answer cannot go stale between the question and this transaction's write. See
      * `docs/architecture/accounting-foundation.md`, *"The functional currency is frozen once the
      * tenant has posted"*.
      */
@@ -197,14 +198,33 @@ class TenantSettingsService(
         organisationId: UUID,
         key: String,
     ) {
-        if (key == BASE_CURRENCY_SETTING && ledgerActivity.hasPostedJournals(organisationId)) {
-            throw ConflictException(
-                code = FUNCTIONAL_CURRENCY_FROZEN,
-                safeDetail =
-                    "The base currency cannot change once the organisation has posted a journal.",
-            )
+        if (key != BASE_CURRENCY_SETTING) {
+            return
+        }
+        // "Has posted" only ever goes from false to true, so an unlocked read that says true is
+        // already final and no lock can change it. Answering that case here keeps the exclusive
+        // lock off the common path entirely - an administrator retrying against a tenant that has
+        // been trading for years never queues, and so never makes that tenant's postings queue
+        // behind them.
+        if (ledgerActivity.hasPostedJournals(organisationId)) {
+            throw frozen()
+        }
+        // An unlocked false, on the other hand, may simply be stale: the tenant's first posting
+        // could be in flight right now. So take the lock and ask again, in that order - adjacency
+        // is the whole fix, and a re-read after the lock is the only answer this transaction may
+        // act on.
+        ledgerActivity.lockFunctionalCurrencyForChange(organisationId)
+        if (ledgerActivity.hasPostedJournals(organisationId)) {
+            throw frozen()
         }
     }
+
+    private fun frozen() =
+        ConflictException(
+            code = FUNCTIONAL_CURRENCY_FROZEN,
+            safeDetail =
+                "The base currency cannot change once the organisation has posted a journal.",
+        )
 
     private fun authorize(
         definition: TenantSettingDefinition,

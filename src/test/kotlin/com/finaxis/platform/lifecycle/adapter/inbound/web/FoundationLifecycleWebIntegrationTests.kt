@@ -9,6 +9,8 @@ import com.finaxis.platform.common.web.idempotency.IdempotencyKeyFilter
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
+import com.finaxis.platform.jooq.tables.references.ORGANISATION
+import com.finaxis.platform.jooq.tables.references.ORGANISATION_SETTING
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateBranchRequest
@@ -33,6 +35,7 @@ import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
 import java.time.OffsetDateTime
 import java.util.UUID
+import kotlin.test.assertEquals
 
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -227,6 +230,227 @@ class FoundationLifecycleWebIntegrationTests
                     jsonPath("$.items[0].branch_code") { value("BR-01") }
                 }
         }
+
+        @Test
+        fun `a tenant cannot be provisioned with a currency the ledger cannot post in`() {
+            val makerId = uuidV7()
+            val organisationFixture =
+                TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
+            val tenantCode = "currency-tenant-" + shortSuffix()
+
+            dsl
+                .insertInto(USER_ACCOUNT)
+                .set(USER_ACCOUNT.ID, makerId)
+                .set(USER_ACCOUNT.USERNAME, "maker-$tenantCode")
+                .set(USER_ACCOUNT.EMAIL, "maker@$tenantCode.test")
+                .set(USER_ACCOUNT.DISPLAY_NAME, "Maker")
+                .set(USER_ACCOUNT.STATUS, "DRAFT")
+                .set(USER_ACCOUNT.CREATED_AT, OffsetDateTime.now())
+                .set(USER_ACCOUNT.CREATED_BY, SystemActor.ID)
+                .set(USER_ACCOUNT.UPDATED_AT, OffsetDateTime.now())
+                .set(USER_ACCOUNT.UPDATED_BY, SystemActor.ID)
+                .execute()
+            organisationFixture.grantPlatformSuperAdmin(makerId)
+
+            // ZZZ passes the DTO's ^[A-Z]{3}$ pattern and the column's CHECK constraint, so nothing
+            // below the application layer would have stopped it: the draft would have been stored
+            // and the tenant activated with a functional currency it can never post in.
+            listOf("ZZZ", "XXX").forEach { code ->
+                mockMvc
+                    .post(ApiPaths.PLATFORM_TENANTS) {
+                        header(
+                            IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER,
+                            UUID.randomUUID().toString(),
+                        )
+                        contentType = MediaType.APPLICATION_JSON
+                        content =
+                            apiJsonCodec.mapper.writeValueAsString(
+                                draftRequest("$tenantCode-${code.lowercase()}", code),
+                            )
+                        with(authentication(platformToken(makerId, setOf("tenant.create"))))
+                    }.andExpect {
+                        status { isUnprocessableContent() }
+                        jsonPath("$.code") { value("accounting.currency_invalid") }
+                    }
+            }
+
+            assertEquals(
+                0,
+                dsl.fetchCount(
+                    ORGANISATION,
+                    ORGANISATION.TENANT_CODE.like("$tenantCode%"),
+                ),
+                "a refused base currency must leave no organisation row behind",
+            )
+        }
+
+        private fun shortSuffix(): String =
+            UUID
+                .randomUUID()
+                .toString()
+                .replace("-", "")
+                .take(8)
+                .lowercase()
+
+        @Test
+        fun `an initial base_currency setting the ledger cannot post in is refused`() {
+            val makerId = seedPlatformMaker("settings-tenant-" + shortSuffix())
+
+            // The column was already guarded; `initial_settings` was the door left open. It went
+            // to the store verbatim, which wrote every key as a STRING row and never consulted
+            // TenantSettingCatalog - so the same request that could not name XAU as its base
+            // currency could still declare XAU as its base currency setting.
+            listOf("XAU", "ZZZ").forEach { code ->
+                val tenantCode = "settings-tenant-" + shortSuffix()
+                mockMvc
+                    .post(ApiPaths.PLATFORM_TENANTS) {
+                        header(
+                            IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER,
+                            UUID.randomUUID().toString(),
+                        )
+                        contentType = MediaType.APPLICATION_JSON
+                        content =
+                            apiJsonCodec.mapper.writeValueAsString(
+                                draftRequest(
+                                    tenantCode,
+                                    "KES",
+                                    initialSettings = mapOf("base_currency" to code),
+                                ),
+                            )
+                        with(authentication(platformToken(makerId, setOf("tenant.create"))))
+                    }.andExpect {
+                        status { isUnprocessableContent() }
+                        jsonPath("$.code") { value("accounting.currency_invalid") }
+                    }
+                assertEquals(
+                    0,
+                    dsl.fetchCount(ORGANISATION, ORGANISATION.TENANT_CODE.eq(tenantCode)),
+                    "a refused initial setting must leave no organisation row behind",
+                )
+            }
+        }
+
+        @Test
+        fun `an accepted initial setting is stored under its catalog value type`() {
+            val tenantCode = "settings-tenant-" + shortSuffix()
+            val makerId = seedPlatformMaker(tenantCode)
+
+            val created =
+                mockMvc
+                    .post(ApiPaths.PLATFORM_TENANTS) {
+                        header(
+                            IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER,
+                            UUID.randomUUID().toString(),
+                        )
+                        contentType = MediaType.APPLICATION_JSON
+                        content =
+                            apiJsonCodec.mapper.writeValueAsString(
+                                draftRequest(
+                                    tenantCode,
+                                    "KES",
+                                    initialSettings = mapOf("base_currency" to "KES"),
+                                ),
+                            )
+                        with(authentication(platformToken(makerId, setOf("tenant.create"))))
+                    }.andExpect {
+                        status { isCreated() }
+                    }.andReturn()
+            val organisationId =
+                UUID.fromString(
+                    apiJsonCodec.mapper
+                        .readTree(created.response.contentAsString)
+                        .get("organisation_id")
+                        .asString(),
+                )
+
+            // The row must be indistinguishable from one the settings endpoint would have written:
+            // the catalog's declared value type, not the hard-coded STRING the store used to stamp.
+            assertEquals(
+                "CURRENCY",
+                dsl
+                    .select(ORGANISATION_SETTING.VALUE_TYPE)
+                    .from(ORGANISATION_SETTING)
+                    .where(ORGANISATION_SETTING.ORGANISATION_ID.eq(organisationId))
+                    .and(ORGANISATION_SETTING.SETTING_KEY.eq("base_currency"))
+                    .fetchOne(ORGANISATION_SETTING.VALUE_TYPE),
+            )
+        }
+
+        @Test
+        fun `an initial setting key outside the catalog is refused`() {
+            val tenantCode = "unknown-setting-" + shortSuffix()
+            val makerId = seedPlatformMaker(tenantCode)
+
+            mockMvc
+                .post(ApiPaths.PLATFORM_TENANTS) {
+                    header(
+                        IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER,
+                        UUID.randomUUID().toString(),
+                    )
+                    contentType = MediaType.APPLICATION_JSON
+                    content =
+                        apiJsonCodec.mapper.writeValueAsString(
+                            draftRequest(
+                                tenantCode,
+                                "KES",
+                                initialSettings = mapOf("base_currancy" to "KES"),
+                            ),
+                        )
+                    with(authentication(platformToken(makerId, setOf("tenant.create"))))
+                }.andExpect {
+                    status { isUnprocessableContent() }
+                    jsonPath("$.code") { value("invalid_operation") }
+                }
+
+            assertEquals(
+                0,
+                dsl.fetchCount(ORGANISATION, ORGANISATION.TENANT_CODE.eq(tenantCode)),
+                "a refused initial setting must leave no organisation row behind",
+            )
+        }
+
+        private fun seedPlatformMaker(tenantCode: String): UUID {
+            val makerId = uuidV7()
+            dsl
+                .insertInto(USER_ACCOUNT)
+                .set(USER_ACCOUNT.ID, makerId)
+                .set(USER_ACCOUNT.USERNAME, "maker-$tenantCode")
+                .set(USER_ACCOUNT.EMAIL, "maker@$tenantCode.test")
+                .set(USER_ACCOUNT.DISPLAY_NAME, "Maker")
+                .set(USER_ACCOUNT.STATUS, "DRAFT")
+                .set(USER_ACCOUNT.CREATED_AT, OffsetDateTime.now())
+                .set(USER_ACCOUNT.CREATED_BY, SystemActor.ID)
+                .set(USER_ACCOUNT.UPDATED_AT, OffsetDateTime.now())
+                .set(USER_ACCOUNT.UPDATED_BY, SystemActor.ID)
+                .execute()
+            TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
+                .grantPlatformSuperAdmin(makerId)
+            return makerId
+        }
+
+        private fun draftRequest(
+            tenantCode: String,
+            baseCurrencyCode: String,
+            initialSettings: Map<String, String> = emptyMap(),
+        ): CreateTenantDraftRequest =
+            CreateTenantDraftRequest(
+                tenantCode = tenantCode,
+                displayName = "Currency Integration Tenant",
+                legalName = "Currency Integration Tenant Ltd",
+                registrationNumber = "REG-WEB-002",
+                countryCode = "KE",
+                baseCurrencyCode = baseCurrencyCode,
+                timezone = "Africa/Nairobi",
+                initialSettings = initialSettings,
+                admin =
+                    InitialAdminDto(
+                        email = "admin@$tenantCode.test",
+                        username = "admin-$tenantCode",
+                        displayName = "Initial Admin",
+                        phoneE164 = "+254700000000",
+                        sendApplicationInvite = true,
+                    ),
+            )
 
         private fun platformToken(
             userId: UUID,

@@ -40,6 +40,7 @@ import com.finaxis.platform.lifecycle.application.OrganisationQueryStore
 import com.finaxis.platform.lifecycle.application.OrganisationSetupRequirement
 import com.finaxis.platform.lifecycle.application.OrganisationSummary
 import com.finaxis.platform.lifecycle.application.RevokeUserBranchAssignmentCommand
+import com.finaxis.platform.lifecycle.application.StoredSetting
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
@@ -114,18 +115,19 @@ class JooqOrganisationBranchProvisioningStore(
 
     override fun saveSettings(
         organisationId: UUID,
-        settings: Map<String, String>,
+        settings: List<StoredSetting>,
         actorId: UUID,
     ) {
-        settings.forEach { (key, value) ->
+        settings.forEach { setting ->
             dsl
                 .insertInto(ORGANISATION_SETTING)
                 .set(ORGANISATION_SETTING.ORGANISATION_ID, organisationId)
-                .set(ORGANISATION_SETTING.SETTING_KEY, key)
+                .set(ORGANISATION_SETTING.SETTING_KEY, setting.key)
                 .set(
                     ORGANISATION_SETTING.SETTING_VALUE,
-                    JSONB.jsonb(objectMapper.writeValueAsString(value)),
-                ).set(ORGANISATION_SETTING.VALUE_TYPE, "STRING")
+                    JSONB.jsonb(objectMapper.writeValueAsString(setting.value)),
+                ).set(ORGANISATION_SETTING.VALUE_TYPE, setting.valueType)
+                .set(ORGANISATION_SETTING.IS_SENSITIVE, setting.sensitive)
                 .set(ORGANISATION_SETTING.EFFECTIVE_FROM, now())
                 .set(ORGANISATION_SETTING.CREATED_AT, now())
                 .set(ORGANISATION_SETTING.CREATED_BY, actorId)

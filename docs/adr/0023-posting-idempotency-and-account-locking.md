@@ -185,15 +185,56 @@ correct discipline for an idempotency key it owns.
 
 **The lock-class ordering, stated once because it is easy to get wrong by accretion.** A posting may
 hold, in this order and never any other: the reversal advisory lock (`JournalReversalLock`, taken by
-`JournalReversalService` before it calls the engine at all), then the fiscal-period shared row lock,
-then the `gl_account` shared row locks in ascending id order. `ChartOfAccountsService` may hold, in
-order: the chart-hierarchy advisory lock, then one `gl_account` exclusive row lock.
+`JournalReversalService` before it calls the engine at all) **or** the `manual_journal` row lock
+(taken by `ManualJournalService` before it approves through the engine); then the `posting_request`
+row lock the idempotency claim holds to commit; then the tenant functional-currency advisory lock
+taken **shared** (`FunctionalCurrencyLock.lockForPosting`, issue #94, the first thing `postNew`
+does); then the fiscal-period shared row lock; then the `gl_account` shared row locks in ascending
+id order; and last the `reference_sequence` row lock `allocateNumber` takes.
+`ChartOfAccountsService` may hold, in order: the chart-hierarchy advisory lock, then one
+`gl_account` exclusive row lock.
 `GlAccountLifecycleService` and `PostingRuleService.approve` each hold at most one lock class beyond
 their own aggregate's lock (the account lock) at a time. No flow acquires a lock class from another
-flow's prefix, so no cycle is representable: the account lock is always the terminal lock in every
-flow that takes it, which is what a future addition must preserve. A new lock class introduced
+flow's prefix, so no cycle is representable: the `reference_sequence` row is the terminal lock of a
+posting, and the `gl_account` locks are terminal in every *other* flow that takes them, which is
+what a future addition must preserve. A new lock class introduced
 "beside" these without restating this ordering is exactly how a review round becomes a production
 deadlock instead of a race.
+
+The functional-currency lock is the worked example of adding one, and of stating the resulting
+property carefully. It is **not** the first lock a posting takes, and an earlier revision of this
+paragraph wrongly said it was: the reversal advisory lock, the `manual_journal` row lock and the
+`posting_request` row lock of the claim all precede it, the last on the plainest posting path there
+is. What is true, and what the safety of the placement actually rests on, is narrower:
+
+> The functional-currency lock is the first lock `PostingEngine.postNew` takes, and **none of the
+> classes that precede it in a posting is ever acquired by the currency-change flow.** The change
+> takes the currency lock and then only the per-setting-key advisory lock, which nothing else in the
+> codebase takes at all.
+
+That is why no cycle is representable today, and it is the property a future change must re-check
+rather than assume. The distinction is not pedantic: under the discarded "always first, therefore
+acyclic" rule, an administrative flow that took the currency lock and then reversed or re-posted
+outstanding journals - the redenomination boundary `accounting-foundation.md` names as future work -
+would be waved through, while holding class 5 and wanting class 4 against a reversal holding 4 and
+wanting 5. That is a hard deadlock the rule would have blessed.
+
+A replay takes the lock not at all: a retry of an already committed posting cannot be a tenant's
+first, so it has nothing to serialise against, and making every retry wait on a tenant-wide lock
+would undo the claim-first property this ADR exists to establish.
+
+**The shared mode makes concurrent postings cheap, but not free.** Shared does not conflict with
+shared, so postings do not wait on *each other* - but PostgreSQL makes a request wait when it
+conflicts with the *pending* queue as well as with what is granted, so once a `base_currency` change
+is queued, every new posting for that tenant queues behind it. Verified against `postgres:18.4`:
+with one shared lock granted and an exclusive request waiting, a second shared request on the same
+key is reported `granted = false`. An unbounded exclusive wait would therefore freeze a tenant's
+entire posting path for as long as one slow posting held the lock, so the change's wait is bounded
+by `finaxis.accounting.functional-currency-lock-timeout` and surfaces as the retryable
+`accounting.functional_currency_lock_timeout` rather than stalling the ledger. The guard also reads
+`hasPostedJournals` **unlocked first**: that predicate only ever moves false to true, so an unlocked
+`true` is already final and an administrator retrying against a long-trading tenant is refused
+without ever queueing.
 
 **A long-running posting now also delays a chart structural edit on any account it references**,
 symmetrically with how it already delays a period close. This is the accepted cost stated in ADR

@@ -32,7 +32,14 @@ unknown keys instead of accepting arbitrary key/value pairs.
 Validation and canonicalization are catalog-owned:
 
 - `TIMEZONE`: must be an IANA zone id from `ZoneId.getAvailableZoneIds()`.
-- `CURRENCY`: must be an ISO 4217 currency from `Currency.getAvailableCurrencies()`.
+- `CURRENCY`: must be a currency the ledger can post in, resolved by
+  `MoneyPolicy.requireSettlementCurrency`. That is an ISO 4217 code the JDK knows **and**
+  one that has a minor unit, so `XXX` and the metals (`XAU`, `XAG`, `XPD`, `XPT`) are
+  refused: no amount can be settled in them. A failure reports `accounting.currency_invalid`.
+  A posting refuses an unknown code under that same code, but refuses `XXX` and the metals as
+  `accounting.amount_precision_exceeded` instead - they are known codes with no minor unit, so it
+  is the amount rather than the currency that fails. Refusing them here is what stops a tenant
+  reaching that state.
 - `BOOLEAN`: accepts only `true` or `false`, case-insensitively, and stores lowercase.
 - `INT`: must parse as a non-negative integer and stores the canonical decimal string.
 

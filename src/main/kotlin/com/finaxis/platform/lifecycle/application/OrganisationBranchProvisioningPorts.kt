@@ -3,6 +3,7 @@ package com.finaxis.platform.lifecycle.application
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
+import com.finaxis.platform.lifecycle.domain.TenantSettingCatalog
 import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
@@ -18,10 +19,17 @@ interface OrganisationLifecycleProvisioningStore {
     /** Amends the organisation draft details. */
     fun amendDraft(command: AmendOrganisationDraftCommand) {}
 
-    /** Stores supplied initial non-sensitive organisation settings. */
+    /**
+     * Stores already-canonicalized initial organisation settings.
+     *
+     * Each entry carries its own `valueType` and `sensitive` metadata rather than letting the
+     * adapter guess: the caller has resolved them from `TenantSettingCatalog`, which is the same
+     * source `OrganisationSettingsStore.upsertSetting` writes from, so a row created at
+     * provisioning is indistinguishable from one written later through the settings endpoint.
+     */
     fun saveSettings(
         organisationId: UUID,
-        settings: Map<String, String>,
+        settings: List<StoredSetting>,
         actorId: UUID,
     )
 
@@ -149,13 +157,40 @@ interface OrganisationSettingsStore {
     ): Boolean
 }
 
-/** A currently effective organisation setting row with its type and sensitivity metadata. */
+/** An organisation setting row with its type and sensitivity metadata, as read back or written. */
 data class StoredSetting(
     val key: String,
     val value: String,
     val valueType: String,
     val sensitive: Boolean,
-)
+) {
+    /** Builders for setting rows the platform is about to write. */
+    companion object {
+        /**
+         * Validates [rawValue] against [TenantSettingCatalog] and builds the row [key] must be
+         * stored as, so a caller supplying settings cannot choose their own storage metadata.
+         *
+         * Throws [com.finaxis.platform.common.application.InvalidOperationException] for a key the
+         * catalog does not define, and whatever the key's own type rule throws for a bad value -
+         * `accounting.currency_invalid` for `base_currency`, for instance. That is the same
+         * treatment `TenantSettingsService.createOrUpdate` gives a key, which is the point: an
+         * uncatalogued key accepted here would be a setting the `/settings` endpoint refuses to
+         * create and can only ever report as unmanaged.
+         */
+        fun fromCatalog(
+            key: String,
+            rawValue: String,
+        ): StoredSetting {
+            val definition = TenantSettingCatalog.require(key)
+            return StoredSetting(
+                key = definition.key,
+                value = TenantSettingCatalog.canonicalize(key, rawValue),
+                valueType = definition.valueType.name,
+                sensitive = definition.sensitive,
+            )
+        }
+    }
+}
 
 /** Business date persistence port for the controlled, optimistically-locked business date. */
 interface BusinessDateStore {

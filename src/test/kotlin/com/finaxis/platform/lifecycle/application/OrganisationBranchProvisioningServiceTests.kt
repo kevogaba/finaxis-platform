@@ -1,7 +1,9 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.accounting.domain.MoneyPolicy
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
@@ -19,6 +21,7 @@ import com.finaxis.platform.lifecycle.domain.LifecycleAggregate
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleTransition
+import com.finaxis.platform.lifecycle.domain.TenantSettingValueType
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.verify
@@ -86,17 +89,21 @@ class OrganisationBranchProvisioningServiceTests {
                     countryCode = "KE",
                     baseCurrencyCode = "KES",
                     timezone = "Africa/Nairobi",
-                    initialSettings = mapOf("settings.locale" to "en-KE"),
+                    initialSettings = mapOf("base_currency" to " kes "),
                     requestedBy = uuidV7(),
                 ),
             )
 
         assertEquals(OrganisationLifecycleState.DRAFT, result.status)
         assertEquals(LocalDate.of(2026, 7, 14), store.businessDates.getValue(result.organisationId))
+        val stored = store.settings.getValue(result.organisationId).getValue("base_currency")
+        assertEquals("KES", stored.value, "the catalog's canonical form must be what is persisted")
         assertEquals(
-            "en-KE",
-            store.settings.getValue(result.organisationId).getValue("settings.locale"),
+            TenantSettingValueType.CURRENCY.name,
+            stored.valueType,
+            "provisioning must persist the catalog's declared value type, not a hard-coded STRING",
         )
+        assertEquals(false, stored.sensitive)
         assertEquals("organisation.create_draft", audits.events.single().action)
     }
 
@@ -565,6 +572,104 @@ class OrganisationBranchProvisioningServiceTests {
         }
     }
 
+    @Test
+    fun `a base currency the ledger cannot post in is refused when creating a draft`() {
+        // ZZZ satisfies the old [A-Z]{3} regex and the column's CHECK constraint, so the draft
+        // validated and the tenant activated - and could then never post, because the column is
+        // the functional currency of every journal line.
+        listOf("ZZZ", "XXY", "kes", "KE").forEach { code ->
+            val failure =
+                assertFailsWith<InvalidOperationException> {
+                    organisations.createDraft(createDraftCommand(baseCurrencyCode = code))
+                }
+            assertEquals(MoneyPolicy.CURRENCY_INVALID, failure.code)
+        }
+    }
+
+    @Test
+    fun `a currency with no minor unit is refused when creating a draft`() {
+        // XXX ("no currency") and the metals ARE known to the JDK, so a bare ISO membership check
+        // would admit them, and they carry defaultFractionDigits -1: MoneyPolicy.requireSettled
+        // then refuses every ordinary amount in them. Same trap as ZZZ, so same answer.
+        listOf("XXX", "XAU", "XPD").forEach { code ->
+            val failure =
+                assertFailsWith<InvalidOperationException> {
+                    organisations.createDraft(createDraftCommand(baseCurrencyCode = code))
+                }
+            assertEquals(MoneyPolicy.CURRENCY_INVALID, failure.code)
+        }
+    }
+
+    @Test
+    fun `real settlement currencies are accepted when creating a draft`() {
+        // JPY is zero-decimal: a minor unit of zero digits is still a minor unit.
+        listOf("KES", "USD", "JPY").forEach { code ->
+            val result =
+                organisations.createDraft(
+                    createDraftCommand(tenantCode = "acme-$code", baseCurrencyCode = code),
+                )
+            assertEquals(OrganisationLifecycleState.DRAFT, result.status)
+        }
+    }
+
+    @Test
+    fun `a base currency the ledger cannot post in is refused when amending a draft`() {
+        val organisationId = activeDraft()
+        store.organisationStates[organisationId] = OrganisationLifecycleState.DRAFT
+
+        listOf("ZZZ", "XXX", "XAU").forEach { code ->
+            val failure =
+                assertFailsWith<InvalidOperationException> {
+                    organisations.amendDraft(
+                        amendDraftCommand(organisationId, baseCurrencyCode = code),
+                    )
+                }
+            assertEquals(MoneyPolicy.CURRENCY_INVALID, failure.code)
+        }
+
+        organisations.amendDraft(amendDraftCommand(organisationId, baseCurrencyCode = "USD"))
+    }
+
+    private fun createDraftCommand(
+        tenantCode: String = "acme-currency",
+        baseCurrencyCode: String,
+    ): CreateOrganisationDraftCommand =
+        CreateOrganisationDraftCommand(
+            tenantCode = tenantCode,
+            displayName = "Acme SACCO",
+            legalName = "Acme SACCO Limited",
+            registrationNumber = "C-200",
+            countryCode = "KE",
+            baseCurrencyCode = baseCurrencyCode,
+            timezone = "Africa/Nairobi",
+            requestedBy = uuidV7(),
+        )
+
+    private fun amendDraftCommand(
+        organisationId: UUID,
+        baseCurrencyCode: String,
+    ): AmendOrganisationDraftCommand =
+        AmendOrganisationDraftCommand(
+            organisationId = organisationId,
+            tenantCode = "acme-currency",
+            displayName = "Acme SACCO",
+            legalName = "Acme SACCO Limited",
+            registrationNumber = "C-200",
+            countryCode = "KE",
+            baseCurrencyCode = baseCurrencyCode,
+            timezone = "Africa/Nairobi",
+            actorId = uuidV7(),
+            requestId = uuidV7(),
+            admin =
+                InitialAdministratorDraft(
+                    email = "admin@test.com",
+                    username = "admin",
+                    displayName = "Admin",
+                    phoneE164 = null,
+                    sendApplicationInvite = false,
+                ),
+        )
+
     private fun assertExternalizedTarget(expectedTarget: String) {
         val event = assertIs<ExternalizedTransitionEvent>(events.events.single())
         assertEquals(expectedTarget, event.target)
@@ -592,6 +697,127 @@ class OrganisationBranchProvisioningServiceTests {
     }
 }
 
+/**
+ * Initial tenant settings supplied at draft creation. These share one authority with the
+ * `/settings` endpoint - `TenantSettingCatalog` - so a value refused there cannot slip in here.
+ */
+class OrganisationInitialSettingsProvisioningTests {
+    private val clock = Clock.fixed(Instant.parse("2026-07-14T10:00:00Z"), ZoneOffset.UTC)
+    private val lifecyclePersistence = LifecycleFake()
+    private val events = EventCapture()
+    private val audits = AuditCapture()
+    private val lifecycle =
+        FoundationLifecycleService(
+            TransitionExecutor(clock, TransitionLogCapture(), events),
+            lifecyclePersistence,
+            lifecyclePersistence,
+            lifecyclePersistence,
+            AuditService(audits, clock),
+        )
+    private val store = ProvisioningFake(lifecyclePersistence)
+    private val organisations =
+        OrganisationProvisioningService(
+            lifecycle,
+            store,
+            store,
+            store,
+            store,
+            AuditService(audits, clock),
+            FakeInitialAdministratorBootstrapStore(),
+            mock(InitialAdministratorBootstrapService::class.java),
+            mock(PermissionGuard::class.java),
+            clock,
+        )
+
+    @Test
+    fun `an initial base_currency setting the ledger cannot post in is refused`() {
+        // The `base_currency_code` column and the `base_currency` tenant setting are two doors
+        // onto one decision. `initial_settings` used to go straight to the store, which stamped
+        // every row STRING and asked the catalog nothing - so a single request could be refused
+        // `XAU` as a column value and granted it as a setting.
+        listOf("XAU", "ZZZ", "XXX").forEach { code ->
+            val failure =
+                assertFailsWith<InvalidOperationException> {
+                    organisations.createDraft(
+                        createDraftCommand(
+                            tenantCode = "acme-setting-$code",
+                            initialSettings = mapOf("base_currency" to code),
+                        ),
+                    )
+                }
+            assertEquals(MoneyPolicy.CURRENCY_INVALID, failure.code)
+        }
+        assertTrue(store.settings.isEmpty(), "a refused setting must persist nothing")
+
+        val result =
+            organisations.createDraft(
+                createDraftCommand(
+                    tenantCode = "acme-setting-kes",
+                    initialSettings = mapOf("base_currency" to "KES"),
+                ),
+            )
+        assertEquals(
+            "KES",
+            store.settings
+                .getValue(result.organisationId)
+                .getValue("base_currency")
+                .value,
+        )
+    }
+
+    @Test
+    fun `an initial setting key outside the catalog is refused`() {
+        // `TenantSettingsService.createOrUpdate` resolves its definition with
+        // `TenantSettingCatalog.require`, so the settings endpoint refuses any uncatalogued key.
+        // Accepting one here would make provisioning the one way to persist a setting that
+        // endpoint would have rejected - a typo storing silently and unmanageable afterwards.
+        val failure =
+            assertFailsWith<InvalidOperationException> {
+                organisations.createDraft(
+                    createDraftCommand(
+                        tenantCode = "acme-unknown-setting",
+                        initialSettings = mapOf("base_currancy" to "KES"),
+                    ),
+                )
+            }
+        assertEquals("Unknown tenant setting key: base_currancy", failure.safeDetail)
+        assertTrue(store.settings.isEmpty(), "a refused setting must persist nothing")
+    }
+
+    @Test
+    fun `an initial setting value that fails its catalog type rule is refused`() {
+        val failure =
+            assertFailsWith<InvalidOperationException> {
+                organisations.createDraft(
+                    createDraftCommand(
+                        tenantCode = "acme-bad-timezone",
+                        initialSettings = mapOf("default_timezone" to "Mars/Olympus"),
+                    ),
+                )
+            }
+        assertEquals(
+            "Setting default_timezone must be a valid IANA time-zone id.",
+            failure.safeDetail,
+        )
+    }
+
+    private fun createDraftCommand(
+        tenantCode: String,
+        initialSettings: Map<String, String>,
+    ): CreateOrganisationDraftCommand =
+        CreateOrganisationDraftCommand(
+            tenantCode = tenantCode,
+            displayName = "Acme SACCO",
+            legalName = "Acme SACCO Limited",
+            registrationNumber = "C-300",
+            countryCode = "KE",
+            baseCurrencyCode = "KES",
+            timezone = "Africa/Nairobi",
+            initialSettings = initialSettings,
+            requestedBy = uuidV7(),
+        )
+}
+
 private class ProvisioningFake(
     private val lifecycle: LifecycleFake,
 ) : OrganisationLifecycleProvisioningStore,
@@ -600,7 +826,7 @@ private class ProvisioningFake(
     OrganisationQueryStore,
     BranchLifecycleStore,
     BranchAssignmentStore {
-    val settings = mutableMapOf<UUID, Map<String, String>>()
+    val settings = mutableMapOf<UUID, Map<String, StoredSetting>>()
     val businessDates = mutableMapOf<UUID, LocalDate>()
     val headOffices = mutableSetOf<UUID>()
     val headOfficeIds = mutableMapOf<UUID, UUID>()
@@ -622,11 +848,10 @@ private class ProvisioningFake(
 
     override fun saveSettings(
         organisationId: UUID,
-        settings: Map<String, String>,
+        settings: List<StoredSetting>,
         actorId: UUID,
     ) {
-        this.settings[organisationId] =
-            settings
+        this.settings[organisationId] = settings.associateBy(StoredSetting::key)
     }
 
     override fun ensureBusinessDate(
@@ -793,7 +1018,11 @@ private class ProvisioningFake(
     ): Int = assignments.count { it.organisationId == organisationId && it.userId == userId }
 
     fun completeSetup(organisationId: UUID) {
-        settings[organisationId] = mapOf("settings.operational" to "true")
+        settings[organisationId] =
+            mapOf(
+                "settings.operational" to
+                    StoredSetting("settings.operational", "true", "STRING", false),
+            )
         businessDates[organisationId] = LocalDate.of(2026, 7, 14)
         referenceSequences += organisationId
         defaultRoles += organisationId
