@@ -1,14 +1,17 @@
 package com.finaxis.platform.accounting.application.rules
 
 import com.finaxis.platform.accounting.AccountingPermissionGuard
+import com.finaxis.platform.accounting.AccountingTenantLookup
 import com.finaxis.platform.accounting.application.GlAccountPostingPolicy
 import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.ledger.PostingLegResolver
+import com.finaxis.platform.accounting.application.ledger.PostingLegsPolicy
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.application.posting.PostingIntent
 import com.finaxis.platform.accounting.domain.AccountingAuditActions
 import com.finaxis.platform.accounting.domain.AccountingContext
 import com.finaxis.platform.accounting.domain.AccountingPermissions
+import com.finaxis.platform.accounting.domain.GlAccount
 import com.finaxis.platform.accounting.domain.PostingLeg
 import com.finaxis.platform.accounting.domain.PostingRule
 import com.finaxis.platform.accounting.domain.PostingRuleLeg
@@ -19,6 +22,7 @@ import com.finaxis.platform.accounting.domain.PostingRuleVersionAggregate
 import com.finaxis.platform.accounting.domain.PostingRuleVersionLifecycle
 import com.finaxis.platform.accounting.domain.PostingRuleVersionStatus
 import com.finaxis.platform.accounting.domain.PostingRuleVersionTransition
+import com.finaxis.platform.common.application.ApplicationException
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
@@ -54,8 +58,9 @@ import java.util.UUID
  * the checker approves; once approved they are what historical postings cite. The store does not
  * know that rule; this service does, under the lock.
  *
- * Dry run resolves an intent through the same [PostingLegResolver] the engine uses and returns the
- * legs it would post, in a read-only transaction that writes nothing - which is the whole point.
+ * Dry run resolves an intent through the same [PostingLegResolver] the engine uses **and then
+ * validates the legs through the same [PostingLegsPolicy]**, in a read-only transaction that
+ * writes nothing - which is the whole point. See [dryRun] for what it deliberately does not check.
  */
 @Service
 @Suppress("TooManyFunctions")
@@ -67,6 +72,7 @@ class PostingRuleService(
     private val transitions: TransitionExecutor,
     private val auditService: AuditService,
     private val resolver: PostingLegResolver,
+    private val tenants: AccountingTenantLookup,
 ) {
     /** Creates a rule with no versions yet. */
     @Transactional
@@ -259,11 +265,43 @@ class PostingRuleService(
     }
 
     /**
-     * Resolves an intent exactly as a posting would, without posting.
+     * Resolves an intent exactly as a posting would, and validates the legs the way a posting
+     * would, without posting.
      *
-     * Read-only by declaration and by construction: the resolver reads rules and accounts and
-     * writes nothing, so an administrator can test a configuration against real facts and see the
-     * legs, the amounts and the version that would answer, with no journal anywhere.
+     * Read-only by declaration and by construction: the resolver reads rules, [PostingLegsPolicy]
+     * is a pure object, and the account lookup here takes no lock, so an administrator can test a
+     * configuration against real facts and see the legs, the amounts and the version that would
+     * answer, with no journal anywhere.
+     *
+     * **It validates the legs as well as resolving them** (issue #95). Until then it stopped at
+     * resolution, so an intent whose facts arrived in a currency the tenant does not post in, or
+     * whose rule named an account deactivated since the version was approved, dry-ran clean and
+     * posted red - which is exactly what the method's name promises it will not do. It now runs
+     * the engine's own eligibility pass over the resolved legs: currency, account postability and
+     * the balance, in the engine's order, raising the engine's codes.
+     *
+     * **It deliberately does not check where and when the posting would happen.** Tenant and
+     * branch postability, fiscal-period status and posting-date admissibility stay with
+     * [com.finaxis.platform.accounting.application.ledger.PostingEngine], because each of them
+     * would break the dry run's principal uses: a tenant is not yet `ACTIVE` while its accounting
+     * is being configured, a period's status is deliberately decided only under the posting lock,
+     * and a rule that takes effect tomorrow or a preview taken at close of business would be
+     * refused for a future or closed posting date. Those are properties of a posting, not of the
+     * configuration under test.
+     *
+     * [PostingRuleDryRunCommand.mode] chooses how a defect is reported.
+     * [PostingRuleDryRunMode.STRICT], the default, throws exactly what a posting would throw.
+     * [PostingRuleDryRunMode.REPORT_PROBLEM] returns it on
+     * [PostingRuleDryRunResult.problem] instead - **the first problem, not all of them**. There is
+     * one validator and it stops at the first defect; that is the price of the dry run and the
+     * posting sharing a single validation path, and it is the right price, because two paths that
+     * could diverge is the defect being fixed here. A caller that wants every problem fixes the
+     * first, runs again, and repeats.
+     *
+     * [PostingRuleDryRunMode.REPORT_PROBLEM] covers the **eligibility pass only**, not resolution:
+     * a rule that does not exist, two that match at the same specificity, or facts the rule cannot
+     * consume still throw in either mode, because there is no version and no legs to report a
+     * problem *about* - [PostingRuleDryRunResult] would have nothing to carry.
      */
     @Transactional(readOnly = true)
     fun dryRun(command: PostingRuleDryRunCommand): PostingRuleDryRunResult {
@@ -272,12 +310,62 @@ class PostingRuleService(
             command.context.organisationId,
             AccountingPermissions.POSTING_RULE_VIEW,
         )
+        val organisationId = command.context.organisationId
         val resolved = resolver.resolve(command.context, command.intent, command.postingDate)
         return PostingRuleDryRunResult(
             postingRuleVersionId = requireNotNull(resolved.postingRuleVersionId),
+            // The legs the resolver produced, NOT the settled copies. Settlement rescales to
+            // MoneyPolicy.STORAGE_SCALE, so returning them would turn "1000.00" into
+            // "1000.000000" for every caller, for no gain: the settled legs differ from these
+            // only in scale, and the scale a journal stores is the store's business.
             legs = resolved.legs,
+            problem = settlementProblem(organisationId, resolved.legs, command.mode),
         )
     }
+
+    /**
+     * Runs the engine's eligibility pass over [legs], returning the first defect when the caller
+     * asked for it as data and letting it fly when the caller asked for strictness.
+     *
+     * The account lookup is memoised per distinct id, so a rule with several legs on one account
+     * reads it once - the dry run has no lock to amortise the reads against, unlike the engine,
+     * whose `lockAccounts` already distinct-ed the ids before it locked them.
+     */
+    private fun settlementProblem(
+        organisationId: UUID,
+        legs: List<PostingLeg>,
+        mode: PostingRuleDryRunMode,
+    ): PostingRuleDryRunProblem? {
+        val currency = functionalCurrency(organisationId)
+        val accountOf = memoisedAccountLookup(organisationId)
+        if (mode == PostingRuleDryRunMode.STRICT) {
+            PostingLegsPolicy.settle(legs, currency, accountOf)
+            return null
+        }
+        return try {
+            PostingLegsPolicy.settle(legs, currency, accountOf)
+            null
+        } catch (ex: ApplicationException) {
+            PostingRuleDryRunProblem(ex.code, ex.safeDetail)
+        }
+    }
+
+    /** Reads each distinct account at most once, so N legs on one account cost one statement. */
+    private fun memoisedAccountLookup(organisationId: UUID): (UUID) -> GlAccount? {
+        val cache = mutableMapOf<UUID, GlAccount>()
+        return { accountId ->
+            cache[accountId] ?: accounts.findById(organisationId, accountId)?.also {
+                cache[accountId] = it
+            }
+        }
+    }
+
+    private fun functionalCurrency(organisationId: UUID): String =
+        tenants.functionalCurrencyOf(organisationId)
+            ?: throw ConflictException(
+                code = PostingErrorCodes.FUNCTIONAL_CURRENCY_UNAVAILABLE,
+                safeDetail = "The organisation has no functional currency.",
+            )
 
     /** Reads one version, permission-gated and tenant-scoped. */
     @Transactional(readOnly = true)
@@ -718,15 +806,53 @@ data class PostingRuleVersionTransitionCommand(
     val effectiveTo: LocalDate? = null,
 )
 
+/**
+ * How a dry run answers a configuration defect.
+ *
+ * A named choice rather than a boolean, because the two answers are genuinely different contracts
+ * and a call site reading `mode = REPORT_PROBLEM` says which one it wants.
+ */
+enum class PostingRuleDryRunMode {
+    /**
+     * Throw exactly what [com.finaxis.platform.accounting.application.ledger.PostingEngine] would
+     * throw for the same legs. The default: a dry run that answers as the posting would.
+     */
+    STRICT,
+
+    /** Return the **first** defect on [PostingRuleDryRunResult.problem] instead of throwing. */
+    REPORT_PROBLEM,
+}
+
 /** Asks what a posting would do, without doing it. */
 data class PostingRuleDryRunCommand(
     val context: AccountingContext,
     val intent: PostingIntent.Facts,
     val postingDate: LocalDate,
+    val mode: PostingRuleDryRunMode = PostingRuleDryRunMode.STRICT,
 )
 
-/** The version and legs a posting of the intent would produce. */
+/**
+ * The first defect a lenient dry run found, in the terms a posting would have refused it.
+ *
+ * [code] is the same [PostingErrorCodes] constant
+ * [com.finaxis.platform.accounting.application.ledger.PostingEngine] raises, and [detail] the same
+ * safe message, so a caller can report one thing whichever mode it asked for.
+ */
+data class PostingRuleDryRunProblem(
+    val code: String,
+    val detail: String,
+)
+
+/**
+ * The version and legs a posting of the intent would produce.
+ *
+ * [legs] are the resolver's legs, at the minor-unit scale it produced them - not the storage-scale
+ * copies the eligibility pass validated. [problem] is null unless the command asked for
+ * [PostingRuleDryRunMode.REPORT_PROBLEM] and a defect was found, in which case the legs are still
+ * returned so the caller can see what was being judged.
+ */
 data class PostingRuleDryRunResult(
     val postingRuleVersionId: UUID,
     val legs: List<PostingLeg>,
+    val problem: PostingRuleDryRunProblem? = null,
 )
