@@ -235,6 +235,62 @@ yet `ACTIVE` while its accounting is being configured, a period's status is deci
 posting lock, and a rule taking effect tomorrow - or a preview at close of business - would be
 refused on its posting date. Those are properties of a posting, not of the configuration under test.
 
+`PostingRuleService.previewVersion` is the second half of issue #95 and a **separate operation, not
+a flag on `dryRun`**. The two ask different questions. `dryRun` asks *what is in force*: it selects
+the rule from the intent's event code and product class and the version from the posting date, so
+by construction only an approved version can answer it - `PostingRuleVersion.governs` requires
+`isApproved`, which is right, because a posting must never reach a version nobody approved. That
+left the configuration a checker most wants to test unreachable: a `DRAFT` or `PENDING_APPROVAL`
+version could not be exercised at all, and a checker approved on the legs and percentages alone.
+`previewVersion` asks *what would this named version do*: the caller names a version id, and the
+legs are allocated directly, bypassing selection. One operation with a flag would have returned one
+type whose meaning depended on an argument, and a reader of the result could no longer tell which
+question had been asked; two operations keep "in force" and "under test" distinguishable, which is
+what the issue asks for.
+
+It takes **facts, not an intent**. The event code and product class of a `PostingIntent.Facts` are
+consumed only by `PostingRulePolicy.select` and the posting date only by `governs`, both of which
+preview bypasses, while `PostingRulePolicy.allocate` takes legs and facts and nothing else.
+Accepting them would let a caller describe an event the named version's rule does not answer and
+receive a confident reply about a fiction; they are read from the version's own rule and reported
+back on `PostingRuleVersionPreview.rule` instead. **Every status is previewable** - `DRAFT` and
+`PENDING_APPROVAL` for the checker, `ACTIVE` without asserting a posting date, and `SUPERSEDED` or
+`RETIRED` forensically - and the whole `PostingRuleVersion` comes back rather than its id, so a
+closed version's legs always arrive beside the status and window that say they are not current.
+
+Bypassing selection costs the diagnostics selection performs, and one of them matters enough to be
+a field. The currency dimension of a selector is matched against the tenant's functional currency,
+so a rule pinned to `USD` in a `KES` tenant is well formed, allocates perfectly and **can never
+fire**; `dryRun` catches that only by accident, as `POSTING_RULE_NOT_FOUND` from finding no rule at
+all. `PostingRuleVersionPreview.selectorMatchesFunctionalCurrency` says it on purpose. Read the
+name literally: it judges the selector's currency dimension and nothing else, so it stays `true`
+for a rule `select` would refuse as `accounting.posting_rule_ambiguous`, for an event code no
+product module emits, and for a window covering no postable date. `false` means the version can
+certainly never be selected; `true` means only that this one way of never being selected does not
+apply. It is not a reachability verdict, and an earlier name that read like one was changed for
+saying more than it knew.
+
+The legs are judged by the same pass, plus one check `dryRun` has no reason to run:
+`PostingRulePolicy.requireWellFormed` first - the same check `approve` runs - so a half-finished
+draft gives the checker the answer submission would rather than partial legs, and then
+`PostingLegsPolicy` under the same `PostingRuleDryRunMode` - **defaulted the other way**, to
+`REPORT_PROBLEM`. `dryRun` mimics a posting, so throwing what the posting would throw is its honest
+default; a named `DRAFT` version cannot post at all, so preview has no posting to mimic, and its
+caller is a checker deciding whether to approve. Throwing would hand them an exception and no legs,
+hiding the very thing they opened the preview to look at. `STRICT` is one argument away for a caller
+that wants the posting's own refusal. The consequence of `requireWellFormed` is worth stating too:
+preview is not a live editing companion, because a version whose legs are not yet well formed is
+refused rather than previewed. Well-formedness and allocation throw in both modes, as they do for
+`dryRun`, since a version with no allocatable legs has nothing for a result to carry a problem
+about. The read is `REPEATABLE READ` and asserts it through `SnapshotIsolationGuard`, for the reason
+`ManualJournalService.get` does: the version, its rule, its legs and its accounts are four
+statements, and under `READ COMMITTED` an amendment committing between them would pair one version's
+metadata with another version's legs. **No lock is taken**, deliberately - an account reported
+postable can be deactivated a moment later, which is why `approve` revalidates every account under
+`lockForPosting`. A preview is evidence for an approver, never a guarantee to build an approval gate
+on. It is gated by `posting_rule.view`, checked before any store read, and reads the version
+tenant-scoped, so an id from another tenant is refused exactly as one that never existed.
+
 ## Control accounts and reconciliation
 
 A control account **is** a GL account (ADR 0020): `gl_account.is_control_account` and

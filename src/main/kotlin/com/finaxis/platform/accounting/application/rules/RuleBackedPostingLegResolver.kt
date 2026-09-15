@@ -6,7 +6,6 @@ import com.finaxis.platform.accounting.application.ledger.ResolvedLegs
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.application.posting.PostingIntent
 import com.finaxis.platform.accounting.domain.AccountingContext
-import com.finaxis.platform.accounting.domain.FactAmount
 import com.finaxis.platform.accounting.domain.PostingRule
 import com.finaxis.platform.accounting.domain.PostingRulePolicy
 import com.finaxis.platform.accounting.domain.PostingRuleVersion
@@ -28,6 +27,10 @@ import java.time.LocalDate
  * The currency dimension of the selector is the tenant's functional currency, because the engine
  * accepts postings in that currency only; a rule pinned to another currency can be configured but
  * never selected until multi-currency posting exists.
+ *
+ * Only an **approved** version is reachable from here, which is deliberate and is why testing a
+ * draft is a different operation: [PostingRuleService.previewVersion] allocates the legs of a
+ * version a caller names, without selecting anything.
  */
 class RuleBackedPostingLegResolver(
     private val rules: PostingRuleStore,
@@ -48,33 +51,9 @@ class RuleBackedPostingLegResolver(
         val version = governingVersion(context, rule, postingDate)
         val legs = rules.findLegs(context.organisationId, version.id)
         return ResolvedLegs(
-            legs = PostingRulePolicy.allocate(legs, factsByCode(intent)),
+            legs = PostingRulePolicy.allocate(legs, factsByCode(intent.facts)),
             postingRuleVersionId = version.id,
         )
-    }
-
-    /**
-     * The intent's facts keyed by code, refusing a code supplied twice.
-     *
-     * `associate` would silently keep the last one, so two `PRINCIPAL` facts would post one of the
-     * two amounts with nothing to say the other was dropped.
-     */
-    private fun factsByCode(intent: PostingIntent.Facts): Map<String, FactAmount> {
-        val duplicates =
-            intent.facts
-                .groupingBy { it.code }
-                .eachCount()
-                .filterValues { it > 1 }
-                .keys
-        if (duplicates.isNotEmpty()) {
-            throw InvalidOperationException(
-                code = PostingRulePolicy.FACT_DUPLICATED,
-                safeDetail = "The intent supplies ${duplicates.sorted()} more than once.",
-            )
-        }
-        return intent.facts.associate {
-            it.code to FactAmount(it.amount, it.positionReference)
-        }
     }
 
     private fun selectRule(
