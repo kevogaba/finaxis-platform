@@ -373,12 +373,45 @@ class JooqJournalStore(
             .limit(pageSize)
             .fetch(::toRequestView)
 
+    /** One journal is the one-element case of the batch, so there is one query shape, not two. */
     override fun findJournalLines(
         organisationId: UUID,
         journalEntryId: UUID,
     ): List<JournalLineView> =
-        dsl
+        findJournalLinesForEntries(organisationId, listOf(journalEntryId))[journalEntryId].orEmpty()
+
+    /** Served by `uq_journal_entry_posting_request`, which is what makes the key unambiguous. */
+    override fun findJournalEntriesForRequests(
+        organisationId: UUID,
+        postingRequestIds: Collection<UUID>,
+    ): Map<UUID, JournalEntryView> {
+        if (postingRequestIds.isEmpty()) {
+            return emptyMap()
+        }
+        return dsl
+            .selectFrom(JOURNAL_ENTRY)
+            .where(JOURNAL_ENTRY.ORGANISATION_ID.eq(organisationId))
+            .and(JOURNAL_ENTRY.POSTING_REQUEST_ID.`in`(postingRequestIds))
+            .fetch()
+            .associateBy({ it.postingRequestId!! }, ::toView)
+    }
+
+    /**
+     * Ordered by journal then line so each group arrives in line order, which `groupBy` keeps.
+     *
+     * Served by `uq_journal_line_entry_number`, whose leading `(organisation_id, journal_entry_id)`
+     * is exactly the predicate, so the batch is one index scan rather than one per journal.
+     */
+    override fun findJournalLinesForEntries(
+        organisationId: UUID,
+        journalEntryIds: Collection<UUID>,
+    ): Map<UUID, List<JournalLineView>> {
+        if (journalEntryIds.isEmpty()) {
+            return emptyMap()
+        }
+        return dsl
             .select(
+                JOURNAL_LINE.JOURNAL_ENTRY_ID,
                 JOURNAL_LINE.LINE_NUMBER,
                 JOURNAL_LINE.GL_ACCOUNT_ID,
                 JOURNAL_LINE.DIRECTION,
@@ -389,20 +422,22 @@ class JooqJournalStore(
                 JOURNAL_LINE.SUBLEDGER_REFERENCE,
             ).from(JOURNAL_LINE)
             .where(JOURNAL_LINE.ORGANISATION_ID.eq(organisationId))
-            .and(JOURNAL_LINE.JOURNAL_ENTRY_ID.eq(journalEntryId))
-            .orderBy(JOURNAL_LINE.LINE_NUMBER)
-            .fetch { row ->
+            .and(JOURNAL_LINE.JOURNAL_ENTRY_ID.`in`(journalEntryIds))
+            .orderBy(JOURNAL_LINE.JOURNAL_ENTRY_ID, JOURNAL_LINE.LINE_NUMBER)
+            .fetch()
+            .groupBy({ row -> row.value1()!! }) { row ->
                 JournalLineView(
-                    lineNumber = row.value1()!!,
-                    accountId = row.value2()!!,
-                    side = PostingSide.valueOf(row.value3()!!),
-                    amount = row.value4()!!,
-                    currencyCode = row.value5()!!,
-                    functionalAmount = row.value6()!!,
-                    narrative = row.value7(),
-                    subledgerReference = row.value8(),
+                    lineNumber = row.value2()!!,
+                    accountId = row.value3()!!,
+                    side = PostingSide.valueOf(row.value4()!!),
+                    amount = row.value5()!!,
+                    currencyCode = row.value6()!!,
+                    functionalAmount = row.value7()!!,
+                    narrative = row.value8(),
+                    subledgerReference = row.value9(),
                 )
             }
+    }
 
     private fun toRequestView(record: PostingRequestRecord) =
         PostingRequestView(

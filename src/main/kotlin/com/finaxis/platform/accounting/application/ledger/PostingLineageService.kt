@@ -100,9 +100,38 @@ class PostingLineageService(
                 pageSize = pageSize,
             )
         return PostingLineagePage(
-            items = requests.map { lineage(query.organisationId, it) },
+            items = hydrate(query.organisationId, requests),
             nextCursor = if (requests.size < pageSize) null else requests.last().id,
         )
+    }
+
+    /**
+     * Joins a page of requests to their journals and lines in two queries, not two per request.
+     *
+     * The per-item path this replaces cost `1 + 2N` round trips, so a full page at the platform
+     * ceiling of a hundred was two hundred and one (issue #96). The rows fetched are the same rows
+     * either way - a page's requests, their journals, and those journals' lines - so the bound is
+     * unchanged and only the number of round trips moves. Order is the page's own: requests stay in
+     * the order the keyset query returned them, and lines stay in line order within each journal.
+     */
+    private fun hydrate(
+        organisationId: UUID,
+        requests: List<PostingRequestView>,
+    ): List<PostingLineage> {
+        if (requests.isEmpty()) {
+            return emptyList()
+        }
+        val entries = journals.findJournalEntriesForRequests(organisationId, requests.map { it.id })
+        val lines =
+            journals.findJournalLinesForEntries(organisationId, entries.values.map { it.id })
+        return requests.map { request ->
+            val journal = entries[request.id]
+            PostingLineage(
+                request = request,
+                journal = journal,
+                lines = journal?.let { lines[it.id] }.orEmpty(),
+            )
+        }
     }
 
     private fun lineage(

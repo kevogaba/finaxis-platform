@@ -263,6 +263,27 @@ internal class FakeJournalReadStore : JournalReadStore {
         }
         return lines[journalEntryId].orEmpty().sortedBy { it.lineNumber }
     }
+
+    override fun findJournalEntriesForRequests(
+        organisationId: UUID,
+        postingRequestIds: Collection<UUID>,
+    ): Map<UUID, JournalEntryView> =
+        postingRequestIds
+            .mapNotNull { findJournalEntryForRequest(organisationId, it) }
+            .associateBy { it.postingRequestId }
+
+    /**
+     * Drops journals with no lines, exactly as the adapter's `GROUP BY` over returned rows does:
+     * a fake that answered an empty list where the adapter answers no key would let a caller who
+     * confuses the two pass here and fail against PostgreSQL.
+     */
+    override fun findJournalLinesForEntries(
+        organisationId: UUID,
+        journalEntryIds: Collection<UUID>,
+    ): Map<UUID, List<JournalLineView>> =
+        journalEntryIds
+            .associateWith { findJournalLines(organisationId, it) }
+            .filterValues { it.isNotEmpty() }
 }
 
 /** Whether a reconciliation row was read plainly or under the row lock. */
