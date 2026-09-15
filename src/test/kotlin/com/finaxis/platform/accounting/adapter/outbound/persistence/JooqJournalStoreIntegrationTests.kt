@@ -72,8 +72,11 @@ class JooqJournalStoreIntegrationTests(
     @Test
     fun `the batched line read groups by journal in line order and omits an empty journal`() {
         val tenant = fixture.createTenant("batch-lines")
-        val debits = fixture.insertJournalEntry(tenant)
-        val credits = fixture.insertJournalEntry(tenant)
+        // Declared counts, not the fixture's default of two: these journals really do hold three
+        // lines, and trg_journal_line_append_guard (V13) refuses a journal that outgrows its own
+        // header. The empty one keeps the default - it gets no lines, which the guard permits.
+        val debits = fixture.insertJournalEntry(tenant, lineCount = LINES_PER_JOURNAL)
+        val credits = fixture.insertJournalEntry(tenant, lineCount = LINES_PER_JOURNAL)
         val empty = fixture.insertJournalEntry(tenant)
         // Inserted out of line order, and interleaved between the two journals, so that ordered
         // and correctly grouped rows are read back rather than stumbled into.

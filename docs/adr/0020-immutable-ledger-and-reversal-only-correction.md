@@ -37,16 +37,31 @@ binding, and every "show me this journal" query becomes a self-join on a correla
 is no column for an update to maintain, so the schema itself states the row is append-only.
 Immutability is backed physically by `REVOKE UPDATE, DELETE` on a dedicated least-privilege
 application role, which is declarative and visible in `\dp`. A `BEFORE UPDATE OR DELETE`
-raise-exception trigger was **rejected**: this repository has zero triggers, and invisible PL/pgSQL
-business logic is the opposite of the declarative-`CHECK` culture `V1` established.
+raise-exception trigger is still **rejected**, but on its merits rather than on a trigger count:
+`REVOKE` states the same prohibition declaratively, is visible in `\dp` to anyone auditing the
+grant, and needs no function body read to understand. What does **not** follow, and what an earlier
+revision of this paragraph implied, is that a trigger is never the right instrument over these
+tables. `REVOKE UPDATE, DELETE` leaves **append** open — a transaction holding only `INSERT` can
+add a line to a journal that committed long ago — and
+[ADR 0024](0024-journal-line-append-guard-and-trigger-policy.md) closes that with a statement-level
+trigger in `V13`, and states the standard a trigger has to meet to be admitted at all. This ADR is
+**amended** by 0024, not superseded: every decision recorded here still stands. Note also that
+neither instrument makes the ledger physically immutable — a **new** `journal_entry` is always
+insertable, because that is what a reversal is.
 
 **The double-entry invariant is enforced by a denormalised balanced header**, because it is a
 cross-row property and cannot be a single `CHECK`. `journal_entry` carries
 `total_debit_functional`, `total_credit_functional` and `line_count`, with
 `CHECK (total_debit_functional = total_credit_functional)`, `CHECK (total_debit_functional > 0)`
 and `CHECK (line_count >= 2)`; a repeatable header-versus-lines proof query ships as both an
-integration test and an operational check. A deferred constraint trigger was rejected for the same
-reason as above.
+integration test and an operational check. A deferred `CONSTRAINT TRIGGER` over this invariant is
+rejected on **cost**, not on the categorical ground the paragraph above once offered. It fires at
+`COMMIT` rather than at the offending statement, so it names the transaction and not the write; and
+every fixture that builds a journal row by row writes the header and each of its lines as separate
+auto-commit statements, so the first line would meet a commit-time equality check against a header
+declaring two and fail. `V13`'s `trg_journal_line_append_guard` is per-statement and deliberately
+carries the weaker "no more than declared" predicate for exactly that reason — see
+[ADR 0024](0024-journal-line-append-guard-and-trigger-policy.md).
 
 **Correction is reversal, never mutation.** A reversal is a **new** `journal_entry` with
 `entry_type = 'REVERSAL'` and `reverses_journal_entry_id` pointing at the original. Its lines mirror

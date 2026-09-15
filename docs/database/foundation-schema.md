@@ -19,6 +19,7 @@ fourteen migrations were collapsed and why that reset was safe.
 | `V10__accounting_manual_journals.sql` | The manual-journal draft aggregate: `manual_journal`, `manual_journal_line` and their transition log — see [the accounting schema](accounting-erd.md) |
 | `V11__accounting_control_account_uniqueness.sql` | `uq_gl_account_control_kind` replacing the non-unique `idx_gl_account_control`: one control account per sub-ledger class per tenant, because the sub-ledger proof asks about a class rather than an account — see [the accounting schema](accounting-erd.md) |
 | `V12__accounting_manual_journal_external_reference.sql` | `manual_journal.external_reference`: the document a hand-keyed adjustment answers to, structured so it can be searched and reported on rather than buried in the narrative — see [the accounting schema](accounting-erd.md) |
+| `V13__accounting_journal_line_append_guard.sql` | `fn_journal_line_append_guard` and `trg_journal_line_append_guard`, the repository's first and only trigger: an `AFTER INSERT … FOR EACH STATEMENT` guard refusing any statement that leaves a journal holding more `journal_line` rows than its header's `line_count` declares. It closes the late append `REVOKE UPDATE, DELETE` cannot reach; because `line_count` is itself mutable, it is complete only once #54 lands — see [the accounting schema](accounting-erd.md) and [ADR 0024](../adr/0024-journal-line-append-guard-and-trigger-policy.md) |
 
 `V1`–`V3` will never be edited again. Every future change is a forward-only `V4+` migration.
 

@@ -28,6 +28,7 @@ authority and this document defers to it.
 | [ADR 0019](../adr/0019-accounting-money-representation-and-rounding.md) | Money representation, rounding, direction, currency |
 | [ADR 0020](../adr/0020-immutable-ledger-and-reversal-only-correction.md) | Immutable journals, reversal-only correction, ledger architecture |
 | [ADR 0017](../adr/0017-bian-semantic-reference-architecture.md) | BIAN as semantic reference, not deployment blueprint |
+| [ADR 0024](../adr/0024-journal-line-append-guard-and-trigger-policy.md) | The journal-line append guard, and when a database trigger is justified |
 | [Accounting schema](../database/accounting-erd.md) | Tables, columns, constraints, indexes |
 
 ## Scope And Non-Goals
@@ -70,7 +71,7 @@ with the exact URLs and the claims that could not be verified.
 | Sign versus direction | Not addressed | Signed entries of opposite sign that must sum to zero | `type_enum SMALLINT` (debit or credit) with a positive `amount` | `debitCreditFlag` indicator with a positive `amount` | Direction, not sign: `direction TEXT CHECK (direction IN ('DEBIT','CREDIT'))` plus `CHECK (amount > 0)`. **Adopt Fineract and OFBiz over Fowler** — a signed amount makes "debit or credit" depend on the account's normal balance, a derived reading, and makes a zero-value line representable. A STORED generated `signed_functional_amount` serves ad-hoc SQL |
 | Multi-currency | Not addressed | `Money` carries a currency; no functional-amount pattern | One `currency_code VARCHAR(3)` and one `amount`; no functional amount, no rate on the entry | `amount`/`currencyUomId` **plus** `origAmount`/`origCurrencyUomId` on `AcctgTransEntry`; no rate column on the line | **Adopt OFBiz's dual-amount shape**, add the rate: five columns always populated. Invariant enforced on `functional_amount` only |
 | Transaction container | `FinancialBookingLog` control record with a `LedgerPosting` behaviour qualifier | `Accounting Transaction` links two or more entries; two-legged and multi-legged variants | **None** — headerless; the entry *is* the line, correlated by `transaction_id VARCHAR(50)` | `AcctgTrans` header plus `AcctgTransEntry` lines, composite key `(acctgTransId, acctgTransEntrySeqId)` | **Adopt header plus lines, reject Fineract's headerless model.** Without a header there is nowhere for balanced totals, the entry number, the reversal link or the period binding, and every "show me this journal" becomes a self-join on a correlation column |
-| Immutability of posted entries | Not addressed | Entries are immutable; corrections are adjustments | `lastmodified_date` and `lastmodifiedby_id` on the entry; `reversed` flag set in place | `AcctgTrans` carries `lastModifiedDate` and `lastModifiedByUserLogin` alongside `isPosted` | **Adopt Fowler's strict immutability.** No `updated_at`, no `updated_by`, no `row_version` on `journal_entry` or `journal_line`; backed physically by `REVOKE UPDATE, DELETE` on a least-privilege role |
+| Immutability of posted entries | Not addressed | Entries are immutable; corrections are adjustments | `lastmodified_date` and `lastmodifiedby_id` on the entry; `reversed` flag set in place | `AcctgTrans` carries `lastModifiedDate` and `lastModifiedByUserLogin` alongside `isPosted` | **Adopt Fowler's strict immutability**, and be precise about how far the physical backing reaches. No `updated_at`, no `updated_by`, no `row_version` on `journal_entry` or `journal_line`; `REVOKE UPDATE, DELETE` on a least-privilege role (#54) for the update and delete cases; and `V13`'s statement-level `trg_journal_line_append_guard` for the append case the revoke does not cover, complete only once #54 lands because `line_count` is itself mutable until then. Not *physical* immutability: a new journal can always be inserted, which is what a reversal is |
 | Reversal mechanism | Not addressed | Three named adjustments: Replacement, **Reversal**, Difference | `reversed BIT` plus a `reversal_id` self-foreign-key, set by `UPDATE` on the original row | No reversal-link field on `AcctgTrans` in the entity model; reversal is service-level | **Adopt Fowler's Reversal Adjustment, reject Fineract's in-place UPDATE.** A contra-journal with `entry_type='REVERSAL'`, direction flipped, the **same positive amounts**, and `reverses_journal_entry_id` on the new row |
 | Fiscal periods | Not addressed | Balances are computed over a time period; no period entity prescribed | `acc_gl_closure` — `office_id`, `closing_date DATE`, `is_deleted BIT`; no status, and journals carry no period reference | `CustomTimePeriod` in `org.apache.ofbiz.common.period` with `parentPeriodId`, `periodTypeId`, `fromDate`, `thruDate` and an `isClosed` indicator | **Reject both.** `accounting_fiscal_year` plus `accounting_fiscal_period` with an explicit FSM. Fineract's closure-date model cannot express `LOCKED` versus reopenable, nor bind a posted journal to a period; OFBiz's is over-general with no accounting FSM |
 | Posting-rule indirection | Fact-in, instruction-out; no rule model | **Posting Rule** and **Secondary Posting Rule** patterns, plus "Handling a Rule Change" | Three overlapping mechanisms: `acc_accounting_rule`, `acc_product_mapping`, `acc_gl_financial_activity_account` | Default-account mappings such as `GlAccountTypeDefault` and `PartyGlAccount`, keyed by `glAccountTypeId` | **Adopt Fowler's Posting Rule, reject Fineract's dual mechanism** — a reviewer cannot tell which of the two governs a given posting. One path: `posting_rule` → effective `posting_rule_version` → `posting_rule_leg` → account. **Versioned and effective-dated is a Finaxis addition** neither benchmark has |
@@ -238,7 +239,7 @@ an inverted port and has no other source. A posting path that calls `LocalDate.n
 **`posted_at` is a distinct column from `created_at` on purpose.** A `posting_request` may be
 created and its journal posted at different instants — a request can be rejected, retried, or
 resolved against a rule that must first be looked up — so collapsing the two loses the moment the
-ledger actually became immutable.
+journal actually became final.
 
 **`business_date != transaction_date` is normal, not an anomaly.** A Friday-evening teller
 transaction may post on Monday's business date after a weekend close. Both values are retained
@@ -254,9 +255,11 @@ posting moves into the wrong month.
 
 ### General Ledger
 
-The general ledger is the **immutable system of record**. It consists of `journal_entry` (a
-balanced header) and `journal_line` (one debit or credit against one GL account), with
-`posting_request` in front of them carrying durable source identity and lineage.
+The general ledger is the **append-only system of record**: a posted journal is never updated,
+never deleted, and — from `V13` — never gains a line after it commits. New *journals* are always
+added; a reversal is exactly that, so "append-only" is the accurate word and "immutable" is not. It
+consists of `journal_entry` (a balanced header) and `journal_line` (one debit or credit against one
+GL account), with `posting_request` in front of them carrying durable source identity and lineage.
 
 A journal is a header plus lines. The header carries what a line cannot: the balanced totals, the
 gapless entry number, the reversal link, the branch, and the fiscal-period binding. Fineract's
@@ -264,9 +267,11 @@ headerless model is rejected precisely because those five things have nowhere to
 "show me this journal" degrades into a self-join on a correlation column.
 
 `journal_line` deliberately denormalises `branch_id`, `posting_date`, `fiscal_period_id` and the
-currency codes from its header. This is safe **only because** the table is append-only under a
-hard no-update rule: the copies cannot drift from their source. It removes a join from every
-aggregate query in the section on performance below.
+currency codes from its header. This is safe **only because** the table is never updated, never
+deleted from, and — from `V13`'s `trg_journal_line_append_guard` — never appended to after its
+header has committed: the copies cannot drift from their source, and no line arrives after the
+verification read that proves they match. It removes a join from every aggregate query in the
+section on performance below.
 
 ### Subsidiary Ledgers And Positions
 
@@ -380,7 +385,7 @@ that supersedes the ADR the invariant comes from, not a code review comment.
 | **INV-2** | Rounding is `HALF_EVEN` at the currency's minor unit; intermediates stay at scale 6; `BigDecimal.divide` without an explicit scale and `RoundingMode` is banned; allocation residue goes to the single `is_residual` leg and the total is never re-rounded | Static analysis, posting-engine unit tests, posting-rule validation |
 | **INV-3** | Direction carries the sign. Every line has `direction IN ('DEBIT','CREDIT')` and `amount > 0`; a zero-amount or negative-amount line cannot exist | Column `CHECK` constraints |
 | **INV-4** | For every journal, the sum of `functional_amount` over debit lines equals the sum over credit lines, the total is greater than zero, and there are at least two lines | The posting service, inside the posting transaction, before the entry is visible (see below). Header `CHECK` constraints cover only the header's own columns; the proof query is a detector, not an enforcer |
-| **INV-5** | A posted `journal_entry` and its `journal_line` rows are never updated and never deleted | No `updated_at`/`updated_by`/`row_version` columns to maintain, plus `REVOKE UPDATE, DELETE` on the application role (#54) |
+| **INV-5** | A posted `journal_entry` and its `journal_line` rows are never updated and never deleted, and a committed journal never gains a line. Not physical immutability: a **new** `journal_entry` is always insertable, because that is what a reversal is | For update and delete: no `updated_at`/`updated_by`/`row_version` columns to maintain, plus `REVOKE UPDATE, DELETE` on the application role (#54). For append: `V13`'s `trg_journal_line_append_guard`, a statement-level trigger refusing any statement that leaves a journal holding more lines than its header's `line_count` — complete only together with #54, because `line_count` is itself mutable until that revoke lands ([ADR 0024](../adr/0024-journal-line-append-guard-and-trigger-policy.md)) |
 | **INV-6** | The only correction is a reversal followed by a fresh posting. There is no edit path, no `CORRECTION` entry type, and no negative amount | `entry_type` check, `reverses_journal_entry_id`, a partial unique index giving at most one reversal per journal, `INV-5` |
 | **INV-7** | Every journal is traceable to exactly one durable source identity, and re-submitting the same source identity produces no second journal | `posting_request.source_reference` with `UNIQUE (organisation_id, source_module, source_reference)` |
 | **INV-8** | Every accounting row is organisation-scoped, every parent reference is a composite foreign key on `(organisation_id, parent_id)`, and every branch-attributable row carries `branch_id` | Composite foreign keys with `uq_<table>_organisation_id` targets, per [the accounting schema](../database/accounting-erd.md) |
@@ -565,8 +570,8 @@ about a *set of rows*. This deserves stating precisely, because an earlier revis
 credited it to "denormalised header totals with `CHECK` constraints" — and a row-level `CHECK` can
 only see its own row. It cannot sum children. As written, a posting defect that wrote balanced
 header totals but omitted a line, or wrote lines that did not match the header, would satisfy every
-constraint; and because `INV-5` makes the journal immutable, the result would be a permanently
-unbalanced ledger detectable only after the fact.
+constraint; and because `INV-5` forbids updating or deleting a posted journal, the result would be
+a permanently unbalanced ledger detectable only after the fact.
 
 What actually enforces it, in order:
 
@@ -591,10 +596,23 @@ What actually enforces it, in order:
 4. **The header-versus-lines proof query** is a *detector* for operational assurance and for tests —
    it runs after commit and therefore cannot prevent anything.
 
-A deferred `CONSTRAINT TRIGGER` was considered and rejected for the reason `V1` established: this
-repository has zero triggers, and invisible PL/pgSQL business logic is the opposite of its
-declarative-`CHECK` culture. The cost of that choice is that step 2 is application-level, so it must
-be covered by a test that fails when the verification read is removed.
+A deferred `CONSTRAINT TRIGGER` is still rejected, but on **cost**, not on principle. It fires at
+`COMMIT` rather than at the offending statement, so it reports a defect after the work that caused
+it has finished and far from the statement responsible; and every fixture that builds a journal row
+by row — `JournalSchemaFixture.insertBalancedJournal` and the suites that go through it — writes the
+header and each line as its own auto-commit statement, each its own transaction, so the first line
+would meet a commit-time equality check against a header declaring two and fail. The cost of
+rejecting it is that step 2 stays application-level, so it must be covered by a test that fails when
+the verification read is removed.
+
+The categorical half of that old rejection — *"this repository has zero triggers"* — no longer
+holds. `V13` adds `trg_journal_line_append_guard`, an `AFTER INSERT … FOR EACH STATEMENT` trigger on
+`journal_line` that refuses a statement leaving any journal holding **more** lines than its header's
+`line_count` declares. See
+[ADR 0024](../adr/0024-journal-line-append-guard-and-trigger-policy.md) for when a trigger is
+justified in this repository and when it is not. It does not replace step 2 and is not a second
+enforcement of `INV-4`: `<=` is not `=`, so the trigger bounds the count from above and the
+verification read remains the only thing that proves equality.
 
 - **`posting_date` alone selects the period** (`INV-9`). Not `business_date`, not
 `transaction_date`, not `value_date`,
@@ -949,6 +967,8 @@ worse than no design record at all.
   journals, reversal-only correction, ledger architecture
 - [ADR 0017](../adr/0017-bian-semantic-reference-architecture.md) — BIAN as semantic
   reference architecture
+- [ADR 0024](../adr/0024-journal-line-append-guard-and-trigger-policy.md) — the journal-line
+  append guard, and the standard a database trigger must meet here
 - [Financial transaction atomicity](financial-transaction-atomicity.md) — the implementer's guide
 - [BIAN service landscape](bian-service-landscape.md) — module-to-Service-Domain mapping
 - [Foundation schema](../database/foundation-schema.md) — the conventions accounting inherits
