@@ -10,6 +10,7 @@ import com.finaxis.platform.accounting.application.FiscalPeriodStateStore
 import com.finaxis.platform.accounting.application.FunctionalCurrencyLock
 import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.PostingPeriodResolver
+import com.finaxis.platform.accounting.application.SnapshotIsolationGuard
 import com.finaxis.platform.accounting.application.ledger.DefaultPostingService
 import com.finaxis.platform.accounting.application.ledger.JournalNumberAllocator
 import com.finaxis.platform.accounting.application.ledger.JournalReadStore
@@ -20,6 +21,7 @@ import com.finaxis.platform.accounting.application.ledger.PostingLegResolver
 import com.finaxis.platform.accounting.application.port.outbound.AccountingContextLookup
 import com.finaxis.platform.accounting.application.port.outbound.PostingMetadataLookup
 import com.finaxis.platform.accounting.application.posting.PostingService
+import com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary
 import com.finaxis.platform.accounting.application.reconciliation.SubledgerProofProviderRegistry
 import com.finaxis.platform.accounting.application.rules.PostingRuleStore
 import com.finaxis.platform.accounting.application.rules.RuleBackedPostingLegResolver
@@ -33,12 +35,18 @@ import java.time.Clock
  *
  * Adapters that a unit test needs to construct directly - the context lookup - stay free of
  * Spring stereotypes and are declared here. Adapters that only ever exist as beans carry
- * `@Component` instead; `PostgresRowLock` is one.
+ * `@Component` instead; `PostgresProofSnapshot` is one.
  *
  * State which of the two an adapter is when adding it. An earlier revision of this KDoc claimed
- * *all* accounting adapters were stereotype-free while `PostgresRowLock` already carried
+ * *all* accounting adapters were stereotype-free while `PostgresProofSnapshot` already carried
  * `@Component`, and a follower of that rule would ship a port with no bean at all - which broke
  * context startup platform-wide once already.
+ *
+ * The two transaction beans are not declared here on purpose.
+ * [com.finaxis.platform.accounting.application.ledger.SerializablePostingTransaction] and
+ * [PostingTransactionBoundary] carry `@Service`, because the Kotlin Spring plugin opens annotated
+ * classes for subclass proxying and a `@Bean`-constructed class with no stereotype stays `final` -
+ * which would leave `@Transactional` on the first of them as advice that never runs.
  */
 @Configuration(proxyBeanMethods = false)
 class AccountingModuleConfiguration {
@@ -96,6 +104,7 @@ class AccountingModuleConfiguration {
         journalReads: JournalReadStore,
         numbers: JournalNumberAllocator,
         clock: Clock,
+        snapshots: SnapshotIsolationGuard,
     ) = PostingEngine(
         contextLookup,
         metadata,
@@ -107,6 +116,7 @@ class AccountingModuleConfiguration {
         journalReads,
         numbers,
         clock,
+        snapshots,
     )
 
     /**
@@ -138,5 +148,6 @@ class AccountingModuleConfiguration {
         engine: PostingEngine,
         resolver: PostingLegResolver,
         reversals: JournalReversalService,
-    ): PostingService = DefaultPostingService(engine, resolver, reversals)
+        boundary: PostingTransactionBoundary,
+    ): PostingService = DefaultPostingService(engine, resolver, reversals, boundary)
 }

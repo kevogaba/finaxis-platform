@@ -73,29 +73,35 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant C as Close transaction
 
-    P->>DB: findCovering(...)  - no lock
-    DB-->>P: period, status OPEN (may already be stale)
+    P->>DB: BEGIN, then the reads that pin its snapshot
     C->>DB: SELECT ... FOR UPDATE
     C->>DB: UPDATE status = CLOSED
     C->>DB: COMMIT
-    P->>DB: SELECT ... FOR SHARE
-    Note over P,DB: READ COMMITTED re-reads on lock acquisition
-    DB-->>P: period, status CLOSED
-    P--xP: reject - fiscal_period_closed
+    P->>DB: SELECT ... WHERE start <= d AND end >= d FOR SHARE
+    Note over P,DB: One statement locks and reads; above READ COMMITTED a concurrent close aborts it
+    DB-->>P: period, status CLOSED - or 40001 above READ COMMITTED
+    P--xP: reject - fiscal_period_closed, or abort for the retry to re-run
 ```
 
 Three properties make this work, and all three are load-bearing:
 
-1. **The decision uses the status read under the lock**, never the earlier lookup.
-   `lockForPosting` returns a freshly read snapshot rather than a boolean, so the correct value is
-   the one nearest to hand. `findCovering` still returns a status, so deciding from the stale read
-   remains *possible* — it is a convention the resolver follows, not something the types forbid.
+1. **The decision uses the status the locking statement returned**, and there is no other status to
+   decide from. `lockCoveringForPosting` carries the date predicate, the tenant predicate and
+   `FOR SHARE` in one `SELECT` and returns the columns of the row it locked. `findCovering` still
+   exists for read-side queries and still returns a status, but the posting path no longer calls
+   it, and the boolean-returning lock primitive that made the split shape writeable is gone.
 2. **`FOR SHARE` for postings, `FOR UPDATE` for closes.** Postings do not block each other; a close
    waits for them. `FOR KEY SHARE` would be wrong — it does not conflict with the
    `FOR NO KEY UPDATE` a plain `UPDATE` takes.
-3. **READ COMMITTED.** The read issued after the lock takes a fresh snapshot and so sees a close
-   that committed since this transaction's own lookup. Under a stricter isolation level that
-   second read would return the transaction's original snapshot and the protocol is simply wrong.
+3. **One statement.** The outcome is lock-or-abort, and it is the same property at every isolation
+   level: at READ COMMITTED the statement takes a fresh snapshot and `EvalPlanQual` re-evaluates
+   the row *and its quals*, so it returns the latest committed status or no row at all; above READ
+   COMMITTED — where the posting path now runs, per
+   [ADR 0025](../adr/0025-serializable-posting-and-the-covering-period-lock.md) — it raises `40001`
+   instead. There is no third outcome in which a stale status comes back labelled as the covering
+   period's. Note that the isolation level is **not** what supplies this: the `FOR SHARE` lock is.
+   A serializable posting that read the period row without it was measured committing into an
+   already-closed period.
 
 ## What the tests prove
 
@@ -106,7 +112,7 @@ passes or fails on machine speed rather than on the property under test.
 | Scenario | Proves |
 | --- | --- |
 | S1 | A close waits for an in-flight posting to commit |
-| **S2** | The unlocked read sees OPEN, a close commits, and the **locking** read sees CLOSED |
+| **S2** | The unlocked read sees OPEN, a close commits, and the **locking** read never sees OPEN |
 | S3 | Two postings hold the shared lock concurrently |
 | S4 | Concurrent closes serialise; the second observes the first |
 | S5 | A bare `UPDATE` still blocks behind the posting's lock |
@@ -118,6 +124,13 @@ S2 is the one that matters, and it earns that only because both of its reads hap
 posting transaction with a close committing between them. Written as three sequential transactions
 — as an earlier revision was — it passes with both locks deleted and at any isolation level, since
 a fresh transaction takes a fresh snapshot for trivial reasons.
+
+What S2 proves is now *"never a stale `OPEN`"* rather than *"`CLOSED` comes back"*, because the two
+are the same property reached two ways. At READ COMMITTED the locking statement returns `CLOSED`
+and the posting is rejected with `accounting.fiscal_period_closed`; at `SERIALIZABLE`, where the
+posting path runs, the same statement raises `40001` and the posting is aborted for the retry to
+re-run against a fresh snapshot. Either outcome satisfies the invariant; neither is a stale `OPEN`.
+Asserting the literal `CLOSED` would pin one of the two mechanisms rather than the property.
 
 The ordering scenarios (S1, S4, S5) have the same hazard in a different place: releasing the lock
 holder immediately after starting the contending transaction lets the assertion hold on thread
@@ -197,7 +210,8 @@ What still must not change:
 - The posting date remains the only period selector.
 - The decision must keep using the post-lock read.
 - `FOR SHARE`/`FOR UPDATE` strengths stay as they are.
-- The isolation assertion stays.
+- The posting path's isolation refusal stays, and so does the `FOR SHARE` lock — the lock, not the
+  isolation level, is what makes the posting-versus-close guarantee.
 - The snapshot's organisation id is read from the **row**, never echoed back from the caller's key.
   Echoing it labels another tenant's period with the caller's organisation, which is how a
   cross-tenant write passes a downstream tenant check.
@@ -205,8 +219,10 @@ What still must not change:
 ## Related documents
 
 - [ADR 0022: Accounting date and fiscal-period concurrency][adr-0022]
+- [ADR 0025: Serializable posting, and the covering-period lock][adr-0025]
 - [Accounting foundation](accounting-foundation.md)
 - [Accounting module boundary](accounting-module-boundary.md)
 - [Business date operations](../operations/business-date.md)
 
 [adr-0022]: ../adr/0022-accounting-date-and-fiscal-period-concurrency.md
+[adr-0025]: ../adr/0025-serializable-posting-and-the-covering-period-lock.md

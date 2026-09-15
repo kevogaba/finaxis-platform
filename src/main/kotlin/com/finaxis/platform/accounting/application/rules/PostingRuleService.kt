@@ -4,6 +4,7 @@ import com.finaxis.platform.accounting.AccountingPermissionGuard
 import com.finaxis.platform.accounting.AccountingTenantLookup
 import com.finaxis.platform.accounting.application.GlAccountPostingPolicy
 import com.finaxis.platform.accounting.application.GlAccountStore
+import com.finaxis.platform.accounting.application.RequiredSnapshotIsolation
 import com.finaxis.platform.accounting.application.SnapshotIsolationGuard
 import com.finaxis.platform.accounting.application.ledger.PostingLegResolver
 import com.finaxis.platform.accounting.application.ledger.PostingLegsPolicy
@@ -451,7 +452,10 @@ class PostingRuleService(
             command.organisationId,
             AccountingPermissions.POSTING_RULE_VIEW,
         )
-        snapshots.requireStableSnapshot("Previewing a posting-rule version")
+        snapshots.requireStableSnapshot(
+            RequiredSnapshotIsolation.REPEATABLE_READ,
+            "Previewing a posting-rule version",
+        )
         val version =
             rules.findVersion(command.organisationId, command.versionId) ?: throw notFound()
         // `fk_posting_rule_version_rule` keeps the rule inside the same tenant as its versions, so

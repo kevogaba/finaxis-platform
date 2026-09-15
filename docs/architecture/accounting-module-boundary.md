@@ -65,10 +65,21 @@ accounting foundation requires. Lifecycle already depends on `accounting` for th
 no new module edge is created.
 
 The same port also hands lifecycle the lock that makes the answer usable. Asking and then writing
-are one transaction, the tenant's first posting is another, and at `READ COMMITTED` neither sees the
-other - so `lockFunctionalCurrencyForChange` is taken immediately before the question, and a posting
-takes the same tenant-scoped lock shared as the first thing `postNew` does. Lifecycle still reasons
-about nothing but a boolean; the serialisation is accounting's, on accounting's side of the port.
+are one transaction and the tenant's first posting is another, and nothing about MVCC makes either
+see the other - so `lockFunctionalCurrencyForChange` is taken immediately before the question, and
+a posting takes the same tenant-scoped lock shared as the first thing `postNew` does. Lifecycle
+still reasons about nothing but a boolean; the serialisation is accounting's, on accounting's side
+of the port.
+
+Raising the posting path to `SERIALIZABLE` does **not** make that advisory lock redundant, and it
+is the one conclusion a reader is most likely to draw. An advisory lock does not participate in
+MVCC, so it brings neither an `EvalPlanQual` re-read nor a `40001` with it: measured, a serializable
+posting that takes the shared lock and then plainly re-reads the currency gets its own snapshot's
+stale value and commits. The lock is what makes the two sides serialise; the isolation level is
+what makes the engine's post-lock *comparison* stop firing. That regression, and the locking read of
+the organisation row that would close it, are recorded in
+[ADR 0025](../adr/0025-serializable-posting-and-the-covering-period-lock.md) with a follow-up issue
+against this port.
 
 Both provider modules gained `"accounting"` in their `allowedDependencies`. The resulting module
 graph stays acyclic: `iam → lifecycle`, `iam → accounting`, `lifecycle → accounting`,
@@ -180,6 +191,29 @@ posting date and currency codes - the `INV-4` enforcement point; mark the reques
 
 Every failure before the claim leaves nothing behind. Every failure after it rolls the claim back
 with the caller's transaction, so a rejected request never occupies its source reference.
+
+**A product module enters through `PostingTransactionBoundary`, not through a transaction of its
+own.** The boundary lives in `accounting.application.posting` - the module's only non-domain
+`@NamedInterface` package, so calling it is legal under Modulith verification where calling
+anything in `application.ledger` is not - and it is lambda-shaped:
+`postingTransactions.execute("...") { productMutation(); postingService.post(cmd) }`. It opens
+nothing itself; one call later `SerializablePostingTransaction` opens the single
+`@Transactional(isolation = SERIALIZABLE)` on any write path in the repository, and an ArchUnit
+rule keeps it the only one. `PostingEngine.post` then refuses any transaction weaker than
+`SERIALIZABLE` with `accounting.snapshot_isolation_unavailable`, because `post` is
+`Propagation.MANDATORY` and a joining method has no isolation of its own to declare - Spring drops
+a declared isolation silently on a joined transaction, so the guard is the only enforcement that
+path has. The boundary also refuses outright to run inside an already-open transaction, because a
+transaction it did not open is not one it can re-run - joining would drop `SERIALIZABLE` silently
+and put the retry inside the very transaction it retries. See
+[ADR 0025](../adr/0025-serializable-posting-and-the-covering-period-lock.md).
+
+**Everything inside the boundary lambda must be replayable**, because a serialization failure is
+re-run by re-running the lambda. No `REQUIRES_NEW`, no JobRunr enqueue, no broker publish, no
+`registerSynchronization`: each of those either escapes the transaction being retried or fires once
+per attempt for a unit of work that happened once. The product module's own mutation belongs
+*inside* the lambda, which is what keeps `INV-12` true - the journal and the mutation it accounts
+for commit or roll back together, and the retry re-runs both.
 
 ## Posting rules
 
@@ -423,12 +457,20 @@ There is exactly one idempotency mechanism at the domain layer:
 `UNIQUE (organisation_id, source_module, source_reference)` on `posting_request` (`INV-7`), claimed
 with `INSERT … ON CONFLICT DO NOTHING`. The database is the authority; no in-memory lock or cache
 takes part. Under a concurrent duplicate the second insert waits on the first's uncommitted row and
-then sees one of two outcomes: the first committed, so the existing row is locked `FOR UPDATE` and
-answered from; or the first rolled back, so the second proceeds as the only claimant. The committed
-case is proved against PostgreSQL by `PostingIdempotencyIntegrationTests`, sequentially and under
-two racing callers. The rolled-back case rests on the semantics of `ON CONFLICT DO NOTHING` against
-an uncommitted row and is **not** covered by a test yet: proving it needs the first transaction held
-open until the second is demonstrably blocked, which the current latch does not guarantee.
+then sees one of three outcomes. The first rolled back, so the second proceeds as the only
+claimant. The first committed *before* this transaction's snapshot, so the existing row is locked
+`FOR UPDATE` and answered from - the ordinary replay. Or the first committed *after* it, which at
+`SERIALIZABLE` - where the posting path now runs - raises `40001` at the insert rather than quietly
+doing nothing, so the follow-up locking read never runs at all. The third outcome is not a defect
+and not a lost replay: the retry re-opens the transaction with a fresh snapshot that includes the
+winner, and the replay happens there. `INV-7` is what survives either way, because at most one
+journal is ever committed for a source reference.
+
+The replay case is proved against PostgreSQL by `PostingIdempotencyIntegrationTests`, sequentially
+and under two racing callers. The rolled-back case rests on the semantics of `ON CONFLICT DO
+NOTHING` against an uncommitted row and is **not** covered by a test yet: proving it needs the
+first transaction held open until the second is demonstrably blocked, which the current latch does
+not guarantee.
 
 A duplicate is answered by comparing `request_fingerprint` - a SHA-256 over the source triple, the
 event, the dates, the currency and the sorted legs, never the raw payload:

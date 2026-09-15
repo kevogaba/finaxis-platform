@@ -30,6 +30,7 @@ import com.finaxis.platform.accounting.domain.PostingLeg
 import com.finaxis.platform.accounting.domain.PostingRequestStatus
 import com.finaxis.platform.accounting.domain.PostingSide
 import com.finaxis.platform.accounting.support.CurrencyLockMode
+import com.finaxis.platform.accounting.support.PermissiveSnapshots
 import com.finaxis.platform.accounting.support.PostingLockJournal
 import com.finaxis.platform.accounting.support.RecordingFunctionalCurrencyLock
 import com.finaxis.platform.common.application.ConflictException
@@ -103,6 +104,7 @@ class PostingEngineTests {
             journals,
             numbers,
             clock,
+            PermissiveSnapshots(),
         )
 
     @BeforeEach
@@ -807,7 +809,10 @@ class PostingEngineTests {
             postingDate: LocalDate,
         ) = covering
 
-        override fun lockForPosting(key: FiscalPeriodKey): FiscalPeriodSnapshot? {
+        override fun lockCoveringForPosting(
+            organisationId: UUID,
+            postingDate: LocalDate,
+        ): FiscalPeriodSnapshot? {
             lockRequests++
             journal.record(PostingLockJournal.PERIOD)
             return locked

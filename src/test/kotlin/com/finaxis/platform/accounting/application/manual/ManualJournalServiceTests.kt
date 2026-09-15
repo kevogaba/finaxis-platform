@@ -1,7 +1,9 @@
 package com.finaxis.platform.accounting.application.manual
 
 import com.finaxis.platform.accounting.application.SnapshotIsolationGuard
+import com.finaxis.platform.accounting.application.ledger.SerializablePostingTransaction
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
+import com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary
 import com.finaxis.platform.accounting.domain.AccountingAuditActions
 import com.finaxis.platform.accounting.domain.AccountingContext
 import com.finaxis.platform.accounting.domain.AccountingPermissions
@@ -433,7 +435,7 @@ abstract class ManualJournalServiceTestFixture {
     internal var stableSnapshot = true
 
     private val snapshots =
-        SnapshotIsolationGuard { operation ->
+        SnapshotIsolationGuard { _, operation ->
             snapshotReads += operation
             if (!stableSnapshot) {
                 throw ConflictException(
@@ -474,6 +476,7 @@ abstract class ManualJournalServiceTestFixture {
             transitions = transitions,
             auditService = auditService,
             snapshots = snapshots,
+            boundary = PostingTransactionBoundary(SerializablePostingTransaction()),
         )
 
     /**

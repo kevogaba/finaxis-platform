@@ -22,6 +22,7 @@ import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.audit.AuditSeverity
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
 
@@ -81,8 +82,17 @@ class JournalReversalService(
     private val permissions: AccountingPermissionGuard,
     private val auditService: AuditService,
 ) {
-    /** Reverses the named journal with an equal-and-opposite one; see the class KDoc. */
-    @Transactional
+    /**
+     * Reverses the named journal with an equal-and-opposite one; see the class KDoc.
+     *
+     * `MANDATORY`, because the transaction this runs in must be the `SERIALIZABLE` one that
+     * [com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary] opened.
+     * Declaring an isolation here instead would be dropped silently the moment this method joined
+     * someone else's transaction; `MANDATORY` turns "the boundary was actually used" from a
+     * convention a reader has to trust into an `IllegalTransactionStateException` at the first call
+     * that bypasses it.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
     fun reverse(command: ReversePostingCommand): PostingReceipt {
         val ambient = reconcileContext(command.context)
         val organisationId = command.context.organisationId
