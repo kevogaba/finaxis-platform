@@ -2,6 +2,7 @@ package com.finaxis.platform.accounting.adapter.outbound.persistence
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.accounting.ControlSubledgerKind
+import com.finaxis.platform.accounting.application.RequiredSnapshotIsolation
 import com.finaxis.platform.accounting.application.SnapshotIsolationGuard
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.application.reconciliation.LedgerBalanceQuery
@@ -75,7 +76,10 @@ class PostgresProofSnapshot(
     private val dsl: DSLContext,
 ) : ProofSnapshot,
     SnapshotIsolationGuard {
-    override fun requireStableSnapshot(operation: String) {
+    override fun requireStableSnapshot(
+        minimum: RequiredSnapshotIsolation,
+        operation: String,
+    ) {
         check(TransactionSynchronizationManager.isActualTransactionActive()) {
             "$operation from one snapshot needs an active transaction."
         }
@@ -83,21 +87,27 @@ class PostgresProofSnapshot(
             dsl.fetchValue(
                 DSL.field("current_setting('transaction_isolation')", String::class.java),
             )
-        // SERIALIZABLE is accepted as well as REPEATABLE READ. The guard's question is "does this
-        // transaction hold one snapshot for its whole life", and serializable answers it more
-        // strongly, so refusing it would reject a caller whose guarantee is better than the one
-        // demanded. Anything weaker - READ COMMITTED, READ UNCOMMITTED - is refused.
-        if (STABLE_SNAPSHOT_ISOLATIONS.none { it.equals(isolation, ignoreCase = true) }) {
+        // The comparison is by rank, not by set membership, so a level stronger than the one
+        // demanded is accepted while a weaker one is refused. A read pair asking for repeatable
+        // read is satisfied by serializable - refusing it would reject a caller whose guarantee is
+        // better than the one it asked for - but a posting asking for serializable is NOT
+        // satisfied by repeatable read, even though that level does hold one snapshot for the
+        // transaction's whole life. Anything absent from the table - READ COMMITTED, READ
+        // UNCOMMITTED - ranks 0 and is refused by every caller.
+        val rank = ISOLATION_RANKS[isolation?.lowercase()] ?: 0
+        if (rank < minimum.rank) {
             throw ConflictException(
                 code = PostingErrorCodes.SNAPSHOT_ISOLATION_UNAVAILABLE,
                 safeDetail =
-                    "$operation must read from one snapshot; this transaction is $isolation.",
+                    "$operation requires at least " +
+                        "${minimum.name.lowercase().replace('_', ' ')}; " +
+                        "this transaction is $isolation.",
             )
         }
     }
 
     override fun currentSnapshotId(): String {
-        requireStableSnapshot("A reconciliation")
+        requireStableSnapshot(RequiredSnapshotIsolation.REPEATABLE_READ, "A reconciliation")
         return requireNotNull(
             dsl.fetchValue(DSL.field("pg_export_snapshot()", String::class.java)),
         ) {
@@ -106,7 +116,17 @@ class PostgresProofSnapshot(
     }
 
     private companion object {
-        val STABLE_SNAPSHOT_ISOLATIONS = setOf("repeatable read", "serializable")
+        /**
+         * PostgreSQL's own `transaction_isolation` spellings, ranked against
+         * [RequiredSnapshotIsolation.rank].
+         *
+         * Weaker levels are deliberately absent rather than mapped to a low number: an unknown
+         * answer and `read committed` deserve the same treatment, and a lookup miss ranking 0
+         * gives it to both. These strings are the only place PostgreSQL's vocabulary appears; the
+         * port speaks in [RequiredSnapshotIsolation] so the application layer never has to know
+         * which database is underneath it.
+         */
+        val ISOLATION_RANKS = mapOf("repeatable read" to 1, "serializable" to 2)
     }
 }
 

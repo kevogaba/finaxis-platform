@@ -10,15 +10,16 @@ import java.util.UUID
 /**
  * Fiscal-period state port.
  *
- * Both locking methods must read the period row **after** taking its lock, so the status they
- * return is the latest committed value rather than the caller's snapshot. Under READ COMMITTED
- * that second read takes a fresh snapshot, which is what makes the posting-versus-close race
- * decidable — see `docs/adr/0022-accounting-date-and-fiscal-period-concurrency.md`.
+ * Both locking methods take the lock and return the locked row's columns in **one** statement, so
+ * there is no window between the lock and the read for a status to change in, at any isolation
+ * level — see `docs/adr/0022-accounting-date-and-fiscal-period-concurrency.md` as amended by
+ * `docs/adr/0025-serializable-posting-and-the-covering-period-lock.md`.
  *
- * Returning a freshly read snapshot rather than a boolean puts the correct value nearest to hand.
- * It does not make the mistake impossible: [findCovering] also returns a status, so a caller can
- * still decide from the unlocked read. Deciding from the snapshot these methods return is a
- * convention, and reviewers of a new caller must check it.
+ * That one statement carries the caller's whole predicate, the posting date included, which is why
+ * [lockCoveringForPosting] takes a date rather than a key. An earlier shape looked up the covering
+ * period unlocked and then locked it by key, and the port could only ask reviewers to decide from
+ * the second answer rather than the first. Folding the date predicate into the locking statement
+ * removes the first answer instead of documenting it.
  *
  * The production adapter is
  * [com.finaxis.platform.accounting.adapter.outbound.persistence.JooqFiscalPeriodStateStore].
@@ -33,16 +34,37 @@ interface FiscalPeriodStateStore {
      */
     fun findById(key: FiscalPeriodKey): FiscalPeriodSnapshot?
 
-    /** Finds the period covering [postingDate] without locking; its status may be stale. */
+    /**
+     * Finds the period covering [postingDate] without locking; its status may be stale.
+     *
+     * Never use this to decide postability; it exists for read-side queries. Postability is
+     * [lockCoveringForPosting]'s question, and it answers it from a row this transaction holds.
+     */
     fun findCovering(
         organisationId: UUID,
         postingDate: LocalDate,
     ): FiscalPeriodSnapshot?
 
-    /** Takes a shared row lock and returns the period as read under that lock. */
-    fun lockForPosting(key: FiscalPeriodKey): FiscalPeriodSnapshot?
+    /**
+     * Locks and reads, in one statement, the period whose inclusive bounds contain [postingDate].
+     *
+     * One statement is the whole contract. A lock taken in one statement and the status read in
+     * another is decidable only at `READ COMMITTED`, where the second statement takes a fresh
+     * snapshot. Here the lock and the projection are the same statement, so PostgreSQL either
+     * re-reads the locked row (`EvalPlanQual`, at `READ COMMITTED`) or refuses to serialize the
+     * access (`40001`, above it). Never a stale status, at any isolation level.
+     *
+     * At most one row can match: `ex_accounting_fiscal_period_no_overlap` makes two periods of one
+     * tenant covering a date unrepresentable.
+     */
+    fun lockCoveringForPosting(
+        organisationId: UUID,
+        postingDate: LocalDate,
+    ): FiscalPeriodSnapshot?
 
-    /** Takes an exclusive row lock and returns the period as read under that lock. */
+    /**
+     * Takes an exclusive row lock and returns the columns of the tuple it locked, in one statement.
+     */
     fun lockForStateChange(key: FiscalPeriodKey): FiscalPeriodSnapshot?
 
     /**

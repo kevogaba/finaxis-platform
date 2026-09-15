@@ -58,6 +58,14 @@ class JooqJournalStore(
      * under an exclusive lock, so the engine's replay-or-conflict decision is made against a state
      * that cannot change until this transaction ends. A bare insert would raise a unique violation
      * and abort the caller's whole transaction instead.
+     *
+     * That replay is the `READ COMMITTED` account of it. The posting path now runs at
+     * `SERIALIZABLE`, where a conflict with a row committed *after* this transaction's snapshot
+     * aborts the insert with `40001` rather than quietly doing nothing, so the locking read below
+     * never runs and there is no receipt to replay. A duplicate whose row was already committed
+     * when this transaction took its snapshot still replays exactly as described. The retried
+     * attempt is what restores the rest: it opens on a fresh snapshot that includes the winner, and
+     * takes the replay branch.
      */
     override fun claimPostingRequest(request: NewPostingRequest): PostingRequestClaim {
         requireActiveTransaction("Claiming a posting request")
@@ -108,7 +116,9 @@ class JooqJournalStore(
                 .fetchOne()
         checkNotNull(existing) {
             "the claim inserted nothing yet no row holds the source reference; ON CONFLICT and " +
-                "the locking read disagree, which cannot happen under READ COMMITTED"
+                "the locking read disagree. At READ COMMITTED that cannot happen; above it a " +
+                "conflict with a row invisible to this snapshot raises 40001 at the insert " +
+                "before this branch is reachable. Either way this is a defect, not a race"
         }
         return PostingRequestClaim.Existing(
             ExistingPostingRequest(

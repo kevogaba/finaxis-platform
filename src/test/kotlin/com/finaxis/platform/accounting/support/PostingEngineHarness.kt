@@ -120,6 +120,7 @@ internal class PostingEngineHarness(
             FakeJournalReadStore(),
             numbers,
             clock,
+            PermissiveSnapshots(),
         )
 }
 
@@ -214,7 +215,10 @@ internal class FakeOpenFiscalPeriods(
         postingDate: LocalDate,
     ) = open
 
-    override fun lockForPosting(key: FiscalPeriodKey) = open
+    override fun lockCoveringForPosting(
+        organisationId: UUID,
+        postingDate: LocalDate,
+    ) = open
 
     override fun lockForStateChange(key: FiscalPeriodKey) = open
 

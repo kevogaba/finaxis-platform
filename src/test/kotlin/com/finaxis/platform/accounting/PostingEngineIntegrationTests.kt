@@ -5,6 +5,7 @@ import com.finaxis.platform.accounting.application.ChartOfAccountsService
 import com.finaxis.platform.accounting.application.FunctionalCurrencyLock
 import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.PostingPeriodResolver
+import com.finaxis.platform.accounting.application.SnapshotIsolationGuard
 import com.finaxis.platform.accounting.application.UpdateGlAccountCommand
 import com.finaxis.platform.accounting.application.ledger.JournalNumberAllocator
 import com.finaxis.platform.accounting.application.ledger.JournalReadStore
@@ -110,6 +111,7 @@ class PostingEngineIntegrationTests(
     private val accounts: GlAccountStore,
     private val numbers: JournalNumberAllocator,
     private val clock: Clock,
+    private val snapshots: SnapshotIsolationGuard,
     private val chartOfAccounts: ChartOfAccountsService,
     private val tenantSettings: TenantSettingsService,
     private val dsl: DSLContext,
@@ -806,6 +808,7 @@ class PostingEngineIntegrationTests(
             ledger,
             numbers,
             clock,
+            snapshots,
         )
 
     /**

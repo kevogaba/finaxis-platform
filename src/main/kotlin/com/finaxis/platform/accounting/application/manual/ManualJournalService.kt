@@ -3,12 +3,14 @@ package com.finaxis.platform.accounting.application.manual
 import com.finaxis.platform.accounting.AccountingPermissionGuard
 import com.finaxis.platform.accounting.application.GlAccountPostingPolicy
 import com.finaxis.platform.accounting.application.GlAccountStore
+import com.finaxis.platform.accounting.application.RequiredSnapshotIsolation
 import com.finaxis.platform.accounting.application.SnapshotIsolationGuard
 import com.finaxis.platform.accounting.application.ledger.LedgerPostingRequest
 import com.finaxis.platform.accounting.application.ledger.PostingEngine
 import com.finaxis.platform.accounting.application.ledger.ResolvedLegs
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.application.posting.PostingReceipt
+import com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary
 import com.finaxis.platform.accounting.domain.AccountingAuditActions
 import com.finaxis.platform.accounting.domain.AccountingContext
 import com.finaxis.platform.accounting.domain.AccountingPermissions
@@ -74,6 +76,7 @@ class ManualJournalService(
     private val transitions: TransitionExecutor,
     private val auditService: AuditService,
     private val snapshots: SnapshotIsolationGuard,
+    private val boundary: PostingTransactionBoundary,
 ) {
     /** Creates a draft with its lines. */
     @Transactional
@@ -206,13 +209,27 @@ class ManualJournalService(
     /**
      * Approves a submitted manual journal, which posts it.
      *
-     * Refuses the actor who submitted it. The posting runs inside this transaction through the
-     * engine, and the produced journal's id is written onto the draft in the same compare-and-set
-     * that moves it to `POSTED`, so the draft, the transition log, the audit event and the ledger
-     * rows commit together or not at all.
+     * Approval **is** a posting, so it runs in the transaction
+     * [PostingTransactionBoundary] opens at `SERIALIZABLE` rather than in one of this class's own:
+     * [PostingEngine] refuses anything weaker with `accounting.snapshot_isolation_unavailable`, and
+     * a `@Transactional` here would have opened a `READ COMMITTED` transaction that the boundary
+     * merely joined, dropping the declared level without a word. The work itself is unchanged and
+     * lives in [approveInTransaction], which is called directly - not through the proxy - because
+     * the transaction is already open and the body must not be separately advised. The class keeps
+     * its `@Service` stereotype, so dropping the annotation from this one method does not close the
+     * class to proxying for the others.
+     *
+     * Refuses the actor who submitted it. The produced journal's id is written onto the draft in
+     * the same compare-and-set that moves it to `POSTED`, so the draft, the transition log, the
+     * audit event and the ledger rows commit together or not at all - and a serialization failure
+     * rolls back all four, which is what makes the whole approval safe to re-run.
      */
-    @Transactional
-    fun approve(command: ManualJournalTransitionCommand): ManualJournalApproval {
+    fun approve(command: ManualJournalTransitionCommand): ManualJournalApproval =
+        boundary.execute("Approving a manual journal") { approveInTransaction(command) }
+
+    private fun approveInTransaction(
+        command: ManualJournalTransitionCommand,
+    ): ManualJournalApproval {
         permissions.requireTenantPermission(
             command.context.actorId,
             command.context.organisationId,
@@ -304,7 +321,10 @@ class ManualJournalService(
             organisationId,
             AccountingPermissions.JOURNAL_VIEW,
         )
-        snapshots.requireStableSnapshot("Reading a manual journal")
+        snapshots.requireStableSnapshot(
+            RequiredSnapshotIsolation.REPEATABLE_READ,
+            "Reading a manual journal",
+        )
         val journal = journals.find(organisationId, journalId) ?: throw notFound()
         return ManualJournalDetail(journal, journals.findLines(organisationId, journalId))
     }
