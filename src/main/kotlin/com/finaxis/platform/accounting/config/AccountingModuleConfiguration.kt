@@ -28,6 +28,8 @@ import com.finaxis.platform.accounting.application.rules.RuleBackedPostingLegRes
 import com.finaxis.platform.common.audit.AuditService
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.core.Ordered
+import org.springframework.retry.annotation.EnableRetry
 import java.time.Clock
 
 /**
@@ -47,8 +49,20 @@ import java.time.Clock
  * [PostingTransactionBoundary] carry `@Service`, because the Kotlin Spring plugin opens annotated
  * classes for subclass proxying and a `@Bean`-constructed class with no stereotype stays `final` -
  * which would leave `@Transactional` on the first of them as advice that never runs.
+ *
+ * `@EnableRetry` sits here rather than on the application-wide configuration. The retry advisor's
+ * pointcut is annotation-driven, so there is no platform-wide blast radius either way, but keeping
+ * it beside its one user keeps `com.finaxis.platform.config` free of a dependency it does not use -
+ * the same reason `@EnableWebSecurity` lives in `iam` and `@EnableJdbcAuditing` in
+ * `common.persistence`. The explicit `order` is written even though nothing depends on it:
+ * [PostingTransactionBoundary] carries no transaction advice, so retry-outside-transaction is
+ * structural rather than a matter of advisor precedence. It is recorded so that the intent survives
+ * a future refactor that puts `@Retryable` and `@Transactional` back on one method, where the
+ * numeric order would suddenly be the only thing standing between the design and silently never
+ * retrying a serialization failure raised by `COMMIT`.
  */
 @Configuration(proxyBeanMethods = false)
+@EnableRetry(order = Ordered.LOWEST_PRECEDENCE - 1)
 class AccountingModuleConfiguration {
     /**
      * The one adapter allowed to read the ambient request context, serving both ports over it:

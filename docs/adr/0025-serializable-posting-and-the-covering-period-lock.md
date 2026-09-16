@@ -16,6 +16,14 @@ gains one class: the `organisation` row `FOR SHARE` the engine takes immediately
 tenant-currency advisory lock. 0023's claim ordering, fingerprint composition and account locking
 are untouched.
 
+This record shipped with a stated forward dependency — the isolation raise landed first, with no
+retry — and the branch that follows discharges it. The Spring Retry boundary, the
+`accounting.posting_retries_exhausted` code and the two integration assertions that were weakened
+for one branch are described below as what exists, not as what is coming. Following
+[ADR 0024](0024-journal-line-append-guard-and-trigger-policy.md), the amendment is folded into this
+record rather than written as a second one: a decision this short-lived would be read against the
+protocol it belongs to either way.
+
 ## Context
 
 Issue #108 asks for two things: that the posting path run at `SERIALIZABLE`, and that the
@@ -287,27 +295,168 @@ in 0022 was about the blast radius, not about the level, and the level was never
 
 ## Consequences
 
-**This branch raises the isolation with no retry, and it is not independently deployable.** The
-retry boundary and the `accounting.posting_retries_exhausted` code arrive in the next branch of
-this stack; here `PostingTransactionBoundary.execute` delegates straight through. Two integration
-assertions are deliberately weaker on this branch as a result. `PostingIdempotencyIntegrationTests`'
-*"concurrent duplicates produce exactly one committed posting"* cannot hold: measured, at
-`SERIALIZABLE` the claim's `INSERT … ON CONFLICT DO NOTHING` against a row committed after this
-transaction's snapshot raises `40001` at `ExecCheckTupleVisible` rather than quietly doing nothing,
-so the follow-up locking read never runs and the loser aborts instead of replaying. The ordinary
-replay — a conflicting row committed *before* the snapshot — still works, which is why the retry's
-fresh snapshot restores the original assertion in the next branch. L7 in
-`GlAccountPostingLockConcurrencyIntegrationTests` relaxes the same way, for the
-`reference_sequence` reason above. And the user-visible outcome of the posting-versus-close race
-changes shape here: without the retry, that
-race surfaces as a raw serialization failure rather than as `accounting.fiscal_period_closed`,
-because the transaction aborts at the locking read instead of observing the close and rejecting.
-The functional-currency window closes the same way and inherits the same dependency: the locking
-read of the `organisation` row aborts with `40001`, and it is the next branch's retry that turns
-that abort into a posting fingerprinted against the currency that won. The retry is therefore
-load-bearing for the *error message*, not only for throughput. This follows
-the precedent ADR 0024 set for its #54 forward dependency: the stack merges as a unit, and saying
-so out loud is required by the rule that a branch must not assert something untrue of itself.
+**The stack merges as a unit, and the two assertions the isolation raise weakened are restored by
+the retry.** Neither branch is independently deployable: the first raises the isolation with no
+retry, which regresses same-tenant posting concurrency, and the second is the retry that pays for
+it. `PostingIdempotencyIntegrationTests`' *"concurrent duplicates produce exactly one committed
+posting"* is back to asserting that both callers hold the receipt of the one journal. It could not
+hold on the first branch: measured, at `SERIALIZABLE` the claim's `INSERT … ON CONFLICT DO NOTHING`
+against a row committed after this transaction's snapshot raises `40001` at
+`ExecCheckTupleVisible` rather than quietly doing nothing, so the follow-up locking read never runs
+and the loser aborts instead of replaying. The retry is what restores it, and the mechanism is
+specific: a retried attempt opens a new transaction and therefore takes a **fresh snapshot** that
+includes the winner's commit, which turns the conflicting row into the ordinary replay case — a row
+committed *before* the snapshot — so the claim reports zero rows inserted and the locking read
+finds it. L7 in `GlAccountPostingLockConcurrencyIntegrationTests` is restored the same way, back to
+asserting that both postings commit with distinct journal numbers, for the `reference_sequence`
+reason above. The same fresh snapshot also restores the *error message* of the posting-versus-close
+race: with no retry that race surfaced as a raw serialization failure, because the transaction
+aborts at the locking read instead of observing the close and rejecting; with one, the next attempt
+reads the committed `CLOSED` and the caller gets `accounting.fiscal_period_closed`. The retry is
+therefore load-bearing for what the caller is told, not only for throughput.
+
+**The retry boundary is `PostingTransactionBoundary.execute`, and it carries no transaction advice,
+so the nesting is structural rather than a dependence on advisor precedence.** `@Retryable` and
+`@Recover` sit on the boundary bean in `application.ledger`; the transaction is opened one call
+later, on `SerializablePostingTransaction`, and the two annotations never appear on one method.
+Calls arriving through the exposed `PostingTransactions.execute` are retried too, because that
+class delegates to the boundary bean through its proxy — one advisor, one budget, no second
+annotation for a product module to get wrong. The structure is what makes it correct, and the
+reason is measured: a serialization failure can be raised by `COMMIT` itself, as
+*"could not serialize access due to read/write dependencies among transactions — Reason code:
+Canceled on identification as a pivot, during commit attempt"*. That exception is thrown **by** the
+transaction interceptor, so only strictly outer advice can ever see it, and it never reaches jOOQ's
+`ExecuteListener`, so no statement-level translator sees it either. Co-locating the annotations and
+pinning `@EnableRetry`'s order numerically would be correct today and one `@Order` attribute away
+from silently never retrying the commit-time case — which is the case the boundary exists for.
+`@EnableRetry(order = Ordered.LOWEST_PRECEDENCE - 1)` is still written, on
+`AccountingModuleConfiguration`, so the intent survives a refactor that puts the annotations back
+together; nothing here depends on it. The separation has a second, operational consequence: the
+transaction has committed or rolled back and its pooled connection has been **returned** before any
+backoff sleeps, which matters because HikariCP is at its unconfigured default of ten connections
+and a backoff that pinned one would be an outage rather than a delay. The annotation is
+`org.springframework.retry.annotation.Retryable`, not the `org.springframework.resilience`
+annotation that spring-context also ships: the two differ only by package, and only the former has
+`@Recover`, which is the whole of translating an exhausted budget into a named code. The retry
+lives on the internal boundary rather than on the exposed `PostingTransactions` for the same reason
+the generic seam does — the exposed package must stay free of type variables, and a retry budget is
+an internal detail the module's public contract gains nothing by naming.
+
+**One SQLSTATE arrives as two Spring exception classes, so the retry matches on their supertype.**
+`retryFor` is `ConcurrencyFailureException`. A statement-level `40001` travels jOOQ's
+`DefaultExceptionTranslatorExecuteListener` → `SQLErrorCodeSQLExceptionTranslator("PostgreSQL")` →
+`CannotSerializeTransactionException`. A commit-time `40001` never reaches jOOQ at all:
+`JdbcTransactionManager.translateException` handles it, and in Spring 7 the default translator is
+`SQLExceptionSubclassTranslator` unless a user `sql-error-codes.xml` exists — this repository has
+none — whose `instanceof` chain misses pgjdbc's `PSQLException` and falls through to
+`SQLStateSQLExceptionTranslator` → `CannotAcquireLockException`. Retrying on
+`CannotSerializeTransactionException` alone would therefore compile, pass review, and silently miss
+every SSI pivot. `ConcurrencyFailureException` is the only common supertype, and it also covers
+`40P01`'s `DeadlockLoserDataAccessException`. `noRetryFor` excludes
+`OptimisticLockingFailureException`, which extends it but is a different decision: a row-version
+conflict is a stale write, not a serialization race, and re-running it would just lose again.
+Accounting's own `ConflictException` is an `ApplicationException`, outside this hierarchy
+altogether, so `accounting.fiscal_period_closed` propagates un-retried with no exclusion needed. A
+classification test pins both translator outcomes, so a Spring upgrade that changes either one
+breaks a test rather than the retry.
+
+**The retry budget is sized by argument, not by measurement, and the deferred throughput issue owns
+it.** `PostingRetryPolicy` fixes five attempts and a uniform-random backoff between 20 and 250
+milliseconds — `delay` plus `maxDelay` with no `multiplier`, which is what selects Spring Retry's
+uniform policy rather than an exponential one. The shape follows from where the aborts come from:
+the dominant source is the per-tenant `reference_sequence` row every posting updates, so losers
+arrive in correlated bursts, and unjittered retries would move in lockstep and collide again. Five
+attempts because that counter is a genuine capacity ceiling rather than a transient: a tenant whose
+posting arrival rate exceeds what five attempts absorb should get a fast, named `409` an operator
+can alert on, not an unbounded loop holding a request thread. The worst-case un-jittered sleep is
+about one second, far inside the five-minute idempotency in-progress timeout, so a retrying request
+can never have its `Idempotency-Key` reclaimed as stale underneath it. None of those numbers is a
+measurement, and nobody has bounded the probability that N concurrent postings exhaust together;
+sizing them belongs with the throughput and lock-wait work in **issue #119**. When the
+budget is spent the boundary throws `ConflictException(accounting.posting_retries_exhausted)`,
+which reaches `409` through the existing `ApplicationException` path with no edit to
+`ApiExceptionHandler`. A sustained rate of that code is a capacity signal for the counter, not a
+defect; a posting racing a close is answered with `accounting.fiscal_period_closed` instead.
+
+**A retried backdated posting leaves up to five independent `journal.post_prior_period` audit rows,
+and an audit query counting authorities must group rather than count.** `recordPriorPeriodAuthority`
+writes with `recordIndependently` (`REQUIRES_NEW`) precisely so the row survives the rollback of a
+posting that fails *after* the gate, and a retry re-runs the gate, so one logical backdated posting
+can leave one row per attempt — bounded by `PostingRetryPolicy.MAX_ATTEMPTS`. Every one of those
+rows is true. The documented meaning of the row is *authority was exercised on a posting the ledger
+accepted as admissible*, not *a journal was committed*, and each attempt independently located,
+locked and validated the covering period before reaching it. The operational consequence is that
+counting rows over-counts contended backdated postings: group by
+`(actorId, tenantId, metadata.sourceModule, metadata.sourceReference)` to count authorities
+exercised, and the metadata carries `sourceModule` and `sourceReference` for exactly that.
+
+That key is the `INV-7` idempotency identity, `(organisation_id, source_module, source_reference)`,
+and nothing weaker will do. An earlier revision of this record named
+`(actorId, tenantId, resourceId, metadata.postingDate)`, which does not discriminate: two
+*different* backdated postings by one operator, into one period, on one posting date produce
+identical tuples — and a batch correction run by a single operator is exactly that shape. Grouping
+on it therefore merges separate exercises of break-glass authority, which is the opposite of what
+the record is for. The source reference does discriminate, because it is "one logical posting"
+expressed as data: identical on every attempt of one posting, different for any other.
+
+The posting request's id looks like the obvious key and is wrong. `posting_request.id` is
+`UUID PRIMARY KEY DEFAULT uuidv7()`, and a retry rolls its claim back and re-inserts, so every
+attempt is allocated a fresh id. Keying on it would put each attempt in its own group — the
+over-counting the grouping exists to prevent, arrived at from the other side, and worse than the
+weak key because a reader has no reason to doubt it.
+
+Recording the source reference also buys something with no connection to retries at all: the row now
+answers *which posting this authority was exercised for*. Previously it could not — an auditor
+holding a `journal.post_prior_period` row could narrow it to a fiscal period and a posting date and
+no further, with no way to reach the journal or the originating business event. No attempt number is
+recorded and none should be added casually — moving the write after commit would destroy the
+property it exists for, and a thread-local attempt counter would introduce ambient state into an
+application layer that has none, to improve an audit query. An integration test asserts the bound
+and, since the key is only worth documenting if it discriminates, asserts that two distinct
+backdated postings sharing an actor, a tenant, a period and a posting date stay two authorities.
+
+**A retry releases the covering `FOR SHARE` lock, so a close queued behind an in-flight posting can
+now win, and the user-visible outcome of an ordinary close changes.** ADR 0022's operational trade
+is that many postings proceed concurrently while a close waits for them; the retry punches a hole
+in it, and an operator told that closes queue behind postings will be surprised by both halves of
+it. Before, a close blocked until every in-flight posting committed, and its `lock_timeout` — ten
+seconds by default — either outlasted them or produced `accounting.fiscal_period_lock_timeout`. Now
+an aborting posting **rolls back**, releasing its `FOR SHARE` lock, and then sleeps 20 to 250
+milliseconds before its next attempt. A close waiting on that lock acquires it in the gap and
+commits; the posting's retry, at a fresh snapshot, finds the period `CLOSED`. So a close that used
+to time out now succeeds, and a posting that was going to succeed comes back
+`accounting.fiscal_period_closed` — the same request, flipped from a receipt to a rejection by a
+race it did not lose the first time. Both outcomes are correct and neither can corrupt the ledger:
+the posting is refused before it writes, and no journal lands in a period closed before it
+committed. But the change is real and it is user-visible on the ordinary path, not only under
+pathological load, which is why it is written down here rather than left to a support ticket.
+
+**The retry re-runs the whole enclosing use case, and that is correct only because every effect on
+this path is transactional.** The boundary is lambda-shaped, so a product module's own mutation
+runs inside the transaction the boundary opened and is re-run with it (`INV-12`); a facade that
+retried only the posting would re-run one third of a unit of work whose other two thirds had
+already rolled back. That is safe exactly as long as nothing on the path escapes the transaction,
+and the claim was checked against the code rather than assumed: across
+`com.finaxis.platform.accounting` there is no `registerSynchronization`, no
+`@TransactionalEventListener`, no after-commit hook, no JobRunr enqueue, no `RabbitTemplate` or
+other AMQP use and no outbox write — the only textual matches are the boundary's own KDoc saying it
+must stay that way. Accounting's lifecycles declare no `eventFactories` at all, so nothing here
+externalizes a domain event even through the outbox. The one deliberate non-transactional effect is
+the prior-period audit row above, whose duplication is bounded, true and documented. **Adding any
+other non-transactional effect inside the boundary lambda re-opens this design and requires
+amending this record** — a JobRunr enqueue, a broker publish, a `REQUIRES_NEW` write or an
+after-commit hook would each happen more than once for a contended posting, and nothing in the
+build would say so.
+
+**`AccountingBoundaryRuleTests`' "no broker or background job may sit in the posting critical path"
+is not violated by the retry.** That rule forbids `org.springframework.amqp..`,
+`io.namastack.outbox..` and `org.jobrunr..` inside accounting, and spring-retry is none of them:
+the retry re-runs the same synchronous transaction on the caller's own thread, introduces no queue,
+no scheduler and no second thread, and the caller's request is still answered by the call that made
+it. What it adds is latency on a contended posting, bounded by the budget above. A companion rule
+pins `PostingTransactionBoundary` as the only `@Retryable` class in accounting, so a second,
+differently-configured retry boundary cannot appear unnoticed and quietly acquire a different
+budget for the same failure.
 
 **`FinancialTransactionAtomicityFixture` needs no new probe.** No new durable write is added by
 this change. The isolation level, the collapsed statement and the guard call all change how an
@@ -318,13 +467,15 @@ effects is unchanged.
 **The posting transaction still carries no `lock_timeout`, and a retry attempt can block rather
 than fail fast.** A queued exclusive close makes new postings wait, because PostgreSQL conflicts an
 incoming request against the *pending* queue as well as the granted set, so a posting that arrives
-behind a waiting close waits for the close. With a retry above it, that wait is multiplied by the
-attempt count. A bound was considered and not added, in this branch or the next: nobody can yet
-size it, a five-second bound would break `FiscalPeriodConcurrencyIntegrationTests` and
+behind a waiting close waits for the close. The retry sitting above it multiplies that wait by the
+attempt count: an attempt that blocks rather than failing fast spends the whole wait before it can
+even lose, and five of them can do so in sequence. A bound was considered and added in neither
+branch of this stack: nobody can yet size it, a five-second bound would break
+`FiscalPeriodConcurrencyIntegrationTests` and
 `GlAccountPostingLockConcurrencyIntegrationTests` (both hold locks for twenty seconds), and it
 would silently make 55P03 retryable, since `CannotAcquireLockException` is a
 `ConcurrencyFailureException`. Sizing it belongs with the throughput and lock-wait measurement in
-**a follow-up issue**, and this paragraph is what that issue starts from.
+**issue #121**, and this paragraph is what that issue started from.
 
 **Issue #52's accounting controllers must call `PostingTransactions`, with the idempotency
 executor outside it.** The boundary refuses an already-open transaction outright, because entering

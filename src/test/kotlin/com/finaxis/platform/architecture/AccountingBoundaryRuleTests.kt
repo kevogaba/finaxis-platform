@@ -3,6 +3,7 @@ package com.finaxis.platform.architecture
 import com.tngtech.archunit.base.DescribedPredicate
 import com.tngtech.archunit.core.domain.JavaClass
 import com.tngtech.archunit.core.domain.JavaClasses
+import com.tngtech.archunit.core.domain.JavaMethod
 import com.tngtech.archunit.core.domain.JavaModifier
 import com.tngtech.archunit.core.importer.ClassFileImporter
 import com.tngtech.archunit.core.importer.ImportOption
@@ -230,10 +231,170 @@ class AccountingBoundaryRuleTests {
         )
     }
 
+    @Test
+    fun `the posting boundary is the only retryable method in accounting`() {
+        // A second retry boundary would not be a duplicate, it would be a multiplier. Any new one
+        // necessarily sits somewhere in the call tree of this one, so a serialization failure gets
+        // re-run by the inner boundary before the outer one ever sees it and the budget becomes
+        // MAX_ATTEMPTS squared - five attempts become twenty-five, and the worst-case latency of a
+        // contended posting goes with it. Nothing else in the build notices.
+        //
+        // Matched on the annotation's SIMPLE name so that both spring-retry's @Retryable and
+        // Spring Framework 7's same-named org.springframework.resilience one land in the subject
+        // set; `accounting never names Spring's resilience package` below pins which of the two
+        // this one actually is.
+        val retryable = accountingMethodsAnnotatedWith(RETRYABLE)
+
+        // Equality against a NON-EMPTY expected list, following `the accounting table rule guards
+        // tables that are actually generated` above. A rule that merely counts annotations goes
+        // green and proves nothing the moment the method is renamed or the annotation moved, so
+        // the guarded method is named here rather than left implicit.
+        assertEquals(
+            listOf("PostingTransactionBoundary.execute"),
+            retryable.map { "${it.owner.simpleName}.${it.name}" }.sorted(),
+            "accounting has exactly one retry boundary, on one method, and this is it",
+        )
+    }
+
+    @Test
+    fun `no accounting method carries both the retry and the transaction annotation`() {
+        // The separation is the design, not a style preference. A serialization failure can be
+        // raised by COMMIT itself - PostgreSQL cancels a transaction it identifies as an SSI pivot
+        // during the commit attempt - and a commit-time exception is thrown BY the transaction
+        // interceptor, so only advice strictly outside it can ever see one. Co-locating @Retryable
+        // and @Transactional on one method puts the retry inside the transaction, where it would
+        // still retry statement-level 40001s, still look right in review, and silently never retry
+        // the commit-time case the whole design exists for. A class-level @Transactional advises
+        // the retryable method just as effectively, so the owner is checked too.
+        val retryable = accountingMethodsAnnotatedWith(RETRYABLE)
+        assertEquals(
+            true,
+            retryable.isNotEmpty(),
+            "non-vacuity: this rule scans nothing at all if @Retryable has moved or gone",
+        )
+
+        // The other half of non-vacuity, and the one that is easy to forget: prove the same scan
+        // can SEE a @Transactional. Without this, a green result means "the detector found no
+        // co-location" and "the detector stopped detecting" equally well.
+        val transactional =
+            accountingMethodsAnnotatedWith(TRANSACTIONAL).map {
+                "${it.owner.simpleName}.${it.name}"
+            }
+        assertEquals(
+            true,
+            "SerializablePostingTransaction.run" in transactional,
+            "non-vacuity: the @Transactional half of the scan found nothing it should have " +
+                "found; saw $transactional",
+        )
+
+        val offenders =
+            retryable
+                .filter { it.carries(TRANSACTIONAL) || it.owner.carries(TRANSACTIONAL) }
+                .map { "${it.owner.simpleName}.${it.name}" }
+                .sorted()
+
+        assertEquals(
+            emptyList(),
+            offenders,
+            "a retried method must not be transaction-advised: an SSI pivot is raised by COMMIT " +
+                "and is invisible to advice nested inside the transaction. Open the transaction " +
+                "on a separate bean, as SerializablePostingTransaction does: $offenders",
+        )
+    }
+
+    @Test
+    fun `accounting never names Spring's resilience package`() {
+        // Spring Framework 7.0.9 ships org.springframework.resilience.annotation.Retryable, which
+        // differs from org.springframework.retry.annotation.Retryable only by package and which an
+        // IDE offers first because it needs no third-party dependency. It has no @Recover. So the
+        // wrong symbol compiles, still retries, and then hands the caller a raw
+        // ConcurrencyFailureException - PostingTransactionBoundary's three @Recover overloads and
+        // accounting.posting_retries_exhausted all become dead code at once, with no build failure
+        // and no log line. That is the exact silent-drop shape this suite exists to make loud.
+        //
+        // Scanned as source rather than as bytecode, following `accounting code never uses binary
+        // floating point` above: this catches the fully-qualified use and an aliased import as
+        // well as a plain one, and it reads at the level a reviewer actually looks at.
+        val offenders =
+            accountingCodeLines()
+                .filter { (_, code) -> RESILIENCE_PACKAGE in code }
+                .map { (where, code) -> "$where $code" }
+
+        assertEquals(
+            emptyList(),
+            offenders,
+            "accounting's retry annotations come from spring-retry; Spring's resilience package " +
+                "has a same-named @Retryable with no @Recover support: $offenders",
+        )
+
+        // Non-vacuity: the rule guards a choice between two packages, so it is worth nothing once
+        // neither is present. Naming the file also pins the correct import to one place.
+        val correct =
+            accountingCodeLines()
+                .filter { (_, code) -> code == "import $SPRING_RETRY_RETRYABLE" }
+                .map { (where, _) -> where.substringBefore(':') }
+
+        assertEquals(
+            listOf("PostingTransactionBoundary.kt"),
+            correct,
+            "non-vacuity: exactly one accounting file imports spring-retry's @Retryable, and if " +
+                "that stops being true the rule above is guarding nothing; saw $correct",
+        )
+    }
+
+    /** Declared methods under `accounting` carrying an annotation with this simple name. */
+    private fun accountingMethodsAnnotatedWith(annotation: String): List<JavaMethod> =
+        productionClasses
+            .filter { it.packageName.startsWith(ACCOUNTING_PACKAGE) }
+            .flatMap { it.methods }
+            .filter { it.carries(annotation) }
+
+    private fun JavaMethod.carries(annotation: String): Boolean =
+        annotations.any { it.rawType.simpleName == annotation }
+
+    private fun JavaClass.carries(annotation: String): Boolean =
+        annotations.any { it.rawType.simpleName == annotation }
+
+    /**
+     * Every accounting Kotlin line as `File.kt:42` to its executable part, comments stripped.
+     *
+     * Stripping matters here: `PostingTransactionBoundary`'s KDoc names the forbidden package on
+     * purpose, to warn the next reader about it. A raw text search would report that warning as
+     * the violation it warns about.
+     */
+    private fun accountingCodeLines(): List<Pair<String, String>> =
+        File(ACCOUNTING_SOURCE_ROOT)
+            .walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .flatMap { file ->
+                file.readLines().withIndex().map { (index, line) ->
+                    "${file.name}:${index + 1}" to executablePartOf(line)
+                }
+            }.toList()
+
+    private fun executablePartOf(line: String): String {
+        val trimmed = line.trim()
+        if (trimmed.startsWith("*") || trimmed.startsWith("/*") || trimmed.startsWith("//")) {
+            return ""
+        }
+        return trimmed.substringBefore("//").trim()
+    }
+
     private companion object {
         const val ROOT = "com.finaxis.platform"
         const val ACCOUNTING = "com.finaxis.platform.accounting.."
+        const val ACCOUNTING_PACKAGE = "com.finaxis.platform.accounting"
         const val ACCOUNTING_SOURCE_ROOT = "src/main/kotlin/com/finaxis/platform/accounting"
+
+        /** Annotation simple names, deliberately unqualified - see the rules that use them. */
+        const val RETRYABLE = "Retryable"
+        const val TRANSACTIONAL = "Transactional"
+
+        /** The retry annotation accounting is allowed to use. */
+        const val SPRING_RETRY_RETRYABLE = "org.springframework.retry.annotation.Retryable"
+
+        /** Spring Framework 7's own retry support, which has no `@Recover`. */
+        const val RESILIENCE_PACKAGE = "org.springframework.resilience"
 
         /** The packages accounting declares as `@NamedInterface`, and therefore exposes. */
         val EXPOSED_PACKAGES =

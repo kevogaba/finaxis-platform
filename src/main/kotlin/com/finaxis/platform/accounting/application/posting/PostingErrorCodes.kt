@@ -100,6 +100,22 @@ object PostingErrorCodes {
      */
     const val FUNCTIONAL_CURRENCY_CHANGED = "accounting.functional_currency_changed"
 
+    /**
+     * A posting could not be serialised against concurrent work within its retry budget.
+     *
+     * Retryable, and deliberately bounded. The posting path runs at `SERIALIZABLE`, where `40001`
+     * is a normal outcome rather than a defect, and
+     * [com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary] re-runs the
+     * whole transaction from the beginning each time one is raised. Two sources dominate and they
+     * mean different things: a posting racing a fiscal-period close, which is rare and
+     * self-correcting; and two postings into one tenant contending on the gapless
+     * `reference_sequence` counter, which is the tenant's posting concurrency exceeding what
+     * gapless numbering can absorb. A sustained rate of this code is a capacity signal for the
+     * second, not a defect - a close is answered with [PERIOD_CLOSED] instead. Raised only by the
+     * boundary, never by the engine.
+     */
+    const val POSTING_RETRIES_EXHAUSTED = "accounting.posting_retries_exhausted"
+
     /** The journal entry does not exist in the tenant. */
     const val JOURNAL_NOT_FOUND = "accounting.journal_not_found"
 

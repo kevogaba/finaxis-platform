@@ -2,6 +2,7 @@
 kotlinVersion = "2.4.10"
 springBootVersion = "4.1.1"
 springCloudVersion = "2025.1.2"
+springRetryVersion = "2.0.13"
 springModulithVersion = "2.1.0"
 springDependencyManagementVersion = "1.1.7"
 graalVmVersion = "1.1.10"
@@ -55,6 +56,7 @@ keycloak-admin-client = { module = "org.keycloak:keycloak-admin-client", version
 springdoc-ui = { module = "org.springdoc:springdoc-openapi-starter-webmvc-ui", version.ref = "springDoc" }
 springdoc-api = { module = "org.springdoc:springdoc-openapi-starter-webmvc-api", version.ref = "springDoc" }
 springdoc-scalar = { module = "org.springdoc:springdoc-openapi-starter-webmvc-scalar", version.ref = "springDoc" }
+springRetry = { module = "org.springframework.retry:spring-retry", version.ref = "springRetryVersion" }
 sentry-bom = { module = "io.sentry:sentry-bom", version.ref = "sentryVersion" }
 opentelemetry-logback-appender = { module = "io.opentelemetry.instrumentation:opentelemetry-logback-appender-1.0", version.ref = "opentelemetryInstrumentationAlphaVersion" }
 errorprone-core = { module = "com.google.errorprone:error_prone_core", version.ref = "errorProneVersion" }

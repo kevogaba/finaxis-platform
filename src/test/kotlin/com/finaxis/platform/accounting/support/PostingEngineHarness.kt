@@ -78,20 +78,30 @@ internal class PostingEngineHarness(
     clock: Clock,
     contextLookup: AccountingContextLookup,
 ) {
+    /**
+     * One ordered record of every lock the engine took, shared by all four fakes that take one.
+     *
+     * Owned by the harness rather than passed in, because the property it exists to state is about
+     * *order across ports*: ADR 0023's chain is currency, then period, then the accounts in
+     * ascending id order, then the `reference_sequence` row, and four independent counters cannot
+     * express an order at all. A suite with no interest in locks can ignore it.
+     */
+    val lockJournal = PostingLockJournal()
+
     /** The tenant's fiscal calendar: one period, open, covering [businessDate]. */
-    val periods = FakeOpenFiscalPeriods(organisationId, periodId, businessDate)
+    val periods = FakeOpenFiscalPeriods(organisationId, periodId, businessDate, lockJournal)
 
     /** The tenant itself: postable, with [currencyCode] as its functional currency. */
     val tenants = FakePostableTenants(currencyCode)
 
     /** The chart of accounts, recording every account it was asked about. */
-    val accounts = FakeGlAccountStore(organisationId)
+    val accounts = FakeGlAccountStore(organisationId, lockJournal)
 
     /** The ledger write port, recording every request, header and line the engine wrote. */
     val postings = RecordingJournalStore()
 
     /** The gapless journal counter; set [FakeJournalNumberAllocator.next] to null to break it. */
-    val numbers = FakeJournalNumberAllocator()
+    val numbers = FakeJournalNumberAllocator(lockJournal)
 
     /** The ambient request id the engine records as lineage; null for a background posting. */
     var ambientRequestId: String? = null
@@ -99,7 +109,7 @@ internal class PostingEngineHarness(
     private val metadata = PostingMetadataLookup { ambientRequestId }
 
     /** The tenant-currency lock, recording what the engine took and in which mode. */
-    val currencyLock = RecordingFunctionalCurrencyLock()
+    val currencyLock = RecordingFunctionalCurrencyLock(lockJournal)
 
     /** The engine under the ports above, ready to post inside an active transaction. */
     val engine =
@@ -201,6 +211,7 @@ internal class FakeOpenFiscalPeriods(
     organisationId: UUID,
     periodId: UUID,
     businessDate: LocalDate,
+    private val journal: PostingLockJournal = PostingLockJournal(),
 ) : FiscalPeriodStateStore {
     private val open =
         FiscalPeriodSnapshot(
@@ -217,10 +228,17 @@ internal class FakeOpenFiscalPeriods(
         postingDate: LocalDate,
     ) = open
 
+    /** Every `(organisationId, postingDate)` this was asked to lock a period for, in call order. */
+    val lockedFor = mutableListOf<Pair<UUID, LocalDate>>()
+
     override fun lockCoveringForPosting(
         organisationId: UUID,
         postingDate: LocalDate,
-    ) = open
+    ): FiscalPeriodSnapshot {
+        lockedFor += organisationId to postingDate
+        journal.record(PostingLockJournal.PERIOD)
+        return open
+    }
 
     override fun lockForStateChange(key: FiscalPeriodKey) = open
 
@@ -240,11 +258,21 @@ internal class FakeOpenFiscalPeriods(
  */
 internal class FakeGlAccountStore(
     private val organisationId: UUID,
+    private val journal: PostingLockJournal = PostingLockJournal(),
 ) : GlAccountStore {
     private val accounts = linkedMapOf<UUID, GlAccount>()
 
     /** Every [findById] argument, in call order: a distinct-account claim rests on it. */
     val lookups = mutableListOf<UUID>()
+
+    /**
+     * Every [lockForPosting] argument, in call order.
+     *
+     * Separate from [lookups] because the two answer different questions: a lookup is a read the
+     * dry run also makes, while a lock is the ADR 0023 chain link. The ascending-id ordering of a
+     * posting's account locks is only visible here.
+     */
+    val locks = mutableListOf<UUID>()
 
     /** Seeds one account, replacing any account already stored under its id. */
     fun put(
@@ -306,7 +334,11 @@ internal class FakeGlAccountStore(
     override fun lockForPosting(
         organisationId: UUID,
         accountId: UUID,
-    ) = tenantAccount(organisationId, accountId)
+    ): GlAccount? {
+        locks += accountId
+        journal.record(PostingLockJournal.ACCOUNT)
+        return tenantAccount(organisationId, accountId)
+    }
 
     override fun hasActivePostingRuleLegs(
         organisationId: UUID,
@@ -420,12 +452,20 @@ internal class RecordingJournalStore : JournalStore {
 }
 
 /** The gapless counter; [next] set to null is a tenant with no `JOURNAL` sequence at all. */
-internal class FakeJournalNumberAllocator : JournalNumberAllocator {
+internal class FakeJournalNumberAllocator(
+    private val journal: PostingLockJournal = PostingLockJournal(),
+) : JournalNumberAllocator {
     /** The number the next allocation returns, or null for a tenant with no sequence row. */
     var next: Long? = 1
 
-    override fun nextEntryNumber(organisationId: UUID): Long? =
-        next?.also { current -> next = current + 1 }
+    override fun nextEntryNumber(organisationId: UUID): Long? {
+        // Production allocates with an unconditional UPDATE ... RETURNING on the tenant's
+        // reference_sequence row, which is a row-exclusive lock and the terminal link of ADR
+        // 0023's chain. Recorded even when there is no row, because a tenant with no sequence
+        // still took the lock attempt's place in the order.
+        journal.record(PostingLockJournal.SEQUENCE)
+        return next?.also { current -> next = current + 1 }
+    }
 }
 
 /** The ambient [AccountingContext] a suite can swap between commands. */

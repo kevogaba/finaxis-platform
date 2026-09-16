@@ -37,6 +37,7 @@ Two rules that catch people out:
 | Business date not open, current-dated posting | Rejected | `accounting.business_date_not_open` |
 | Business date not open, backdated posting | **Allowed** | — |
 | Organisation has no business date | Rejected | `accounting.business_date_unavailable` |
+| Every attempt lost a serialization race | Rejected, retryable | `accounting.posting_retries_exhausted` |
 
 The last two rows are deliberate. Close-of-business must not deadlock corrections: a backdated
 posting into a still-open prior period stays legal while the current day is closing.
