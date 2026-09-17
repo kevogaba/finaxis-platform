@@ -33,10 +33,18 @@ import java.util.UUID
  * a `@Service` here failed application context startup for the whole platform rather than merely
  * for accounting. The store adapter and this wiring therefore landed together.
  *
- * The order matters and is the whole design. An unlocked lookup finds the covering period cheaply;
- * the lock is then taken; and **the decision uses the status returned by the locking read**, never
- * the one from the lookup. Under READ COMMITTED the locking read sees the latest committed value,
- * so a close that committed in between is observed rather than missed.
+ * One statement is the whole design. [FiscalPeriodStateStore.lockCoveringForPosting] carries the
+ * tenant predicate, the date-range predicate and `FOR SHARE` together, so **the decision is taken
+ * from the columns of the very tuple this transaction now holds**. There is no earlier, unlocked
+ * answer to be tempted by: an edit that commits before the lock is either re-read by `EvalPlanQual`
+ * at `READ COMMITTED`, or refused with `40001` above it, and the posting path runs above it.
+ *
+ * Note what that does and does not buy. The isolation level supplies none of this — a serializable
+ * posting that read the period *without* `FOR SHARE` would happily commit a journal into a period a
+ * concurrent close had already closed, because there is only one rw-dependency edge and no cycle
+ * for SSI to break. "No journal lands in a period closed before it committed" is a linearizability
+ * requirement, and the shared row lock is the entire guarantee. See
+ * `docs/adr/0025-serializable-posting-and-the-covering-period-lock.md`.
  */
 class PostingPeriodResolver(
     private val periods: FiscalPeriodStateStore,
@@ -121,23 +129,23 @@ class PostingPeriodResolver(
             )
         }
 
-        val candidate = periods.findCovering(organisationId, dates.postingDate)
-        val locked = candidate?.key?.let { periods.lockForPosting(it) }
-        requireCoveringPeriod(locked, dates)
+        val period = periods.lockCoveringForPosting(organisationId, dates.postingDate)
+        requireCoveringPeriod(period, dates)
 
-        // Both decisions use the snapshot read under the lock, never `candidate`: a close - or an
-        // edit to the period's bounds - may have committed between the two reads, and that is
-        // precisely the race this guards. Coverage is re-checked as well as status, because the
-        // pre-lock coverage answer is exactly as stale as the pre-lock status answer was.
-        val period = checkNotNull(locked)
-        requireCovers(period, dates)
-        requireOpen(period)
+        // The date predicate is inside the locking statement, so a row that comes back is a row
+        // this transaction holds FOR SHARE and whose bounds satisfied the predicate at lock time.
+        // The bounds check below is now an assertion against the adapter, not a guard against a
+        // race: at READ COMMITTED a bounds change makes the statement return no row at all
+        // (EvalPlanQual re-evaluates the quals), and above it the statement raises 40001.
+        val locked = checkNotNull(period)
+        requireCovers(locked, dates)
+        requireOpen(locked)
 
         if (classification == PostingDateClassification.BACKDATED) {
-            recordPriorPeriodAuthority(organisationId, actorId, dates, period)
+            recordPriorPeriodAuthority(organisationId, actorId, dates, locked)
         }
 
-        return ResolvedPostingPeriod(dates, period, classification)
+        return ResolvedPostingPeriod(dates, locked, classification)
     }
 
     /**
@@ -152,6 +160,19 @@ class PostingPeriodResolver(
      * That is intentional and the reason string says so: this row means *authority was exercised
      * on a posting the ledger accepted as admissible*, not *a journal was committed*. The journal's
      * own outcome is issue #41's to audit, which is the only place the journal id exists.
+     *
+     * A row records *an attempt that reached here*, not a committed journal, and it outlives that
+     * posting's rollback by design. One logical backdated posting can therefore leave more than
+     * one row whenever the posting runs twice - on this branch, a client re-submitting after a
+     * serialization failure it was handed raw; on the branch that adds the retry, the retry itself.
+     *
+     * A row written here cannot be grouped back to the posting it belongs to. It names the actor,
+     * the tenant, the fiscal period and the dates, and a batch of corrections backdated by one
+     * operator into one period on one date agrees on every one of them - so counting rows
+     * over-counts a re-submitted posting, while grouping over these columns merges postings that
+     * are genuinely distinct. Neither is safe, and no column recorded here separates the two cases.
+     * The branch that adds the retry carries the source reference into the metadata, which is the
+     * `INV-7` identity and the only thing here that does discriminate, and names the grouping key.
      */
     private fun recordPriorPeriodAuthority(
         organisationId: UUID,
@@ -169,7 +190,9 @@ class PostingPeriodResolver(
                 resourceId = period.key.fiscalPeriodId.toString(),
                 outcome = AuditOutcome.SUCCESS,
                 severity = AuditSeverity.HIGH,
-                reason = "Prior-period posting authority exercised on an admissible posting.",
+                reason =
+                    "Prior-period posting authority exercised on an admissible posting; " +
+                        "recorded once per attempt for a posting that is retried.",
                 metadata =
                     mapOf(
                         "postingDate" to dates.postingDate.toString(),

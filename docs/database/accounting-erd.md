@@ -1273,7 +1273,15 @@ stops.
 is evaluated once per statement with no lock on `journal_entry`. Under `READ COMMITTED`, if a
 journal were ever committed holding *fewer* lines than it declares, two concurrent transactions
 could each append one, each see its own count satisfied, and both commit — leaving the journal over
-its declared count. Production cannot reach it, for the reason given above: `writeJournal`'s
+its declared count. The posting path itself no longer runs there: per
+[ADR 0025](../adr/0025-serializable-posting-and-the-covering-period-lock.md) it runs at
+`SERIALIZABLE`, where two appenders to one journal each read the count the other writes to, which is
+a read-write dependency SSI detects, so one of them aborts with `40001` instead of committing. That
+narrows the window rather than closing it, and it is worth being precise about how: any writer
+reaching `journal_line` from outside the posting path — a migration, a repair script, an
+`INSERT` issued at the default isolation level — is still at `READ COMMITTED` and the theoretical
+window is unchanged for it. Production cannot reach it either way, for the reason given above:
+`writeJournal`'s
 verification read and `markPosted` share a transaction, so no under-count journal is ever committed.
 Closing it properly would need `SELECT … FOR UPDATE` on the header, which serialises every posting
 in a tenant behind its own header row for no invariant production can violate — and which the same

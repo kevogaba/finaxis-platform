@@ -2,7 +2,9 @@ package com.finaxis.platform.accounting.support
 
 import org.jooq.DSLContext
 import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.TransactionDefinition
 import org.springframework.transaction.TransactionStatus
+import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.transaction.support.TransactionTemplate
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -40,13 +42,22 @@ data class AtomicityProbe(
  * uncommitted writes. Asserting on the same connection that holds the open transaction proves
  * nothing about durability - it is exactly the observation that made issue #12 look like a rollback
  * defect.
+ *
+ * [isolationLevel] raises the transaction this fixture opens for [assertRollsBackAtomically] and
+ * [assertVisibleOnlyAfterCommit]. It exists because those two entry points run the operation in the
+ * fixture's *own* template rather than the caller's: a caller that raised only its outer
+ * transaction would still be handed a `READ COMMITTED` one here, and would pass while proving the
+ * opposite of what it claims. An operation that opens a transaction of its own cannot use either
+ * entry point at all, and belongs on [assertLeavesNoTrace].
  */
 class FinancialTransactionAtomicityFixture(
     private val dsl: DSLContext,
     transactionManager: PlatformTransactionManager,
     private val probes: List<AtomicityProbe>,
+    isolationLevel: Int = TransactionDefinition.ISOLATION_DEFAULT,
 ) {
-    private val transactions = TransactionTemplate(transactionManager)
+    private val transactions =
+        TransactionTemplate(transactionManager).also { it.isolationLevel = isolationLevel }
 
     /** Row counts for every probe, read outside any transaction. */
     fun snapshot(): Map<String, Long> {
@@ -82,6 +93,55 @@ class FinancialTransactionAtomicityFixture(
             )
         }
         return failure
+    }
+
+    /**
+     * Snapshots every probe, runs [operation] on the caller's own thread with no transaction open
+     * around it, and asserts each probe moved by exactly the delta [expectedDeltas] names - zero
+     * for every probe it does not name.
+     *
+     * This is the entry point for an operation that owns its transaction, which since the posting
+     * path was raised to `SERIALIZABLE` means every accounting write.
+     * `PostingTransactionBoundary.execute` refuses outright to run inside an already-open
+     * transaction - joining one drops the declared isolation with no log line and strands a retry
+     * inside the very transaction it is retrying - and [assertRollsBackAtomically] and
+     * [assertVisibleOnlyAfterCommit] both run the operation inside this fixture's own template. A
+     * boundary-driven operation therefore cannot reach either of them, and this third shape is the
+     * only way such an operation can be put under the atomicity gate at all.
+     *
+     * Running on the caller's thread with nothing open is what keeps the proof honest, and is a
+     * [check] rather than a comment for that reason. `TransactionAwareDataSourceProxy` binds a
+     * connection per thread, so a snapshot taken while a transaction was open on this thread would
+     * read that transaction's own uncommitted writes, and a durable effect that leaked would be
+     * indistinguishable from one that did not.
+     *
+     * The price of the operation owning its transaction is that nothing outside can hold it open,
+     * so this entry point proves atomicity and says nothing about pre-commit visibility;
+     * [assertVisibleOnlyAfterCommit] remains the only proof of that. A throwable from [operation]
+     * is rethrown only *after* the probes have been compared, so a caller asserting on a refusal
+     * still gets the atomicity assertion it came here for.
+     */
+    fun assertLeavesNoTrace(
+        expectedDeltas: Map<String, Long>,
+        operation: () -> Unit,
+    ) {
+        check(!TransactionSynchronizationManager.isActualTransactionActive()) {
+            "assertLeavesNoTrace must run with no transaction open on this thread: its snapshots " +
+                "would otherwise read the operation's own uncommitted writes and prove nothing."
+        }
+        val before = snapshot()
+        val outcome = runCatching(operation)
+        val after = snapshot()
+        probes.forEach { probe ->
+            val delta = expectedDeltas[probe.name] ?: 0L
+            val moved = (after[probe.name] ?: 0L) - (before[probe.name] ?: 0L)
+            assertEquals(
+                (before[probe.name] ?: 0L) + delta,
+                after[probe.name],
+                "probe '${probe.name}' moved by $moved across the operation, not by $delta",
+            )
+        }
+        outcome.getOrThrow()
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.finaxis.platform.accounting
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary
 import com.finaxis.platform.accounting.application.posting.FinancialFact
 import com.finaxis.platform.accounting.application.posting.PostFinancialFactsCommand
 import com.finaxis.platform.accounting.application.posting.PostingIntent
@@ -44,8 +45,6 @@ import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestConstructor
-import org.springframework.transaction.PlatformTransactionManager
-import org.springframework.transaction.support.TransactionTemplate
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.OffsetDateTime
@@ -71,12 +70,11 @@ class SubledgerPositionReferenceIntegrationTests(
     private val rules: PostingRuleService,
     private val postingService: PostingService,
     private val dsl: DSLContext,
-    private val transactionManager: PlatformTransactionManager,
+    private val postingTransactions: PostingTransactionBoundary,
     organisationProvisioningService: OrganisationProvisioningService,
 ) {
     private val tenants = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
     private val schema = JournalSchemaFixture(dsl)
-    private val transactions = TransactionTemplate(transactionManager)
 
     @Test
     fun `a fact's position reference reaches every line the rule derives from it`() {
@@ -160,15 +158,23 @@ class SubledgerPositionReferenceIntegrationTests(
         val checker: UUID,
     )
 
-    /** Posts one deposit through the public facts path and returns the journal it produced. */
+    /**
+     * Posts one deposit through the public facts path and returns the journal it produced.
+     *
+     * Opens its own transaction through [PostingTransactionBoundary], exactly as a product module
+     * would: the engine refuses anything below `SERIALIZABLE`, and a bare `TransactionTemplate`
+     * opens at the server default. Two calls in one test are sequential on purpose - overlapping
+     * postings in one tenant contend on the single `reference_sequence` row, where at this
+     * isolation level the loser aborts rather than waiting.
+     */
     private fun post(
         tenant: Tenant,
         reference: String,
         positionReference: String?,
     ): UUID =
         inContext(tenant) {
-            transactions
-                .execute {
+            postingTransactions
+                .execute("A savings deposit carrying a position") {
                     postingService.post(
                         PostFinancialFactsCommand(
                             context =

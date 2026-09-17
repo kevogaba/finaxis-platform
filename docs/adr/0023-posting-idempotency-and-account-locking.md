@@ -6,6 +6,13 @@ Accepted
 
 Date: 2026-09-02
 
+Amended by [ADR 0025](0025-serializable-posting-and-the-covering-period-lock.md). Every decision
+below stands; the lock chain in the consequences gains one class. Raising the posting path to
+`SERIALIZABLE` made the engine's post-lock functional-currency re-read snapshot-bound, so that
+re-read is now a locking read of the `organisation` row, taken immediately after the tenant-currency
+advisory lock and before the fiscal period. The ordering paragraph below is restated with that class
+in it, and its acyclicity re-derived from the code rather than assumed.
+
 ## Context
 
 Issues #89 and #90 are Phase C/D review follow-ups against epic #55, raised across #78, #80, #82
@@ -189,8 +196,11 @@ hold, in this order and never any other: the reversal advisory lock (`JournalRev
 (taken by `ManualJournalService` before it approves through the engine); then the `posting_request`
 row lock the idempotency claim holds to commit; then the tenant functional-currency advisory lock
 taken **shared** (`FunctionalCurrencyLock.lockForPosting`, issue #94, the first thing `postNew`
-does); then the fiscal-period shared row lock; then the `gl_account` shared row locks in ascending
-id order; and last the `reference_sequence` row lock `allocateNumber` takes.
+does); then the `organisation` row shared (`FOR SHARE`, taken by
+`AccountingTenantLookup.functionalCurrencyForPosting` in the very next statement - issue #121,
+closed here rather than deferred); then the fiscal-period shared row lock; then the `gl_account`
+shared row locks in ascending id order; and last the `reference_sequence` row lock `allocateNumber`
+takes.
 `ChartOfAccountsService` may hold, in order: the chart-hierarchy advisory lock, then one
 `gl_account` exclusive row lock.
 `GlAccountLifecycleService` and `PostingRuleService.approve` each hold at most one lock class beyond
@@ -219,9 +229,48 @@ outstanding journals - the redenomination boundary `accounting-foundation.md` na
 would be waved through, while holding class 5 and wanting class 4 against a reversal holding 4 and
 wanting 5. That is a hard deadlock the rule would have blessed.
 
-A replay takes the lock not at all: a retry of an already committed posting cannot be a tenant's
-first, so it has nothing to serialise against, and making every retry wait on a tenant-wide lock
-would undo the claim-first property this ADR exists to establish.
+**The `organisation` row lock exists because the isolation raise took the re-read's freshness away,
+and nothing weaker replaces it.** ADR 0025 moved this path to `SERIALIZABLE`, where the engine's
+pre-claim read of the functional currency and its post-lock re-read come from one snapshot: a
+`base_currency` that changed in between is invisible, and the posting commits in the superseded
+unit. The advisory lock cannot rescue that - `pg_advisory_xact_lock_shared` does not participate in
+MVCC, so it carries neither an `EvalPlanQual` re-read nor a `40001` with it, measured both with the
+lock where it stands and hoisted above the first read. Only a *locking* read of the row raises
+`40001`, which is the whole reason the class exists. It does **not** replace the advisory lock: the
+row lock closes the *posting's* read of the currency, the advisory lock closes the *change's* read
+of "has this tenant posted", and neither subsumes the other. The pre-claim read stays unlocked on
+purpose, because a replay is answered from the claim and must take no lock at all; ADR 0025 states
+that trade in full.
+
+**The new class introduces no cycle, and this was checked against the code rather than assumed.**
+Three flows write the `organisation` row and none of them acquires a class from a posting's prefix.
+The `base_currency` tenant-setting change (`TenantSettingsService.createOrUpdate`/`deactivate`)
+takes the functional-currency advisory lock exclusively, then the per-setting-key advisory lock,
+then writes `organisation_setting` - it never touches the `organisation` row at all, so the one flow
+a posting can genuinely be queued behind on the advisory lock does not hold the row the posting
+wants next. `organisation.base_currency_code` itself is written only by `createDraft` and
+`amendDraft` in `JooqOrganisationBranchProvisioningStore`, and `amendDraft` is refused outside
+`DRAFT`, where no journal can exist. The row's remaining writer is `FoundationLifecycleService`'s
+organisation transition through `saveOrganisation`, which stamps `status` and `row_version` under no
+advisory lock and no accounting row lock: the `organisation` row is terminal there, as `gl_account`
+is terminal in every non-posting flow that takes it. That is the property a future change must
+re-check - not that the two sides "look ordered the same", but that no flow holds the `organisation`
+row while wanting the currency advisory lock, the `posting_request` row, a `manual_journal` row or
+the reversal advisory lock.
+
+**The row lock is per tuple, not per column, and that widens what aborts a posting.** Any committed
+update to the tenant's `organisation` row - an activation, a suspension, a closure, each of which
+moves `status` and `row_version` - conflicts with the posting's `FOR SHARE` exactly as a currency
+change would, so a posting whose snapshot predates one of them aborts with `40001` rather than
+reading through it. That is the accepted trade rather than something to engineer around: these are
+rare administrative writes on the tenant's own root row, the retry in ADR 0025's stack re-runs the
+posting at a fresh snapshot, and where the transition really does forbid posting the re-run is
+refused by `requireTenantPostable` with its own named code instead of by a lock.
+
+A replay takes neither the advisory lock nor the row lock: a retry of an already committed posting
+cannot be a tenant's first, so it has nothing to serialise against, and making every retry wait on a
+tenant-wide lock - or hold the tenant's root row for the length of the transaction - would undo the
+claim-first property this ADR exists to establish.
 
 **The shared mode makes concurrent postings cheap, but not free.** Shared does not conflict with
 shared, so postings do not wait on *each other* - but PostgreSQL makes a request wait when it

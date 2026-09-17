@@ -17,22 +17,28 @@ import java.util.UUID
  * The `accounting_fiscal_period` adapter behind [FiscalPeriodStateStore].
  *
  * Issue #35 shipped the port, the locking protocol and its proofs before the table existed, with
- * the proofs bound to a stand-in row. This binds them to the real table, and nothing about the
- * protocol changes: the lookup is unlocked, the lock is taken through the same [PostgresRowLock],
- * and both locking methods re-read **after** the lock so the status they return is the latest
- * committed value rather than the caller's snapshot.
+ * the proofs bound to a stand-in row. This binds them to the real table. The protocol has since
+ * been reduced to one statement per lock: [lockCoveringForPosting] and [lockForStateChange] each
+ * take their lock and project the locked tuple's columns in a single `SELECT … FOR SHARE` /
+ * `… FOR UPDATE`, rather than locking through a boolean primitive and re-reading afterwards.
+ *
+ * That collapse is not a tidy-up. A lock in one statement and a read in the next is decidable only
+ * at `READ COMMITTED`, where the second statement takes a fresh snapshot; above it the lock
+ * statement raises `40001` and the second statement never runs. One statement leaves one mechanism
+ * to reason about at every isolation level — `EvalPlanQual` at `READ COMMITTED`, `40001` above it —
+ * which matters now that the posting path runs at `SERIALIZABLE` and the close path does not.
  *
  * Every statement carries the tenant predicate. The snapshot's organisation is read from the row
  * rather than echoed back from the caller's key, so a key naming another tenant's period can never
  * come back labelled with the caller's organisation — which is how a cross-tenant write slips past
  * a downstream tenant check.
  *
- * See `docs/adr/0022-accounting-date-and-fiscal-period-concurrency.md`.
+ * See `docs/adr/0022-accounting-date-and-fiscal-period-concurrency.md` as amended by
+ * `docs/adr/0025-serializable-posting-and-the-covering-period-lock.md`.
  */
 @Component
 class JooqFiscalPeriodStateStore(
     private val dsl: DSLContext,
-    private val rowLock: PostgresRowLock,
     private val clock: Clock,
 ) : FiscalPeriodStateStore {
     /**
@@ -60,27 +66,53 @@ class JooqFiscalPeriodStateStore(
             .fetchOne()
             ?.let(::toSnapshot)
 
-    override fun lockForPosting(key: FiscalPeriodKey): FiscalPeriodSnapshot? =
-        readUnderLock(key) { id, organisationId ->
-            rowLock.lockForShare(
-                ACCOUNTING_FISCAL_PERIOD,
-                ACCOUNTING_FISCAL_PERIOD.ID,
-                ACCOUNTING_FISCAL_PERIOD.ORGANISATION_ID,
-                id,
-                organisationId,
-            )
-        }
+    /**
+     * `FOR SHARE`, with the tenant predicate *and* the date-range predicate in the same statement
+     * as the lock.
+     *
+     * The date predicate belongs here rather than in a lookup the caller makes first. With it
+     * inside the locking statement, a row that comes back is a row this transaction holds and whose
+     * bounds satisfied the predicate at lock time: at `READ COMMITTED` a concurrent edit to those
+     * bounds makes `EvalPlanQual` re-evaluate the quals and the statement return nothing at all,
+     * and above `READ COMMITTED` it raises `40001`. Neither outcome is a stale row labelled as
+     * covering the date.
+     *
+     * At most one row can match: `ex_accounting_fiscal_period_no_overlap` makes two periods of one
+     * tenant covering the same date unrepresentable, which is what lets this return a single
+     * snapshot rather than a collection the caller would have to disambiguate.
+     */
+    override fun lockCoveringForPosting(
+        organisationId: UUID,
+        postingDate: LocalDate,
+    ): FiscalPeriodSnapshot? {
+        requireActiveTransaction("Locking the fiscal period covering a posting date")
+        return selectPeriod()
+            .where(ACCOUNTING_FISCAL_PERIOD.ORGANISATION_ID.eq(organisationId))
+            .and(ACCOUNTING_FISCAL_PERIOD.START_DATE.le(postingDate))
+            .and(ACCOUNTING_FISCAL_PERIOD.END_DATE.ge(postingDate))
+            .forShare()
+            .fetchOne()
+            ?.let(::toSnapshot)
+    }
 
-    override fun lockForStateChange(key: FiscalPeriodKey): FiscalPeriodSnapshot? =
-        readUnderLock(key) { id, organisationId ->
-            rowLock.lockForUpdate(
-                ACCOUNTING_FISCAL_PERIOD,
-                ACCOUNTING_FISCAL_PERIOD.ID,
-                ACCOUNTING_FISCAL_PERIOD.ORGANISATION_ID,
-                id,
-                organisationId,
-            )
-        }
+    /**
+     * `FOR UPDATE`, with the tenant predicate in the same statement as the lock.
+     *
+     * A close or a reopen waits here for every in-flight posting holding [lockCoveringForPosting]'s
+     * shared lock on the same row, and the status it reads back is the locked tuple's own. The
+     * close path deliberately stays at `READ COMMITTED`, so one adapter method now serves a
+     * serializable reader and a read-committed writer; the statement is correct at both, which is
+     * the reason the collapse was worth making rather than raising the writer too.
+     */
+    override fun lockForStateChange(key: FiscalPeriodKey): FiscalPeriodSnapshot? {
+        requireActiveTransaction("Locking a fiscal period for a state change")
+        return selectPeriod()
+            .where(ACCOUNTING_FISCAL_PERIOD.ORGANISATION_ID.eq(key.organisationId))
+            .and(ACCOUNTING_FISCAL_PERIOD.ID.eq(key.fiscalPeriodId))
+            .forUpdate()
+            .fetchOne()
+            ?.let(::toSnapshot)
+    }
 
     /**
      * Writes the new status under the exclusive lock the caller already holds.
@@ -126,25 +158,6 @@ class JooqFiscalPeriodStateStore(
                 ACCOUNTING_FISCAL_PERIOD.END_DATE,
                 ACCOUNTING_FISCAL_PERIOD.STATUS,
             ).from(ACCOUNTING_FISCAL_PERIOD)
-
-    /**
-     * Takes the lock, then re-reads. The re-read is the point: under READ COMMITTED the second
-     * statement takes a fresh snapshot, so a status change that committed between an earlier
-     * unlocked lookup and this call is observed rather than missed.
-     */
-    private fun readUnderLock(
-        key: FiscalPeriodKey,
-        lock: (UUID, UUID) -> Boolean,
-    ): FiscalPeriodSnapshot? {
-        if (!lock(key.fiscalPeriodId, key.organisationId)) {
-            return null
-        }
-        return selectPeriod()
-            .where(ACCOUNTING_FISCAL_PERIOD.ID.eq(key.fiscalPeriodId))
-            .and(ACCOUNTING_FISCAL_PERIOD.ORGANISATION_ID.eq(key.organisationId))
-            .fetchOne()
-            ?.let(::toSnapshot)
-    }
 
     private fun toSnapshot(row: Record5<UUID?, UUID?, LocalDate?, LocalDate?, String?>) =
         FiscalPeriodSnapshot(

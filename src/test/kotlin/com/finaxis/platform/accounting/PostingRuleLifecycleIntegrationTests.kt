@@ -4,6 +4,7 @@ import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.accounting.PostingRuleFixture.Companion.MAKER
 import com.finaxis.platform.accounting.PostingRuleFixture.Companion.STRANGER
 import com.finaxis.platform.accounting.application.ledger.JournalReadStore
+import com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary
 import com.finaxis.platform.accounting.application.posting.FinancialFact
 import com.finaxis.platform.accounting.application.posting.PostFinancialFactsCommand
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
@@ -32,8 +33,6 @@ import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestConstructor
-import org.springframework.transaction.PlatformTransactionManager
-import org.springframework.transaction.support.TransactionTemplate
 import java.math.BigDecimal
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -45,6 +44,12 @@ import kotlin.test.assertTrue
  * Posting-rule lifecycle, maker-checker and deterministic resolution against PostgreSQL (#45),
  * ending with the first product-style posting the platform can make: a `PostingIntent.Facts`
  * resolved by an approved rule into a journal that records the exact version it used.
+ *
+ * That last posting enters through [PostingTransactionBoundary], the way a product module does. A
+ * bare `TransactionTemplate` opens at the server default, `READ COMMITTED`, which the engine now
+ * refuses outright - so a suite that kept one would be asserting the refusal rather than the
+ * resolution it exists to prove. Everything else here reads or configures and needs no transaction
+ * of its own.
  */
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -54,10 +59,9 @@ class PostingRuleLifecycleIntegrationTests(
     private val postingService: PostingService,
     private val journals: JournalReadStore,
     private val dsl: DSLContext,
-    transactionManager: PlatformTransactionManager,
+    private val postingTransactions: PostingTransactionBoundary,
     organisationProvisioningService: OrganisationProvisioningService,
 ) {
-    private val transactions = TransactionTemplate(transactionManager)
     private val fx =
         PostingRuleFixture(
             dsl,
@@ -205,7 +209,7 @@ class PostingRuleLifecycleIntegrationTests(
 
         val receipt =
             fx.inContext(tenant, MAKER) {
-                transactions.execute {
+                postingTransactions.execute("A savings deposit") {
                     postingService.post(
                         PostFinancialFactsCommand(
                             context = fx.context(tenant, MAKER),

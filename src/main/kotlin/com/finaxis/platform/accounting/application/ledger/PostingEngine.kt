@@ -4,7 +4,9 @@ import com.finaxis.platform.accounting.AccountingTenantLookup
 import com.finaxis.platform.accounting.application.FunctionalCurrencyLock
 import com.finaxis.platform.accounting.application.GlAccountStore
 import com.finaxis.platform.accounting.application.PostingPeriodResolver
+import com.finaxis.platform.accounting.application.RequiredSnapshotIsolation
 import com.finaxis.platform.accounting.application.ResolvedPostingPeriod
+import com.finaxis.platform.accounting.application.SnapshotIsolationGuard
 import com.finaxis.platform.accounting.application.port.outbound.AccountingContextLookup
 import com.finaxis.platform.accounting.application.port.outbound.PostingMetadataLookup
 import com.finaxis.platform.accounting.application.posting.FinancialFact
@@ -98,7 +100,9 @@ fun interface LegProvider {
  * `docs/adr/0023-posting-idempotency-and-account-locking.md`). Only a request the claim finds
  * genuinely new - [postNew] - runs the state that *can* drift, in this order: the tenant's
  * functional-currency lock, taken shared and first so that a tenant's very first posting cannot
- * interleave with a change to the currency it is denominated in; tenant and branch
+ * interleave with a change to the currency it is denominated in; a locking re-read of the
+ * organisation row, which is what stops this posting acting on a currency another transaction has
+ * already replaced; tenant and branch
  * postability; the period lock, which takes the shared lock issue #35 requires before the legs are
  * resolved, because the rule version depends on the posting date; a lock on every distinct account
  * the legs reference, in ascending id order, which is what closes the account-eligibility race
@@ -106,6 +110,17 @@ fun interface LegProvider {
  * currency, account postability and the balance - which is [PostingLegsPolicy], shared verbatim
  * with the administrator's dry run so the two cannot disagree (issue #95). The verification
  * read happens after the lines, before return, because a row-level `CHECK` cannot sum children.
+ *
+ * **Lock ordering**, stated once because a new flow has to be checked against it. A posting
+ * acquires: the tenant-currency advisory lock (shared), the `organisation` row (`FOR SHARE`), the
+ * covering `accounting_fiscal_period` row (`FOR SHARE`), every `gl_account` row the legs name
+ * (`FOR SHARE`, ascending id), and finally the tenant's `reference_sequence` row, which the
+ * gapless allocator updates. No cycle is introduced by the organisation row, and the reason is
+ * worth writing down rather than assuming: nothing that takes the tenant-currency advisory lock
+ * ever locks the organisation row exclusively. The `base_currency` *setting* change takes that
+ * advisory lock exclusively and then writes `organisation_setting`, never `organisation`; the only
+ * writer of `organisation.base_currency_code` is the draft amendment, which refuses any
+ * organisation that is not `DRAFT` and so can never overlap a posting at all.
  */
 class PostingEngine(
     private val contextLookup: AccountingContextLookup,
@@ -118,6 +133,7 @@ class PostingEngine(
     private val journalReads: JournalReadStore,
     private val numbers: JournalNumberAllocator,
     private val clock: Clock,
+    private val snapshots: SnapshotIsolationGuard,
 ) {
     /**
      * Records one journal for [request] with the legs [legs] supplies, or records nothing.
@@ -130,6 +146,19 @@ class PostingEngine(
         legs: LegProvider,
     ): PostingReceipt {
         requireActiveTransaction()
+        // Second statement, and before the claim, for three reasons. The claim's
+        // `ON CONFLICT DO NOTHING` is itself a statement whose semantics change with the isolation
+        // level, so guarding after it would guard a decision already taken under unknown rules.
+        // After the claim, whether a misconfigured caller is refused would depend on whether this
+        // request happens to be a replay, and a misconfiguration that fails the first time and
+        // succeeds on every retry is the worst signal available. And because this engine always
+        // runs inside the caller's transaction - `MANDATORY` on the public service - the
+        // transaction being judged is the *caller's*, the one holding the source mutation that
+        // must commit with the journal or not at all (`INV-12`), so it has to be judged before
+        // this method writes anything into it. Do not move this call later as an
+        // optimisation: at `REPEATABLE READ` and above the guard's own `current_setting` read pins
+        // the transaction snapshot, and moving it changes what every read after it sees.
+        snapshots.requireStableSnapshot(RequiredSnapshotIsolation.SERIALIZABLE, "A posting")
         val context = reconcileContext(request.context)
         requireValidCorrectionTarget(context.organisationId, request.correctsPostingRequestId)
         val dates = periods.resolveDates(context.organisationId, request.dates)
@@ -179,7 +208,9 @@ class PostingEngine(
     ): PostingReceipt {
         // First lock of the chain, and shared, so postings do not wait on each other. It is a
         // genuinely new posting that can be a tenant's first, and therefore the one a concurrent
-        // base_currency change must not interleave with; a replay takes no lock here at all.
+        // base_currency change must not interleave with; a replay takes no lock here at all. The
+        // locking re-read on the next line does not make this redundant - see
+        // [requireFunctionalCurrencyUnchanged] for which half of the race each one closes.
         currency.lockForPosting(context.organisationId)
         requireFunctionalCurrencyUnchanged(context.organisationId, functionalCurrency)
         requireTenantPostable(context)
@@ -328,26 +359,61 @@ class PostingEngine(
     }
 
     /**
-     * Re-reads the functional currency under the lock and refuses a posting that raced a change.
+     * Reads the functional currency again under the tenant-currency lock, with a **locking** read
+     * of the organisation row, and refuses a posting whose two reads disagree.
      *
-     * The currency is read *before* the claim, because the idempotency fingerprint is computed from
-     * it - and that read is necessarily unlocked, since the claim is what a replay is answered
-     * from and a replay must take no tenant-wide lock. So a `base_currency` change can still commit
-     * between that read and this lock, and without this check the tenant's very first journal would
-     * be denominated in the currency it declared a moment ago rather than the one it declares now:
-     * the same divergence the lock exists to prevent, approached from the other side.
+     * The locking read is what closes the window; the comparison is what states the invariant.
+     * They are not the same mechanism and it is worth being exact about which does what, because
+     * the shape that looks right - a plain re-read and a comparison - was measured not to work.
      *
-     * Refusing is the only honest answer. The claim row already carries the pre-lock currency, so
-     * this posting cannot adopt the new one without contradicting its own fingerprint; rolling back
-     * takes the claim with it, and the retry fingerprints against the currency that won. Reachable
-     * only for a tenant's first posting - after that the currency is frozen and a change is refused
-     * outright.
+     * The currency is read *before* the claim, because the idempotency fingerprint is computed
+     * from it, and that read is necessarily unlocked: the claim is what a replay is answered from,
+     * and a replay must take no tenant-wide lock. A `base_currency` change can therefore commit
+     * between that read and [postNew]'s shared advisory lock. At `SERIALIZABLE`, which is what this
+     * path runs at, a plain re-read cannot see it - both reads come from one snapshot and always
+     * agree - so the posting would commit the tenant's very first journal in the superseded
+     * currency. Measured, not assumed. The advisory lock does not rescue it either:
+     * `pg_advisory_xact_lock_shared` does not participate in MVCC, so there is no `EvalPlanQual`
+     * re-read to correct the second value and no `40001` to abort on; and hoisting the lock above
+     * the first read leaves the re-read just as stale, because the snapshot was already fixed.
+     *
+     * [AccountingTenantLookup.functionalCurrencyForPosting] is a locking read of that row, and it
+     * is the only shape measured to close this. A change committed after this transaction's
+     * snapshot makes it raise a serialization failure, the transaction aborts - taking its claim
+     * with it - and the retry fingerprints against the currency that won. That is the whole fix,
+     * and it happens before the comparison below is ever reached.
+     *
+     * The pre-claim read stays non-locking on purpose. Making *it* the locking one would hold the
+     * organisation row for the whole transaction including replays, and a replay deliberately
+     * takes no locks at all - that is the design of [post].
+     *
+     * **The advisory lock stays, and is not made redundant by the row lock.** They close different
+     * halves of the same race and neither subsumes the other. The row lock closes the *posting's*
+     * read: it stops this transaction acting on a currency another transaction has already
+     * replaced. The advisory lock closes the *change's* read: it makes a `base_currency` change
+     * wait for in-flight first postings before it asks "has this tenant posted", which is the
+     * adjacency [com.finaxis.platform.accounting.application.FunctionalCurrencyLock] calls the fix.
+     * Remove it and a change would read an empty `journal_entry`, commit, and leave the tenant
+     * declaring a currency its first journal was never written under - a race the row lock never
+     * sees, because the two transactions never touch the same row in conflicting modes.
+     *
+     * The comparison, then, can no longer fire at `SERIALIZABLE`: both values come from one
+     * snapshot, and a change committed after that snapshot aborts the locking read before this is
+     * reached. It is kept because it states the invariant legibly at the point the invariant is
+     * decided, and because it *would* fire below `SERIALIZABLE`, which [SnapshotIsolationGuard]
+     * forbids this path from running at. Reachable only for a tenant's first posting in any case -
+     * after that the currency is frozen and a change is refused outright.
      */
     private fun requireFunctionalCurrencyUnchanged(
         organisationId: UUID,
         readBeforeLock: String,
     ) {
-        val underLock = requireFunctionalCurrency(organisationId)
+        val underLock =
+            tenants.functionalCurrencyForPosting(organisationId)
+                ?: throw ConflictException(
+                    code = PostingErrorCodes.FUNCTIONAL_CURRENCY_UNAVAILABLE,
+                    safeDetail = "The organisation has no functional currency.",
+                )
         if (underLock != readBeforeLock) {
             throw ConflictException(
                 code = PostingErrorCodes.FUNCTIONAL_CURRENCY_CHANGED,

@@ -2,8 +2,10 @@ package com.finaxis.platform.accounting
 
 import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.accounting.application.ledger.JournalReadStore
+import com.finaxis.platform.accounting.application.ledger.JournalReversalService
 import com.finaxis.platform.accounting.application.ledger.LedgerPostingRequest
 import com.finaxis.platform.accounting.application.ledger.PostingEngine
+import com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary
 import com.finaxis.platform.accounting.application.ledger.ResolvedLegs
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.application.posting.PostingReceipt
@@ -21,7 +23,6 @@ import com.finaxis.platform.accounting.schema.JournalSchemaFixture
 import com.finaxis.platform.accounting.support.FinancialTransactionAtomicityFixture
 import com.finaxis.platform.accounting.support.FoundationAtomicityProbes
 import com.finaxis.platform.accounting.support.LockOverlapProbe
-import com.finaxis.platform.common.application.ApplicationException
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
@@ -51,8 +52,10 @@ import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
+import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.test.context.TestConstructor
 import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.interceptor.TransactionAspectSupport
 import org.springframework.transaction.support.TransactionTemplate
 import java.math.BigDecimal
 import java.time.LocalDate
@@ -84,6 +87,8 @@ import kotlin.test.assertTrue
 class JournalReversalIntegrationTests(
     private val engine: PostingEngine,
     private val postingService: PostingService,
+    private val reversals: JournalReversalService,
+    private val postings: PostingTransactionBoundary,
     private val journals: JournalReadStore,
     private val dsl: DSLContext,
     private val transactionManager: PlatformTransactionManager,
@@ -91,8 +96,10 @@ class JournalReversalIntegrationTests(
 ) {
     private val tenants = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
     private val schema = JournalSchemaFixture(dsl)
+
+    /** For the scenarios that only hold a lock or read; nothing that posts may use it. */
     private val transactions = TransactionTemplate(transactionManager)
-    private val fx = JournalReversalFixture(dsl, engine, tenants, schema, transactions)
+    private val fx = JournalReversalFixture(dsl, engine, tenants, schema, postings)
     private val probe = LockOverlapProbe(dsl)
 
     @Test
@@ -209,8 +216,21 @@ class JournalReversalIntegrationTests(
      * So the overlap is established first: a third transaction takes the reversal's own advisory
      * key and holds it, both racers are proved to be parked on that exact key at the same moment,
      * and only then is the key released. Both are then demonstrably inside their transactions
-     * together. The advisory lock serialises them; the loser finds the winner's row and is refused
-     * with the named conflict, never with a unique violation, and exactly one reversal exists.
+     * together. The advisory lock serialises them, exactly one reversal exists, and the loser is
+     * refused - never with a unique violation, and never by writing a second reversal.
+     *
+     * **The loser's refusal is deliberately weaker on this branch, and PR 2 restores it.** The
+     * postings now run at `SERIALIZABLE`, and a racer that waits on the advisory key fixed its
+     * snapshot *before* it began to wait: waiting is precisely what makes that snapshot stale. So
+     * the loser wakes, reads at its own pre-winner snapshot, does not see the reversal the winner
+     * committed, and proceeds - until it reaches the tenant's single gapless `reference_sequence`
+     * row, which the winner has since updated, and PostgreSQL refuses to serialize the access
+     * (`40001`). There is no retry on this branch, so the failure reaches the caller as a
+     * `ConcurrencyFailureException` instead of `accounting.journal_already_reversed`. Once PR 2's
+     * retry boundary lands, the retried attempt opens on a fresh snapshot that contains the
+     * winner's reversal and is refused by name again, and this assertion narrows back to the
+     * named conflict alone. The invariant this scenario exists for - one reversal per journal, and
+     * the loser refused rather than admitted - holds either way, so it is what is asserted here.
      */
     @Test
     fun `a journal is reversed at most once by two overlapping reversers`() {
@@ -243,13 +263,28 @@ class JournalReversalIntegrationTests(
             }
         assertEquals(1, outcomes.count { it.isSuccess }, "exactly one reversal wins: $outcomes")
         val loser = outcomes.single { it.isFailure }.exceptionOrNull()
-        assertTrue(loser is ConflictException, "the loser is refused by name, got $loser")
-        assertEquals(
-            PostingErrorCodes.JOURNAL_ALREADY_REVERSED,
-            (loser as ApplicationException).code,
-        )
+        if (loser is ConflictException) {
+            assertEquals(PostingErrorCodes.JOURNAL_ALREADY_REVERSED, loser.code)
+        } else {
+            assertTrue(
+                loser is ConcurrencyFailureException,
+                "the loser is refused by name or aborted as a serialization failure, never " +
+                    "admitted and never a unique violation, but got $loser",
+            )
+        }
         assertEquals(1, fx.reversalsOf(tenant, racedOriginal.journalEntryId))
     }
+
+    /**
+     * Marks the transaction [PostingTransactionBoundary] opened rollback-only, from inside its
+     * lambda.
+     *
+     * The boundary hands the work no `TransactionStatus`, on purpose - it owns the transaction so
+     * that it alone can retry it - so a scenario that needs the transaction abandoned rather than
+     * committed reaches the status the same way any Spring-advised method would.
+     */
+    private fun abandonTransaction() =
+        TransactionAspectSupport.currentTransactionStatus().setRollbackOnly()
 
     /** Holds the journal-reversal advisory key open until [release], so a reverser parks on it. */
     private fun holdReversalKey(
@@ -284,13 +319,20 @@ class JournalReversalIntegrationTests(
             Result.failure(ex.cause ?: ex)
         }
 
+    /**
+     * The other side of the advisory lock, and the one nothing covered: the first claimant rolls
+     * back while a second reverser is parked on its key.
+     *
+     * `pg_advisory_xact_lock` is released by rollback exactly as by commit, so the waiter wakes,
+     * finds no reversal, and becomes the one that writes it. A journal whose only reversal attempt
+     * rolled back must stay reversible - otherwise a failed correction would strand it forever.
+     *
+     * The abandoned attempt rolls back without committing anything, so the waiter's own snapshot
+     * is never stale against it and no `40001` enters this scenario: what the waiter contends for
+     * is the advisory key alone.
+     */
     @Test
     fun `a reversal that rolls back leaves the journal reversible and the waiter wins`() {
-        // The other side of the advisory lock, and the one nothing covered: the first claimant
-        // rolls back while a second reverser is parked on its key. `pg_advisory_xact_lock` is
-        // released by rollback exactly as by commit, so the waiter wakes, finds no reversal, and
-        // becomes the one that writes it. A journal whose only reversal attempt rolled back must
-        // stay reversible - otherwise a failed correction would strand it forever.
         val tenant = fx.provisionTenant("reversal-rollback")
         val original = fx.postOriginal(tenant, reference = "dep-rollback")
         val reversalKey = fx.reversalLockKey(tenant, original.journalEntryId)
@@ -303,18 +345,23 @@ class JournalReversalIntegrationTests(
                 val abandoned =
                     executor.submit {
                         fx.inContext(tenant, tenant.checker) {
-                            // `reverse` is @Transactional REQUIRED, so it joins this transaction
-                            // and rolls back with it - which is what makes the abandonment real
-                            // rather than simulated.
-                            transactions.execute { status ->
-                                postingService.reverse(
+                            // The abandoned attempt enters through the same boundary production
+                            // enters through, and calls `JournalReversalService.reverse` - which is
+                            // `Propagation.MANDATORY` - rather than `PostingService.reverse`, which
+                            // opens a boundary transaction of its own and would be refused inside
+                            // this one. Marking the boundary's own transaction rollback-only is
+                            // what makes the abandonment real rather than simulated: it is the
+                            // transaction the reversal actually wrote in, and the one holding the
+                            // advisory key the waiter below is parked on.
+                            postings.execute("An abandoned reversal") {
+                                reversals.reverse(
                                     fx.command(tenant, original.journalEntryId, reason = "Aborted"),
                                 )
                                 reversalApplied.countDown()
                                 assertTrue(
                                     releaseRollback.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS),
                                 )
-                                status.setRollbackOnly()
+                                abandonTransaction()
                             }
                         }
                     }
@@ -485,14 +532,36 @@ class JournalReversalIntegrationTests(
                 ),
             )
 
-        harness.assertRollsBackAtomically(IllegalStateException::class) {
-            fx.inContext(tenant, tenant.checker) {
-                postingService.reverse(
-                    fx.command(tenant, original.journalEntryId, reason = "Then fail"),
-                )
-                error("simulated failure after the reversal and its audit were written")
+        // The harness's own `TransactionTemplate` can no longer carry this. `PostingService`'s
+        // `reverse` opens the boundary's `SERIALIZABLE` transaction and refuses to run inside a
+        // caller's, so wrapping it in `assertRollsBackAtomically(IllegalStateException::class)`
+        // would have gone green on the boundary's `check` firing before a reversal existed at all -
+        // a probe reading "unchanged" because nothing was ever attempted. The failure is injected
+        // where it belongs instead: inside the transaction the boundary owns, beside
+        // `JournalReversalService.reverse`, which is `MANDATORY` and joins it. The message is
+        // asserted for the same reason, so this can never again pass on a refusal to start.
+        val before = harness.snapshot()
+        val failure =
+            assertFailsWith<IllegalStateException> {
+                fx.inContext(tenant, tenant.checker) {
+                    postings.execute<Unit>("A reversal that fails after it is written") {
+                        reversals.reverse(
+                            fx.command(tenant, original.journalEntryId, reason = "Then fail"),
+                        )
+                        error(SIMULATED_POST_REVERSAL_FAILURE)
+                    }
+                }
             }
-        }
+        assertEquals(
+            SIMULATED_POST_REVERSAL_FAILURE,
+            failure.message,
+            "the rollback must be the injected failure's, never the boundary refusing to nest",
+        )
+        assertEquals(
+            before,
+            harness.snapshot(),
+            "every durable effect of the reversal rolled back with the transaction that wrote it",
+        )
     }
 
     @Test
@@ -507,7 +576,7 @@ class JournalReversalIntegrationTests(
 
         val replacement =
             fx.inContext(tenant, JournalReversalFixture.MAKER) {
-                transactions.execute {
+                postings.execute("Posting a correction") {
                     fx.postExplicit(
                         tenant,
                         "dep-corrected",
@@ -633,5 +702,12 @@ class JournalReversalIntegrationTests(
     private companion object {
         const val LATCH_TIMEOUT_SECONDS = 10L
         const val FUTURE_TIMEOUT_SECONDS = 60L
+
+        /**
+         * The injected failure's message, asserted so the atomicity scenario cannot go green on
+         * `PostingTransactionBoundary`'s own `IllegalStateException` instead.
+         */
+        const val SIMULATED_POST_REVERSAL_FAILURE =
+            "simulated failure after the reversal and its audit were written"
     }
 }

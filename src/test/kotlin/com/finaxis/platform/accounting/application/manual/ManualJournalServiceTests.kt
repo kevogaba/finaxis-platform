@@ -1,6 +1,8 @@
 package com.finaxis.platform.accounting.application.manual
 
 import com.finaxis.platform.accounting.application.SnapshotIsolationGuard
+import com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary
+import com.finaxis.platform.accounting.application.ledger.SerializablePostingTransaction
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.domain.AccountingAuditActions
 import com.finaxis.platform.accounting.domain.AccountingContext
@@ -377,6 +379,33 @@ private class StoreRefusingDraftUpdate(
 }
 
 /**
+ * Stands in for the proxy the container wraps [SerializablePostingTransaction] in.
+ *
+ * The real bean carries `@Transactional(isolation = SERIALIZABLE)`, and every effect that matters
+ * to a unit test comes from the proxy rather than from the method body, which is a bare `work()`.
+ * Constructed directly, as it must be here, the annotation is inert: no transaction opens, so the
+ * posting engine's own `requireActiveTransaction` refuses the approval before any of the sequence
+ * these suites exist to assert has run.
+ *
+ * Raising the flag here rather than in a `@BeforeEach` is what keeps the shape honest. Approval
+ * owns its transaction now, and `PostingTransactionBoundary.execute` refuses to run inside one
+ * that is already open; a fixture that raised the flag for the whole test would have to disarm
+ * that refusal to keep working, and would then be asserting against a wiring the production code
+ * rejects. Here the flag is false on the way into the boundary, exactly as it is in production,
+ * and true only for the span the transaction would have covered.
+ */
+private class TransactionOpeningStandIn : SerializablePostingTransaction() {
+    override fun <T : Any> run(work: () -> T): T {
+        TransactionSynchronizationManager.setActualTransactionActive(true)
+        return try {
+            work()
+        } finally {
+            TransactionSynchronizationManager.setActualTransactionActive(false)
+        }
+    }
+}
+
+/**
  * The collaborators every manual-journal service test needs, and the builders that feed them.
  *
  * Shared by [ManualJournalServiceTests] and `ManualJournalApprovalServiceTests`, which split the
@@ -385,9 +414,12 @@ private class StoreRefusingDraftUpdate(
  * stub cannot fail the way a posting fails - and the approval path's whole interest is in what the
  * service does when it does.
  *
- * The engine requires an active transaction, so one is declared around every test; nothing rolls
- * back, and the assertions about a refused operation are therefore about what was *never
- * attempted*, which is the stronger statement anyway.
+ * The engine requires an active transaction and approval now *owns* one:
+ * `PostingTransactionBoundary.execute` refuses to run inside a transaction that is already open,
+ * so the flag cannot simply be raised around every test any more. [TransactionOpeningStandIn]
+ * stands in for the container proxy instead, raising the flag only for the span the boundary would
+ * have held a transaction over. Nothing rolls back, so the assertions about a refused operation
+ * are about what was *never attempted*, which is the stronger statement anyway.
  */
 abstract class ManualJournalServiceTestFixture {
     private val clock = Clock.fixed(NOW, ZoneOffset.UTC)
@@ -433,7 +465,7 @@ abstract class ManualJournalServiceTestFixture {
     internal var stableSnapshot = true
 
     private val snapshots =
-        SnapshotIsolationGuard { operation ->
+        SnapshotIsolationGuard { _, operation ->
             snapshotReads += operation
             if (!stableSnapshot) {
                 throw ConflictException(
@@ -443,6 +475,20 @@ abstract class ManualJournalServiceTestFixture {
             }
         }
 
+    /**
+     * The transaction boundary approval enters, over a stand-in for the container's proxy.
+     *
+     * [SerializablePostingTransaction] is a plain object here, not a proxied bean, so its `run` is
+     * an ordinary call that opens nothing - and the posting engine refuses a posting with no
+     * transaction active. [TransactionOpeningStandIn] supplies the one thing the proxy would have:
+     * the flag is raised for exactly the span the real transaction would have covered, and lowered
+     * again whether the work returned or threw. Raising it for the whole test instead, as this
+     * fixture used to, now trips the boundary's own `check` that nothing is already open - and
+     * that check is worth leaving armed here, because it is the only thing standing between a
+     * future caller and a posting that silently joins a `READ COMMITTED` transaction.
+     */
+    private val boundary = PostingTransactionBoundary(TransactionOpeningStandIn())
+
     /** The manual-journal store the service under test writes through. */
     internal val journals = FakeManualJournalStore()
 
@@ -450,8 +496,7 @@ abstract class ManualJournalServiceTestFixture {
     internal val service = serviceOver(journals)
 
     @BeforeEach
-    fun inTransaction() {
-        TransactionSynchronizationManager.setActualTransactionActive(true)
+    fun seedChartOfAccounts() {
         accounts.put(DEBIT_ACCOUNT)
         accounts.put(CREDIT_ACCOUNT)
         accounts.put(RULE_FED_ACCOUNT, manualPostingAllowed = false)
@@ -460,6 +505,9 @@ abstract class ManualJournalServiceTestFixture {
 
     @AfterEach
     fun clearTransaction() {
+        // Belt and braces. The stand-in lowers the flag in a `finally`, but it lives in a
+        // thread-local that JUnit reuses across classes, so a leak here would surface as an
+        // unrelated suite's posting mysteriously succeeding.
         TransactionSynchronizationManager.setActualTransactionActive(false)
     }
 
@@ -474,6 +522,7 @@ abstract class ManualJournalServiceTestFixture {
             transitions = transitions,
             auditService = auditService,
             snapshots = snapshots,
+            boundary = boundary,
         )
 
     /**

@@ -478,6 +478,8 @@ private class BootstrapProvisioningFake(
 
     override fun baseCurrencyCode(organisationId: UUID) = "KES"
 
+    override fun lockBaseCurrencyCode(organisationId: UUID) = "KES"
+
     override fun ensureHeadOfficeDraft(organisationId: UUID): HeadOfficeDraftResult {
         headOfficeIds[organisationId]?.let { return HeadOfficeDraftResult(it, false) }
         val branchId = uuidV7()

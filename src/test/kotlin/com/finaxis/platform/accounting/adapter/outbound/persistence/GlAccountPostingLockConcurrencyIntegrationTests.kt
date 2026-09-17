@@ -9,6 +9,7 @@ import com.finaxis.platform.accounting.application.GlAccountTransitionCommand
 import com.finaxis.platform.accounting.application.UpdateGlAccountCommand
 import com.finaxis.platform.accounting.application.ledger.LedgerPostingRequest
 import com.finaxis.platform.accounting.application.ledger.PostingEngine
+import com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary
 import com.finaxis.platform.accounting.application.ledger.ResolvedLegs
 import com.finaxis.platform.accounting.application.rules.CreatePostingRuleCommand
 import com.finaxis.platform.accounting.application.rules.CreatePostingRuleVersionCommand
@@ -52,6 +53,8 @@ import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
+import org.springframework.dao.ConcurrencyFailureException
+import org.springframework.dao.DeadlockLoserDataAccessException
 import org.springframework.test.context.TestConstructor
 import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.support.TransactionTemplate
@@ -64,6 +67,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -92,12 +96,22 @@ class GlAccountPostingLockConcurrencyIntegrationTests(
     private val chart: ChartOfAccountsService,
     private val rules: PostingRuleService,
     private val engine: PostingEngine,
+    private val postings: PostingTransactionBoundary,
     private val dsl: DSLContext,
     private val transactionManager: PlatformTransactionManager,
     organisationProvisioningService: OrganisationProvisioningService,
 ) {
     private val tenants = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
     private val schema = JournalSchemaFixture(dsl)
+
+    /**
+     * For L1 to L6, which take the account locks directly and post nothing.
+     *
+     * Those scenarios are about `FOR SHARE` against `FOR UPDATE` on one `gl_account` row, so the
+     * transaction they need is any transaction; raising them to the posting path's `SERIALIZABLE`
+     * would change what they prove rather than strengthen it. Only L7, which drives the real
+     * engine, goes through [PostingTransactionBoundary].
+     */
     private val transactions = TransactionTemplate(transactionManager)
     private val probe = LockOverlapProbe(dsl)
 
@@ -388,29 +402,55 @@ class GlAccountPostingLockConcurrencyIntegrationTests(
         // other wants next. A real deadlock would not merely fail an assertion, it would hang, so
         // the proof is that both futures return within a generous bound rather than one raising
         // PostgreSQL's deadlock_detected.
+        //
+        // DELIBERATELY WEAKENED ON THIS BRANCH; PR 2 RESTORES IT. The posting path now runs at
+        // SERIALIZABLE, and every posting in a tenant increments the one gapless
+        // `reference_sequence` row - measured, not feared - so of two overlapping same-tenant
+        // postings the second aborts with 40001 where it used to block and proceed. There is no
+        // retry on this branch, so this test can no longer assert that both postings commit, and
+        // pretending otherwise would make it pass for a reason that is not the one it is named
+        // for. What it still asserts is the property it exists for, and the number allocator runs
+        // *after* lockAccounts, so that property is still exercised on both attempts: neither
+        // posting hangs, and neither dies of PostgreSQL's deadlock_detected. PR 2's
+        // retry re-runs the loser on a fresh snapshot taken after the winner committed, which is
+        // what makes "both postings commit" true again.
         val tenant = provisionEngineTenant("l7")
 
-        Executors.newVirtualThreadPerTaskExecutor().use { executor ->
-            val first =
-                executor.submit {
-                    inContext(tenant) {
-                        transactions.execute {
-                            postLegs(tenant, "l7-1", tenant.accountAId, tenant.accountBId)
-                        }
+        val outcomes =
+            Executors.newVirtualThreadPerTaskExecutor().use { executor ->
+                val first =
+                    executor.submit<Throwable?> {
+                        postInOwnTransaction(tenant, "l7-1", tenant.accountAId, tenant.accountBId)
                     }
-                }
-            val second =
-                executor.submit {
-                    inContext(tenant) {
-                        transactions.execute {
-                            postLegs(tenant, "l7-2", tenant.accountBId, tenant.accountAId)
-                        }
+                val second =
+                    executor.submit<Throwable?> {
+                        postInOwnTransaction(tenant, "l7-2", tenant.accountBId, tenant.accountAId)
                     }
-                }
+                listOf(
+                    first.get(DEADLOCK_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                    second.get(DEADLOCK_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                )
+            }
 
-            first.get(DEADLOCK_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            second.get(DEADLOCK_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        outcomes.filterNotNull().forEach { failure ->
+            assertFalse(
+                failure is DeadlockLoserDataAccessException,
+                "PostgreSQL raised deadlock_detected, which is the one outcome the ascending-id " +
+                    "lock order exists to make impossible - and the one SERIALIZABLE does not " +
+                    "excuse: $failure",
+            )
+            assertTrue(
+                failure is ConcurrencyFailureException,
+                "the only failure this branch tolerates is the serialization abort the gapless " +
+                    "journal counter forces on the second of two overlapping same-tenant " +
+                    "postings; anything else is a real defect wearing its clothes: $failure",
+            )
         }
+        assertTrue(
+            outcomes.any { it == null },
+            "SERIALIZABLE aborts the loser of an overlapping pair, not both of them: if neither " +
+                "posting committed, the contention is not the one this branch accepts",
+        )
     }
 
     // ---- account and chart helpers ------------------------------------------------------------
@@ -589,6 +629,28 @@ class GlAccountPostingLockConcurrencyIntegrationTests(
             .set(ACCOUNTING_FISCAL_PERIOD.UPDATED_AT, now)
             .execute()
     }
+
+    /**
+     * Posts through the real boundary and returns what it threw, or `null` if it committed.
+     *
+     * Returning the failure rather than letting [java.util.concurrent.Future.get] wrap it keeps
+     * `L7`'s assertions about the *posting's* outcome instead of about `ExecutionException`
+     * nesting, and lets both futures be awaited before either is judged - so a genuine deadlock
+     * still shows up as the timeout it is rather than as whichever exception arrived first.
+     */
+    private fun postInOwnTransaction(
+        tenant: EngineTenant,
+        reference: String,
+        debitAccountId: UUID,
+        creditAccountId: UUID,
+    ): Throwable? =
+        runCatching {
+            inContext(tenant) {
+                postings.execute("Posting an account-lock ordering scenario") {
+                    postLegs(tenant, reference, debitAccountId, creditAccountId)
+                }
+            }
+        }.exceptionOrNull()
 
     /** Posts a two-leg journal for [reference] with legs in the exact order given. */
     private fun postLegs(

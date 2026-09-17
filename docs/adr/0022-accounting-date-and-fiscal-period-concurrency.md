@@ -6,6 +6,12 @@ Accepted
 
 Date: 2026-08-31
 
+Amended by [ADR 0025](0025-serializable-posting-and-the-covering-period-lock.md). Every decision
+below still stands except two, and both are marked where they appear: the protocol is now one
+statement rather than an unlocked lookup followed by a lock, and the posting path now runs at
+`SERIALIZABLE` rather than at READ COMMITTED. What does **not** change is the `FOR SHARE` row lock,
+which 0025 measured to be the entire posting-versus-close guarantee at every isolation level.
+
 ## Context
 
 Issue #35 makes accounting-date and fiscal-period behaviour deterministic under concurrent posting
@@ -25,7 +31,9 @@ settings key from an idempotency key today. There are no `FOR UPDATE`/`FOR SHARE
 anywhere, and no explicit isolation levels — everything runs at PostgreSQL's default READ
 COMMITTED. (That last was true when this ADR was written. Issue #91 has since made the
 control-account proof `REPEATABLE READ`; see the consequences below for why that does not touch
-this protocol.)
+this protocol. Issue #108 then raised the posting path itself to `SERIALIZABLE`, which does touch
+it — see [ADR 0025](0025-serializable-posting-and-the-covering-period-lock.md) and the paragraph
+recording it below.)
 
 ## Decision
 
@@ -40,28 +48,40 @@ which a plain `UPDATE` takes, so a future close path that forgot its explicit lo
 straight past a key-share lock. Scenario S5 exists specifically to prove a bare `UPDATE` still
 blocks.
 
-**The protocol is: unlocked lookup, then lock, then decide on the status read under the lock.** The
-decision never uses the status from the lookup. `FiscalPeriodStateStore.lockForPosting` returns a
-freshly read snapshot rather than a boolean precisely so the correct value is the one nearest to
-hand. It is not, however, unrepresentable: `findCovering` also returns a status, so a caller can
-still decide from the unlocked read and then take the lock for nothing. Making it impossible would
-mean `findCovering` returning a key without a status; until then this is a convention the resolver
-follows and reviewers must check.
+**The protocol is: one statement that locks the covering period and reads its columns.** (Amended
+by ADR 0025; as originally recorded it was an unlocked lookup, then a lock, then a decision taken
+on the status read under the lock.) The decision never uses the status from any unlocked read.
+`FiscalPeriodStateStore.lockCoveringForPosting` carries the tenant predicate, the date-range
+predicate and `FOR SHARE` in one `SELECT` and returns the columns of the row it locked, so there is
+no second statement for the value to go stale between. As originally shipped the split was a
+convention rather than an impossibility — `findCovering` also returns a status, so a caller could
+decide from the unlocked read and then take the lock for nothing — and ADR 0025 removed the
+boolean-returning primitive that made that shape writeable at all.
 
-**This is correct only at READ COMMITTED, and that is load-bearing rather than incidental.** Under
-READ COMMITTED every statement takes a fresh snapshot, so the read issued *after* the lock
-observes the latest committed row — including a close that committed since this transaction's own
-earlier lookup. Under REPEATABLE READ that second read would return the transaction's original
-snapshot, and the protocol would be wrong.
+**The guarantee is lock-or-abort, and it does not depend on the isolation level.** (Amended by ADR
+0025; this paragraph originally read *"this is correct only at READ COMMITTED, and that is
+load-bearing rather than incidental"*.) At READ COMMITTED the locking statement takes a fresh
+snapshot and `EvalPlanQual` re-evaluates the row and its quals, so it returns the latest committed
+state or no row at all. Above READ COMMITTED the same statement raises `40001` instead. Neither
+outcome is a stale status labelled as the covering period's, which is the only property the
+protocol ever needed.
 
-Note the mechanism precisely, because an earlier draft of this ADR named the wrong one:
-`PostgresRowLock` selects `1` and returns a boolean, and the status arrives from a separate
-statement. So the guarantee rests on per-statement snapshots plus the lock holding writers off
-between the two statements — not on `EvalPlanQual` re-reading the locked row, which would be the
-mechanism only if the lock and the read were one statement. `the locking read runs at READ
-COMMITTED` asserts the isolation from inside a transaction that has taken the lock, so escalating
-it breaks a named test; an explicit `@Transactional(isolation = ...)` on a future posting service
-would still need catching by review. Global `SERIALIZABLE` escalation is rejected outright, per the issue.
+Note the mechanism precisely, because an earlier draft of this ADR named the wrong one, and because
+naming the wrong one is the mistake ADR 0025 had to avoid repeating. As originally shipped,
+`PostgresRowLock` selected `1` and returned a boolean and the status arrived from a separate
+statement, so the guarantee rested on per-statement snapshots plus the lock holding writers off
+between the two — not on `EvalPlanQual` re-reading the locked row, which would have been the
+mechanism only if the lock and the read were one statement. Under ADR 0025 they **are** one
+statement, so `EvalPlanQual` is the mechanism at READ COMMITTED; above it there is no re-read at
+all and the statement aborts. What was never true, at any point, is that the split protocol failed
+*silently* above READ COMMITTED: `select 1 … for share` is itself a locking read and aborts before
+the stale second statement runs. `a posting locks at SERIALIZABLE while a close still locks at READ
+COMMITTED` asserts both levels from inside a transaction that has actually taken the lock, so a
+downgrade on either side breaks a named test; an explicit `@Transactional(isolation = ...)`
+elsewhere in accounting is caught by the ArchUnit rule ADR 0025 adds. Global `SERIALIZABLE`
+escalation is still rejected outright, per the issue — that rejection is about the blast radius of
+a platform-wide default, and ADR 0025 adopts a path-scoped escalation on one bean instead, which is
+a different question.
 
 **Only the posting date selects a fiscal period.** Five values exist and their roles are fixed:
 `recordedAt` is technical and drives nothing; `businessDate` is the tenant's controlled date, read
@@ -93,25 +113,46 @@ cannot collide with either existing call site by construction rather than by has
 
 ## Consequences
 
-**The protocol depends on READ COMMITTED.** Anyone raising the isolation level for an unrelated
-reason would silently break the posting-versus-close guarantee. The named test is the guard, and
-this ADR is the explanation the test points at.
+**The protocol no longer depends on the isolation level.** (Amended by ADR 0025; this consequence
+originally read *"the protocol depends on READ COMMITTED"* and warned that raising the level would
+silently break the posting-versus-close guarantee.) The guard is the single-statement lock-and-read,
+and the `FOR SHARE` lock is the entire guarantee — measured, a serializable posting that reads the
+period row *without* it commits into an already-closed period, whether the close runs at READ
+COMMITTED or at `SERIALIZABLE`. That invariant is a linearizability requirement and no isolation
+level supplies it. The named test still pins the level the posting path declares, and this ADR
+together with 0025 is the explanation it points at.
 
 **One path has since raised it, deliberately, and it is not this one.** Issue #91 made
 `ControlAccountReconciliationService.run` `REPEATABLE READ`, because a proof compares two
 aggregates that have to describe one instant and per-statement snapshots are exactly what makes
 them describe two. That is the opposite requirement to the protocol above, and the two do not meet:
 a proof takes no fiscal-period lock, performs no lock-then-re-read, and posts nothing — it reads
-`journal_line` and asks a `SubledgerProofProvider`, then writes one evidence row. `the locking read
-runs at READ COMMITTED` still asserts the posting path's isolation and still guards it. This is the
-review this ADR asked for, recorded rather than waved through: **raising isolation on a path that
-locks a fiscal period and re-reads it remains forbidden**; raising it on a read-only proof that does
-neither is what `INV-14` requires. See `docs/architecture/accounting-module-boundary.md`.
+`journal_line` and asks a `SubledgerProofProvider`, then writes one evidence row. `a posting locks
+at SERIALIZABLE while a close still locks at READ COMMITTED` still asserts the posting path's
+isolation and still guards it. This is the review this ADR asked for, recorded rather than waved
+through; what it concluded — **raising isolation on a path that locks a fiscal period and re-reads
+it remains forbidden** — is withdrawn by ADR 0025 and replaced by the paragraph below. Raising it
+on a read-only proof that does neither is what `INV-14` requires. See
+`docs/architecture/accounting-module-boundary.md`.
+
+**And the posting path has since raised it too, deliberately, which is what the paragraph above
+forbade.** Issue #108 made the posting path `SERIALIZABLE`, declared on one
+`SerializablePostingTransaction` bean and enforced at `PostingEngine.post`, at the same time as it
+collapsed the lock and the status read into one statement. The prohibition above rested on the
+premise that the post-lock re-read needs a fresh snapshot; with the lock and the read in one
+statement there is no second read to go stale, and above READ COMMITTED the statement aborts with
+`40001` rather than returning anything at all. Recorded here the way #91 was: the review happened,
+the measurements are in
+[ADR 0025](0025-serializable-posting-and-the-covering-period-lock.md), and the `FOR SHARE` lock is
+untouched because it — not the isolation level — is what makes the guarantee.
 
 **A long posting transaction delays a close.** `FOR SHARE` means a close waits for every in-flight
 posting. That is the intended trade — a close that raced past an in-flight posting would be worse —
 but it makes posting-transaction duration a latency budget for period close. Bound it in #41, and
-set `lock_timeout` on the close path in #39.
+set `lock_timeout` on the close path in #39. The close path stays at READ COMMITTED under ADR 0025,
+deliberately; were it ever raised, it would gain a second failure mode on top of the 55P03 the
+`lock_timeout` produces, because under SSI a close can also abort with `40001`, which
+`FiscalPeriodLifecycleService`'s `CannotAcquireLockException` catch would not see.
 
 **A 32-bit `objid` can collide within one advisory class.** The consequence is false sharing: two
 unrelated keys serialise against each other. That costs throughput and never correctness, which is
@@ -139,7 +180,10 @@ A test pinned their absence until the adapter existed and now asserts their pres
 `accounting_fiscal_period` did not exist. Only the location of the status byte was substituted; the
 lock statements, their strengths, the protocol order, the READ COMMITTED re-read, the transaction
 manager, the pool and the database were always production. `V6` created the table, the stand-in was
-deleted, and the compiler is what forced every scenario onto the real adapter.
+deleted, and the compiler is what forced every scenario onto the real adapter. (*The READ COMMITTED
+re-read* names the protocol as it stood before issue #108, which collapsed the lock and the read
+into one statement and raised the posting path to `SERIALIZABLE`; the sentence is left as written
+because it describes what that proof actually exercised at the time.)
 
 **`updateStatus` carries the actor.** It populates `accounting_fiscal_period.updated_by` so the row
 says who last moved it. That is a mirror for convenience: the authoritative record of a transition,

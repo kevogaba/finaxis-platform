@@ -19,6 +19,8 @@ package com.finaxis.platform.accounting.support
 
 import com.finaxis.platform.accounting.AccountingPermissionGuard
 import com.finaxis.platform.accounting.application.FunctionalCurrencyLock
+import com.finaxis.platform.accounting.application.RequiredSnapshotIsolation
+import com.finaxis.platform.accounting.application.SnapshotIsolationGuard
 import com.finaxis.platform.accounting.application.ledger.JournalEntryView
 import com.finaxis.platform.accounting.application.ledger.JournalLineView
 import com.finaxis.platform.accounting.application.ledger.JournalReadStore
@@ -789,4 +791,26 @@ internal enum class CurrencyLockMode {
 
     /** Taken by a base-currency change; conflicts with postings and with itself. */
     EXCLUSIVE,
+}
+
+/**
+ * A [SnapshotIsolationGuard] that certifies whatever the caller demands, recording the demands.
+ *
+ * Unit suites run with no database and no transaction, so there is no isolation to interrogate;
+ * what they still want to state is *which* minimum a path asked for. The posting engine asking for
+ * `SERIALIZABLE` rather than `REPEATABLE_READ` is a decision, not an implementation detail - it is
+ * the difference between refusing a caller that joined at the weaker level and certifying it - so
+ * [demands] lets a test assert it without a container. Refusal itself is the adapter's behaviour
+ * and belongs to the suites that have a real transaction to refuse.
+ */
+internal class PermissiveSnapshots : SnapshotIsolationGuard {
+    /** Every (minimum, operation) pair asked of this guard, in call order. */
+    internal val demands = mutableListOf<Pair<RequiredSnapshotIsolation, String>>()
+
+    override fun requireStableSnapshot(
+        minimum: RequiredSnapshotIsolation,
+        operation: String,
+    ) {
+        demands += minimum to operation
+    }
 }

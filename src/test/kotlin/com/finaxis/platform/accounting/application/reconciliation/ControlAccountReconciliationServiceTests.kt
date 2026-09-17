@@ -872,6 +872,10 @@ private class FakeReconciliationTenantLookup : AccountingTenantLookup {
     }
 
     override fun functionalCurrencyOf(organisationId: UUID): String? = functionalCurrency
+
+    /** Reconciliation never posts, so the locking read is a wiring error if it is ever reached. */
+    override fun functionalCurrencyForPosting(organisationId: UUID): String? =
+        error("reconciliation must not take the posting lock on the organisation row")
 }
 
 /** The tenant business date a proof is bounded by. */

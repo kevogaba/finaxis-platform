@@ -49,6 +49,7 @@ import org.jooq.DSLContext
 import org.jooq.JSONB
 import org.jooq.impl.DSL
 import org.springframework.stereotype.Component
+import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.Clock
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -380,6 +381,31 @@ class JooqOrganisationBootstrapStore(
             .where(ORGANISATION.ID.eq(organisationId))
             .fetchOne(ORGANISATION.BASE_CURRENCY_CODE)
 
+    /**
+     * The same select with `FOR SHARE`, so the code comes back attached to a row this transaction
+     * holds rather than to a snapshot another transaction may already have superseded.
+     *
+     * Shared, not exclusive: several postings may read the code at once, and nothing in the
+     * posting path writes the organisation row. The only writer is the draft amendment, which
+     * cannot run against an organisation that is postable at all.
+     *
+     * Above `READ COMMITTED` - and the posting path runs at `SERIALIZABLE` - a change committed
+     * after this transaction's snapshot makes this statement raise `40001` rather than return the
+     * stale code. That failure is the point: it is what the caller's plain re-read could not do.
+     * The active-transaction assertion comes first, as it does on every locking statement here,
+     * because outside a transaction the lock would be taken and released by the same statement and
+     * guarantee nothing at all.
+     */
+    override fun lockBaseCurrencyCode(organisationId: UUID): String? {
+        requireActiveTransaction("Locking an organisation's base currency")
+        return dsl
+            .select(ORGANISATION.BASE_CURRENCY_CODE)
+            .from(ORGANISATION)
+            .where(ORGANISATION.ID.eq(organisationId))
+            .forShare()
+            .fetchOne(ORGANISATION.BASE_CURRENCY_CODE)
+    }
+
     override fun ensureHeadOfficeDraft(organisationId: UUID): HeadOfficeDraftResult {
         dsl
             .select(BRANCH.ID)
@@ -481,6 +507,12 @@ class JooqOrganisationBootstrapStore(
         )
 
     private fun now() = clock.instant().atOffset(ZoneOffset.UTC)
+
+    private fun requireActiveTransaction(operation: String) {
+        check(TransactionSynchronizationManager.isActualTransactionActive()) {
+            "$operation requires an active transaction."
+        }
+    }
 }
 
 private fun String.toDisplayName(): String =

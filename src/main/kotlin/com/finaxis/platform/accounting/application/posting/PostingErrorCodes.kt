@@ -84,6 +84,19 @@ object PostingErrorCodes {
      * before the lock, so a posting that finds a different one under the lock cannot go on to use
      * either value honestly: it rolls back - taking its claim with it - and the retry fingerprints
      * against the currency that won.
+     *
+     * **The window this guarded is closed, and not by this code.** The read under the lock is now
+     * a locking read of the organisation row, so a base-currency change committed after the
+     * posting's snapshot makes that read fail with a serialization error and the transaction
+     * aborts; the retry fingerprints against the currency that won. That abort, not this code, is
+     * what a caller racing a base-currency change sees.
+     *
+     * This code therefore does not fire on the posting path in normal operation, and no caller
+     * should be written expecting it: at `SERIALIZABLE` the two reads come from one snapshot and
+     * always agree, and anything that changed after that snapshot has already aborted the
+     * transaction before the comparison is reached. It is published and kept because it states the
+     * invariant at the point the invariant is decided, and because it would fire below
+     * `SERIALIZABLE`, which the posting path's snapshot guard forbids.
      */
     const val FUNCTIONAL_CURRENCY_CHANGED = "accounting.functional_currency_changed"
 
@@ -157,12 +170,23 @@ object PostingErrorCodes {
     const val BRANCH_NOT_IN_ORGANISATION = "accounting.branch_not_in_organisation"
 
     /**
-     * A read that must see one instant could not get a stable snapshot.
+     * The transaction is weaker than the operation declared.
      *
-     * Raised when a transaction that declared `REPEATABLE READ` is not actually running at it -
-     * Spring drops the declaration silently when the method joins a transaction already open. The
-     * control-account proof needs it so its two aggregates describe one instant; reading a manual
-     * journal needs it so a checker's header and lines are the same draft.
+     * Raised when the isolation level actually in force is below the one the operation asked for -
+     * Spring drops the declaration silently when the method joins a transaction already open, so
+     * the annotation alone is a request rather than a guarantee. Three operations ask, and not for
+     * the same thing. The control-account proof and reading a manual journal need at least
+     * `REPEATABLE READ`, so that two reads describe one instant: a pair of general-ledger and
+     * sub-ledger aggregates, and a draft's header beside its lines. A posting needs `SERIALIZABLE`,
+     * which is stronger than snapshot stability and is what the posting rules were decided under;
+     * accepting `REPEATABLE READ` there would certify exactly the downgrade the decision forbids.
+     *
+     * On the posting path this is the *only* enforcement available. `PostingService.post` is
+     * `MANDATORY`, so the transaction being judged belongs to the caller and no annotation of
+     * accounting's can raise it - the guard refuses a misconfigured caller rather than quietly
+     * fixing one. The refusal names both the level demanded and the level in force, because
+     * "this transaction is repeatable read", read against an operation whose declaration says
+     * otherwise, looks like a false positive.
      */
     const val SNAPSHOT_ISOLATION_UNAVAILABLE = "accounting.snapshot_isolation_unavailable"
 
