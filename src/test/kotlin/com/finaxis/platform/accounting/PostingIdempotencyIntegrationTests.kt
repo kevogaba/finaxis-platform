@@ -46,7 +46,6 @@ import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
-import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.test.context.TestConstructor
 import org.springframework.transaction.interceptor.TransactionAspectSupport
 import java.math.BigDecimal
@@ -58,10 +57,10 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -74,8 +73,9 @@ import kotlin.test.assertTrue
  * `ON CONFLICT` claim decide the concurrent case, and no in-memory lock or cache takes part.
  *
  * Which makes the isolation level part of the subject rather than a setting. Every posting enters
- * through [PostingTransactionBoundary] at `SERIALIZABLE`, as production does, and the concurrent
- * case is measurably weaker there until the retry lands - see the note on that test.
+ * through [PostingTransactionBoundary] at `SERIALIZABLE`, as production does, and at that level the
+ * concurrent case is decided by the boundary's retry as much as by `ON CONFLICT` - see the note on
+ * that test.
  */
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -114,8 +114,9 @@ class PostingIdempotencyIntegrationTests(
         // Two real transactions on two connections that demonstrably OVERLAP. The first claims the
         // source reference and is held open, uncommitted; the second is then proved - out of
         // PostgreSQL's own lock catalogue - to be parked behind it *on posting_request* before the
-        // first is allowed to commit. Only then does the loser resolve at all, and neither ever
-        // sees a unique violation - the claim is decided by `ON CONFLICT`, not by an error.
+        // first is allowed to commit. Only then does the loser observe the committed request and
+        // replay it, and neither ever sees a unique violation - the claim is decided by
+        // `ON CONFLICT`, not by an error.
         //
         // The relation is part of the proof, not decoration: the holder's open transaction also
         // holds the tenant's reference_sequence counter row and its own uncommitted journal rows,
@@ -126,56 +127,51 @@ class PostingIdempotencyIntegrationTests(
         // let the first commit before the second issued a statement, degrading this to the
         // sequential replay two tests above already cover.
         //
-        // DELIBERATELY WEAKENED ON THIS BRANCH, AND RESTORED BY PR 2. The posting path now runs at
-        // SERIALIZABLE, and there `INSERT ... ON CONFLICT DO NOTHING` against a row committed
-        // *after* this transaction's snapshot raises 40001 instead of quietly doing nothing - so
-        // the loser's follow-up `SELECT ... FOR UPDATE` never runs and it cannot replay. There is
-        // no retry on this branch, so the failure reaches the caller raw. What the branch can
-        // still prove is everything that made this scenario worth writing: the two genuinely
-        // overlapped, exactly one journal committed, and the loser burnt no gapless number. The
-        // assertion that both callers hold the same receipt comes back with PR 2, whose retry
-        // re-opens the transaction on a fresh snapshot that includes the winner - and then the
-        // claim reports zero rows, the `FOR UPDATE` read finds the winner, and the replay is
-        // correct again. Restore it there; do not delete it here.
+        // WHY THE REPLAY IS STILL CORRECT AT SERIALIZABLE, which is the one thing about this
+        // scenario that needs saying now and did not at READ COMMITTED: the duplicate's *first*
+        // attempt cannot replay, because `INSERT ... ON CONFLICT DO NOTHING` against a row
+        // committed after that attempt's snapshot raises 40001 rather than quietly doing nothing,
+        // so its follow-up `SELECT ... FOR UPDATE` never runs. The boundary's retry is what makes
+        // the assertion below true again: a retry opens a NEW transaction, whose snapshot is taken
+        // after the winner committed, so the claim reports zero rows, the `FOR UPDATE` read finds
+        // the winner's request, and the replay is the ordinary one. The wait this test proves is
+        // unaffected - it is a genuine row-lock wait on the uncommitted claim, which is exactly
+        // what `pg_locks` can see, not an SSI conflict that it cannot.
+        //
+        // Three connections: the holder's, the duplicate's, and the probe's.
         val tenant = provisionTenant("idem-concurrent")
         val claimApplied = CountDownLatch(1)
         val releaseClaim = CountDownLatch(1)
         val holderPid = AtomicInteger()
         val duplicateReturned = AtomicBoolean()
-        val lostRace = AtomicReference<ConcurrencyFailureException>()
 
-        val (winner, loser) =
+        val outcomes =
             Executors.newVirtualThreadPerTaskExecutor().use { executor ->
                 val holder =
-                    executor.submit<PostingReceipt> {
-                        inContext(tenant) {
-                            posting {
-                                val receipt = post(tenant, "dep-race")
-                                holderPid.set(probe.currentBackendPid())
-                                claimApplied.countDown()
-                                assertTrue(
-                                    releaseClaim.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS),
-                                )
-                                receipt
+                    executor.submit<Result<PostingReceipt>> {
+                        runCatching {
+                            inContext(tenant) {
+                                posting {
+                                    val receipt = post(tenant, "dep-race")
+                                    holderPid.set(probe.currentBackendPid())
+                                    claimApplied.countDown()
+                                    assertTrue(
+                                        releaseClaim.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                                    )
+                                    receipt
+                                }
                             }
                         }
                     }
                 assertTrue(claimApplied.await(LATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS))
 
                 val duplicate =
-                    executor.submit<PostingReceipt?> {
-                        // Only a lost serialization race is tolerated, and only because this
-                        // branch has nothing to retry it with. Every other failure propagates out
-                        // of `get` and fails the test, so the weakening cannot quietly widen.
-                        val outcome =
-                            try {
-                                inContext(tenant) { posting { post(tenant, "dep-race") } }
-                            } catch (lostTheRace: ConcurrencyFailureException) {
-                                lostRace.set(lostTheRace)
-                                null
-                            }
-                        duplicateReturned.set(true)
-                        outcome
+                    executor.submit<Result<PostingReceipt>> {
+                        // Captured rather than thrown, so a failure is judged by the assertions
+                        // below - which can name an exhausted retry budget - instead of arriving
+                        // as an ExecutionException nobody reads past.
+                        runCatching { inContext(tenant) { posting { post(tenant, "dep-race") } } }
+                            .also { duplicateReturned.set(true) }
                     }
 
                 probe.awaitClaimBlockedBehind(holderPid.get())
@@ -186,21 +182,13 @@ class PostingIdempotencyIntegrationTests(
                 )
 
                 releaseClaim.countDown()
-                holder.get(FUTURE_TIMEOUT_SECONDS, TimeUnit.SECONDS) to
-                    duplicate.get(FUTURE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                listOf(holder, duplicate).map { it.get(FUTURE_TIMEOUT_SECONDS, TimeUnit.SECONDS) }
             }
 
-        assertEquals(1, journalCount(tenant), "the overlap left exactly one committed journal")
-        assertEquals("1", winner.journalReference, "no gapless number was burnt by the loser")
-        if (loser == null) {
-            assertNotNull(
-                lostRace.get(),
-                "a duplicate that returned no receipt must carry the serialization failure that " +
-                    "stopped it, so a reader can see why this branch's assertion is the weaker one",
-            )
-        } else {
-            assertEquals(winner, loser, "a duplicate that did replay holds the one journal")
-        }
+        val receipts = outcomes.map(::committedReceipt)
+        assertEquals(receipts[0], receipts[1], "both callers hold the receipt of the one journal")
+        assertEquals(1, journalCount(tenant))
+        assertEquals("1", receipts[0].journalReference, "no gapless number was burnt by the loser")
     }
 
     @Test
@@ -558,6 +546,26 @@ class PostingIdempotencyIntegrationTests(
     }
 
     // ---- helpers ------------------------------------------------------------------------------
+
+    /**
+     * Unwraps one caller's outcome, naming an exhausted retry budget before anything else.
+     *
+     * A caller that spent every attempt would fail the `assertNull` below anyway, but as an opaque
+     * conflict. This suite is the place where one retry is supposed to be enough - the duplicate
+     * races exactly one other posting, and its second attempt starts on a snapshot that already
+     * contains the winner - so `accounting.posting_retries_exhausted` here means the retry is not
+     * reaching that fresh snapshot, and is worth its own sentence rather than a stack trace.
+     */
+    private fun committedReceipt(outcome: Result<PostingReceipt>): PostingReceipt {
+        val failure = outcome.exceptionOrNull()
+        assertNotEquals(
+            PostingErrorCodes.POSTING_RETRIES_EXHAUSTED,
+            (failure as? ConflictException)?.code,
+            "neither caller may spend its whole retry budget on a race against one other posting",
+        )
+        assertNull(failure, "both callers must come back with the one journal's receipt: $failure")
+        return outcome.getOrThrow()
+    }
 
     /**
      * Opens the one `SERIALIZABLE` transaction a posting is allowed to commit in, and runs [block].

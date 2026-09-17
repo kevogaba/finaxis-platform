@@ -76,6 +76,9 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-security-oauth2-resource-server")
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-webmvc")
+    // Not in the Boot BOM; version pinned here rather than inherited from
+    // spring-cloud-commons, which manages it only as an optional dependency.
+    implementation(libs.springRetry)
     implementation(libs.bucket4j.core)
     implementation(libs.bucket4j.redis.common)
     implementation(libs.bucket4j.lettuce)

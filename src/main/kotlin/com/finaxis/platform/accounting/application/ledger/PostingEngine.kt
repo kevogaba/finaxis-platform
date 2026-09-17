@@ -214,7 +214,13 @@ class PostingEngine(
         currency.lockForPosting(context.organisationId)
         requireFunctionalCurrencyUnchanged(context.organisationId, functionalCurrency)
         requireTenantPostable(context)
-        val period = periods.lockAndValidate(context.organisationId, context.actorId, dates)
+        val period =
+            periods.lockAndValidate(
+                context.organisationId,
+                context.actorId,
+                dates,
+                request.source,
+            )
         val resolved = legs.legsFor(period.dates)
         val lockedAccounts = lockAccounts(context.organisationId, resolved.legs)
         // [lockAccounts] has already refused every account it could not read, so this map is total

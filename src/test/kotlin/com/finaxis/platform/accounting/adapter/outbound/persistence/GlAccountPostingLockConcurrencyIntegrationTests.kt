@@ -11,6 +11,7 @@ import com.finaxis.platform.accounting.application.ledger.LedgerPostingRequest
 import com.finaxis.platform.accounting.application.ledger.PostingEngine
 import com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary
 import com.finaxis.platform.accounting.application.ledger.ResolvedLegs
+import com.finaxis.platform.accounting.application.posting.PostingReceipt
 import com.finaxis.platform.accounting.application.rules.CreatePostingRuleCommand
 import com.finaxis.platform.accounting.application.rules.CreatePostingRuleVersionCommand
 import com.finaxis.platform.accounting.application.rules.PostingRuleService
@@ -68,6 +69,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -403,27 +405,29 @@ class GlAccountPostingLockConcurrencyIntegrationTests(
         // the proof is that both futures return within a generous bound rather than one raising
         // PostgreSQL's deadlock_detected.
         //
-        // DELIBERATELY WEAKENED ON THIS BRANCH; PR 2 RESTORES IT. The posting path now runs at
-        // SERIALIZABLE, and every posting in a tenant increments the one gapless
-        // `reference_sequence` row - measured, not feared - so of two overlapping same-tenant
-        // postings the second aborts with 40001 where it used to block and proceed. There is no
-        // retry on this branch, so this test can no longer assert that both postings commit, and
-        // pretending otherwise would make it pass for a reason that is not the one it is named
-        // for. What it still asserts is the property it exists for, and the number allocator runs
-        // *after* lockAccounts, so that property is still exercised on both attempts: neither
-        // posting hangs, and neither dies of PostgreSQL's deadlock_detected. PR 2's
-        // retry re-runs the loser on a fresh snapshot taken after the winner committed, which is
-        // what makes "both postings commit" true again.
+        // At SERIALIZABLE the pair costs one wasted attempt, and the outcome is unchanged. Every
+        // posting in a tenant increments the one gapless `reference_sequence` row - measured, not
+        // feared - so of two overlapping same-tenant postings the second aborts with 40001 where
+        // at READ COMMITTED it blocked and proceeded. [PostingTransactionBoundary] re-runs it on a
+        // new transaction whose snapshot was taken after the winner committed, and that attempt
+        // finds the counter where the winner left it. So both postings still commit, with distinct
+        // numbers and nothing burnt by the abort - and because the allocator runs *after*
+        // lockAccounts, the ascending-id lock order this test exists for is exercised on every
+        // attempt, not just the winning one. A serialization failure reaching a caller here would
+        // mean the retry did not run.
+        //
+        // Two connections, one per posting: nothing is held open and no probe is needed, because
+        // the ordering property is proved by both futures returning rather than by a lock wait.
         val tenant = provisionEngineTenant("l7")
 
         val outcomes =
             Executors.newVirtualThreadPerTaskExecutor().use { executor ->
                 val first =
-                    executor.submit<Throwable?> {
+                    executor.submit<Result<PostingReceipt>> {
                         postInOwnTransaction(tenant, "l7-1", tenant.accountAId, tenant.accountBId)
                     }
                 val second =
-                    executor.submit<Throwable?> {
+                    executor.submit<Result<PostingReceipt>> {
                         postInOwnTransaction(tenant, "l7-2", tenant.accountBId, tenant.accountAId)
                     }
                 listOf(
@@ -432,24 +436,26 @@ class GlAccountPostingLockConcurrencyIntegrationTests(
                 )
             }
 
-        outcomes.filterNotNull().forEach { failure ->
+        outcomes.forEach { outcome ->
+            val failure = outcome.exceptionOrNull()
             assertFalse(
                 failure is DeadlockLoserDataAccessException,
                 "PostgreSQL raised deadlock_detected, which is the one outcome the ascending-id " +
                     "lock order exists to make impossible - and the one SERIALIZABLE does not " +
                     "excuse: $failure",
             )
-            assertTrue(
+            assertFalse(
                 failure is ConcurrencyFailureException,
-                "the only failure this branch tolerates is the serialization abort the gapless " +
-                    "journal counter forces on the second of two overlapping same-tenant " +
-                    "postings; anything else is a real defect wearing its clothes: $failure",
+                "a serialization failure escaped to the caller, so the retry that is supposed to " +
+                    "re-run the loser on a snapshot containing the winner did not run: $failure",
             )
+            assertNull(failure, "both postings must commit: $failure")
         }
-        assertTrue(
-            outcomes.any { it == null },
-            "SERIALIZABLE aborts the loser of an overlapping pair, not both of them: if neither " +
-                "posting committed, the contention is not the one this branch accepts",
+        assertEquals(
+            listOf("1", "2"),
+            outcomes.map { it.getOrThrow().journalReference }.sorted(),
+            "the pair must leave two consecutively numbered journals: the aborted attempt rolled " +
+                "its counter increment back with everything else, so its retry burnt no number",
         )
     }
 
@@ -631,9 +637,9 @@ class GlAccountPostingLockConcurrencyIntegrationTests(
     }
 
     /**
-     * Posts through the real boundary and returns what it threw, or `null` if it committed.
+     * Posts through the real boundary and returns its receipt, or whatever it threw.
      *
-     * Returning the failure rather than letting [java.util.concurrent.Future.get] wrap it keeps
+     * Capturing the outcome rather than letting [java.util.concurrent.Future.get] wrap it keeps
      * `L7`'s assertions about the *posting's* outcome instead of about `ExecutionException`
      * nesting, and lets both futures be awaited before either is judged - so a genuine deadlock
      * still shows up as the timeout it is rather than as whichever exception arrived first.
@@ -643,14 +649,14 @@ class GlAccountPostingLockConcurrencyIntegrationTests(
         reference: String,
         debitAccountId: UUID,
         creditAccountId: UUID,
-    ): Throwable? =
+    ): Result<PostingReceipt> =
         runCatching {
             inContext(tenant) {
                 postings.execute("Posting an account-lock ordering scenario") {
                     postLegs(tenant, reference, debitAccountId, creditAccountId)
                 }
             }
-        }.exceptionOrNull()
+        }
 
     /** Posts a two-leg journal for [reference] with legs in the exact order given. */
     private fun postLegs(

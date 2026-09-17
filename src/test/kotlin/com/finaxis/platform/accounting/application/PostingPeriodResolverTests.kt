@@ -5,6 +5,7 @@ import com.finaxis.platform.accounting.AccountingBusinessDateLookup
 import com.finaxis.platform.accounting.AccountingPermissionGuard
 import com.finaxis.platform.accounting.domain.AccountingAuditActions
 import com.finaxis.platform.accounting.domain.AccountingPermissions
+import com.finaxis.platform.accounting.domain.AccountingSourceReference
 import com.finaxis.platform.accounting.domain.FiscalPeriodKey
 import com.finaxis.platform.accounting.domain.FiscalPeriodSnapshot
 import com.finaxis.platform.accounting.domain.FiscalPeriodStatus
@@ -103,6 +104,27 @@ class PostingPeriodResolverTests {
         assertEquals(ORGANISATION_ID.toString(), recorded.tenantId)
         assertEquals(postingDate.toString(), recorded.metadata["postingDate"])
         assertEquals(TODAY.toString(), recorded.metadata["businessDate"])
+    }
+
+    @Test
+    fun `the recorded authority names the posting it was exercised for`() {
+        // The two halves of the INV-7 idempotency identity, which is what ADR 0025 tells an
+        // auditor to group these rows by. Without them the row identifies only a period and a
+        // date, which two different backdated postings by one operator share.
+        inTransaction()
+        periods.covering = snapshot(FiscalPeriodStatus.OPEN)
+        periods.locked = snapshot(FiscalPeriodStatus.OPEN)
+
+        resolver.resolveForPosting(command(PostingDateRequest(postingDate = TODAY.minusDays(3))))
+
+        val recorded = audits.saved.single()
+        assertEquals(SOURCE.sourceModule, recorded.metadata["sourceModule"])
+        assertEquals(
+            SOURCE.idempotencyKey,
+            recorded.metadata["sourceReference"],
+            "the idempotency key is what posting_request.source_reference holds, so the audit " +
+                "row and the claim it was exercised against name the same posting",
+        )
     }
 
     @Test
@@ -246,7 +268,7 @@ class PostingPeriodResolverTests {
     }
 
     private fun command(dates: PostingDateRequest = PostingDateRequest()) =
-        ResolvePostingPeriodCommand(ORGANISATION_ID, ACTOR_ID, dates)
+        ResolvePostingPeriodCommand(ORGANISATION_ID, ACTOR_ID, SOURCE, dates)
 
     private fun snapshot(status: FiscalPeriodStatus) =
         FiscalPeriodSnapshot(
@@ -324,6 +346,8 @@ class PostingPeriodResolverTests {
         val ORGANISATION_ID: UUID = uuidV7()
         val ACTOR_ID: UUID = uuidV7()
         val PERIOD_ID: UUID = uuidV7()
+        val SOURCE =
+            AccountingSourceReference("savings", "SAVINGS_DEPOSIT", uuidV7(), "dep-resolver")
         val TODAY: LocalDate = LocalDate.of(2026, 8, 31)
         val RECORDED_AT: Instant = Instant.parse("2026-08-31T09:15:00Z")
     }

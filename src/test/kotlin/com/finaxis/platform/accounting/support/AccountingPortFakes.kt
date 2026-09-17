@@ -756,6 +756,16 @@ internal class PostingLockJournal {
 
         /** One GL account row lock; a posting takes one per distinct account its legs name. */
         const val ACCOUNT = "account"
+
+        /**
+         * The tenant's gapless `reference_sequence` row, taken by the number allocation.
+         *
+         * The terminal link of ADR 0023's chain, and the reason it is recorded at all: a chain
+         * asserted only as far as the account locks would still be satisfied by an implementation
+         * that hoisted the number allocation out of the replayed region, which is precisely the
+         * shape a retry must not have.
+         */
+        const val SEQUENCE = "sequence"
     }
 }
 

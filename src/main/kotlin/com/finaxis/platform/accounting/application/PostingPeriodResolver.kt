@@ -6,6 +6,7 @@ import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.domain.AccountingAuditActions
 import com.finaxis.platform.accounting.domain.AccountingDates
 import com.finaxis.platform.accounting.domain.AccountingPermissions
+import com.finaxis.platform.accounting.domain.AccountingSourceReference
 import com.finaxis.platform.accounting.domain.FiscalPeriodSnapshot
 import com.finaxis.platform.accounting.domain.FiscalPeriodStatus
 import com.finaxis.platform.accounting.domain.PostingDateClassification
@@ -84,7 +85,7 @@ class PostingPeriodResolver(
      */
     fun resolveForPosting(command: ResolvePostingPeriodCommand): ResolvedPostingPeriod {
         val dates = resolveDates(command.organisationId, command.dates)
-        return lockAndValidate(command.organisationId, command.actorId, dates)
+        return lockAndValidate(command.organisationId, command.actorId, dates, command.source)
     }
 
     /**
@@ -112,11 +113,18 @@ class PostingPeriodResolver(
      * calls a new posting makes - one before its claim, one after - never disagree about what the
      * dates are. Requires an active transaction: the shared lock it takes must outlive this call
      * and be held until the posting commits.
+     *
+     * [source] is required rather than nullable or defaulted, even though only a backdated posting
+     * uses it: a caller that could omit it would silently record a break-glass row that no longer
+     * names the posting it was exercised for, which is the exact defect
+     * [recordPriorPeriodAuthority] now exists to prevent. The compiler refusing the call is the
+     * cheapest place to catch that.
      */
     fun lockAndValidate(
         organisationId: UUID,
         actorId: UUID,
         dates: AccountingDates,
+        source: AccountingSourceReference,
     ): ResolvedPostingPeriod {
         requireActiveTransaction()
 
@@ -142,7 +150,7 @@ class PostingPeriodResolver(
         requireOpen(locked)
 
         if (classification == PostingDateClassification.BACKDATED) {
-            recordPriorPeriodAuthority(organisationId, actorId, dates, locked)
+            recordPriorPeriodAuthority(organisationId, actorId, dates, locked, source)
         }
 
         return ResolvedPostingPeriod(dates, locked, classification)
@@ -161,24 +169,34 @@ class PostingPeriodResolver(
      * on a posting the ledger accepted as admissible*, not *a journal was committed*. The journal's
      * own outcome is issue #41's to audit, which is the only place the journal id exists.
      *
-     * A row records *an attempt that reached here*, not a committed journal, and it outlives that
-     * posting's rollback by design. One logical backdated posting can therefore leave more than
-     * one row whenever the posting runs twice - on this branch, a client re-submitting after a
-     * serialization failure it was handed raw; on the branch that adds the retry, the retry itself.
+     * A serialization failure re-runs the whole posting, and with it this write, so one logical
+     * backdated posting can leave one row per attempt — bounded by the retry budget. Each row is
+     * true on its own terms: every attempt independently located, locked and validated the period
+     * before reaching here. Group by `(actorId, tenantId, sourceModule, sourceReference)` to count
+     * authorities exercised rather than rows written.
      *
-     * A row written here cannot be grouped back to the posting it belongs to. It names the actor,
-     * the tenant, the fiscal period and the dates, and a batch of corrections backdated by one
-     * operator into one period on one date agrees on every one of them - so counting rows
-     * over-counts a re-submitted posting, while grouping over these columns merges postings that
-     * are genuinely distinct. Neither is safe, and no column recorded here separates the two cases.
-     * The branch that adds the retry carries the source reference into the metadata, which is the
-     * `INV-7` identity and the only thing here that does discriminate, and names the grouping key.
+     * That key, and not the fiscal period with the posting date, is why [source] is carried here
+     * at all. `(organisation_id, source_module, source_reference)` is the `INV-7` idempotency
+     * identity: identical on every attempt of one logical posting, different for any other. The
+     * period and the posting date are not — a batch of corrections backdated by one operator into
+     * one period on one date is many exercises of break-glass authority wearing a single tuple, so
+     * grouping on it merges them.
+     *
+     * The posting request's id is not the answer either: `posting_request.id` defaults to
+     * `uuidv7()`, and a retry rolls its claim back and re-inserts, so every attempt would carry a
+     * fresh one and each row would become its own group — the opposite error, and harder to notice
+     * because it looks precise.
+     *
+     * A row now also answers *which posting* the authority was exercised for, which it could not
+     * before at all: an auditor could previously narrow a break-glass use to a period and a date
+     * and no further. That is worth having independently of anything to do with retries.
      */
     private fun recordPriorPeriodAuthority(
         organisationId: UUID,
         actorId: UUID,
         dates: AccountingDates,
         period: FiscalPeriodSnapshot,
+        source: AccountingSourceReference,
     ) {
         auditService.recordIndependently(
             AuditCommand(
@@ -197,6 +215,8 @@ class PostingPeriodResolver(
                     mapOf(
                         "postingDate" to dates.postingDate.toString(),
                         "businessDate" to dates.businessDate.toString(),
+                        "sourceModule" to source.sourceModule,
+                        "sourceReference" to source.idempotencyKey,
                     ),
             ),
         )
@@ -253,10 +273,17 @@ class PostingPeriodResolver(
         )
 }
 
-/** Request to resolve and lock the fiscal period for one posting. */
+/**
+ * Request to resolve and lock the fiscal period for one posting.
+ *
+ * [source] carries no default, unlike [dates]: it is what a break-glass audit row is grouped by,
+ * and a command that could be built without it would record an authority nothing identifies. See
+ * [PostingPeriodResolver.lockAndValidate].
+ */
 data class ResolvePostingPeriodCommand(
     val organisationId: UUID,
     val actorId: UUID,
+    val source: AccountingSourceReference,
     val dates: PostingDateRequest = PostingDateRequest(),
 )
 
