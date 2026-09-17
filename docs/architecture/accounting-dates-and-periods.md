@@ -62,9 +62,24 @@ posting date is still 2026-08-31.
 **Close-of-business in progress.** Business date 2026-08-31, `postingAllowed` false. A current-dated
 posting is rejected; a posting dated 2026-08-30 into the still-open period succeeds.
 
-**Business date rolls mid-flight.** A posting captures 2026-08-31 and holds its period lock; an
-operator advances the business date to 2026-09-01 and commits. The posting still commits against
-2026-08-31, because August is open until it is closed. This is correct, not a race.
+**Business date rolls mid-flight, and the answer now depends on which posting it is.**
+
+A **backdated** correction captures 2026-08-28, holds its period lock, and commits against
+2026-08-28 whatever the business date does meanwhile. August is open until it is closed, and the
+correction never read the current day to decide its admissibility. This is correct, not a race, and
+issue #125 deliberately left it alone — a backdated posting takes no lock on `business_date` at all.
+
+A **current-dated** posting is a different claim: it said *"today"*, with no date of its own. If an
+operator advances to 2026-09-01 and commits while it is in flight, its `FOR SHARE` read raises
+`40001`, the retry resolves against the day that won, and the journal lands on 2026-09-01. Before
+issue #125 it committed against 2026-08-31 from a snapshot taken before the advance — which looked
+like stability and was really staleness, since the same blindness let it commit into a day whose
+close-of-business had started.
+
+The lock is per tuple and not per column, so an advance conflicts with it exactly as a close does.
+That is the same trade [ADR 0023](../adr/0023-posting-idempotency-and-account-locking.md) records
+for the `organisation` row, accepted for the same reason: these are rare, operator-driven writes on
+the tenant's own control row, and the retry re-runs the posting against the state that won.
 
 ## The concurrency protocol
 
@@ -138,6 +153,40 @@ holder immediately after starting the contending transaction lets the assertion 
 scheduling rather than on the lock. Each waits for PostgreSQL to report a backend genuinely blocked
 before releasing, so a missing lock times out instead of passing.
 
+## The business date is locked too, and for the same reason the period is
+
+The close-of-business gate has the same shape as the period gate and, until issue #125, the same
+defect. `PostingEngine.post` pins the transaction's snapshot at its second statement, so the plain
+read `PostingPeriodResolver.resolveDates` performs is answered from a snapshot a concurrent
+`startCob` may already have superseded — and nothing locked the row or re-read it before the journal
+committed. A current-dated journal therefore committed into a day whose close-of-business had
+started, with `accounting.business_date_not_open` never firing. `SERIALIZABLE` catches nothing here:
+the posting reads the row and `startCob` writes it, which is one rw-dependency edge and no cycle.
+
+So `PostingPeriodResolver.lockAndValidate` re-reads the day through
+`AccountingBusinessDateLookup.currentBusinessDateForPosting` — the same select with `FOR SHARE` —
+and re-applies the close-of-business gate to the row it locked.
+
+Three consequences worth knowing before touching either side:
+
+- **Only a current-dated posting takes the lock**, and that is a correctness requirement rather
+  than an optimisation. A backdated posting stays legal while the day is closing, so its
+  admissibility does not rest on this row — and a backdated posting that *held* it would make
+  `startCob` queue behind exactly the corrections close-of-business must not deadlock, and, because
+  PostgreSQL queues incoming requests behind a pending exclusive one, park every new posting in the
+  tenant behind that wait. An earlier revision took the lock unconditionally and inverted the rule
+  it was added to serve.
+- **The pre-claim read stays non-locking**, because the resolved dates are fingerprinted and a
+  *replay* must take no lock at all. `currentBusinessDate` keeps that job and carries a KDoc warning
+  that it must never decide whether a posting may commit.
+- **Every business-date mutation now waits for in-flight current-dated postings, and is bounded.**
+  `advance`, `startCob`, `completeCob` and `reopen` all queue behind postings holding the shared
+  lock, so each applies `finaxis.lifecycle.business-date-lock-timeout` and surfaces an expiry as the
+  retryable `lifecycle.business_date_lock_timeout`. Unbounded, one slow posting would stall not just
+  the operator but the tenant's whole posting path, for the queueing reason above.
+
+See [ADR 0026](../adr/0026-real-time-gates-on-the-serializable-posting-path.md).
+
 ## Prior-period authority
 
 A backdated posting requires `journal.post_prior_period`, and two things about that gate are
@@ -163,10 +212,25 @@ authority that no principal holds, and a tenant administrator who revoked the pe
 neither observe nor prevent it. Accounting therefore calls
 `AccountingPermissionGuard.requireBreakGlassPermission`, which never short-circuits.
 
-That path also resolves through `EffectivePermissionResolver` rather than `RequestPermissionCache`.
-The cache is `@RequestScope`, so dereferencing it outside a web request raises
-`ScopeNotActiveException` — which would have failed a background caller with a scope error instead
-of evaluating its grant, defeating the very alternative this section prescribes.
+That path also avoids `RequestPermissionCache`, which is `@RequestScope`: dereferencing it outside a
+web request raises `ScopeNotActiveException` — which would have failed a background caller with a
+scope error instead of evaluating its grant, defeating the very alternative this section prescribes.
+
+**And it reads no cache at all, and takes a lock.** Until issue #123 it resolved through
+`EffectivePermissionResolver`, which is cache-first, from inside the posting's `SERIALIZABLE`
+transaction. Both cache outcomes were wrong and the miss was the worse one: revoking *evicts*, so
+the revocation itself turned the check into a miss, and the miss fell through to a database read
+taken from the posting's pinned, pre-revocation snapshot. The act that should have denied the
+posting was what made the revocation invisible.
+
+`AuthorizationService.requireBreakGlassPermission` now answers from
+`PermissionResolutionQueries.lockedBreakGlassGrant`: one code, no cache, and every row the answer
+rests on held `FOR SHARE` until the posting commits. A revocation therefore waits for in-flight
+backdated postings, or the posting takes `40001` and its retry — at a fresh snapshot — is denied.
+The ordinary `requirePermission` paths are unchanged and keep the cache; the asymmetry is
+deliberate and argued in
+[ADR 0026](../adr/0026-real-time-gates-on-the-serializable-posting-path.md), which also audits every
+other authorization check reachable from this transaction.
 
 The consequence is intended: a background job that legitimately needs to post into a prior period
 must be given a real service identity holding the code, which is auditable. Opening that path is a
@@ -209,7 +273,11 @@ state the enum carried, the guard refused transitions out of, and nothing could 
 What still must not change:
 
 - The posting date remains the only period selector.
-- The decision must keep using the post-lock read.
+- The decision must keep using the post-lock read — for the period, for the functional currency,
+  for the business date, and for break-glass authority. All four are locking reads, and the lock is
+  the guarantee in every case.
+- The business date is re-read under `FOR SHARE` after the claim **for a current-dated posting
+  only**, and the pre-claim read stays unlocked so a replay locks nothing.
 - `FOR SHARE`/`FOR UPDATE` strengths stay as they are.
 - The posting path's isolation refusal stays, and so does the `FOR SHARE` lock — the lock, not the
   isolation level, is what makes the posting-versus-close guarantee.
@@ -221,9 +289,11 @@ What still must not change:
 
 - [ADR 0022: Accounting date and fiscal-period concurrency][adr-0022]
 - [ADR 0025: Serializable posting, and the covering-period lock][adr-0025]
+- [ADR 0026: Real-time gates on the serializable posting path][adr-0026]
 - [Accounting foundation](accounting-foundation.md)
 - [Accounting module boundary](accounting-module-boundary.md)
 - [Business date operations](../operations/business-date.md)
 
 [adr-0022]: ../adr/0022-accounting-date-and-fiscal-period-concurrency.md
 [adr-0025]: ../adr/0025-serializable-posting-and-the-covering-period-lock.md
+[adr-0026]: ../adr/0026-real-time-gates-on-the-serializable-posting-path.md

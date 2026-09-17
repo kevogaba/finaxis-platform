@@ -582,6 +582,11 @@ class RoleManagementServiceTests {
 
         override fun directPermissionEffects(membershipId: UUID) =
             emptyList<PermissionEffectAssignment>()
+
+        override fun lockedBreakGlassGrant(
+            membershipId: UUID,
+            permissionCode: String,
+        ) = false
     }
 
     /** In-memory port implementation that records role-administration side effects. */

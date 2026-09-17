@@ -16,6 +16,7 @@ import com.finaxis.platform.lifecycle.application.StoredSetting
 import org.jooq.DSLContext
 import org.jooq.JSONB
 import org.springframework.stereotype.Component
+import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.Clock
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -227,6 +228,32 @@ class JooqBusinessDateStore(
             ).from(BUSINESS_DATE)
             .where(BUSINESS_DATE.ORGANISATION_ID.eq(organisationId))
             .fetchOne(::businessDateSnapshot)
+
+    /**
+     * The same select with `FOR SHARE`, so the status comes back attached to a row this transaction
+     * holds rather than to a snapshot a concurrent close-of-business may already have superseded.
+     *
+     * Above `READ COMMITTED` - and the posting path that calls this runs at `SERIALIZABLE` - a
+     * `startCob` committed after this transaction's snapshot makes the statement raise `40001`
+     * rather than return the stale `OPEN`. That failure is the point: it is what the caller's plain
+     * read could not do. The active-transaction assertion comes first, as it does on every locking
+     * statement in this package, because outside a transaction the lock would be taken and released
+     * by the same statement and guarantee nothing at all.
+     */
+    override fun lockCurrentForPosting(organisationId: UUID): BusinessDateSnapshot? {
+        check(TransactionSynchronizationManager.isActualTransactionActive()) {
+            "Locking an organisation's business date requires an active transaction."
+        }
+        return dsl
+            .select(
+                BUSINESS_DATE.CURRENT_BUSINESS_DATE,
+                BUSINESS_DATE.STATUS,
+                BUSINESS_DATE.ROW_VERSION,
+            ).from(BUSINESS_DATE)
+            .where(BUSINESS_DATE.ORGANISATION_ID.eq(organisationId))
+            .forShare()
+            .fetchOne(::businessDateSnapshot)
+    }
 
     override fun advance(
         organisationId: UUID,

@@ -267,6 +267,13 @@ finaxis:
         - X-Domain-Reference
   accounting:
     fiscal-period-close-lock-timeout: ${FINAXIS_ACCOUNTING_CLOSE_LOCK_TIMEOUT:10s}
+  lifecycle:
+    # How long a business-date mutation waits for the postings in flight for the tenant. Since
+    # issue #125 a posting holds `business_date` FOR SHARE until it commits, so an advance or a
+    # close-of-business queues behind them; unbounded, a queued exclusive request also makes every
+    # new posting queue behind it, so this bounds the tenant's whole posting path and not just the
+    # operator's request.
+    business-date-lock-timeout: ${FINAXIS_LIFECYCLE_BUSINESS_DATE_LOCK_TIMEOUT:10s}
   pagination:
     default-page-size: ${FINAXIS_PAGINATION_DEFAULT_PAGE_SIZE:25}
     max-page-size: ${FINAXIS_PAGINATION_MAX_PAGE_SIZE:100}

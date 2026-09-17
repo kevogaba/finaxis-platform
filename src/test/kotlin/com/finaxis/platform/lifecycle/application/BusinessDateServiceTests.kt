@@ -6,13 +6,17 @@ import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.persistence.TransactionLockBound
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
+import org.springframework.dao.CannotAcquireLockException
+import org.springframework.dao.CannotSerializeTransactionException
 import java.time.Clock
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -22,6 +26,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 
+/** Deliberately not [BusinessDateProperties.DEFAULT_BUSINESS_DATE_LOCK_TIMEOUT]. */
+private val CONFIGURED_LOCK_TIMEOUT: Duration = Duration.ofSeconds(3)
+
 class BusinessDateServiceTests {
     private val lifecycleStore = FakeOrganisationLifecycleStoreForBusinessDate()
     private val businessDateStore = FakeBusinessDateStore()
@@ -30,6 +37,7 @@ class BusinessDateServiceTests {
     private val events = CapturingTransitionPublisherForBusinessDate()
     private val auditEvents = RecordingAuditRepositoryForBusinessDate()
     private val clock = Clock.fixed(Instant.parse("2026-07-17T10:15:30Z"), ZoneOffset.UTC)
+    private val lockBound = RecordingLockBound()
     private val service =
         BusinessDateService(
             lifecycleStore,
@@ -38,6 +46,8 @@ class BusinessDateServiceTests {
             guard,
             AuditService(auditEvents, clock),
             events,
+            lockBound,
+            BusinessDateProperties(CONFIGURED_LOCK_TIMEOUT),
             clock,
         )
 
@@ -320,6 +330,70 @@ class BusinessDateServiceTests {
         )
     }
 
+    @Test
+    fun `every mutation of the row bounds its wait for in-flight postings`() {
+        // Issue #125 gave the posting path a shared lock on `business_date`, which made every
+        // writer of that row a waiter: correct - a close must not sail past postings already in
+        // flight - and unacceptable unbounded, because PostgreSQL queues incoming lock requests
+        // behind pending ones, so an administrator stuck here stalls the tenant's whole posting
+        // path behind them. `initialize` is excluded on purpose: it inserts a row that does not
+        // exist yet, so it has nothing to wait on.
+        val organisationId = activeOrganisation()
+        val actorId = uuidV7()
+        businessDateStore.snapshots[organisationId] =
+            BusinessDateSnapshot(LocalDate.parse("2026-07-15"), "OPEN", 0)
+
+        service.advance(
+            AdvanceBusinessDateCommand(organisationId, LocalDate.parse("2026-07-16"), actorId),
+        )
+        service.startCob(StartCobCommand(organisationId, actorId))
+        service.completeCob(CompleteCobCommand(organisationId, actorId))
+        service.reopen(ReopenBusinessDateCommand(organisationId, actorId))
+
+        assertEquals(
+            List(4) { CONFIGURED_LOCK_TIMEOUT },
+            lockBound.applied,
+            "an unbounded wait on the business-date row is an operator request that may never " +
+                "return, and a tenant whose postings queue behind it",
+        )
+    }
+
+    @Test
+    fun `a lock wait that expires becomes the retryable business-date code`() {
+        // The other half of the bound: applying it is worth nothing if the expiry it produces
+        // reaches the caller as an uncategorised 500. `CannotAcquireLockException` is what Spring
+        // raises for PostgreSQL's 55P03 - `JooqBusinessDateLockTimeoutIntegrationTests` proves that
+        // against a real database - and this proves the service turns it into the code
+        // `docs/api/foundation-api.md` advertises.
+        val organisationId = activeOrganisation()
+        businessDateStore.snapshots[organisationId] =
+            BusinessDateSnapshot(LocalDate.parse("2026-07-15"), "OPEN", 0)
+        businessDateStore.lockWaitExpires = true
+
+        val failure =
+            assertFailsWith<ConflictException> {
+                service.startCob(StartCobCommand(organisationId, uuidV7()))
+            }
+
+        assertEquals(LifecycleErrorCodes.BUSINESS_DATE_LOCK_TIMEOUT, failure.code)
+    }
+
+    @Test
+    fun `a serialization failure is not mistaken for a lock-wait expiry`() {
+        // 40001 and 55P03 are different decisions and only one is this method's to name. Catching
+        // the supertype would swallow a serialization abort into a bounded-wait message, which is
+        // the shape ADR 0025 records as the reason accounting matches on the supertype *there* and
+        // not here.
+        val organisationId = activeOrganisation()
+        businessDateStore.snapshots[organisationId] =
+            BusinessDateSnapshot(LocalDate.parse("2026-07-15"), "OPEN", 0)
+        businessDateStore.serializationFails = true
+
+        assertFailsWith<CannotSerializeTransactionException> {
+            service.startCob(StartCobCommand(organisationId, uuidV7()))
+        }
+    }
+
     private fun activeOrganisation(): UUID =
         uuidV7().also {
             lifecycleStore.states[it] = OrganisationLifecycleState.ACTIVE
@@ -347,13 +421,37 @@ private class FakeOrganisationLifecycleStoreForBusinessDate :
     override fun hasRequiredMetadata(organisationId: UUID): Boolean = true
 }
 
+/**
+ * Records the bound every mutation applies before it touches the row.
+ *
+ * Its own assertion, not a no-op: `SET LOCAL lock_timeout` is the only thing standing between an
+ * operator's close-of-business and an unbounded wait behind in-flight postings, and a refactor that
+ * dropped the call would otherwise leave every test in this class green.
+ */
+private class RecordingLockBound : TransactionLockBound {
+    val applied = mutableListOf<Duration>()
+
+    override fun applyToCurrentTransaction(timeout: Duration) {
+        applied += timeout
+    }
+}
+
 private class FakeBusinessDateStore : BusinessDateStore {
     val snapshots = mutableMapOf<UUID, BusinessDateSnapshot>()
     val advancedTo = mutableMapOf<UUID, LocalDate>()
     val cobDates = mutableMapOf<UUID, LocalDate>()
     var advanceSucceeds = true
 
+    /** Raises what Spring raises for PostgreSQL's `55P03`, from inside the bounded region. */
+    var lockWaitExpires = false
+
+    /** Raises what Spring raises for a statement-level `40001`, which must not be translated. */
+    var serializationFails = false
+
     override fun current(organisationId: UUID): BusinessDateSnapshot? = snapshots[organisationId]
+
+    override fun lockCurrentForPosting(organisationId: UUID): BusinessDateSnapshot? =
+        error("only the posting path takes the business-date lock, and it is not under test here")
 
     override fun advance(
         organisationId: UUID,
@@ -401,6 +499,8 @@ private class FakeBusinessDateStore : BusinessDateStore {
         expectedRowVersion: Long,
         actorId: UUID,
     ): Boolean {
+        if (lockWaitExpires) throw CannotAcquireLockException("lock_timeout expired")
+        if (serializationFails) throw CannotSerializeTransactionException("could not serialize")
         val current = snapshots[organisationId] ?: return false
         if (current.rowVersion != expectedRowVersion) return false
         snapshots[organisationId] =

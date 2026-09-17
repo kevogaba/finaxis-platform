@@ -89,7 +89,7 @@ class LifecyclePermissionGuardAdapterTests {
     private fun adapterWith(lookup: MembershipSelectionLookup): LifecyclePermissionGuardAdapter {
         val resolver = EffectivePermissionResolver(NoPermissions, ConcurrentMapCacheManager())
         val cache = RequestPermissionCache(resolver)
-        val authorizationService = AuthorizationService(lookup, resolver, cache)
+        val authorizationService = AuthorizationService(lookup, cache, NoPermissions)
         return LifecyclePermissionGuardAdapter(authorizationService)
     }
 
@@ -198,5 +198,10 @@ class LifecyclePermissionGuardAdapterTests {
 
         override fun directPermissionEffects(membershipId: UUID): List<PermissionEffectAssignment> =
             emptyList()
+
+        override fun lockedBreakGlassGrant(
+            membershipId: UUID,
+            permissionCode: String,
+        ) = false
     }
 }

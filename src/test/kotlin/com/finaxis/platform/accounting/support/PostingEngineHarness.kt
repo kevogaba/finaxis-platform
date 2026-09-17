@@ -140,6 +140,9 @@ internal class FixedBusinessDates(
 ) : AccountingBusinessDateLookup {
     override fun currentBusinessDate(organisationId: UUID) =
         AccountingBusinessDate(organisationId, businessDate, postingAllowed = true)
+
+    override fun currentBusinessDateForPosting(organisationId: UUID) =
+        currentBusinessDate(organisationId)
 }
 
 /**

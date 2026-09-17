@@ -46,6 +46,14 @@ import java.util.UUID
  * for SSI to break. "No journal lands in a period closed before it committed" is a linearizability
  * requirement, and the shared row lock is the entire guarantee. See
  * `docs/adr/0025-serializable-posting-and-the-covering-period-lock.md`.
+ *
+ * **The same reasoning applies to the tenant business date, and [requireDayStillOpen] is where it
+ * is applied.** The close-of-business gate had exactly the shape the period gate had before issue
+ * #35: a plain read, decided from a snapshot pinned before a concurrent `startCob` could be seen.
+ * It is a locking read too now - taken for a *current-dated* posting, whose admissibility is what
+ * rests on the day, and deliberately not for a backdated one, which stays legal while the day is
+ * closing and must not make the close wait. Three gates on this path, one mechanism:
+ * `docs/adr/0026-real-time-gates-on-the-serializable-posting-path.md`.
  */
 class PostingPeriodResolver(
     private val periods: FiscalPeriodStateStore,
@@ -106,8 +114,15 @@ class PostingPeriodResolver(
     }
 
     /**
-     * Gates a backdated posting on [AccountingPermissions.JOURNAL_POST_PRIOR_PERIOD], locks the
-     * period covering [dates], and re-validates the freshly read status.
+     * Re-reads the business date under a lock, gates a backdated posting on
+     * [AccountingPermissions.JOURNAL_POST_PRIOR_PERIOD], locks the period covering [dates], and
+     * re-validates the freshly read status.
+     *
+     * The order is the lock order, and it is not arbitrary: a current-dated posting establishes
+     * the day from a row this transaction holds; a backdated one instead takes the break-glass
+     * gate against grant rows it holds; and the covering period is locked last, closest to the
+     * write. A posting therefore takes exactly one of the first two classes, never both. See ADR
+     * 0023 for the whole chain and why it has no cycle.
      *
      * Takes [dates] already resolved by [resolveDates] rather than re-deriving them, so the two
      * calls a new posting makes - one before its claim, one after - never disagree about what the
@@ -129,6 +144,9 @@ class PostingPeriodResolver(
         requireActiveTransaction()
 
         val classification = PostingDatePolicy.classify(dates.postingDate, dates.businessDate)
+        if (classification == PostingDateClassification.CURRENT) {
+            requireDayStillOpen(organisationId, dates)
+        }
         if (classification == PostingDateClassification.BACKDATED) {
             permissions.requireBreakGlassPermission(
                 actorId,
@@ -220,6 +238,65 @@ class PostingPeriodResolver(
                     ),
             ),
         )
+    }
+
+    /**
+     * Re-reads the tenant's business date under a shared row lock and re-applies the
+     * close-of-business gate to the row this transaction now holds.
+     *
+     * The window this closes is the one ADR 0026 was written for. `PostingEngine.post` pins the
+     * transaction's snapshot at its second statement and resolves the dates from a plain read of
+     * `business_date`; a `startCob` committing after that pin is invisible to every later plain
+     * read, so the gate `PostingDatePolicy` applies before the claim can only ever re-confirm what
+     * the snapshot already said. Measured on the pinned PostgreSQL, a current-dated journal
+     * committed into a day whose close-of-business had already started.
+     *
+     * A locking read is the whole repair, and it repairs by *failing*: above `READ COMMITTED` a row
+     * changed since the snapshot makes this statement raise `40001`, the posting rolls back with
+     * its claim, and
+     * [com.finaxis.platform.accounting.application.ledger.PostingTransactionBoundary] re-runs it at
+     * a fresh snapshot, where the day reads `CLOSING` and the posting is refused with
+     * `accounting.business_date_not_open`. The isolation level supplies none of that - a
+     * serializable posting that read this row *without* `FOR SHARE` commits into a closing day,
+     * because there is one rw-dependency edge and no cycle for SSI to break.
+     *
+     * **Only a current-dated posting takes it, and that is a correctness requirement rather than an
+     * optimisation.** A backdated posting is admissible *while the day is closing* - close-of-
+     * business must not deadlock corrections - so its admissibility does not rest on this row and
+     * it has no business holding it. Taking the lock unconditionally inverted exactly the rule it
+     * was added to serve: a long-running correction would have made `startCob` wait behind it and,
+     * because PostgreSQL queues incoming requests behind a pending exclusive one, parked every new
+     * posting in the tenant behind that wait.
+     *
+     * **The lock is per tuple, not per column, so an ordinary advance now aborts a current-dated
+     * posting too.** ADR 0023 states that trade for the `organisation` row and it is the same one
+     * here: any committed change to `business_date` - `startCob`, `advance`, a COB completion, a
+     * reopen - conflicts with this `FOR SHARE`. For a posting that is claiming *today*, that is the
+     * honest outcome rather than a cost: the day it asserted has moved, the retry resolves against
+     * the day that won, and `docs/architecture/accounting-dates-and-periods.md` says so.
+     */
+    private fun requireDayStillOpen(
+        organisationId: UUID,
+        dates: AccountingDates,
+    ) {
+        val locked =
+            businessDates.currentBusinessDateForPosting(organisationId)
+                ?: throw ConflictException(
+                    code = BUSINESS_DATE_UNAVAILABLE,
+                    safeDetail = "The organisation has no initialized business date.",
+                )
+        // An assertion about this transaction, not a race guard, so it is a `check` rather than a
+        // published code. Both reads come from one snapshot - `PostingEngine.post` refuses any
+        // isolation below `SERIALIZABLE` - so they can only disagree if that guard has stopped
+        // working, and a caller has nothing to do about it either way. An earlier revision raised a
+        // public `accounting.business_date_changed` here, which was the "published code nothing can
+        // raise" defect this module has been caught by once already.
+        check(locked.businessDate == dates.businessDate) {
+            "The locked business date ${locked.businessDate} disagrees with the resolved " +
+                "${dates.businessDate}, which one snapshot makes impossible: the posting path's " +
+                "snapshot-isolation guard is not doing its job."
+        }
+        PostingDatePolicy.requireOpenForPosting(dates.postingDate, locked)
     }
 
     private fun requireActiveTransaction() {

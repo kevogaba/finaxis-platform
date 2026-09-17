@@ -883,6 +883,10 @@ private class FakeReconciliationBusinessDateLookup : AccountingBusinessDateLooku
     var current: AccountingBusinessDate? = null
 
     override fun currentBusinessDate(organisationId: UUID): AccountingBusinessDate? = current
+
+    /** A read-side caller: it must never reach the posting path's locking business-date read. */
+    override fun currentBusinessDateForPosting(organisationId: UUID): AccountingBusinessDate? =
+        error("reconciliation must not take the posting lock on the business-date row")
 }
 
 /**

@@ -2,10 +2,10 @@ package com.finaxis.platform.accounting.adapter.outbound.persistence
 
 import com.finaxis.platform.accounting.AccountingLedgerActivity
 import com.finaxis.platform.accounting.application.FunctionalCurrencyLock
-import com.finaxis.platform.accounting.application.TransactionLockBound
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.config.AccountingProperties
 import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.persistence.TransactionLockBound
 import com.finaxis.platform.jooq.tables.references.JOURNAL_ENTRY
 import org.jooq.DSLContext
 import org.jooq.impl.DSL

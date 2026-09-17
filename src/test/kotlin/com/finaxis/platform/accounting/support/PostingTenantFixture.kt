@@ -9,6 +9,7 @@ import com.finaxis.platform.accounting.domain.AccountingContext
 import com.finaxis.platform.accounting.domain.AccountingSourceReference
 import com.finaxis.platform.accounting.domain.JournalEntryType
 import com.finaxis.platform.accounting.domain.MonetaryAmount
+import com.finaxis.platform.accounting.domain.PostingDateRequest
 import com.finaxis.platform.accounting.domain.PostingLeg
 import com.finaxis.platform.accounting.domain.PostingSide
 import com.finaxis.platform.accounting.schema.JournalSchemaFixture
@@ -188,6 +189,7 @@ internal class PostingTenantFixture(
         credit: String = debit,
         currency: String = "KES",
         debitAccount: UUID = tenant.debitAccountId,
+        dates: PostingDateRequest = PostingDateRequest(),
         engine: PostingEngine = this.engine,
     ): PostingReceipt =
         engine.post(
@@ -197,6 +199,7 @@ internal class PostingTenantFixture(
                 eventCode = "SAVINGS_DEPOSIT",
                 entryType = JournalEntryType.STANDARD,
                 narrative = "Counter deposit",
+                dates = dates,
                 // A real product-module caller carries this from PostingIntent.Facts; supplied by
                 // hand here because this helper calls the engine directly, so a "conflicting reuse"
                 // test that varies only the amount stays distinguishable (ADR 0023).
@@ -206,6 +209,27 @@ internal class PostingTenantFixture(
                     ),
             ),
         ) { ResolvedLegs(legs(tenant, debit, credit, currency, debitAccount), null) }
+
+    /**
+     * Moves the tenant's business date to the last day of its month, so that backdating by a few
+     * days stays inside the fiscal period [provisionTenant] opened.
+     *
+     * Without it a backdated scenario is date-dependent: provisioning sets the business date to the
+     * tenant's today, and on the first of a month `minusDays(1)` falls into the previous month,
+     * where no period exists and the posting is refused with `fiscal_period_not_found` for reasons
+     * that have nothing to do with what the test is about. Written straight to the row because
+     * `BusinessDateService.advance` refuses a date that is not after the current one.
+     */
+    fun moveBusinessDateToMonthEnd(tenant: Tenant): LocalDate {
+        val monthEnd = tenant.businessDate.withDayOfMonth(tenant.businessDate.lengthOfMonth())
+        dsl
+            .update(BUSINESS_DATE)
+            .set(BUSINESS_DATE.CURRENT_BUSINESS_DATE, monthEnd)
+            .set(BUSINESS_DATE.ROW_VERSION, BUSINESS_DATE.ROW_VERSION.plus(1))
+            .where(BUSINESS_DATE.ORGANISATION_ID.eq(tenant.organisationId))
+            .execute()
+        return monthEnd
+    }
 
     /** Installs the ambient request context the engine reconciles the caller's claim against. */
     fun <T> inContext(

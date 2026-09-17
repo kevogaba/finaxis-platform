@@ -16,6 +16,13 @@ gains one class: the `organisation` row `FOR SHARE` the engine takes immediately
 tenant-currency advisory lock. 0023's claim ordering, fingerprint composition and account locking
 are untouched.
 
+Amended in turn by
+[ADR 0026](0026-real-time-gates-on-the-serializable-posting-path.md), which found the same defect in
+two more gates: the tenant business date (issue #125) and break-glass authority (issue #123). The
+principle this record states in bold below was right and its application here was incomplete — it
+named two cases and should have named four. Nothing below is withdrawn; the Consequences gain the
+paragraph at the end saying so.
+
 This record shipped with a stated forward dependency — the isolation raise landed first, with no
 retry — and the branch that follows discharges it. The Spring Retry boundary, the
 `accounting.posting_retries_exhausted` code and the two integration assertions that were weakened
@@ -161,6 +168,13 @@ is a **linearizability** requirement, not a serializability one, and **no isolat
 it**. The explicit `FOR SHARE` lock is the entire guarantee, at every isolation level, and it was
 the entire guarantee before this change too. A future author who deletes it because "we are
 serializable now" reintroduces precisely the bug ADR 0022 exists to prevent.
+
+**And the same is true of every other gate on this path, which this record did not say and should
+have.** The sentence above is written as though the fiscal period were the only place the
+distinction bites. It is not: the tenant business date and break-glass authority have exactly this
+shape, were exactly this wrong, and are repaired the same way in
+[ADR 0026](0026-real-time-gates-on-the-serializable-posting-path.md). A reader who takes the
+principle from here should take the list from there.
 
 **The fiscal-period lock and the status read become one statement, and the unlocked-lookup shape is
 deleted rather than deprecated.** `FiscalPeriodStateStore.lockForPosting(key)` is replaced by
@@ -495,3 +509,14 @@ applies to its own residual-window paragraph and to the twin of it in the accoun
 reasoned *"under READ COMMITTED"* about a posting path that no longer runs there, and both are
 corrected in the same commit. A statement about isolation left true in one document and false in
 another is the one a future author will quote back.
+
+**Two more gates had this shape and this record named neither.** Issue #125 (the close-of-business
+gate) and issue #123 (break-glass authority) were both found by review on the pull request that
+shipped this change, and both were verified to be real. Neither is a regression in the strict
+sense — both were already wrong at `READ COMMITTED`, and raising the isolation widened the window
+from read-to-commit to snapshot-pin-to-commit — but the honest reading is that this record derived
+the right principle, applied it to the two gates it was looking at, and did not ask the question of
+the others. [ADR 0026](0026-real-time-gates-on-the-serializable-posting-path.md) asks it of all of
+them, repairs the two that needed it, and writes down the answer for every authorization check
+reachable from this transaction, including where the answer is "unchanged". The lock chain those
+repairs extend is in [ADR 0023](0023-posting-idempotency-and-account-locking.md), as this one's is.

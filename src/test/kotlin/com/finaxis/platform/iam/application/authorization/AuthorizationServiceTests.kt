@@ -202,26 +202,92 @@ class AuthorizationServiceTests {
         service.requirePermission(userId, organisationId, branchId, "branch.create")
     }
 
+    @Test
+    fun `break-glass authority is read under a lock and never from the cached resolver`() {
+        val queries = FakePermissionResolutionQueries(mapOf(tenantKey() to setOf(BREAK_GLASS)))
+        val service = authorizationService(queries, memberships = tenantMembership())
+
+        service.requireBreakGlassPermission(userId, organisationId, BREAK_GLASS)
+
+        assertEquals(1, queries.lockedReads, "the gate must go through the locking read")
+        assertEquals(
+            0,
+            queries.cachedResolutions,
+            "the gate reached the cache-first resolver: a cached answer is by construction a " +
+                "pre-revocation answer, and a break-glass control that a cache can satisfy is " +
+                "not a control",
+        )
+    }
+
+    @Test
+    fun `break-glass authority is denied when the locking read finds no grant`() {
+        val service = authorizationService(memberships = tenantMembership())
+
+        assertThrows<AccessDeniedException> {
+            service.requireBreakGlassPermission(userId, organisationId, BREAK_GLASS)
+        }
+    }
+
+    @Test
+    fun `break-glass authority is not granted to a system actor`() {
+        val service = authorizationService(memberships = tenantMembership())
+
+        assertThrows<AccessDeniedException> {
+            service.requireBreakGlassPermission(SystemActor.ID, organisationId, BREAK_GLASS)
+        }
+    }
+
+    @Test
+    fun `break-glass authority is denied in an organisation that is not active`() {
+        val service =
+            authorizationService(
+                FakePermissionResolutionQueries(mapOf(tenantKey() to setOf(BREAK_GLASS))),
+                memberships = tenantMembership(),
+                organisationStatus = OrganisationStatus.SUSPENDED,
+            )
+
+        assertThrows<AccessDeniedException> {
+            service.requireBreakGlassPermission(userId, organisationId, BREAK_GLASS)
+        }
+    }
+
+    private fun tenantKey() = PermissionKey(membershipId, null)
+
+    private fun tenantMembership() = mapOf(userId to selection())
+
     private fun authorizationService(
         memberships: Map<UUID, MembershipSelection> = emptyMap(),
         permissions: Map<PermissionKey, Set<String>> = emptyMap(),
         organisationStatus: OrganisationStatus = OrganisationStatus.ACTIVE,
+    ): AuthorizationService =
+        authorizationService(
+            FakePermissionResolutionQueries(permissions),
+            memberships,
+            organisationStatus,
+        )
+
+    /**
+     * The same wiring with the caller holding the fake, for the assertions that count its reads.
+     *
+     * One fake serves both the cached resolver and the locking break-glass read, which is what
+     * makes "the gate never touched the cached path" assertable at all.
+     */
+    private fun authorizationService(
+        queries: FakePermissionResolutionQueries,
+        memberships: Map<UUID, MembershipSelection> = emptyMap(),
+        organisationStatus: OrganisationStatus = OrganisationStatus.ACTIVE,
     ): AuthorizationService {
-        val resolver = effectivePermissionResolver(permissions)
+        val resolver =
+            EffectivePermissionResolver(
+                queries,
+                ConcurrentMapCacheManager(EffectivePermissionResolver.CACHE_NAME),
+            )
         return AuthorizationService(
             FakeMembershipSelectionLookup(memberships, organisationStatus),
-            resolver,
             RequestPermissionCache(resolver),
+            queries,
         )
     }
-
-    private fun effectivePermissionResolver(
-        permissions: Map<PermissionKey, Set<String>>,
-    ): EffectivePermissionResolver =
-        EffectivePermissionResolver(
-            FakePermissionResolutionQueries(permissions),
-            ConcurrentMapCacheManager(EffectivePermissionResolver.CACHE_NAME),
-        )
 
     private fun selection(): MembershipSelection =
         MembershipSelection(
@@ -230,6 +296,11 @@ class AuthorizationServiceTests {
             organisationId = organisationId,
             status = MembershipStatus.ACTIVE,
         )
+
+    private companion object {
+        /** A real break-glass code, so the test reads as the control it stands for. */
+        const val BREAK_GLASS = "journal.post_prior_period"
+    }
 }
 
 private data class PermissionKey(
@@ -265,15 +336,38 @@ private class FakeMembershipSelectionLookup(
 private class FakePermissionResolutionQueries(
     private val permissions: Map<PermissionKey, Set<String>>,
 ) : PermissionResolutionQueries {
+    /** How often the *cached* resolution path read this fake, as opposed to the locking one. */
+    var cachedResolutions = 0
+
+    /** How many times the locking break-glass read was issued. */
+    var lockedReads = 0
+
     override fun membershipStatus(membershipId: UUID): MembershipStatus? = MembershipStatus.ACTIVE
 
     override fun rolePermissionCodes(
         membershipId: UUID,
         branchId: UUID?,
-    ): Set<String> = permissions[PermissionKey(membershipId, branchId)].orEmpty()
+    ): Set<String> {
+        cachedResolutions++
+        return permissions[PermissionKey(membershipId, branchId)].orEmpty()
+    }
 
     override fun directPermissionEffects(
         membershipId: UUID,
     ): List<com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment> =
         emptyList()
+
+    /**
+     * The locking break-glass read, answered from the same map the cached resolver reads.
+     *
+     * Deliberately the *same* source: these tests are about the decision rule, and a fake that
+     * answered from somewhere else would let the two drift without a failure.
+     */
+    override fun lockedBreakGlassGrant(
+        membershipId: UUID,
+        permissionCode: String,
+    ): Boolean {
+        lockedReads++
+        return permissionCode in permissions[PermissionKey(membershipId, null)].orEmpty()
+    }
 }

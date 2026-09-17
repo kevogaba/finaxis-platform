@@ -251,6 +251,17 @@ system-actor short-circuit. Their use is audited at the point of enforcement, an
 fails if enforcement and audit are ever separated. See
 `docs/architecture/accounting-dates-and-periods.md` for the reasoning.
 
+That method also reads **no cache and takes a lock**. It resolves one code through
+`PermissionResolutionQueries.lockedBreakGlassGrant`, which holds every row the answer rests on
+`FOR SHARE` until the caller's transaction commits, so a revocation committed while a backdated
+posting is in flight either waits for it or aborts it. Until issue #123 it resolved through the
+cache-first `EffectivePermissionResolver` from inside the posting's `SERIALIZABLE` transaction,
+where a cache hit answered from before the revocation and a cache *miss* — which revoking produces,
+because revoking evicts — fell through to a database read taken from the posting's pre-revocation
+snapshot. Ordinary `requireTenantPermission` checks are unchanged and keep the cache; the asymmetry
+is argued in
+[ADR 0026](../adr/0026-real-time-gates-on-the-serializable-posting-path.md).
+
 Two codes are classified break-glass and appear in **no default tenant role bundle** (`PLATFORM_SUPER_ADMIN` holds the whole catalogue, as described below):
 
 - `fiscal_period.reopen` — reopening a closed accounting period.

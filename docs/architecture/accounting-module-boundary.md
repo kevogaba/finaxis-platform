@@ -102,6 +102,32 @@ state enums, and `AccountingBusinessDateLookup` returns a `postingAllowed` flag 
 string, so a new lifecycle state cannot silently change accounting behaviour — it is denied until
 someone decides otherwise in the adapter.
 
+**`AccountingBusinessDateLookup` answers two ways for the same reason `AccountingTenantLookup`
+does.** `currentBusinessDate` is a plain read, for read-side callers and for the pre-claim read the
+idempotency fingerprint is computed from; `currentBusinessDateForPosting` is the same select with
+`FOR SHARE`, and it is the only one a posting may decide close-of-business eligibility from once it
+holds its claim. Only a *current-dated* posting calls it: a backdated correction stays legal while
+the day is closing, so it neither needs the row nor may hold it, since holding it would make
+close-of-business queue behind exactly the corrections it must not deadlock. Two methods rather than
+a boolean parameter, because the two have different
+preconditions — the second requires an active transaction and leaves a lock behind — and a flag
+would let a read-side caller take that lock by accident.
+
+That distinction is not cosmetic. Until issue #125 there was only the plain read, and the posting
+path decided the close-of-business gate from a snapshot pinned before a concurrent `startCob` could
+be seen, so a current-dated journal committed into a closing day. `SERIALIZABLE` catches nothing
+there — one rw-dependency edge, no cycle — and the shared row lock is the entire guarantee, exactly
+as it is for the covering period and the functional currency. The operational consequence is that
+every mutation of `business_date` now waits for in-flight postings and is bounded by
+`finaxis.lifecycle.business-date-lock-timeout`. See
+[ADR 0026](../adr/0026-real-time-gates-on-the-serializable-posting-path.md).
+
+**`AccountingPermissionGuard.requireBreakGlassPermission` had the same defect and is repaired the
+same way.** It resolved through `iam`'s cache-first `EffectivePermissionResolver` from inside the
+posting transaction, so a revocation was either answered from a stale cache entry or — after the
+eviction a revocation performs — from a stale snapshot. It now answers from a locking, cache-free
+read of the one code. The port's signature is unchanged; only what `iam` does behind it changed.
+
 ## Business date access
 
 Accounting needs the tenant business date, and before this module there was **no cross-module way

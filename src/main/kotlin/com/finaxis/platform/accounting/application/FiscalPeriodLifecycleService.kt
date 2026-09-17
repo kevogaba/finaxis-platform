@@ -19,6 +19,7 @@ import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.audit.AuditSeverity
+import com.finaxis.platform.common.persistence.TransactionLockBound
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionCommand
 import com.finaxis.platform.common.transitions.TransitionException

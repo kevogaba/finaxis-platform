@@ -6,12 +6,19 @@ Accepted
 
 Date: 2026-09-02
 
-Amended by [ADR 0025](0025-serializable-posting-and-the-covering-period-lock.md). Every decision
-below stands; the lock chain in the consequences gains one class. Raising the posting path to
-`SERIALIZABLE` made the engine's post-lock functional-currency re-read snapshot-bound, so that
-re-read is now a locking read of the `organisation` row, taken immediately after the tenant-currency
-advisory lock and before the fiscal period. The ordering paragraph below is restated with that class
-in it, and its acyclicity re-derived from the code rather than assumed.
+Amended by [ADR 0025](0025-serializable-posting-and-the-covering-period-lock.md) and then by
+[ADR 0026](0026-real-time-gates-on-the-serializable-posting-path.md). Every decision below stands;
+the lock chain in the consequences gains three classes across the two amendments.
+
+0025 added the `organisation` row: raising the posting path to `SERIALIZABLE` made the engine's
+post-lock functional-currency re-read snapshot-bound, so that re-read is now a locking read of that
+row, taken immediately after the tenant-currency advisory lock and before the fiscal period.
+
+0026 added the `business_date` row, taken `FOR SHARE` by a **current-dated** posting, and the `iam`
+grant rows a **backdated** posting's break-glass gate rests on — the same defect as the currency
+one, found in two more gates. The two are mutually exclusive: a posting takes one or the other,
+never both. The ordering paragraph below is restated with all three classes in it, and its
+acyclicity re-derived from the code rather than assumed.
 
 ## Context
 
@@ -198,9 +205,14 @@ row lock the idempotency claim holds to commit; then the tenant functional-curre
 taken **shared** (`FunctionalCurrencyLock.lockForPosting`, issue #94, the first thing `postNew`
 does); then the `organisation` row shared (`FOR SHARE`, taken by
 `AccountingTenantLookup.functionalCurrencyForPosting` in the very next statement - issue #121,
-closed here rather than deferred); then the fiscal-period shared row lock; then the `gl_account`
-shared row locks in ascending id order; and last the `reference_sequence` row lock `allocateNumber`
-takes.
+closed here rather than deferred); then, **for a current-dated posting only**, the `business_date`
+row shared (`FOR SHARE`, taken by `AccountingBusinessDateLookup.currentBusinessDateForPosting` in
+`PostingPeriodResolver.lockAndValidate` - issue #125); then, **for a backdated posting only**, the
+`iam` grant rows shared - `user_organisation_membership`, then either `membership_permission` plus
+`permission`, or `user_role_assignment` plus `role` plus `role_permission` plus `permission`
+(`PermissionResolutionQueries.lockedBreakGlassGrant` - issue #123); then the fiscal-period shared
+row lock; then the `gl_account` shared row locks in ascending id order; and last the
+`reference_sequence` row lock `allocateNumber` takes.
 `ChartOfAccountsService` may hold, in order: the chart-hierarchy advisory lock, then one
 `gl_account` exclusive row lock.
 `GlAccountLifecycleService` and `PostingRuleService.approve` each hold at most one lock class beyond
@@ -257,6 +269,31 @@ is terminal in every non-posting flow that takes it. That is the property a futu
 re-check - not that the two sides "look ordered the same", but that no flow holds the `organisation`
 row while wanting the currency advisory lock, the `posting_request` row, a `manual_journal` row or
 the reversal advisory lock.
+
+**The `business_date` and `iam` grant-row classes introduce no cycle either, and the argument is a
+property of their writers rather than of the ordering.** ADR 0026 derives it in full; the short form
+belongs here, with the chain it constrains. Every lock a posting takes from class 4 onwards is
+**shared**, so postings never conflict with each other there. A deadlock would therefore need a
+writer of one of the new classes to also want a class a posting holds *before* it, and no such
+writer exists. `BusinessDateService` is the only writer of `business_date`, and it takes no advisory
+lock, no accounting row lock and no `iam` row lock — it reads `organisation` and the actor's
+permissions with plain selects. `RoleManagementService` and `UserProvisioningService` are the only
+writers of the grant rows, and they take nothing from accounting or lifecycle either; their one
+overlap with a posting is the `audit_event` insert, and inserts do not conflict on rows. So the
+posting is the only transaction that ever holds locks from both sides, and a cycle needs two. **The
+property a future change must re-check is that a writer of `business_date` or of an `iam` grant row
+never acquires an accounting lock or the tenant-currency advisory lock.**
+
+**Every `business_date` mutation is now a waiter, and every one of them is now bounded.**
+`startCob`, `advance`, `completeCob` and `reopen` all update that row, so each queues behind the
+*current-dated* postings in flight for the tenant — which is the point, and which unbounded would
+stall the tenant's whole posting path, because a queued exclusive request makes new postings queue
+behind it in turn exactly as the currency change does above. Backdated corrections hold nothing
+here and never make a close wait, which is the rule that decided the class is conditional.
+`BusinessDateService` applies
+`finaxis.lifecycle.business-date-lock-timeout` to all four and surfaces an expiry as the retryable
+`lifecycle.business_date_lock_timeout`. `initialize` is excluded: it inserts a row that does not
+exist yet.
 
 **The row lock is per tuple, not per column, and that widens what aborts a posting.** Any committed
 update to the tenant's `organisation` row - an activation, a suspension, a closure, each of which

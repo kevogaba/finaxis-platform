@@ -4,12 +4,14 @@ import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.persistence.TransactionLockBound
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
+import org.springframework.dao.CannotAcquireLockException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
@@ -20,6 +22,19 @@ import java.util.UUID
  * Manages the controlled organisation business date and its close-of-business status foundation.
  * Mutations require an active organisation, tenant-scoped permission, history, audit, and
  * externalized lifecycle-event records.
+ *
+ * **Every mutation of the row can now wait, and every mutation is therefore bounded.** Issue #125
+ * gave the posting path a shared lock on `business_date`, so an advance, a `startCob`, a COB
+ * completion and a reopen each queue behind the *current-dated* postings in flight for the tenant.
+ * That is the point of the lock - a close-of-business that sails past postings already running is
+ * the defect it closes - but an unbounded wait turns a fast status flip into a request that may
+ * never return, and, because PostgreSQL queues incoming requests behind pending ones, stalls the
+ * tenant's whole posting path while it waits. [BusinessDateProperties] sizes the bound; an expiry
+ * surfaces as [LifecycleErrorCodes.BUSINESS_DATE_LOCK_TIMEOUT], which is retryable.
+ *
+ * Two things never make an operator wait here. `initialize` inserts a row that does not exist yet,
+ * so it has nothing to wait on; and a **backdated** correction takes no lock on this row at all,
+ * deliberately, because close-of-business must not deadlock corrections.
  */
 @Service
 class BusinessDateService(
@@ -29,6 +44,8 @@ class BusinessDateService(
     private val permissionGuard: PermissionGuard,
     private val auditService: AuditService,
     private val eventPublisher: TransitionEventPublisher,
+    private val lockTimeout: TransactionLockBound,
+    private val properties: BusinessDateProperties,
     private val clock: Clock,
 ) {
     /** Initializes the singleton organisation business date in its OPEN state. */
@@ -65,7 +82,10 @@ class BusinessDateService(
 
     /** Advances an active, open organisation business date by one optimistic-locked step. */
     @Transactional
-    fun advance(command: AdvanceBusinessDateCommand): BusinessDateAdvanceResult {
+    fun advance(command: AdvanceBusinessDateCommand): BusinessDateAdvanceResult =
+        withBoundedLockWait { advanceBounded(command) }
+
+    private fun advanceBounded(command: AdvanceBusinessDateCommand): BusinessDateAdvanceResult {
         requireActive(command.organisationId)
         requirePermission(command.actorId, command.organisationId, BUSINESS_DATE_ADVANCE_PERMISSION)
         val current = requireCurrent(command.organisationId)
@@ -106,20 +126,24 @@ class BusinessDateService(
 
     /** Moves an open business date into CLOSING and captures its COB date. */
     @Transactional
-    fun startCob(command: StartCobCommand): BusinessDateView {
+    fun startCob(command: StartCobCommand): BusinessDateView =
+        withBoundedLockWait { startCobBounded(command) }
+
+    private fun startCobBounded(command: StartCobCommand): BusinessDateView {
         requireActive(command.organisationId)
         requirePermission(command.actorId, command.organisationId, COB_START_PERMISSION)
         val current = requireCurrent(command.organisationId)
         if (current.status != OPEN) {
             throw ConflictException()
         }
-        if (!businessDateStore.startCob(
+        val started =
+            businessDateStore.startCob(
                 command.organisationId,
                 current.currentBusinessDate,
                 current.rowVersion,
                 command.actorId,
             )
-        ) {
+        if (!started) {
             throw ConflictException()
         }
         record(
@@ -143,20 +167,24 @@ class BusinessDateService(
 
     /** Moves a CLOSING business date into CLOSED without changing its recorded COB date. */
     @Transactional
-    fun completeCob(command: CompleteCobCommand): BusinessDateView {
+    fun completeCob(command: CompleteCobCommand): BusinessDateView =
+        withBoundedLockWait { completeCobBounded(command) }
+
+    private fun completeCobBounded(command: CompleteCobCommand): BusinessDateView {
         requireActive(command.organisationId)
         requirePermission(command.actorId, command.organisationId, COB_COMPLETE_PERMISSION)
         val current = requireCurrent(command.organisationId)
         if (current.status != CLOSING) {
             throw ConflictException()
         }
-        if (!businessDateStore.changeStatus(
+        val completed =
+            businessDateStore.changeStatus(
                 command.organisationId,
                 CLOSED,
                 current.rowVersion,
                 command.actorId,
             )
-        ) {
+        if (!completed) {
             throw ConflictException()
         }
         record(
@@ -180,20 +208,24 @@ class BusinessDateService(
 
     /** Reopens a CLOSED business date without changing its recorded COB date. */
     @Transactional
-    fun reopen(command: ReopenBusinessDateCommand): BusinessDateView {
+    fun reopen(command: ReopenBusinessDateCommand): BusinessDateView =
+        withBoundedLockWait { reopenBounded(command) }
+
+    private fun reopenBounded(command: ReopenBusinessDateCommand): BusinessDateView {
         requireActive(command.organisationId)
         requirePermission(command.actorId, command.organisationId, BUSINESS_DATE_REOPEN_PERMISSION)
         val current = requireCurrent(command.organisationId)
         if (current.status != CLOSED) {
             throw ConflictException()
         }
-        if (!businessDateStore.changeStatus(
+        val reopened =
+            businessDateStore.changeStatus(
                 command.organisationId,
                 OPEN,
                 current.rowVersion,
                 command.actorId,
             )
-        ) {
+        if (!reopened) {
             throw ConflictException()
         }
         record(
@@ -234,6 +266,38 @@ class BusinessDateService(
         }
         requirePermission(query.actorId, query.organisationId, BUSINESS_DATE_VIEW_PERMISSION)
         return historyStore.list(query.organisationId, query.page, query.size)
+    }
+
+    /**
+     * Bounds this transaction's wait for the `business_date` row, and names the expiry.
+     *
+     * **Wrapped around the whole mutation, deliberately, because `SET LOCAL` is transaction-scoped
+     * and the translation must be too.** An earlier revision wrapped only the store call, which
+     * left the bound applying to every statement after it - the history insert, the audit insert,
+     * the outbox write - while the `catch` covered none of them, so an expiry there would have
+     * escaped as an uncategorised `500` instead of the retryable `409` this same method publishes.
+     * A bound you cannot narrow has to be matched by a `catch` you widen.
+     *
+     * `CannotAcquireLockException`, not `QueryTimeoutException`: PostgreSQL raises `55P03` when
+     * `lock_timeout` expires and Spring lists `55P03` under `cannotAcquireLockCodes`, while
+     * `QueryTimeoutException` is a *sibling* under `TransientDataAccessException` and never a
+     * supertype - the mistake `FiscalPeriodLifecycleService` made once and records in a comment,
+     * where it left a published code nothing could raise. `40001` is *not* caught: a serialization
+     * failure is a different decision and must keep propagating.
+     */
+    private fun <T> withBoundedLockWait(block: () -> T): T {
+        lockTimeout.applyToCurrentTransaction(properties.businessDateLockTimeout)
+        return try {
+            block()
+        } catch (ex: CannotAcquireLockException) {
+            throw ConflictException(
+                code = LifecycleErrorCodes.BUSINESS_DATE_LOCK_TIMEOUT,
+                safeDetail =
+                    "The organisation business date is busy with in-flight postings; " +
+                        "retry shortly.",
+                cause = ex,
+            )
+        }
     }
 
     private fun requireActive(organisationId: UUID) {

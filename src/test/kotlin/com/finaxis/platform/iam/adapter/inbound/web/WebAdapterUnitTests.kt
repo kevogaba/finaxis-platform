@@ -109,23 +109,26 @@ class WebAdapterUnitTests {
     }
 
     private fun selectionService(lookup: MembershipSelectionLookup): AuthSelectionService {
-        val resolver =
-            EffectivePermissionResolver(
-                object : PermissionResolutionQueries {
-                    override fun membershipStatus(membershipId: UUID) = MembershipStatus.ACTIVE
+        val queries =
+            object : PermissionResolutionQueries {
+                override fun membershipStatus(membershipId: UUID) = MembershipStatus.ACTIVE
 
-                    override fun rolePermissionCodes(
-                        membershipId: UUID,
-                        branchId: UUID?,
-                    ) = setOf("auth.select_organisation", "auth.select_branch")
+                override fun rolePermissionCodes(
+                    membershipId: UUID,
+                    branchId: UUID?,
+                ) = setOf("auth.select_organisation", "auth.select_branch")
 
-                    override fun directPermissionEffects(membershipId: UUID) =
-                        emptyList<PermissionEffectAssignment>()
-                },
-                ConcurrentMapCacheManager(),
-            )
+                override fun directPermissionEffects(membershipId: UUID) =
+                    emptyList<PermissionEffectAssignment>()
+
+                override fun lockedBreakGlassGrant(
+                    membershipId: UUID,
+                    permissionCode: String,
+                ) = false
+            }
+        val resolver = EffectivePermissionResolver(queries, ConcurrentMapCacheManager())
         val cache = RequestPermissionCache(resolver)
-        val authorizationService = AuthorizationService(lookup, resolver, cache)
+        val authorizationService = AuthorizationService(lookup, cache, queries)
         return AuthSelectionService(lookup, authorizationService)
     }
 
