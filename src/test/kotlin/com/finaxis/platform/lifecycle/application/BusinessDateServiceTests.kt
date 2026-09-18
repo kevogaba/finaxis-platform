@@ -38,6 +38,7 @@ class BusinessDateServiceTests {
     private val auditEvents = RecordingAuditRepositoryForBusinessDate()
     private val clock = Clock.fixed(Instant.parse("2026-07-17T10:15:30Z"), ZoneOffset.UTC)
     private val lockBound = RecordingLockBound()
+    private val dailyBalanceBuilds = RecordingDailyBalanceBuilds()
     private val service =
         BusinessDateService(
             lifecycleStore,
@@ -46,6 +47,7 @@ class BusinessDateServiceTests {
             guard,
             AuditService(auditEvents, clock),
             events,
+            dailyBalanceBuilds,
             lockBound,
             BusinessDateProperties(CONFIGURED_LOCK_TIMEOUT),
             clock,
@@ -156,6 +158,32 @@ class BusinessDateServiceTests {
         val event = assertIs<ExternalizedTransitionEvent>(events.published.single())
         assertEquals("finaxis.lifecycle.organisation.business-date-advanced", event.target)
         assertEquals("BusinessDateAdvanced", event.metadata["eventType"])
+        // The date LEFT, not the one arrived at. Once the tenant's date has moved past a day, no
+        // journal can be recorded against it again, which is what makes the set the projection
+        // build enumerates closed rather than still filling.
+        assertEquals(
+            listOf(organisationId to LocalDate.parse("2026-07-15")),
+            dailyBalanceBuilds.scheduled,
+        )
+    }
+
+    @Test
+    fun `a refused advance schedules no daily-balance build`() {
+        val organisationId = activeOrganisation()
+        businessDateStore.snapshots[organisationId] =
+            BusinessDateSnapshot(LocalDate.parse("2026-07-15"), "OPEN", 0)
+
+        assertFailsWith<InvalidOperationException> {
+            service.advance(
+                AdvanceBusinessDateCommand(
+                    organisationId,
+                    LocalDate.parse("2026-07-14"),
+                    uuidV7(),
+                ),
+            )
+        }
+
+        assertEquals(emptyList(), dailyBalanceBuilds.scheduled)
     }
 
     @Test
@@ -428,6 +456,17 @@ private class FakeOrganisationLifecycleStoreForBusinessDate :
  * operator's close-of-business and an unbounded wait behind in-flight postings, and a refactor that
  * dropped the call would otherwise leave every test in this class green.
  */
+private class RecordingDailyBalanceBuilds : DailyBalanceBuildScheduler {
+    val scheduled = mutableListOf<Pair<UUID, LocalDate>>()
+
+    override fun scheduleBuild(
+        organisationId: UUID,
+        businessDateLeft: LocalDate,
+    ) {
+        scheduled += organisationId to businessDateLeft
+    }
+}
+
 private class RecordingLockBound : TransactionLockBound {
     val applied = mutableListOf<Duration>()
 

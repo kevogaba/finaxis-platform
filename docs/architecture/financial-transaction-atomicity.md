@@ -102,17 +102,48 @@ evaluates it both inside the transaction under test and from a second, independe
 
 ## Probes available today
 
-`FoundationAtomicityProbes` covers the tables that exist now:
+`FoundationAtomicityProbes` covers the tables that exist now. An earlier revision of this table
+listed only the first seven and described them as *"the tables that exist now"* while the source
+already defined seventeen — every ledger and manual-journal probe issue #41 and issue #48 added was
+missing, including the three this same document told the reader to expect.
+
+Foundation:
 
 | Probe | Covers |
 | --- | --- |
 | `organisationSettingRows(org, key)` | All rows for a setting key, effective or closed |
 | `openOrganisationSettingRows(org, key)` | Only the currently effective row |
 | `businessDateHistoryRows(org)` | Append-only business-date history |
+| `advancedBusinessDateRows(org, expected)` | The business-date row itself, at an expected value |
 | `auditEventRows(org, action, outcome)` | Audit rows for one action and outcome |
 | `organisationTransitionLogRows(entityId)` | Append-only lifecycle transition log |
+| `bootstrapSubmissionAttempts(org)` | The bootstrap row's attempt counter, which is updated rather than inserted |
 | `outboxRecordRows(aggregateId)` | Namastack outbox rows mentioning an aggregate |
 | `eventPublicationRows()` | Spring Modulith event publications |
+
+Ledger, added by issue #41:
+
+| Probe | Covers |
+| --- | --- |
+| `postingRequestRows(org)` | Posting requests |
+| `journalEntryRows(org)` | Journal headers |
+| `journalLineRows(org)` | Journal lines |
+| `journalSequenceValue(org)` | The gapless `JOURNAL` counter — the one **UPDATE** the posting path performs, which counting appended rows cannot see roll back |
+
+Manual journals, added by issue #48:
+
+| Probe | Covers |
+| --- | --- |
+| `manualJournalRows(org)` | Draft headers |
+| `manualJournalLineRows(org)` | Draft lines |
+| `manualJournalTransitionLogRows(org)` | Append-only draft transition log |
+| `manualJournalStatus(journalId)` | The draft's `POSTED` status, moved in the same transaction as the journal write |
+
+Derived balances, added by issue #47:
+
+| Probe | Covers |
+| --- | --- |
+| `glAccountDailyBalanceRows(org)` | Daily-balance projection rows — present so a test can assert the projection **does not move** inside a posting transaction, which is what keeps `INV-12` and the write-hotspot refusal honest |
 
 `openOrganisationSettingRows` exists for a specific reason: a settings update **closes** the
 previous time-effective row and inserts a replacement. Counting all rows for the key sees the
@@ -134,6 +165,16 @@ plus post-commit visibility:
 | Failure after event registration | Throw after `BusinessDateService.advance` has written history, audit and the event | All three roll back; the business date is unchanged |
 | Nested transactional services | Submit an already-submitted organisation, so the FSM rejects across two nested `@Transactional` proxies | Transition log and outbox unchanged; the `REQUIRES_NEW` rejection audit **survives** |
 | Post-commit visibility | None — hold the transaction open | History, audit and outbox rows are invisible to a second connection until commit |
+
+The accounting suites extend the same gate to the ledger's own write paths:
+
+| Suite | What it proves atomic |
+| --- | --- |
+| `PostingEngineIntegrationTests` | Request, journal, lines and the gapless counter commit or roll back together |
+| `PostingRetryEffectsIntegrationTests` | A serialization retry leaves no durable trace of the attempt that lost |
+| `JournalReversalIntegrationTests` | A reversal's request, journal and lines, and the audit that records it |
+| `ManualJournalIntegrationTests` | Approval's draft-status move and the journal it posts |
+| `RollbackObservationArtifactIntegrationTests` | What a rolled-back posting leaves behind, observed rather than assumed |
 
 ## Adding a probe for a new accounting table
 

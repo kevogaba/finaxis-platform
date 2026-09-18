@@ -5,7 +5,6 @@ import com.finaxis.platform.accounting.ControlSubledgerKind
 import com.finaxis.platform.accounting.application.RequiredSnapshotIsolation
 import com.finaxis.platform.accounting.application.SnapshotIsolationGuard
 import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
-import com.finaxis.platform.accounting.application.reconciliation.LedgerBalanceQuery
 import com.finaxis.platform.accounting.application.reconciliation.NewReconciliationRun
 import com.finaxis.platform.accounting.application.reconciliation.ProofSnapshot
 import com.finaxis.platform.accounting.application.reconciliation.ReconciliationRun
@@ -14,44 +13,16 @@ import com.finaxis.platform.accounting.application.reconciliation.Reconciliation
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.jooq.tables.records.ControlAccountReconciliationRunRecord
 import com.finaxis.platform.jooq.tables.references.CONTROL_ACCOUNT_RECONCILIATION_RUN
-import com.finaxis.platform.jooq.tables.references.JOURNAL_LINE
 import org.jooq.DSLContext
 import org.jooq.JSONB
 import org.jooq.impl.DSL
 import org.springframework.stereotype.Component
 import org.springframework.transaction.support.TransactionSynchronizationManager
-import java.math.BigDecimal
 import java.time.Clock
 import java.time.Instant
-import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.UUID
-
-/**
- * The general-ledger side of a control-account proof: one bounded aggregate over the account's
- * lines, served by `idx_journal_line_account_date`. Issue #47's projection replaces the scan with
- * one row read; the contract stays.
- */
-@Component
-class JooqLedgerBalanceQuery(
-    private val dsl: DSLContext,
-) : LedgerBalanceQuery {
-    override fun signedBalanceAsOf(
-        organisationId: UUID,
-        accountId: UUID,
-        branchId: UUID?,
-        asOfDate: LocalDate,
-    ): BigDecimal =
-        dsl
-            .select(DSL.coalesce(DSL.sum(JOURNAL_LINE.SIGNED_FUNCTIONAL_AMOUNT), BigDecimal.ZERO))
-            .from(JOURNAL_LINE)
-            .where(JOURNAL_LINE.ORGANISATION_ID.eq(organisationId))
-            .and(JOURNAL_LINE.GL_ACCOUNT_ID.eq(accountId))
-            .and(JOURNAL_LINE.POSTING_DATE.le(asOfDate))
-            .and(branchId?.let { JOURNAL_LINE.BRANCH_ID.eq(it) } ?: DSL.noCondition())
-            .fetchOne(0, BigDecimal::class.java) ?: BigDecimal.ZERO
-}
 
 /**
  * PostgreSQL's answer to *"which snapshot is this transaction reading from"*, and the guard that

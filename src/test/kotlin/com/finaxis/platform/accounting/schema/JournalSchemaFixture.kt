@@ -218,6 +218,8 @@ class JournalSchemaFixture(
         fiscalPeriodId: UUID = tenant.fiscalPeriodId,
         branchId: UUID? = tenant.branchId,
         id: UUID? = null,
+        businessDate: LocalDate = PERIOD_DAY,
+        postingDate: LocalDate = businessDate,
     ): UUID =
         dsl
             .insertInto(JOURNAL_ENTRY)
@@ -229,10 +231,10 @@ class JournalSchemaFixture(
             .set(JOURNAL_ENTRY.ENTRY_NUMBER, entryNumber)
             .set(JOURNAL_ENTRY.ENTRY_TYPE, entryType)
             .set(JOURNAL_ENTRY.REVERSES_JOURNAL_ENTRY_ID, reversesJournalEntryId)
-            .set(JOURNAL_ENTRY.BUSINESS_DATE, PERIOD_DAY)
-            .set(JOURNAL_ENTRY.TRANSACTION_DATE, PERIOD_DAY)
-            .set(JOURNAL_ENTRY.VALUE_DATE, PERIOD_DAY)
-            .set(JOURNAL_ENTRY.POSTING_DATE, PERIOD_DAY)
+            .set(JOURNAL_ENTRY.BUSINESS_DATE, businessDate)
+            .set(JOURNAL_ENTRY.TRANSACTION_DATE, postingDate)
+            .set(JOURNAL_ENTRY.VALUE_DATE, postingDate)
+            .set(JOURNAL_ENTRY.POSTING_DATE, postingDate)
             .set(JOURNAL_ENTRY.CURRENCY_CODE, "KES")
             .set(JOURNAL_ENTRY.FUNCTIONAL_CURRENCY_CODE, "KES")
             .set(JOURNAL_ENTRY.TOTAL_DEBIT_FUNCTIONAL, totalDebit)
@@ -257,6 +259,8 @@ class JournalSchemaFixture(
         exchangeRate: BigDecimal = BigDecimal.ONE,
         fiscalPeriodId: UUID = tenant.fiscalPeriodId,
         subledgerReference: String? = null,
+        postingDate: LocalDate = PERIOD_DAY,
+        branchId: UUID? = tenant.branchId,
     ): UUID =
         dsl
             .insertInto(JOURNAL_LINE)
@@ -264,9 +268,9 @@ class JournalSchemaFixture(
             .set(JOURNAL_LINE.JOURNAL_ENTRY_ID, journalEntryId)
             .set(JOURNAL_LINE.LINE_NUMBER, lineNumber)
             .set(JOURNAL_LINE.GL_ACCOUNT_ID, glAccountId)
-            .set(JOURNAL_LINE.BRANCH_ID, tenant.branchId)
+            .set(JOURNAL_LINE.BRANCH_ID, branchId)
             .set(JOURNAL_LINE.FISCAL_PERIOD_ID, fiscalPeriodId)
-            .set(JOURNAL_LINE.POSTING_DATE, PERIOD_DAY)
+            .set(JOURNAL_LINE.POSTING_DATE, postingDate)
             .set(JOURNAL_LINE.DIRECTION, direction)
             .set(JOURNAL_LINE.CURRENCY_CODE, "KES")
             .set(JOURNAL_LINE.AMOUNT, amount)

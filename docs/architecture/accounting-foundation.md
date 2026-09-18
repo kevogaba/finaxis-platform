@@ -991,6 +991,8 @@ a silently edited constant. They are calibrated on the seeded fixture, not on pr
 | Q5 | One journal drill-down by entry number | 50 |
 | Q6 | Control reconciliation, one control account, one business date | 500 |
 | Q7 | Keyset page 50 pages deep in history | 200 |
+| Rebuild | The projection's rebuild aggregate, one account, from a date | 300 |
+| Watermark | The earliest posting date recorded since the projection watermark | 50 |
 
 A pull request that raises a budget must say why in the pull request body, and the number here
 changes in the same commit as the number in the test.

@@ -73,6 +73,27 @@ object AdvisoryLockNamespace {
     const val ACCOUNTING_TENANT_FUNCTIONAL_CURRENCY: Int = 5
 
     /**
+     * Building or rebuilding a tenant's daily-balance projection.
+     *
+     * Keyed on the organisation, because a build's unit of work is the tenant's business day rather
+     * than any one account, and because two builds for one tenant overlap on whichever series they
+     * both touch. Coarse for the same reason the chart-hierarchy lock is coarse: this is background
+     * administrative work, not the posting path, so serialising a tenant's rebuilds costs nothing
+     * measurable.
+     *
+     * It is load-bearing rather than defensive. A rebuild **deletes** a series' rows from a date
+     * forward before reinserting the recomputed ones, so two interleaved builds give that series a
+     * window in which it has no rows at all — during which an as-of read would answer zero for an
+     * account that has posted for years. The projection is not authoritative, so that answer is
+     * never wrong money; it would still be a number on a report that nothing explains.
+     *
+     * Takes part in no posting-path lock chain: the projection is built outside the posting
+     * transaction (`INV-12`), and nothing that holds this lock goes on to acquire a posting lock or
+     * the reverse.
+     */
+    const val ACCOUNTING_DAILY_BALANCE_PROJECTION: Int = 6
+
+    /**
      * The `objid` for a two-int advisory lock, derived in the JVM so a caller never has to
      * round-trip to the database for a lock key.
      *

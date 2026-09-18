@@ -3,6 +3,7 @@ package com.finaxis.platform.accounting.support
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE_HISTORY
+import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT_DAILY_BALANCE
 import com.finaxis.platform.jooq.tables.references.JOURNAL_ENTRY
 import com.finaxis.platform.jooq.tables.references.JOURNAL_LINE
 import com.finaxis.platform.jooq.tables.references.MANUAL_JOURNAL
@@ -190,6 +191,26 @@ object FoundationAtomicityProbes {
                 .fetchCount(
                     MANUAL_JOURNAL_TRANSITION_LOG,
                     MANUAL_JOURNAL_TRANSITION_LOG.ORGANISATION_ID.eq(organisationId),
+                ).toLong()
+        }
+
+    /**
+     * Daily-balance projection rows for one organisation.
+     *
+     * Present so that a test can assert the projection **does not move** inside a posting
+     * transaction. It is a derived structure built after the fact by the business-date rollover
+     * (`INV-13`, ADR 0027), so a posting that wrote one would have put a per-account write hotspot
+     * into the `SERIALIZABLE` posting path - which is the precise thing `gl_account_balance` was
+     * refused for. A probe that stays flat across a posting is the evidence for that, and a probe
+     * that returns to its starting value across a failed *build* is the evidence the build is
+     * atomic in its own right.
+     */
+    fun glAccountDailyBalanceRows(organisationId: UUID): AtomicityProbe =
+        AtomicityProbe("gl_account_daily_balance") { dsl ->
+            dsl
+                .fetchCount(
+                    GL_ACCOUNT_DAILY_BALANCE,
+                    GL_ACCOUNT_DAILY_BALANCE.ORGANISATION_ID.eq(organisationId),
                 ).toLong()
         }
 

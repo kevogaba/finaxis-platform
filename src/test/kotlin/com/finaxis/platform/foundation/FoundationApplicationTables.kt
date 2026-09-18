@@ -5,9 +5,10 @@ package com.finaxis.platform.foundation
  *
  * `V1` created the first 23; `V6` added the five fiscal-calendar and chart-of-accounts tables; `V7`
  * added the three journal tables; `V8` added the four posting-rule tables; `V9` the reconciliation
- * evidence table; `V10` the three manual-journal tables. Starter-managed tables —
- * `outbox_record`, `event_publication` and JobRunr's — are deliberately absent: they live outside
- * Flyway and carry no `guid`, so the conventions asserted against this list do not apply to them.
+ * evidence table; `V10` the three manual-journal tables; `V14` the daily-balance projection.
+ * Starter-managed tables — `outbox_record`, `event_publication` and JobRunr's — are deliberately
+ * absent: they live outside Flyway and carry no `guid`, so the conventions asserted against this
+ * list do not apply to them.
  *
  * This list is hand-maintained on purpose. `FoundationSchemaGuidTests` compares it for **equality**
  * against what the database holds, so a migration that adds a table without adding it here fails
@@ -26,6 +27,7 @@ val APPLICATION_TABLES =
         "control_account_reconciliation_run",
         "fiscal_period_transition_log",
         "gl_account",
+        "gl_account_daily_balance",
         "gl_account_transition_log",
         "identity_dispatch_log",
         "journal_entry",

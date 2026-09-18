@@ -87,4 +87,13 @@ object AccountingAuditActions {
 
     /** A control-account reconciliation break was resolved or overridden. */
     const val RECONCILIATION_RESOLVE = "reconciliation.resolve"
+
+    /**
+     * An operator rebuilt a slice of `gl_account_daily_balance` by hand.
+     *
+     * Audited for the same reason [RECONCILIATION_RESOLVE] is: it replaces derived financial rows
+     * wholesale on a tenant, on one person's authority. The permission check proves the actor was
+     * allowed to; only this records that they did, over what range, and to what effect.
+     */
+    const val DAILY_BALANCE_REBUILD = "daily_balance.rebuild"
 }

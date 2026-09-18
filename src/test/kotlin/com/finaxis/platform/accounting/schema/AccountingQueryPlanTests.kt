@@ -220,6 +220,68 @@ class AccountingQueryPlanTests(
         assertEquals(0, plan["Actual Rows"].asInt(), "the seeded ledger is balanced")
     }
 
+    @Test
+    fun `the rebuild aggregate the projection ships with stays inside the account index`() {
+        // INV-13 requires the projection to ship with the query that rebuilds it, and the schema
+        // document claims that query is index-only. The claim is asserted here rather than left in
+        // a paragraph: an earlier revision grouped by functional_currency_code, which is in neither
+        // the key nor the INCLUDE list of idx_journal_line_account_date, so every line in range
+        // would have cost a heap fetch and the build would not have fitted its window.
+        val plan =
+            explain(
+                """
+                SELECT jl.branch_id,
+                       jl.posting_date,
+                       COALESCE(SUM(jl.functional_amount)
+                                FILTER (WHERE jl.direction = 'DEBIT'), 0)  AS debit_functional,
+                       COALESCE(SUM(jl.functional_amount)
+                                FILTER (WHERE jl.direction = 'CREDIT'), 0) AS credit_functional,
+                       COUNT(*)                                            AS line_count
+                FROM journal_line jl
+                WHERE jl.organisation_id = ? AND jl.gl_account_id = ? AND jl.posting_date >= ?
+                GROUP BY jl.branch_id, jl.posting_date
+                """.trimIndent(),
+                organisationId,
+                accountId,
+                LedgerVolumeFixture.START.plusMonths(23),
+            )
+
+        assertNoSeqScan(plan)
+        assertUsesIndex(plan, "idx_journal_line_account_date")
+        assertBlocksUnder(plan, REBUILD_BUDGET)
+    }
+
+    @Test
+    fun `the as-of read finds the earliest unprojected posting date inside the header index`() {
+        // What makes a checkpoint-plus-delta balance exact rather than merely fresh. The projection
+        // holds the journals recorded up to its watermark and no others, so a checkpoint is only
+        // safe strictly before the earliest posting date any journal recorded since has touched -
+        // a backdated one especially, since its posting date may precede every projected row.
+        // V14 put posting_date in this index's INCLUDE list for exactly this aggregate; without it
+        // the probe fetches a heap tuple per journal recorded since the last build.
+        val plan =
+            explain(
+                """
+                SELECT MIN(posting_date)
+                FROM journal_entry
+                WHERE organisation_id = ? AND business_date > ?
+                """.trimIndent(),
+                organisationId,
+                LedgerVolumeFixture.END.minusDays(WATERMARK_LAG_DAYS),
+            )
+
+        assertNoSeqScan(plan)
+        assertUsesIndex(plan, "idx_journal_entry_business_date")
+        assertBlocksUnder(plan, WATERMARK_BUDGET)
+    }
+
+    // There is deliberately no plan test for the projection's own as-of read here. This fixture
+    // seeds journal lines and no projection rows, so an EXPLAIN over an empty
+    // gl_account_daily_balance asserts nothing a planner could fail - a test that cannot fail is
+    // worse than an absent one, because it reads as coverage. The read is covered behaviourally by
+    // DailyBalanceProjectionIntegrationTests, and gets a plan test when #49 seeds the projection at
+    // volume for the trial balance.
+
     private fun explain(
         sql: String,
         vararg args: Any?,
@@ -279,9 +341,16 @@ class AccountingQueryPlanTests(
     private companion object {
         /** Budgets, as `docs/architecture/accounting-foundation.md` states them. */
         const val Q1_BUDGET = 200
+        const val REBUILD_BUDGET = 300
         const val Q5_BUDGET = 50
         const val Q6_BUDGET = 500
         const val Q7_BUDGET = 200
+        const val WATERMARK_BUDGET = 50
+
+        /**
+         * A build a few days behind, which is the widest healthy lag the trailing re-scan covers.
+         */
+        const val WATERMARK_LAG_DAYS = 3L
 
         /** One page of a hundred rows into an account that holds a few hundred lines. */
         const val DEEP_PAGE_OFFSET = 100
@@ -435,22 +504,44 @@ class LedgerVolumeFixture(
      * Journal n posts on day `n mod 730` of the two years, at branch `n mod 40`, with two debit
      * lines and two credit lines of 50.00 each against four accounts chosen by `n`, so every
      * journal balances at 100.00 and every account receives a spread of lines.
+     *
+     * **Inserted in batches, so the seed does not depend on how much memory the machine will
+     * give one join.** `V13`'s append guard is an `AFTER INSERT … FOR EACH STATEMENT` trigger
+     * that counts the lines of every journal the statement touched, matching `journal_line`
+     * against the statement's transition table. A transition table is a tuplestore — no indexes
+     * and no statistics — so the planner sizes it at its default guess however many rows it
+     * actually holds. Seeding all [JOURNALS] journals in one statement hands that join 200,000
+     * rows on both sides against an estimate of a thousand, and what the misestimate costs is not
+     * fixed: CI runs the whole quality gate on this fixture in under ten minutes, while a
+     * memory-constrained sandbox spent over forty on that single statement before it was killed.
+     *
+     * Batching removes the dependence on that guess, and it is the more faithful shape anyway:
+     * production inserts one journal's lines per statement, so the guard is never asked the
+     * question one big statement asks it. Nothing about the seeded data changes — `n` still runs
+     * from 1 to [JOURNALS] across the batches, so entry numbers and source references stay unique
+     * and the rows are identical to what one statement produced.
      */
     private fun seedJournals(organisationId: UUID) {
-        dsl.execute(
-            SEED_JOURNALS_SQL,
-            START,
-            DAYS,
-            JOURNALS,
-            organisationId,
-            organisationId,
-            BRANCHES,
-            organisationId,
-            organisationId,
-            organisationId,
-            organisationId,
-            ACCOUNTS,
-        )
+        var first = 1
+        while (first <= JOURNALS) {
+            val last = minOf(first + JOURNAL_BATCH - 1, JOURNALS)
+            dsl.execute(
+                SEED_JOURNALS_SQL,
+                START,
+                DAYS,
+                first,
+                last,
+                organisationId,
+                organisationId,
+                BRANCHES,
+                organisationId,
+                organisationId,
+                organisationId,
+                organisationId,
+                ACCOUNTS,
+            )
+            first = last + 1
+        }
     }
 
     private fun now(): OffsetDateTime = OffsetDateTime.now()
@@ -462,6 +553,15 @@ class LedgerVolumeFixture(
     companion object {
         const val TENANT_CODE = "ledger-volume-fixture"
         const val JOURNALS = 50_000
+
+        /**
+         * Journals per seeding statement, so `V13`'s statement-scoped append guard stays cheap.
+         *
+         * Two thousand journals is eight thousand lines - large enough that the seed is twenty-five
+         * statements rather than fifty thousand, and small enough that the guard's join against the
+         * statement's transition table is a hash join over a few thousand rows.
+         */
+        const val JOURNAL_BATCH = 2_000
         const val BRANCHES = 40
         const val ACCOUNTS = 500
         const val DAYS = 730
@@ -479,7 +579,7 @@ class LedgerVolumeFixture(
                        (?::date + (n % ?))::date AS posting_date,
                        uuidv7() AS request_id,
                        uuidv7() AS journal_id
-                FROM generate_series(1, ?) AS n
+                FROM generate_series(?, ?) AS n
             ),
             resolved AS (
                 SELECT s.*, p.id AS period_id, b.id AS branch_id
