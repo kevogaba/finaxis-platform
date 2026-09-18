@@ -325,4 +325,13 @@ object PostingErrorCodes {
 
     /** A report names a general-ledger account the tenant does not have. */
     const val GL_ACCOUNT_NOT_FOUND = "accounting.gl_account_not_found"
+
+    /**
+     * A balance sheet's assets do not equal its liabilities, equity and unclosed earnings.
+     *
+     * The same kind of refusal as [TRIAL_BALANCE_UNBALANCED] and for the same reason: every journal
+     * balances, so the equation is true of any sound ledger, and a statement that presented it
+     * broken would be reporting a formatting problem where there is an integrity one.
+     */
+    const val BALANCE_SHEET_UNBALANCED = "accounting.balance_sheet_unbalanced"
 }

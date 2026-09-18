@@ -885,6 +885,43 @@ the reasoning behind the three decisions that were open is
 No other projection is approved by this document. A second one needs its own arithmetic showing
 that the query it serves is infeasible without it — not that it would be faster.
 
+### Financial-Statement Classification
+
+**An account reaches its statement section through its `account_class`, and through nothing else.**
+No mapping table, no configured account-number range, and no constant in code naming an account —
+which is the only design that survives a tenant numbering its chart however it likes.
+
+| `account_class` | Section | Statement |
+| --- | --- | --- |
+| `ASSET` | Assets | Balance sheet |
+| `LIABILITY` | Liabilities | Balance sheet |
+| `EQUITY` | Equity | Balance sheet |
+| `INCOME` | Income | Income statement |
+| `EXPENSE` | Expenses | Income statement |
+
+The chart's parent hierarchy supplies the nesting *within* a section; the class supplies the
+section. A reporting hierarchy that grouped differently would be a second classification of the same
+accounts, and the two would eventually disagree.
+
+**Only postable accounts carry a line.** A `HEADER` receives no journal line, so it holds no balance,
+and giving it one is how a roll-up comes to double-count. Each line carries its parent and its depth
+instead, so a presentation layer nests without any total being restated.
+
+**Unclosed earnings appear in equity, and the balance sheet does not balance without them.** Every
+journal balances, so the signed sum over every account is zero:
+`assets + liabilities + equity + income + expenses = 0`, which in presentation terms is
+`assets = liabilities + equity + (income − expenses)`. Income and expense accounts accumulate until
+a year-end close moves them into retained earnings, and this platform has no year-end close — so the
+parenthetical is real money and a statement omitting it would be out by the tenant's profit to date.
+When a close is implemented, the arithmetic is unchanged: the figure simply becomes the earnings
+since the last close.
+
+**Open and closed periods are not consulted.** A statement of an `OPEN` period is a report of the
+ledger as it stands and changes when someone posts, which is what mid-period means. A statement of a
+`CLOSED` period is stable unless break-glass authority reopens it, and then it changes because the
+ledger did. What makes a statement trustworthy is being derived from the journal when it is asked
+for, not having been taken at a blessed moment.
+
 ### Keyset Pagination Contract
 
 Every accounting listing endpoint uses keyset pagination. `OFFSET` is **banned**: at page 5,000 of
@@ -1013,7 +1050,7 @@ changes in the same commit as the number in the test.
 | #47 | Rollups: `gl_account_daily_balance`, its rebuild query, its build trigger and its drift proof | `INV-13` |
 | #49 | Q1, Q3, Q4, Q5 and Q7; the trial balance, the GL ledger and the branch index they need | `INV-15` |
 | #50 | Q2 and Q7: the sub-ledger statement contract product modules implement, in [subsidiary-ledger statements and balances](subledger-statements-and-balances.md) | `INV-15` |
-| #51 | The statement read models over #47 and #49, and their balancing proofs | `INV-15` |
+| #51 | The balance sheet and income statement over #47 and #49, classified from `account_class`, with their balancing proofs | `INV-4`, `INV-15` |
 | #52 | REST contracts for the accounting endpoints | `INV-15` |
 | #53 | Observability: posting latency, lock wait, reconciliation outcomes | `INV-12`, `INV-14` |
 | #54 | The `REVOKE UPDATE, DELETE` operational prerequisite and the partitioning threshold | `INV-5` |
