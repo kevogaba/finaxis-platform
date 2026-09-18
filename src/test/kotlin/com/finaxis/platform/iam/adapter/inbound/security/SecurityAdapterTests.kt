@@ -15,6 +15,7 @@ import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
 import com.finaxis.platform.iam.application.port.outbound.AppPrincipalLookup
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
+import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
 import com.finaxis.platform.iam.application.port.outbound.PrincipalMembership
 import com.finaxis.platform.iam.application.port.outbound.PrincipalUser
 import com.finaxis.platform.iam.application.security.RequestPermissionCache
@@ -98,8 +99,8 @@ class SecurityAdapterTests {
     private fun authorizationService(): AuthorizationService =
         AuthorizationService(
             mock(MembershipSelectionLookup::class.java),
-            mock(EffectivePermissionResolver::class.java),
             mock(RequestPermissionCache::class.java),
+            mock(PermissionResolutionQueries::class.java),
         )
 
     @Test

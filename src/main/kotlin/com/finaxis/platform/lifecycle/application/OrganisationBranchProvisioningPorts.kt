@@ -215,6 +215,23 @@ interface BusinessDateStore {
     /** Returns the current business date snapshot used for optimistic-lock validation. */
     fun current(organisationId: UUID): BusinessDateSnapshot?
 
+    /**
+     * The same snapshot read under a shared row lock, for accounting's post-claim posting gate.
+     *
+     * A second method rather than a flag on [current], and deliberately so: the two have different
+     * preconditions - this one requires an active transaction and leaves a lock behind that is held
+     * until commit - and a boolean parameter would let a read-side caller acquire that lock by
+     * accident. It is the lifecycle half of
+     * [com.finaxis.platform.accounting.AccountingBusinessDateLookup.currentBusinessDateForPosting],
+     * whose KDoc carries the full account of the window it closes.
+     *
+     * Shared, not exclusive: postings must not block each other on the tenant's business date.
+     * What the lock does is make a concurrent [startCob] wait for the postings already in flight,
+     * or - when the close committed first - make this read raise `40001` instead of answering from
+     * the caller's pre-close snapshot.
+     */
+    fun lockCurrentForPosting(organisationId: UUID): BusinessDateSnapshot?
+
     /** Advances the business date; returns `false` when [expectedRowVersion] is stale. */
     fun advance(
         organisationId: UUID,

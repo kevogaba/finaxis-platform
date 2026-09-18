@@ -141,6 +141,44 @@ internal class LockOverlapProbe(
         )
 
     /**
+     * Blocks until a backend is waiting **on [relation]** behind [holderPid].
+     *
+     * [awaitClaimBlockedBehind] generalised, and for the same reason: a posting transaction held
+     * open holds far more than the one row a scenario is about - its claim, the tenant's counter
+     * row, its own uncommitted journal rows, and now the tenant's `organisation` and
+     * `business_date` rows - so "blocked behind the holder" alone is satisfied by a waiter parked
+     * on any of them, and the scenario would pass under an interleaving that never touched the
+     * lock it claims to prove.
+     *
+     * Three facts, each read out of PostgreSQL rather than assumed: the backend is waiting on a
+     * lock; the holder is who it waits on; and the statement it is blocked in writes [relation],
+     * evidenced both by the executing query text and by a granted `RowExclusiveLock` on that
+     * relation. The relation is asserted that way rather than through an *ungranted* `pg_locks` row
+     * on it, because no such row exists - a waiter blocked on a tuple another transaction holds
+     * has already taken its own relation-level lock and is queued on a `transactionid` or `tuple`
+     * lock, neither of which carries a relation at all.
+     */
+    fun awaitBlockedOnRelationBehind(
+        holderPid: Int,
+        relation: String,
+    ) = await(
+        query =
+            "select count(*) from pg_stat_activity a " +
+                "where a.datname = current_database() " +
+                "and a.wait_event_type = 'Lock' " +
+                "and ? = any(pg_blocking_pids(a.pid)) " +
+                "and position(? in a.query) > 0 " +
+                "and exists (select 1 from pg_locks l where l.pid = a.pid " +
+                "and l.relation = ?::regclass " +
+                "and l.mode = 'RowExclusiveLock' and l.granted)",
+        bindings = arrayOf(holderPid, relation, relation),
+        failure =
+            "no backend ever blocked on $relation behind pid $holderPid: the contending " +
+                "statement was never obstructed by the holder's shared row lock, so this " +
+                "scenario proved nothing about it and would pass with that lock removed",
+    )
+
+    /**
      * Blocks until *any* backend in this database is waiting on *any* lock.
      *
      * The weakest of the three, and the last resort: it cannot tell this scenario's waiter from an

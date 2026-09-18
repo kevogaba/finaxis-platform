@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.adapter.outbound.accounting
 
 import com.finaxis.platform.accounting.AccountingBusinessDate
 import com.finaxis.platform.accounting.AccountingBusinessDateLookup
+import com.finaxis.platform.lifecycle.application.BusinessDateSnapshot
 import com.finaxis.platform.lifecycle.application.BusinessDateStore
 import org.springframework.stereotype.Component
 import java.util.UUID
@@ -18,13 +19,29 @@ class LifecycleAccountingBusinessDateAdapter(
     private val businessDateStore: BusinessDateStore,
 ) : AccountingBusinessDateLookup {
     override fun currentBusinessDate(organisationId: UUID): AccountingBusinessDate? =
-        businessDateStore.current(organisationId)?.let { snapshot ->
-            AccountingBusinessDate(
-                organisationId = organisationId,
-                businessDate = snapshot.currentBusinessDate,
-                postingAllowed = snapshot.status == OPEN_STATUS,
-            )
-        }
+        businessDateStore.current(organisationId)?.let { view(organisationId, it) }
+
+    /**
+     * The locking read accounting decides a posting's close-of-business eligibility from, delegated
+     * unchanged.
+     *
+     * Deliberately a second port method rather than a flag on the first, for the same reason
+     * `functionalCurrencyForPosting` is: the two have different preconditions - this one requires
+     * an active transaction and leaves a lock behind - and a boolean parameter would let a
+     * read-side caller acquire that lock by accident.
+     */
+    override fun currentBusinessDateForPosting(organisationId: UUID): AccountingBusinessDate? =
+        businessDateStore.lockCurrentForPosting(organisationId)?.let { view(organisationId, it) }
+
+    /** The one translation of lifecycle's status vocabulary, shared by both reads. */
+    private fun view(
+        organisationId: UUID,
+        snapshot: BusinessDateSnapshot,
+    ) = AccountingBusinessDate(
+        organisationId = organisationId,
+        businessDate = snapshot.currentBusinessDate,
+        postingAllowed = snapshot.status == OPEN_STATUS,
+    )
 
     private companion object {
         /**

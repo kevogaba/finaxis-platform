@@ -818,6 +818,12 @@ Base path: `/api/v1/tenant/business-date`.
 | POST   | `/cob/complete` | Complete close of business | `cob.complete`          | mutation |
 | POST   | `/reopen`       | Reopen business date       | `business_date.reopen`  | mutation |
 
+Every mutation on this base path takes a row lock that postings in flight for the tenant may be
+holding, so each can return `409` with `lifecycle.business_date_lock_timeout` when it cannot acquire
+it within the configured bound. That is retryable and is not the same as the plain `conflict` an
+optimistic-lock clash produces. See
+[business date and COB status](../operations/business-date.md).
+
 Advance request and response:
 
 ```json

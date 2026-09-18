@@ -43,7 +43,7 @@ object PostingDatePolicy {
         val transactionDate = request.transactionDate ?: today
         rejectFuturePostingDate(postingDate, today)
         rejectFutureTransactionDate(transactionDate, today)
-        rejectClosedBusinessDate(postingDate, today, businessDate.postingAllowed)
+        requireOpenForPosting(postingDate, businessDate)
         return AccountingDates(
             businessDate = today,
             transactionDate = transactionDate,
@@ -51,6 +51,34 @@ object PostingDatePolicy {
             postingDate = postingDate,
             recordedAt = recordedAt,
         )
+    }
+
+    /**
+     * Rejects a current-dated [postingDate] while [businessDate] is not open for posting.
+     *
+     * Public, and called twice on one posting: once by [resolve], from the plain pre-claim read the
+     * idempotency fingerprint is computed from, and once by
+     * [com.finaxis.platform.accounting.application.PostingPeriodResolver.lockAndValidate], from a
+     * `business_date` row that transaction now holds `FOR SHARE`. The second call is the one that
+     * decides. The first is kept because it refuses an obviously closed day before the engine
+     * writes a claim it would only roll back, and because a replay - which never reaches the second
+     * call - still has to be answered.
+     *
+     * A backdated posting is deliberately admitted while the day is closing: close-of-business must
+     * not deadlock corrections into a still-open prior period.
+     */
+    fun requireOpenForPosting(
+        postingDate: LocalDate,
+        businessDate: AccountingBusinessDate,
+    ) {
+        val isCurrent =
+            classify(postingDate, businessDate.businessDate) == PostingDateClassification.CURRENT
+        if (isCurrent && !businessDate.postingAllowed) {
+            throw ConflictException(
+                code = BUSINESS_DATE_NOT_OPEN,
+                safeDetail = "The organisation business date is not open for posting.",
+            )
+        }
     }
 
     /** Classifies [postingDate] against [businessDate] for the prior-period permission gate. */
@@ -84,20 +112,6 @@ object PostingDatePolicy {
             throw InvalidOperationException(
                 code = TRANSACTION_DATE_IN_FUTURE,
                 safeDetail = "A transaction date may not follow the organisation business date.",
-            )
-        }
-    }
-
-    private fun rejectClosedBusinessDate(
-        postingDate: LocalDate,
-        businessDate: LocalDate,
-        postingAllowed: Boolean,
-    ) {
-        val isCurrent = classify(postingDate, businessDate) == PostingDateClassification.CURRENT
-        if (isCurrent && !postingAllowed) {
-            throw ConflictException(
-                code = BUSINESS_DATE_NOT_OPEN,
-                safeDetail = "The organisation business date is not open for posting.",
             )
         }
     }

@@ -63,6 +63,18 @@ Only active organisations can be mutated.
 Each mutation uses optimistic locking. A stale `row_version` causes the command to fail and the
 caller must retry with the latest current row.
 
+**Each mutation also waits for in-flight postings, and the wait is bounded.** Since issue #125 a
+*current-dated* posting holds a shared row lock on `business_date` until it commits, so `Advance`,
+`StartCob`, `CompleteCob` and `Reopen` queue behind those. Backdated corrections take no such lock
+and never make an operator wait — deliberately, because close-of-business must not deadlock them.
+
+Waiting is the intended behaviour: a close-of-business that starts while current-dated postings are
+in flight is the defect issue #125 closes. But it is new, and an operator who used to see an instant
+status flip may now see a short wait. It is bounded by
+`finaxis.lifecycle.business-date-lock-timeout` (ten seconds by default); an expiry is a `409`
+carrying `lifecycle.business_date_lock_timeout` and is safe to retry. `Initialize` is unaffected:
+it inserts a row nothing can be holding.
+
 ## History
 
 Every mutation appends a row to `business_date_history`. The table is append-only and records:
@@ -154,8 +166,18 @@ Two consequences worth knowing when operating close-of-business:
 - While the business date is not `OPEN`, a **current-dated** posting is rejected, but a
   **backdated** posting into a still-open prior period is still allowed. Close-of-business
   deliberately does not deadlock corrections.
-- The business date is read **without a lock** and captured once per posting, so it is never the
-  ledger's serialisation point. A posting that began before an advance still commits with the date
-  it captured, which is correct: the prior period stays open until it is closed.
+- A **backdated** correction captures its date once and commits with it whatever the business date
+  does meanwhile. The prior period stays open until it is closed, and the correction never consulted
+  the current day to decide it was admissible.
+- A **current-dated** posting re-reads the date and status **under a shared row lock** after it
+  claims its source reference. Before issue #125 that read was unlocked and answered from a snapshot
+  pinned earlier in the transaction, so a close-of-business starting mid-posting was invisible and
+  the posting committed into a closing day. The lock is the whole guarantee — the database's
+  isolation level supplies none of it.
+- Consequently a current-dated posting can now be **aborted and retried** by a concurrent close *or
+  advance*, and a concurrent mutation can now **wait** for one. Both are correct and both are new.
+  An advance that lands mid-posting moves that posting to the new day, which is the honest reading
+  of a request that said "today"; the bound above is what keeps the waiting side finite.
 
-See [accounting dates and periods](../architecture/accounting-dates-and-periods.md).
+See [accounting dates and periods](../architecture/accounting-dates-and-periods.md) and
+[ADR 0026](../adr/0026-real-time-gates-on-the-serializable-posting-path.md).

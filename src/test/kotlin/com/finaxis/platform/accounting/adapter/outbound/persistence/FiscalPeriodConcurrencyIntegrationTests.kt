@@ -10,6 +10,7 @@ import com.finaxis.platform.accounting.application.ledger.PostingTransactionBoun
 import com.finaxis.platform.accounting.domain.FiscalPeriodKey
 import com.finaxis.platform.accounting.domain.FiscalPeriodStatus
 import com.finaxis.platform.accounting.support.LockOverlapProbe
+import com.finaxis.platform.common.persistence.TransactionLockTimeout
 import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_PERIOD
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService

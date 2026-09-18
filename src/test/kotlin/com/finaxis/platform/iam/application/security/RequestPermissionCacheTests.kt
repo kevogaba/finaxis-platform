@@ -81,5 +81,10 @@ private class CountingPermissionQueries(
     override fun directPermissionEffects(membershipId: UUID): List<PermissionEffectAssignment> =
         emptyList()
 
+    override fun lockedBreakGlassGrant(
+        membershipId: UUID,
+        permissionCode: String,
+    ) = false
+
     fun resolveCount(key: PermissionKey): Int = calls.getOrDefault(key, 0)
 }

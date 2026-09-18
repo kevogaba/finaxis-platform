@@ -630,6 +630,11 @@ private fun serviceWith(
 
                 override fun directPermissionEffects(membershipId: UUID) =
                     emptyList<PermissionEffectAssignment>()
+
+                override fun lockedBreakGlassGrant(
+                    membershipId: UUID,
+                    permissionCode: String,
+                ) = false
             }
         } else {
             object : PermissionResolutionQueries {
@@ -642,11 +647,16 @@ private fun serviceWith(
 
                 override fun directPermissionEffects(membershipId: UUID) =
                     emptyList<PermissionEffectAssignment>()
+
+                override fun lockedBreakGlassGrant(
+                    membershipId: UUID,
+                    permissionCode: String,
+                ) = false
             }
         }
     val resolver = EffectivePermissionResolver(perms, ConcurrentMapCacheManager())
     val cache = RequestPermissionCache(resolver)
-    val authorizationService = AuthorizationService(lookup, resolver, cache)
+    val authorizationService = AuthorizationService(lookup, cache, perms)
     return AuthSelectionService(lookup, authorizationService)
 }
 

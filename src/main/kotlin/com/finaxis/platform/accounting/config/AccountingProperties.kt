@@ -1,5 +1,6 @@
 package com.finaxis.platform.accounting.config
 
+import com.finaxis.platform.common.persistence.requireLockTimeoutBound
 import org.springframework.boot.context.properties.ConfigurationProperties
 import java.time.Duration
 
@@ -16,24 +17,17 @@ data class AccountingProperties(
     val functionalCurrencyLockTimeout: Duration = DEFAULT_CURRENCY_LOCK_TIMEOUT,
 ) {
     init {
-        // At least one millisecond, not merely positive: `SET LOCAL lock_timeout` is expressed in
-        // milliseconds and the conversion truncates, so `500us` would arrive as `0` - which
-        // PostgreSQL reads as no timeout at all. Caught here so a misconfigured deployment fails at
-        // startup rather than the first time something waits on a lock.
-        require(
-            !fiscalPeriodCloseLockTimeout.isNegative &&
-                fiscalPeriodCloseLockTimeout.toMillis() >= 1,
-        ) {
-            "The fiscal-period close lock timeout must be at least 1ms; below that it truncates " +
-                "to zero, which disables the bound."
-        }
-        require(
-            !functionalCurrencyLockTimeout.isNegative &&
-                functionalCurrencyLockTimeout.toMillis() >= 1,
-        ) {
-            "The functional-currency lock timeout must be at least 1ms; below that it truncates " +
-                "to zero, which disables the bound."
-        }
+        // Validated at startup so a misconfigured deployment fails before the first time something
+        // waits on a lock, rather than discovering it has no bound at all. The rule and the reason
+        // live in `requireLockTimeoutBound`.
+        requireLockTimeoutBound(
+            fiscalPeriodCloseLockTimeout,
+            "finaxis.accounting.fiscal-period-close-lock-timeout",
+        )
+        requireLockTimeoutBound(
+            functionalCurrencyLockTimeout,
+            "finaxis.accounting.functional-currency-lock-timeout",
+        )
     }
 
     /** The shipped default, overridden per deployment. */

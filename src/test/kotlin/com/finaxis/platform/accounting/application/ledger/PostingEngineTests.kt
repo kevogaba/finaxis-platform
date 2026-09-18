@@ -841,6 +841,9 @@ class PostingEngineTests {
     private class FakeBusinessDateLookup : AccountingBusinessDateLookup {
         override fun currentBusinessDate(organisationId: UUID) =
             AccountingBusinessDate(organisationId, TODAY, postingAllowed = true)
+
+        override fun currentBusinessDateForPosting(organisationId: UUID) =
+            currentBusinessDate(organisationId)
     }
 
     private class PermissiveGuard : AccountingPermissionGuard {

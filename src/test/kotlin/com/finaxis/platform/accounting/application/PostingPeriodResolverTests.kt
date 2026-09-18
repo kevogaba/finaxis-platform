@@ -3,6 +3,7 @@ package com.finaxis.platform.accounting.application
 import com.finaxis.platform.accounting.AccountingBusinessDate
 import com.finaxis.platform.accounting.AccountingBusinessDateLookup
 import com.finaxis.platform.accounting.AccountingPermissionGuard
+import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.domain.AccountingAuditActions
 import com.finaxis.platform.accounting.domain.AccountingPermissions
 import com.finaxis.platform.accounting.domain.AccountingSourceReference
@@ -10,6 +11,7 @@ import com.finaxis.platform.accounting.domain.FiscalPeriodKey
 import com.finaxis.platform.accounting.domain.FiscalPeriodSnapshot
 import com.finaxis.platform.accounting.domain.FiscalPeriodStatus
 import com.finaxis.platform.accounting.domain.PostingDateClassification
+import com.finaxis.platform.accounting.domain.PostingDatePolicy
 import com.finaxis.platform.accounting.domain.PostingDateRequest
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.audit.AuditEvent
@@ -170,6 +172,94 @@ class PostingPeriodResolverTests {
     }
 
     @Test
+    fun `a day closed under the lock is rejected even when the unlocked read saw it open`() {
+        // The business-date twin of the period scenario below, and the unit-level statement of
+        // issue #125: the decision must come from the row the transaction holds, not from the
+        // plain read taken before the claim. Above READ COMMITTED those two are the same snapshot
+        // in production, which is exactly why the second read has to lock.
+        inTransaction()
+        periods.covering = snapshot(FiscalPeriodStatus.OPEN)
+        periods.locked = snapshot(FiscalPeriodStatus.OPEN)
+        businessDates.locked = closedDay()
+
+        val failure = assertFailsWith<ConflictException> { resolver.resolveForPosting(command()) }
+
+        assertEquals(PostingDatePolicy.BUSINESS_DATE_NOT_OPEN, failure.code)
+        assertEquals(1, businessDates.lockedReads, "the decision must use the locking read")
+    }
+
+    @Test
+    fun `a backdated posting is still admitted while the day is closing`() {
+        // Close-of-business must not deadlock corrections. Without this the test above passes for
+        // a locking read that refused everything once the day left OPEN, which is a different
+        // defect with the same green build.
+        inTransaction()
+        periods.covering = snapshot(FiscalPeriodStatus.OPEN)
+        periods.locked = snapshot(FiscalPeriodStatus.OPEN)
+        businessDates.current = closedDay()
+
+        val resolved =
+            resolver.resolveForPosting(
+                command(PostingDateRequest(postingDate = TODAY.minusDays(3))),
+            )
+
+        assertEquals(PostingDateClassification.BACKDATED, resolved.classification)
+    }
+
+    @Test
+    fun `a business date that disagrees under the lock is an assertion, not a client error`() {
+        // One snapshot answers both reads, so a disagreement means the posting path's isolation
+        // guard has stopped working - something a caller can do nothing about and must not be
+        // handed a published code for. An earlier revision raised a public
+        // `accounting.business_date_changed` here, which no production interleaving could reach:
+        // the "published code nothing can raise" defect this module was caught by once already.
+        inTransaction()
+        periods.covering = snapshot(FiscalPeriodStatus.OPEN)
+        periods.locked = snapshot(FiscalPeriodStatus.OPEN)
+        businessDates.locked =
+            AccountingBusinessDate(ORGANISATION_ID, TODAY.plusDays(1), postingAllowed = true)
+
+        assertFailsWith<IllegalStateException> { resolver.resolveForPosting(command()) }
+    }
+
+    @Test
+    fun `a backdated posting neither reads nor holds the business-date row`() {
+        // The rule this enforces is the one the lock was added to serve, and taking it
+        // unconditionally inverted it: a backdated correction stays legal while the day is closing,
+        // so close-of-business must not queue behind one. A posting that holds the row is a
+        // posting a close waits for - and, because PostgreSQL queues incoming requests behind a
+        // pending exclusive one, so does every new posting in the tenant.
+        inTransaction()
+        periods.covering = snapshot(FiscalPeriodStatus.OPEN)
+        periods.locked = snapshot(FiscalPeriodStatus.OPEN)
+
+        resolver.resolveForPosting(command(PostingDateRequest(postingDate = TODAY.minusDays(3))))
+
+        assertEquals(
+            0,
+            businessDates.lockedReads,
+            "a backdated posting took the business-date lock, so close-of-business now queues " +
+                "behind exactly the corrections it must not deadlock",
+        )
+    }
+
+    @Test
+    fun `a day closed under the lock is refused before the period is ever locked`() {
+        // Ordering, not merely outcome. The business date is what the classification rests on, so
+        // it is established from a held row before anything is classified, gated or locked - which
+        // is also the order ADR 0023's lock chain records.
+        inTransaction()
+        periods.covering = snapshot(FiscalPeriodStatus.OPEN)
+        periods.locked = snapshot(FiscalPeriodStatus.OPEN)
+        businessDates.locked = closedDay()
+
+        assertFailsWith<ConflictException> { resolver.resolveForPosting(command()) }
+
+        assertEquals(0, periods.lockedCalls, "the period must not be locked after the day refused")
+        assertEquals(emptyList(), permissions.required, "nor any permission checked")
+    }
+
+    @Test
     fun `a period closed under the lock is rejected even when the unlocked lookup saw it open`() {
         inTransaction()
         periods.covering = snapshot(FiscalPeriodStatus.OPEN)
@@ -278,9 +368,12 @@ class PostingPeriodResolverTests {
             status = status,
         )
 
+    private fun closedDay() = AccountingBusinessDate(ORGANISATION_ID, TODAY, postingAllowed = false)
+
     private class FakeFiscalPeriodStateStore : FiscalPeriodStateStore {
         var covering: FiscalPeriodSnapshot? = null
         var locked: FiscalPeriodSnapshot? = null
+        var lockedCalls = 0
 
         override fun findById(key: FiscalPeriodKey) = covering
 
@@ -292,7 +385,10 @@ class PostingPeriodResolverTests {
         override fun lockCoveringForPosting(
             organisationId: UUID,
             postingDate: LocalDate,
-        ) = locked
+        ): FiscalPeriodSnapshot? {
+            lockedCalls++
+            return locked
+        }
 
         override fun lockForStateChange(key: FiscalPeriodKey) = locked
 
@@ -308,7 +404,19 @@ class PostingPeriodResolverTests {
         var current: AccountingBusinessDate? =
             AccountingBusinessDate(ORGANISATION_ID, TODAY, true)
 
+        /**
+         * What the locking re-read answers, defaulting to [current] so that every scenario which
+         * does not care about the window behaves as it did before the lock existed.
+         */
+        var locked: AccountingBusinessDate? = null
+        var lockedReads = 0
+
         override fun currentBusinessDate(organisationId: UUID) = current
+
+        override fun currentBusinessDateForPosting(organisationId: UUID): AccountingBusinessDate? {
+            lockedReads++
+            return locked ?: current
+        }
     }
 
     private class RecordingPermissionGuard : AccountingPermissionGuard {

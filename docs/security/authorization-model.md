@@ -120,6 +120,18 @@ another branch's permissions.
 `PermissionCacheInvalidator` evicts cached selections when role grants or role assignments change.
 It can also clear the entire effective-permission cache.
 
+**Break-glass checks read neither cache.** `AuthorizationService.requireBreakGlassPermission`
+answers from `PermissionResolutionQueries.lockedBreakGlassGrant`, a locking read of the rows that
+grant the one code being checked, and never from `RequestPermissionCache` or the
+`iam.effective-permissions` cache. A cached answer is by construction a pre-revocation answer, and
+that is not adequate for a control whose whole purpose is that a tenant administrator can take it
+back: a revocation must either wait for the in-flight transaction or abort it, which only a lock
+delivers. The eviction above is still performed and still correct — it is what keeps the *ordinary*
+checks from serving a revoked grant for the rest of the cache entry's life — but nothing about
+break-glass depends on it any more. See
+[ADR 0026](../adr/0026-real-time-gates-on-the-serializable-posting-path.md), which also explains why
+the ordinary checks deliberately keep the cache.
+
 ## Spring Security integration
 
 After JWT authentication and active-organisation resolution, `AppPrincipalAuthenticationToken`

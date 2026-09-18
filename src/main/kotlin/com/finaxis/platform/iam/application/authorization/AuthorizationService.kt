@@ -4,6 +4,7 @@ import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
+import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
 import com.finaxis.platform.iam.application.security.RequestPermissionCache
 import com.finaxis.platform.iam.domain.OrganisationStatus
 import org.springframework.stereotype.Service
@@ -34,8 +35,8 @@ data class ResourceRef(
 @Service
 class AuthorizationService(
     private val membershipSelectionLookup: MembershipSelectionLookup,
-    private val effectivePermissionResolver: EffectivePermissionResolver,
     private val requestPermissionCache: RequestPermissionCache,
+    private val permissionResolutionQueries: PermissionResolutionQueries,
 ) {
     /**
      * Returns whether the principal has the permission code in the active membership context.
@@ -128,45 +129,74 @@ class AuthorizationService(
 
     /**
      * Requires [userId] to hold a break-glass [permissionCode] in [organisationId], with **no**
-     * system-actor exemption and **no** dependency on an active web request.
+     * system-actor exemption, **no** dependency on an active web request, and **no** cache.
      *
-     * Two deliberate differences from [requirePermission]:
+     * Three deliberate differences from [requirePermission]:
      *
      * Unlike [hasPermission], this does not short-circuit for the system-actor sentinels. That
      * exemption is right for background provisioning and wrong for a ledger control - a batch job
      * would otherwise exercise authority no principal holds.
      *
-     * And it resolves through [EffectivePermissionResolver] rather than `RequestPermissionCache`,
-     * which is `@RequestScope`. Dereferencing that proxy outside a web request raises
-     * `ScopeNotActiveException`, so routing a background caller through the cached path would fail
-     * with a scope error rather than evaluating its grant - defeating the point of denying the
-     * system-actor bypass in the first place, since the documented alternative is precisely a
-     * background job running under a real service identity.
+     * It does not route through `RequestPermissionCache`, which is `@RequestScope`. Dereferencing
+     * that proxy outside a web request raises `ScopeNotActiveException`, so routing a background
+     * caller through the cached path would fail with a scope error rather than evaluating its
+     * grant - defeating the point of denying the system-actor bypass in the first place, since the
+     * documented alternative is precisely a background job running under a real service identity.
+     *
+     * And it no longer routes through [EffectivePermissionResolver] either, which is the change
+     * issue #123 asked for. That resolver is cache-first, and it is reached from the posting path
+     * inside a `SERIALIZABLE` transaction, which made the answer wrong in two compounding ways: a
+     * cache hit answered from a set resolved before the revocation, and a cache *miss* - which is
+     * exactly what a revocation produces, since revoking evicts - fell through to a database read
+     * taken from the posting's pinned, pre-revocation snapshot. The eviction that should have
+     * denied the posting was what routed the check onto the path where the revocation was
+     * invisible. [PermissionResolutionQueries.lockedBreakGlassGrant] answers instead, from rows
+     * this transaction holds `FOR SHARE`, so a revocation either waits for the posting or aborts
+     * it. See `docs/adr/0026-real-time-gates-on-the-serializable-posting-path.md`.
+     *
+     * Outside a transaction the locks would be taken and released by their own statements and
+     * guarantee nothing, so the query adapter refuses the call. Every current caller -
+     * `PostingPeriodResolver` and `FiscalPeriodLifecycleService` - is already inside one.
      */
     fun requireBreakGlassPermission(
         userId: UUID,
         organisationId: UUID,
         permissionCode: String,
     ) {
-        if (permissionCode in breakGlassPermissions(userId, organisationId)) {
+        if (holdsBreakGlassPermission(userId, organisationId, permissionCode)) {
             return
         }
         throw AccessDeniedException("Missing break-glass permission: $permissionCode")
     }
 
-    private fun breakGlassPermissions(
+    private fun holdsBreakGlassPermission(
         userId: UUID,
         organisationId: UUID,
-    ): Set<String> {
+        permissionCode: String,
+    ): Boolean {
+        // Unlocked, and unchanged by issue #123, which is narrower than it may look: this read is
+        // snapshot-bound for the same reason the grant read was, and it is left that way.
+        //
+        // On the posting path it happens to be covered - `functionalCurrencyForPosting` already
+        // holds the `organisation` row `FOR SHARE` several statements earlier, so a suspension
+        // committed after the snapshot has aborted the transaction before this line runs. On the
+        // *other* caller, `FiscalPeriodLifecycleService.reopen`/`lock`, nothing holds that row at
+        // all, so a suspension racing a reopen is still decided from a stale snapshot. That is
+        // pre-existing behaviour on a path this change does not touch, and closing it means adding
+        // an `organisation` lock to a flow whose whole lock chain is one fiscal-period row - a
+        // decision for whoever takes that on, not a side effect of the break-glass repair.
         if (!isOrganisationActive(organisationId)) {
-            return emptySet()
+            return false
         }
         val membership =
             membershipSelectionLookup.findMembership(
                 userId = userId,
                 organisationId = organisationId,
-            ) ?: return emptySet()
-        return effectivePermissionResolver.effectivePermissions(membership.membershipId, null)
+            ) ?: return false
+        return permissionResolutionQueries.lockedBreakGlassGrant(
+            membership.membershipId,
+            permissionCode,
+        )
     }
 
     /**

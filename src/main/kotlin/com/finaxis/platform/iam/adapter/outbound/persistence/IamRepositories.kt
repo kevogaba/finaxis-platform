@@ -31,6 +31,7 @@ import org.jooq.DSLContext
 import org.jooq.impl.DSL.exists
 import org.jooq.impl.DSL.notExists
 import org.springframework.stereotype.Component
+import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.util.UUID
 
 /** jOOQ adapter for membership selection and branch-assignment reads. */
@@ -362,6 +363,136 @@ class JooqPermissionResolutionQueries(
                     PermissionEffect.valueOf(requireNotNull(record[MEMBERSHIP_PERMISSION.EFFECT])),
                 )
             }
+
+    /**
+     * The same rule as the three reads above, for one code, from rows this transaction holds.
+     *
+     * Three statements rather than one, and the reason is not that one is impossible. PostgreSQL
+     * refuses `FOR SHARE` on a `SELECT DISTINCT`, which is why `rolePermissionCodes`' shape could
+     * not simply gain it - but it *does* honour `FOR SHARE` inside a sub-`SELECT`, measured on
+     * `postgres:18.4`, so a single `EXISTS`-shaped statement would have locked correctly. What
+     * three buys is that they mirror `EffectivePermissionResolver.resolve`'s three reads one for
+     * one, so the rule is visibly the same rule, and that the short-circuit below can leave rows
+     * unlocked that the answer does not rest on.
+     *
+     * Short-circuiting is deliberate and matches `EffectivePermissionResolver.resolve`, where the
+     * effective set is `allowed - denied`: a direct `DENY` settles the question, then a direct
+     * `ALLOW`, and only an undecided code is looked for among the role grants. A code settled by a
+     * direct row therefore leaves the role rows unlocked, which is correct - those rows are not
+     * what the answer rests on, and locking them would abort postings for revocations that could
+     * not have changed the outcome.
+     *
+     * **Two things it deliberately does not close.**
+     *
+     * An *inserted* `DENY` row is a phantom: a lock is taken on rows that exist, and above
+     * `READ COMMITTED` a row inserted after the snapshot is not in it, so a `DENY` inserted
+     * mid-posting is not seen. Today that is unreachable - no production code writes
+     * `membership_permission` at all - and a writer of that table is what would make it reachable,
+     * which means revisiting ADR 0026.
+     *
+     * A **catalogue** deactivation is not linearized either, and that is why every statement below
+     * names its `OF` list rather than taking the bare lock. `permission` is global reference data
+     * seeded by `V2`/`V5`: a bare `FOR SHARE` on these joins would lock its row too, so every
+     * backdated posting in every tenant would contend on one row per code, and one catalogue edit
+     * would abort backdated postings platform-wide. Deactivating a code is a platform-wide
+     * reference-data change rather than a tenant's revocation, and it is read here without being
+     * held. What is held is exactly what a *tenant* can revoke.
+     *
+     * Everything a tenant can revoke is caught: an `UPDATE` of `user_role_assignment`, `role` or
+     * the membership row, or a `DELETE` from `role_permission`. Measured on `postgres:18.4`, both
+     * the update and the delete arrive as `40001`.
+     */
+    override fun lockedBreakGlassGrant(
+        membershipId: UUID,
+        permissionCode: String,
+    ): Boolean {
+        check(TransactionSynchronizationManager.isActualTransactionActive()) {
+            "A break-glass permission check takes shared row locks that must be held until the " +
+                "caller's transaction ends, so it requires an active transaction."
+        }
+        if (lockedMembershipStatus(membershipId) != MembershipStatus.ACTIVE) return false
+        val direct = lockedDirectEffects(membershipId, permissionCode)
+        return when {
+            PermissionEffect.DENY in direct -> false
+            PermissionEffect.ALLOW in direct -> true
+            else -> hasLockedRoleGrant(membershipId, permissionCode)
+        }
+    }
+
+    private fun lockedMembershipStatus(membershipId: UUID): MembershipStatus? =
+        dsl
+            .select(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS)
+            .from(USER_ORGANISATION_MEMBERSHIP)
+            .where(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
+            .forShare()
+            .fetchOne(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS)
+            ?.let(MembershipStatus::valueOf)
+
+    private fun lockedDirectEffects(
+        membershipId: UUID,
+        permissionCode: String,
+    ): Set<PermissionEffect> =
+        dsl
+            .select(MEMBERSHIP_PERMISSION.EFFECT)
+            .from(MEMBERSHIP_PERMISSION)
+            .join(PERMISSION)
+            .on(PERMISSION.ID.eq(MEMBERSHIP_PERMISSION.PERMISSION_ID))
+            .where(MEMBERSHIP_PERMISSION.MEMBERSHIP_ID.eq(membershipId))
+            .and(PERMISSION.PERMISSION_CODE.eq(permissionCode))
+            .and(PERMISSION.STATUS.eq(ACTIVE))
+            .forShare()
+            .of(MEMBERSHIP_PERMISSION)
+            .fetch(MEMBERSHIP_PERMISSION.EFFECT)
+            .filterNotNull()
+            .map(PermissionEffect::valueOf)
+            .toSet()
+
+    /**
+     * Tenant-scoped role grants only, matching the `branchId = null` resolution a break-glass check
+     * performs: a branch-scoped grant applies while that branch is selected, and a ledger control
+     * is not decided by which branch a request happened to pick.
+     *
+     * Every matching row is locked, not merely the first. Two grants of one code through two roles
+     * are two independent reasons the answer is `true`, and stopping at one would leave the other
+     * free to be revoked underneath this posting. Locking both costs a spurious abort when only one
+     * is revoked - the retry then re-reads and grants - which is the safe direction to be wrong in.
+     *
+     * The `OF` list is the three tenant-scoped tables and nothing else. `permission` is global and
+     * deliberately excluded (see the caller's KDoc); `user_organisation_membership` is already held
+     * by [lockedMembershipStatus], so naming it again here would only widen this statement's lock
+     * footprint for a row this transaction holds anyway.
+     */
+    private fun hasLockedRoleGrant(
+        membershipId: UUID,
+        permissionCode: String,
+    ): Boolean =
+        dsl
+            .select(ROLE_PERMISSION.ROLE_ID)
+            .from(USER_ROLE_ASSIGNMENT)
+            .join(USER_ORGANISATION_MEMBERSHIP)
+            .on(
+                USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(
+                    USER_ROLE_ASSIGNMENT.ORGANISATION_ID,
+                ),
+            ).and(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ROLE_ASSIGNMENT.USER_ID))
+            .join(ROLE)
+            .on(ROLE.ID.eq(USER_ROLE_ASSIGNMENT.ROLE_ID))
+            .and(ROLE.ORGANISATION_ID.eq(USER_ROLE_ASSIGNMENT.ORGANISATION_ID))
+            .join(ROLE_PERMISSION)
+            .on(ROLE_PERMISSION.ROLE_ID.eq(ROLE.ID))
+            .and(ROLE_PERMISSION.ORGANISATION_ID.eq(ROLE.ORGANISATION_ID))
+            .join(PERMISSION)
+            .on(PERMISSION.ID.eq(ROLE_PERMISSION.PERMISSION_ID))
+            .where(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
+            .and(PERMISSION.PERMISSION_CODE.eq(permissionCode))
+            .and(USER_ROLE_ASSIGNMENT.STATUS.eq(ACTIVE))
+            .and(ROLE.STATUS.eq(ACTIVE))
+            .and(PERMISSION.STATUS.eq(ACTIVE))
+            .and(USER_ROLE_ASSIGNMENT.SCOPE_TYPE.eq(TENANT_SCOPE))
+            .forShare()
+            .of(USER_ROLE_ASSIGNMENT, ROLE, ROLE_PERMISSION)
+            .fetch()
+            .isNotEmpty
 }
 
 /** jOOQ adapter for secure principal construction from Keycloak identity links. */
