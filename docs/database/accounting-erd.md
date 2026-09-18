@@ -5,13 +5,14 @@ implement it: if implementation proves a change is required, change this documen
 why, then write the forward-only migration.
 
 The five tables issue #36 created, the three tables issue #40 created, the four tables issue #44
-created and the evidence table issue #46 creates are specified below to column, constraint and
-index level, so each migration is a transcription rather than a design exercise. Issue #47's
-projection is still specified at relationship level only and will be brought to column level by the
-change that implements it — the same way the earlier ones were, and for the same reason. An earlier revision of this
+created, the evidence table issue #46 created, the three manual-journal tables issue #48 created
+and issue #47's projection are all specified below to column, constraint and index level, so each
+migration is a transcription rather than a design exercise. An earlier revision of this
 document promised that an implementing agent *"never has to invent a table, a column or a
 constraint"* while carrying no column definitions for any table, which made the promise false for
-the first issue that tried to keep it.
+the first issue that tried to keep it. A later revision kept issue #47's projection at relationship
+level only; the Phase E design change brought it to column level before its migration was written,
+which is the order this document asks for everywhere else.
 
 Read it with [the accounting foundation](../architecture/accounting-foundation.md), which holds the
 invariants and the benchmark reasoning, and with
@@ -31,7 +32,8 @@ sentence.
 | `V11` | `uq_gl_account_control_kind` replacing `idx_gl_account_control` | #91 |
 | `V12` | `manual_journal.external_reference` | #92 |
 | `V13` | `fn_journal_line_append_guard` and `trg_journal_line_append_guard` on `journal_line` | #95 |
-| Then | `gl_account_daily_balance` | #47 |
+| Then | `gl_account_daily_balance` and `idx_journal_entry_business_date` | #47 |
+| Then | `idx_journal_line_branch_account_date` | #49 |
 
 Issue #34's permission migration carries no accounting tables — only reference data.
 
@@ -1020,7 +1022,7 @@ balance without any of the copied dimensions being re-checked against the header
 | `functional_amount` | `NUMERIC(23, 6)` | no | In the functional currency, always positive; the balance invariant is over this column |
 | `exchange_rate` | `NUMERIC(20, 10)` | no | Transaction to functional, positive; `1` in a single-currency tenant |
 | `signed_functional_amount` | `NUMERIC(23, 6)` | no | **Generated**: `functional_amount` for a debit, its negation for a credit. For ad-hoc and reconciliation SQL |
-| `source_module` | `TEXT` | no | Copied from the request, for Q6 without a join |
+| `source_module` | `TEXT` | no | The module that owns the subsidiary position this line moved, for Q6 without a join; the requesting module when the line moves no position. **Not** simply copied from the request — see below |
 | `subledger_reference` | `TEXT` | yes | The product-owned position this line moved, for Q5 and Q6 drill-down. Descriptive, no foreign key (`INV-16`), at most 200 characters |
 | `narrative` | `TEXT` | yes | Free text, at most 500 characters |
 | `created_at` | `TIMESTAMPTZ` | no | When the row was written |
@@ -1050,6 +1052,34 @@ property of the account *at posting time*, and an account legitimately becomes `
 has received lines, so a foreign key over `(organisation_id, id, status)` would either reject the
 deactivation or invalidate history. The engine enforces eligibility through
 `GlAccountPostingPolicy`; the schema enforces tenant scope.
+
+**`source_module` names the module that owns the position, and a reversal is where that matters.**
+The column exists so that Q6 — *"every line that moved this subsidiary position"* — is one range
+scan over `idx_journal_line_subledger`, whose key is
+`(organisation_id, source_module, subledger_reference, posting_date, id)`. A query using that index
+names the owning module, because that is the only module whose positions the caller is asking
+about.
+
+A reversal is posted by accounting: its `posting_request.source_module` is the constant
+`accounting`, which is right — the *request* really is accounting's. But `JournalReversalService`
+mirrors each original line including its `subledger_reference`, so if the line simply copied its
+request's module, a reversed savings deposit would leave the original under `('savings', 'SAV-1')`
+and the reversal under `('accounting', 'SAV-1')`. The Q6 query would return the debit and not the
+credit that cancels it, and the position would read as still holding an amount the general ledger
+has given back. Control-account totals would still agree, because they aggregate by account alone
+— which is the worse failure, not the milder one: the aggregate matches while the drill-down meant
+to explain a break contradicts it. Issue #43 requires that read models see a reversal as an
+ordinary immutable entry, and that is only true if both halves answer the same query.
+
+So a line's `source_module` is taken from **the leg** when the leg carries a `subledgerReference`,
+and from the request otherwise. `PostingLeg` carries `subledgerModule` alongside
+`subledgerReference` for exactly this, and the reversal's mirror copies both. The request's own
+`source_module` is unchanged and still says `accounting`; the two columns answer different
+questions and are allowed to differ.
+
+The alternative was to leave the column copying the request and make a sub-ledger query walk
+`journal_entry.reverses_journal_entry_id`. That costs the join the partial index exists to avoid
+and loses the range scan Q6's block budget depends on.
 
 | Index | Definition | Justifying query |
 | --- | --- | --- |
@@ -1677,6 +1707,377 @@ account without manual posting, a control account and a closed period cannot pos
 through the engine and produces ordinary immutable `MANUAL` journal rows with the draft's id as
 lineage; rejection returns to `DRAFT` with a reason; and every creation and approval is audited.
 
+## Column definitions for the issue #47 table
+
+Every column, constraint, index and comment the projection migration creates. The identifier pair
+(`id`, `guid`) follows the conventions above; the audit columns do **not**, and the exception is
+explained below rather than left to be noticed.
+
+### Why this table exists at all, in two numbers
+
+[The accounting foundation](../architecture/accounting-foundation.md) approves exactly one
+projection, and the justification is arithmetic rather than taste. A monthly trial balance scans
+roughly 16 million journal lines, which is survivable for a report. An as-of balance computed by
+summing an account's lines from inception scans a table heading for 1.4 billion rows, which is not
+survivable at any latency a user will wait for. `gl_account_daily_balance` closes that second gap
+and only that one: it answers *"what was this account worth at the close of day D"* from **one row
+read per key** — one descent of `uq_gl_account_daily_balance_key` plus one heap fetch for
+`closing_signed_functional`, which that index does not carry. Constant in the tenant's history
+rather than growing with it, which is the property the design needs; it is not an index-only scan,
+and an earlier revision of this section wrongly claimed it was.
+
+Nothing else is approved. A second projection needs its own arithmetic showing the query it serves
+is infeasible without it — not that it would be faster (`INV-13` and the foundation's
+*"Rollups And Projections"*).
+
+### `gl_account_daily_balance`
+
+One row per account, branch, currency and business day **that had movement**. A dense projection
+over 40 branches and 2,000 accounts would be 29 million rows a year of mostly zeros; a sparse one
+is small enough to stay in cache, and the gaps are exactly what the as-of read walks past.
+
+| Column | Type | Null | Meaning |
+| --- | --- | --- | --- |
+| `gl_account_id` | `UUID` | no | The account the day's lines landed on |
+| `branch_id` | `UUID` | yes | The branch, null exactly where `journal_line.branch_id` is null — a head-office or tenant-level posting |
+| `currency_code` | `CHAR(3)` | no | The **functional** currency. Every amount here is a functional amount; see below |
+| `posting_date` | `DATE` | no | The day whose books these amounts belong to. `INV-9`'s selector, never the business date |
+| `opening_signed_functional` | `NUMERIC(23, 6)` | no | This key's closing balance on its previous row, carried forward; `0` when the key has no earlier row |
+| `debit_functional` | `NUMERIC(23, 6)` | no | Sum of `functional_amount` over the day's `DEBIT` lines |
+| `credit_functional` | `NUMERIC(23, 6)` | no | Sum of `functional_amount` over the day's `CREDIT` lines |
+| `movement_signed_functional` | `NUMERIC(23, 6)` | no | **Generated**, `debit_functional - credit_functional` |
+| `closing_signed_functional` | `NUMERIC(23, 6)` | no | **Generated**, `opening_signed_functional + debit_functional - credit_functional` |
+| `line_count` | `INTEGER` | no | How many `journal_line` rows the row aggregates. Part of the proof, not decoration |
+| `built_at` | `TIMESTAMPTZ` | no | When the build last recomputed this row |
+| `built_for_business_date` | `DATE` | no | The tenant business date whose build wrote it. What makes a stale row identifiable without a join |
+
+**No `created_by`, no `updated_by`, no `row_version`, and the omission is the design.** Every other
+table here records *which actor* wrote a row, because every other table is written by an actor. A
+projection row is written by a rebuild, from journal lines that already carry their own actor, and
+inventing a `created_by` for it would either be null on every row or name a system principal that
+does not exist. `built_at` and `built_for_business_date` answer the only questions anyone asks of a
+projection row — *when was this computed* and *from which build* — and `row_version` would guard an
+optimistic-locking protocol the rebuild does not use, because the rebuild replaces a key's rows
+wholesale rather than editing one.
+
+`created_at` is likewise absent: a row that is deleted and reinserted by every rebuild has no
+meaningful creation instant distinct from `built_at`.
+
+| Constraint | Kind | Purpose |
+| --- | --- | --- |
+| `uq_gl_account_daily_balance_guid` | `UNIQUE (guid)` | Alternate key, single-column, as `FoundationSchemaGuidTests` requires of every application table |
+| `uq_gl_account_daily_balance_key` | `UNIQUE NULLS NOT DISTINCT (organisation_id, gl_account_id, branch_id, currency_code, posting_date)` | **The grain, and the as-of read path.** `NULLS NOT DISTINCT` because `branch_id` is nullable and two head-office rows for one account on one day must collide rather than coexist — the default `NULLS DISTINCT` would let the projection hold two contradictory balances for the same key and neither would be wrong by the constraint |
+| `fk_gl_account_daily_balance_account` | `FOREIGN KEY (organisation_id, gl_account_id)` | The account is in the same tenant (`INV-8`) |
+| `fk_gl_account_daily_balance_branch` | `FOREIGN KEY (organisation_id, branch_id)` | The branch is in the same tenant |
+| `chk_gl_account_daily_balance_debit` | `CHECK (debit_functional >= 0)` | Direction carries the sign (`INV-3`); a side total is never negative |
+| `chk_gl_account_daily_balance_credit` | `CHECK (credit_functional >= 0)` | As above |
+| `chk_gl_account_daily_balance_movement` | `CHECK (debit_functional > 0 OR credit_functional > 0)` | **Sparseness, enforced.** A row with no movement is a row the build should not have written, and a zero row breaks the as-of read's "latest row wins" reasoning by answering a day the account did not move |
+| `chk_gl_account_daily_balance_line_count` | `CHECK (line_count > 0)` | Same reason, from the other side |
+| `chk_gl_account_daily_balance_currency` | `CHECK (currency_code ~ '^[A-Z]{3}$')` | The foundation currency regex |
+
+**There is no foreign key to `accounting_fiscal_period`, and no `fiscal_period_id` column.** The
+period is a deterministic function of `posting_date` — periods cannot overlap
+(`ex_accounting_fiscal_period_no_overlap`) — so storing it would be a denormalisation with a
+maintenance obligation and nothing to buy: a period-scoped read expresses itself as the period's
+date range, which is what the unique key is already sorted by.
+
+| Index | Definition | Justifying query |
+| --- | --- | --- |
+| `uq_gl_account_daily_balance_key` | as above | **Q3 opening balance**: `WHERE organisation_id = ? AND gl_account_id = ? AND branch_id = ? AND currency_code = ? AND posting_date <= ? ORDER BY posting_date DESC LIMIT 1`, with a second `branch_id IS NULL` arm for head office. The key's column order is exactly the predicate's, so each arm is one backward range scan stopping at the first row, then a heap fetch for `closing_signed_functional`. **Two arms rather than one `IS NOT DISTINCT FROM`**: PostgreSQL cannot qualify an index with that operator, so a single parameterised probe would degrade to scanning the account's whole key range — the thing the key exists to avoid |
+| `idx_gl_account_daily_balance_watermark` | `(organisation_id, built_for_business_date DESC)` | **The watermark**: `SELECT MAX(built_for_business_date) WHERE organisation_id = ?`, one backward scan stopping at the first row. Read on every as-of balance, because the journals the projection does *not* hold are exactly those recorded after it |
+
+The projection's migration creates **one further index, and it is on `journal_entry`**:
+
+| Index | Definition | Justifying query |
+| --- | --- | --- |
+| `idx_journal_entry_business_date` | `(organisation_id, business_date, id) INCLUDE (posting_date)` | The incremental build: *"every journal this tenant recorded on business date B"*, which is the only enumeration that sees a backdated correction. The payload column serves the reader instead: `SELECT MIN(posting_date) WHERE organisation_id = ? AND business_date >= watermark` — index-only, but a range scan over the matching entries rather than a one-row probe, because `posting_date` is a payload and not an ordered key, so PostgreSQL cannot rewrite the aggregate into a lookup. Its cost grows with the journals recorded since the last build: normally one business day's worth |
+
+It is needed because of which table carries which date. The build has to enumerate the journals
+**recorded** on a business date, whatever posting dates they claim, and `business_date` lives on
+`journal_entry` only — `journal_line` denormalises `branch_id`, `posting_date`, `fiscal_period_id`
+and the currency codes, which are the columns its read-path indexes are keyed on, and not this one.
+`V7`'s `idx_journal_entry_posting_date` leads with `posting_date` and cannot answer the question,
+so without this index every build would scan the tenant's whole header table once per business day.
+
+**Two indexes, and the second one earns its place.** The unique key doubles as the read path
+because the as-of question is always asked about one key; a tenant-wide or branch-wide sweep is
+#49's trial balance, which reads this table through a `LATERAL` per account rather than scanning
+it, and therefore needs no index of its own. The watermark index is not a speculative read path but
+a correctness dependency: without it the as-of read cannot cheaply learn where the projection ends,
+and a read that guesses that boundary is wrong in the way described below. An index added here is
+paid on every rebuild of every key, so the rule from `V1` still holds: no speculative indexes, and
+these two are not speculative.
+
+**The one-row promise holds per key, and a null branch is not a wildcard.** The read above answers
+*"this account, in this branch, in this currency"*. `branch_id IS NOT DISTINCT FROM NULL` matches
+head-office and tenant-level postings and **nothing else**, which is not what
+[`LedgerBalanceQuery`](../architecture/accounting-module-boundary.md) means by a null branch: that
+port applies no branch predicate at all when `branchId` is null, so its null is *every* branch. The
+two nulls are opposites, and the distinction is load-bearing — a projection-backed implementation
+that ignored it would answer a tenant-wide control-account reconciliation with a head-office-only
+balance and turn every default run into a `BREAK`.
+
+**And the projection alone cannot answer an as-of balance at all for a date the tenant has not yet
+rolled over**, which includes *today* — the date a reconciliation is most often run for. The build
+happens when the business date advances, so today has no projected row by construction. A read that
+took the latest row and stopped would answer yesterday's balance for today's question, compare it
+against a sub-ledger aggregate that is current, and file a `BREAK` that is an artefact of the read
+rather than a fact about the ledger. `control_account_reconciliation_run` would then accumulate
+evidence rows that are *wrong* rather than absent, and wrong evidence is filed where absent evidence
+is noticed.
+
+So an as-of balance is **the latest trusted checkpoint plus a bounded delta**, which is the same
+shape #50 fixes for every future sub-ledger statement. Where that checkpoint may be taken is the
+subtle part, and the obvious answer is wrong.
+
+**The latest projected posting date is not a safe checkpoint.** The projection holds exactly the
+journals recorded on or before its watermark, and a journal recorded after it may be **backdated**
+to a posting date earlier than any row the projection offers. Post on business date 18 September
+into posting date 16 September and the projection still shows 16 September as it stood before that
+line existed. A checkpoint taken there is stale, and a delta bounded by *"posting dates after 16
+September"* does not contain the line either — so both halves of the read miss it, the balance
+silently omits a line the journal holds, and a control-account reconciliation reports the omission
+as a break in the sub-ledger. This is the failure the whole read exists to avoid, arriving through
+the other door.
+
+The checkpoint is therefore taken at the latest date **no unprojected line can reach**:
+
+1. `W` — the watermark, `MAX(built_for_business_date)` for the tenant. The projection holds the
+   journals recorded on or before it and no others.
+2. `P` — `MIN(posting_date)` over the journals recorded after `W`. Every line the projection is
+   missing is dated on or after it.
+3. `S = min(as-of, P - 1)`, or the as-of date when nothing has been recorded since `W`. Every line
+   dated on or before `S` is projected, by construction rather than by assumption.
+4. The closing balance of every series at `S`; one row read each — an index descent and a heap
+   fetch — and one in total when the caller named a branch.
+5. `SUM(signed_functional_amount)` over `journal_line` in `(S, as-of]`, which contains every line
+   the checkpoint does not.
+
+The two sets are disjoint and together they are every line dated on or before the as-of date, so
+the answer is **exact** rather than approximately fresh. How far `S` falls behind the as-of date is
+bounded by how far back a posting may be dated at all, and that is bounded by the open fiscal
+periods: posting into a `CLOSED` period takes break-glass authority, so a backdated correction
+reaches days or weeks into the past, never years. It is also a monitoring signal (#53) when the gap
+stops being days.
+
+`W` is read tenant-wide rather than per series. A series the build did not touch on a business date
+is one that had no journals on it, so the tenant-wide maximum is sound for every series, and one
+aggregate is cheaper than one per key — which matters because #49's trial balance asks this
+question for the whole chart at once.
+
+With no projected rows at all, `W` is absent, `P` is the tenant's first posting date and step five
+degrades to the inception-to-date scan this replaces: correct, and no slower than what it replaces.
+
+### Why the row carries a carried-forward opening and not only the day's movement
+
+A projection of daily *movements* alone would still answer an as-of balance by summing every row up
+to date D. At the design envelope that is roughly 250 rows a year per key, so ~1,750 over the
+seven-year retention — a thousand times better than 1.4 billion lines, and genuinely tempting,
+because a movement-only row is invalidated by nothing that happens after it.
+
+It is rejected because the document this one implements already committed to the stronger promise:
+*"`gl_account_daily_balance` answers an as-of balance from **one row read per key**"*
+([tables deliberately not created](#tables-deliberately-not-created)), and because #50 builds the
+subsidiary-ledger statement contract on *"the closest trusted checkpoint plus bounded deltas"*,
+which is a checkpoint carrying a cumulative value or it is nothing.
+
+The cost is stated plainly rather than discovered later: **a carried-forward balance makes every
+later row of a key depend on every earlier one**, so a line arriving on an already-built day
+invalidates the whole tail. That is the next section, and it is the only genuinely hard part of
+this table.
+
+### Late arrivals, and why the build is keyed on the business date rather than the posting date
+
+A backdated posting is not an edge case here. `chk_journal_entry_dates` permits
+`posting_date <= business_date`, `journal.post_prior_period` exists precisely to authorise it, and
+[accounting dates and periods](../architecture/accounting-dates-and-periods.md) states that a
+backdated posting into a still-open prior period is legal **even while close-of-business is
+running**, and deliberately takes no lock on `business_date`. So a journal line can land on a day
+whose projection row already exists, and the projection has to be right afterwards.
+
+The mechanism is the distinction between the two dates:
+
+- `posting_date` is the day the amounts belong to, and it is the *grain* of this table.
+- `journal_entry.business_date` is the day the posting was **recorded**, and it is the *trigger* of
+  the build.
+
+A build for business date `B` enumerates the journals with `business_date = B`, whatever their
+posting dates, derives the affected keys and the earliest affected `posting_date` per key, and
+**recomputes each affected key from that date forward**. A backdated correction recorded on `B`
+into `B - 40` is therefore rebuilt along with everything after it, deterministically, by the
+ordinary build — not by a repair path that only runs when someone notices.
+
+Three consequences, each of which the implementation must carry:
+
+1. **The build runs when the business date advances, not when close-of-business completes.** Once
+   the tenant's business date has moved off `B`, no journal can ever again be recorded with
+   `business_date = B`, so the set the build enumerates is closed. A build at `completeCob` would
+   run against a set still open to backdated postings, which the date rules explicitly allow while
+   the date is `CLOSED`.
+2. **The build's window starts at the watermark**, not at a fixed offset from the day it was
+   called for. The latest business date the projection has settled is already recorded, so one
+   build covers every date from there forward, however many have accumulated. A day whose build
+   was never enqueued — a process that died between the advance committing and the callback
+   running — is therefore caught up by the next build that runs, rather than stranded the moment
+   the watermark moves past it. With no watermark at all the floor is the tenant's earliest
+   journal business date, because a cold start over a journal that already holds history has to
+   backfill it: the watermark such a build leaves behind claims every journal recorded up to it is
+   projected.
+
+   A configurable re-scan *behind* the watermark covers the other race. `advance` takes the
+   `business_date` row lock exclusively and a *current-dated* posting holds it shared, so no
+   current-dated posting can straddle the advance — but a backdated one takes no lock on that row
+   at all, and one that read `business_date = B` before the advance may commit after it. The
+   re-scan costs only the keys that actually moved, because the recompute is idempotent by
+   construction, and the as-of read's **inclusive** `business_date >= W` keeps such a straggler in
+   the delta meanwhile: the watermark's own day is never assumed closed.
+3. **The rebuild horizon is bounded by the oldest open fiscal period**, not by a configured number
+   of days. A backdated posting requires an open covering period, and a closed period rejects one
+   whatever permission the actor holds, so no line can arrive behind a closed period and no
+   recompute needs to reach behind one.
+
+The drift proof below is the backstop, not the mechanism. A projection whose correctness depended
+on a proof job noticing would be the *"second independent ledger that can diverge silently"* that
+issue #47 forbids.
+
+### The rebuild query
+
+`INV-13` requires that the projection ship with the deterministic query that rebuilds it. This is
+that query, and it is what both the build and the proof run:
+
+```sql
+SELECT jl.organisation_id,
+       jl.gl_account_id,
+       jl.branch_id,
+       jl.posting_date,
+       COALESCE(SUM(jl.functional_amount)
+                FILTER (WHERE jl.direction = 'DEBIT'), 0)  AS debit_functional,
+       COALESCE(SUM(jl.functional_amount)
+                FILTER (WHERE jl.direction = 'CREDIT'), 0) AS credit_functional,
+       COUNT(*)                                            AS line_count
+FROM journal_line jl
+WHERE jl.organisation_id = :organisation_id
+  AND jl.gl_account_id = :gl_account_id
+  AND jl.posting_date >= :from_date
+GROUP BY jl.organisation_id,
+         jl.gl_account_id,
+         jl.branch_id,
+         jl.posting_date
+ORDER BY jl.branch_id, jl.posting_date;
+```
+
+It sums `functional_amount`, never `amount`. `currency_code` on the line is the *transaction*
+currency, and summing across transaction currencies would add incompatible units — the whole reason
+`functional_amount`, `functional_currency_code` and `signed_functional_amount` exist on the row.
+
+**`functional_currency_code` is deliberately not a grouping key**, and the reason is the index
+rather than the semantics. `idx_journal_line_account_date` is
+`(organisation_id, gl_account_id, posting_date, id) INCLUDE (direction, functional_amount,
+branch_id, journal_entry_id)`: the currency column appears in neither the key nor the `INCLUDE`
+list, so grouping by it would force a heap fetch for **every line in the range** and the plan would
+be an index scan with full heap access rather than an index-only scan. Over the design envelope
+that is the difference between a build that fits the rollover window and one that does not. An
+earlier revision of this section grouped by it and claimed the result was index-only, which was
+simply false.
+
+The column is populated instead from the tenant's frozen functional currency, read once per
+rebuild through `AccountingTenantLookup`. This is exact rather than approximate: the functional
+currency is frozen the moment a tenant posts its first journal — `lockFunctionalCurrencyForChange`
+serialises any change against that first posting — so every line of that tenant carries the same
+`functional_currency_code` by construction. The **drift proof** below does group by it, because a
+proof runs per period rather than per rollover and is allowed to be heavier; that is where a future
+multi-currency change would surface as a mismatch rather than as a silently wrong sum.
+
+It is bounded by account and by a `from_date` for the same reason the header-versus-lines proof is
+bounded by period: it must be runnable on a 1.4-billion-row table without being a full scan. The
+`(organisation_id, gl_account_id, posting_date, id)` prefix of `idx_journal_line_account_date`
+serves it directly, and `direction`, `functional_amount` and `branch_id` are all in that index's
+`INCLUDE` list, so the aggregate is index-only — a claim `AccountingQueryPlanTests` asserts with a
+named index and a recorded shared-block budget, not one this paragraph asks to be taken on trust.
+
+The `opening_signed_functional` of the first rebuilt row is read from the key's last row strictly
+before `:from_date`, and every later row carries the previous row's closing forward. Reversals need
+no special handling anywhere in this: a `REVERSAL` journal writes ordinary lines in the opposite
+direction, so the sums net naturally (`INV-6`).
+
+### The projection-versus-journal proof
+
+The second of the three first-class proof contracts in the foundation document. It compares the
+stored row against the rebuild above and returns the rows that disagree:
+
+```sql
+SELECT b.gl_account_id,
+       b.branch_id,
+       b.currency_code,
+       b.posting_date,
+       b.debit_functional,
+       b.credit_functional,
+       b.line_count,
+       agg.debit_total,
+       agg.credit_total,
+       agg.lines
+FROM gl_account_daily_balance b
+FULL OUTER JOIN (
+    -- the rebuild query above, for the same tenant and date range, plus the same branch key
+) AS agg
+  ON  agg.branch_key    = COALESCE(b.branch_id, '00000000-0000-0000-0000-000000000000'::uuid)
+  AND agg.currency_code = b.currency_code
+  AND agg.posting_date  = b.posting_date
+WHERE b.id IS NULL
+   OR agg.posting_date IS NULL
+   OR b.debit_functional  <> agg.debit_total
+   OR b.credit_functional <> agg.credit_total
+   OR b.line_count        <> agg.lines;
+```
+
+**A sound projection returns zero rows.** `FULL OUTER JOIN` rather than an inner one, because the
+two failure modes are opposite and both matter: a row the journal has and the projection does not
+is a missed build, and a row the projection has and the journal does not is a phantom that would
+be added into a balance. An inner join sees neither.
+
+**The join compares a coalesced branch key rather than `IS NOT DISTINCT FROM`, and that is a
+PostgreSQL constraint rather than a preference.** `branch_id` is nullable on both sides, so the
+obvious way to match head office against head office is `IS NOT DISTINCT FROM` — and PostgreSQL
+refuses it here with `FULL JOIN is only supported with merge-joinable or hash-joinable join
+conditions`. `IS NOT DISTINCT FROM` is neither, and the restriction applies to **every** condition
+of a full join, so one such predicate makes the whole query unexecutable. An earlier revision of
+this section specified exactly that query; it was written before anything ran it.
+
+Coalescing the nullable branch to the nil UUID gives a null-free key that hash-joins. The sentinel
+cannot collide with a real branch, because every identifier in this schema is a `uuidv7` whose
+leading 48 bits are a millisecond timestamp and are therefore never all zero. The tenant and
+account predicates move into the two derived tables, where they bound each side before the join
+rather than filtering after it.
+
+The opening/closing chain is proven separately and more cheaply, by asserting that each row's
+`opening_signed_functional` equals the previous row's `closing_signed_functional` for its key — a
+single window function over the key's rows, with no journal access at all. **The earliest row of
+each key is asserted to open at zero**, and that clause is load-bearing rather than tidy: a window
+function comparing each row against its predecessor has no predecessor for the first, so a constant
+offset planted there yields a chain that is consistent at every step. The daily comparison against
+the journal would not catch it either — that checks a day's debit, credit and line totals, which
+such an offset leaves untouched — so without this anchor both proofs can pass over a projection
+whose every balance is wrong by the same amount.
+
+Like every proof contract here it ships twice: as an integration test that fails the build, and as
+an operational query that can be run against a live tenant on a named date range. A proof that
+exists only in a test suite cannot answer the question an auditor actually asks.
+
+### What the projection migration proves before it merges
+
+`GlAccountDailyBalanceSchemaIntegrationTests` exercises every constraint above by name, including
+that a second row for one key with a null `branch_id` is rejected — the case
+`NULLS NOT DISTINCT` exists for — and that a zero-movement row is refused.
+`DailyBalanceProjectionIntegrationTests` proves the behaviour through the service: a build after an
+ordinary posting day writes one row per moved key and none for the unmoved; a backdated posting
+recorded on a later business date rebuilds its key from the backdated day forward and leaves every
+other key untouched; a reversal nets to zero without special handling; a deliberately corrupted row
+is caught by the proof query and repaired by a rebuild; and the rebuild is idempotent, in that
+running it twice over the same range yields the same grain keys carrying the same balances. Not
+byte-identical rows: the rebuild deletes and reinserts, so `id`, `guid` and `built_at` are fresh by
+construction. Identity churns and the derived values do not, and it is the values the assertion is
+about.
+
 ## The period selector
 
 `journal_entry` and `journal_line` both carry `posting_date DATE NOT NULL`. **It is the only column
@@ -1798,7 +2199,7 @@ Deferred, with the issue that creates each:
   Classification lives on `gl_account.is_control_account` and `control_subledger_kind`.
 - **`gl_account_balance`** (an authoritative stored current balance) — a per-account write hotspot
   on every posting and a silent divergence risk. `gl_account_daily_balance` answers an as-of
-  balance from one index-only row read instead, and is rebuildable from `journal_line`. Note that
+  balance from one row read per key instead, and is rebuildable from `journal_line`. Note that
   OFBiz trunk does not carry a running balance on `GlAccount` either; it keeps a `GlAccountHistory`
   period rollup, which is closer to the projection adopted here. See ADR 0020.
 - **Any member or product subsidiary-ledger table** — product-owned-future. Accounting creates none
@@ -1817,7 +2218,8 @@ Deferred, with the issue that creates each:
 | #91 | `V11`: one control account per class per tenant, so the class the proof query names has one answer |
 | #92 | `V12`: `manual_journal.external_reference`, so a document number has somewhere to live other than inside prose |
 | #48 | `V10`: `manual_journal`, `manual_journal_line`, their transition log, and approval through the engine |
-| #47 | `gl_account_daily_balance` and its documented rebuild query |
-| #49, #50, #51 | The read models, using the query patterns and pagination contract |
+| #47 | `gl_account_daily_balance`, its documented rebuild query and its drift proof |
+| #49 | `idx_journal_line_branch_account_date`, and the trial-balance, GL-ledger and drill-down read models over it |
+| #50, #51 | The remaining read models, using the query patterns and the pagination contract |
 | #54 | The `REVOKE UPDATE, DELETE` operational prerequisite; also what completes `V13`'s append guard, because `line_count` is mutable until it lands |
 | #95 | `V13`: `trg_journal_line_append_guard` and `fn_journal_line_append_guard`, and ADR 0024's standard for admitting a trigger at all |
