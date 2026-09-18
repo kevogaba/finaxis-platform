@@ -290,4 +290,39 @@ object PostingErrorCodes {
 
     /** A daily-balance proof or rebuild was asked for a range that ends before it starts. */
     const val PROJECTION_RANGE_INVALID = "accounting.projection_range_invalid"
+
+    /** A report named neither a fiscal period nor a date range, or named both of them. */
+    const val REPORT_SCOPE_INVALID = "accounting.report_scope_invalid"
+
+    /** A report was asked for a date range that ends before it starts. */
+    const val REPORT_RANGE_INVALID = "accounting.report_range_invalid"
+
+    /** A report was asked for a window wider than a fiscal year and a day. */
+    const val REPORT_RANGE_TOO_WIDE = "accounting.report_range_too_wide"
+
+    /** A ledger page was asked for outside the platform's page-size bounds. */
+    const val REPORT_PAGE_SIZE_INVALID = "accounting.report_page_size_invalid"
+
+    /**
+     * A ledger page was asked for with a cursor and no carried balance, or the reverse.
+     *
+     * The two are one pagination state and not two options. A cursor without the balance the
+     * previous page ended at skips those rows and then restarts the running balance from the
+     * range's opening; a carried balance without a cursor applies a balance from somewhere else to
+     * the first page. Both return a statement that looks right and is not, which is worse than a
+     * refusal.
+     */
+    const val REPORT_CURSOR_INVALID = "accounting.report_cursor_invalid"
+
+    /**
+     * A trial balance's debit and credit columns disagree.
+     *
+     * Never a formatting problem. `INV-4` makes the equality true of any sound ledger, so this code
+     * means something upstream is wrong and the report is refused rather than presented with a
+     * caveat - the assurance is the whole reason a reader opened it.
+     */
+    const val TRIAL_BALANCE_UNBALANCED = "accounting.trial_balance_unbalanced"
+
+    /** A report names a general-ledger account the tenant does not have. */
+    const val GL_ACCOUNT_NOT_FOUND = "accounting.gl_account_not_found"
 }

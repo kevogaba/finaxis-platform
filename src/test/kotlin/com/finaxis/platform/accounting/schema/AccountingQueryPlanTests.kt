@@ -53,6 +53,7 @@ class AccountingQueryPlanTests(
     private val mapper = ObjectMapper()
     private lateinit var organisationId: UUID
     private lateinit var accountId: UUID
+    private lateinit var branchId: UUID
 
     @BeforeAll
     fun seed() {
@@ -64,6 +65,13 @@ class AccountingQueryPlanTests(
                 .where(GL_ACCOUNT.ORGANISATION_ID.eq(organisationId))
                 .and(GL_ACCOUNT.ACCOUNT_CODE.eq("0008"))
                 .fetchOne(GL_ACCOUNT.ID)!!
+        branchId =
+            dsl
+                .select(BRANCH.ID)
+                .from(BRANCH)
+                .where(BRANCH.ORGANISATION_ID.eq(organisationId))
+                .and(BRANCH.BRANCH_CODE.eq("B001"))
+                .fetchOne(BRANCH.ID)!!
     }
 
     @Test
@@ -275,6 +283,110 @@ class AccountingQueryPlanTests(
         assertBlocksUnder(plan, WATERMARK_BUDGET)
     }
 
+    @Test
+    fun `Q4 a branch trial balance is one range scan of that branch's own rows`() {
+        // The index V15 creates, and the reason it exists. Its key is
+        // (organisation_id, branch_id, posting_date, gl_account_id) - this predicate in its own
+        // order - so a branch-scoped report is a single index-only range scan. V7's
+        // idx_journal_line_account_date leads with the account instead, so the same question asked
+        // through it would read every account's whole window and discard the other branches.
+        val plan =
+            explain(
+                """
+                SELECT gl_account_id,
+                       COALESCE(SUM(functional_amount)
+                                FILTER (WHERE direction = 'DEBIT'), 0)  AS debit,
+                       COALESCE(SUM(functional_amount)
+                                FILTER (WHERE direction = 'CREDIT'), 0) AS credit
+                FROM journal_line
+                WHERE organisation_id = ? AND branch_id = ?
+                  AND posting_date BETWEEN ? AND ?
+                GROUP BY gl_account_id
+                """.trimIndent(),
+                organisationId,
+                branchId,
+                LedgerVolumeFixture.START.plusMonths(6),
+                LedgerVolumeFixture.START.plusMonths(7).minusDays(1),
+            )
+
+        assertNoSeqScan(plan)
+        assertUsesIndex(plan, "idx_journal_line_branch_account_date")
+        assertBlocksUnder(plan, Q4_BUDGET)
+    }
+
+    @Test
+    fun `a tenant-wide trial balance is one tight range scan per account`() {
+        // The other half of the same report. A tenant-wide scope has no leading index value to
+        // range on, so the aggregate is driven by the chart - bounded by configuration rather than
+        // by history - and each correlated probe reads one account's rows in the window and nothing
+        // else. The bare `posting_date BETWEEN` form this replaces has to read the tenant's whole
+        // ledger to answer a question about one month of it.
+        val plan =
+            explain(
+                """
+                SELECT a.id, m.debit, m.credit
+                FROM gl_account a
+                CROSS JOIN LATERAL (
+                    SELECT COALESCE(SUM(jl.functional_amount)
+                                    FILTER (WHERE jl.direction = 'DEBIT'), 0)  AS debit,
+                           COALESCE(SUM(jl.functional_amount)
+                                    FILTER (WHERE jl.direction = 'CREDIT'), 0) AS credit
+                    FROM journal_line jl
+                    WHERE jl.organisation_id = ? AND jl.gl_account_id = a.id
+                      AND jl.posting_date BETWEEN ? AND ?
+                ) m
+                WHERE a.organisation_id = ?
+                """.trimIndent(),
+                organisationId,
+                LedgerVolumeFixture.START.plusMonths(6),
+                LedgerVolumeFixture.START.plusMonths(7).minusDays(1),
+                organisationId,
+            )
+
+        assertNoSeqScan(plan)
+        assertUsesIndex(plan, "idx_journal_line_account_date")
+        assertBlocksUnder(plan, Q4_BUDGET)
+    }
+
+    @Test
+    fun `a trial balance's opening balance is one index probe per key, whatever the history`() {
+        // The promise gl_account_daily_balance was created to keep, asserted now that the fixture
+        // seeds it: an opening balance for the whole chart is one backward range scan per key
+        // stopping at the first row, never a sweep of the projection. A sweep would cost one row
+        // per account, branch, currency and day that moved - which grows for as long as the tenant
+        // posts, while this stays fixed by how the tenant is configured.
+        val plan =
+            explain(
+                """
+                SELECT s.gl_account_id, c.closing_signed_functional
+                FROM (
+                    SELECT a.id AS gl_account_id, b.id AS branch_id
+                    FROM gl_account a
+                    JOIN branch b ON b.organisation_id = a.organisation_id
+                    WHERE a.organisation_id = ?
+                ) s
+                JOIN LATERAL (
+                    SELECT d.closing_signed_functional
+                    FROM gl_account_daily_balance d
+                    WHERE d.organisation_id = ?
+                      AND d.gl_account_id = s.gl_account_id
+                      AND d.branch_id = s.branch_id
+                      AND d.currency_code = 'KES'
+                      AND d.posting_date <= ?
+                    ORDER BY d.posting_date DESC
+                    LIMIT 1
+                ) c ON TRUE
+                """.trimIndent(),
+                organisationId,
+                organisationId,
+                LedgerVolumeFixture.START.plusMonths(6).minusDays(1),
+            )
+
+        assertNoSeqScan(plan)
+        assertUsesIndex(plan, "uq_gl_account_daily_balance_key")
+        assertBlocksUnder(plan, CHECKPOINT_BUDGET)
+    }
+
     // There is deliberately no plan test for the projection's own as-of read here. This fixture
     // seeds journal lines and no projection rows, so an EXPLAIN over an empty
     // gl_account_daily_balance asserts nothing a planner could fail - a test that cannot fail is
@@ -301,8 +413,11 @@ class AccountingQueryPlanTests(
             nodes(plan)
                 .filter { it["Node Type"].asString() == "Seq Scan" }
                 .map { it["Relation Name"].asString() }
-                .filter { it == "journal_line" || it == "journal_entry" }
-                .toList()
+                .filter {
+                    it == "journal_line" ||
+                        it == "journal_entry" ||
+                        it == "gl_account_daily_balance"
+                }.toList()
         assertTrue(seqScans.isEmpty(), "sequential scan on $seqScans in\n${plan.toPrettyString()}")
     }
 
@@ -346,6 +461,16 @@ class AccountingQueryPlanTests(
         const val Q6_BUDGET = 500
         const val Q7_BUDGET = 200
         const val WATERMARK_BUDGET = 50
+        const val Q4_BUDGET = 4_000
+
+        /**
+         * The opening-balance probe: 500 accounts crossed with 40 branches, one index descent each.
+         *
+         * Large in absolute terms and small next to the movement aggregate the same report already
+         * runs - which reads the window's journal lines rather than a few blocks per key - and, the
+         * point of the projection, constant in the tenant's history rather than growing with it.
+         */
+        const val CHECKPOINT_BUDGET = 120_000
 
         /**
          * A build a few days behind, which is the widest healthy lag the trailing re-scan covers.
@@ -390,7 +515,11 @@ class LedgerVolumeFixture(
         seedBranches(organisationId)
         seedAccounts(organisationId)
         seedJournals(organisationId)
-        dsl.execute("VACUUM ANALYZE posting_request, journal_entry, journal_line")
+        seedProjection(organisationId)
+        dsl.execute(
+            "VACUUM ANALYZE posting_request, journal_entry, journal_line, " +
+                "gl_account_daily_balance",
+        )
         return organisationId
     }
 
@@ -544,6 +673,19 @@ class LedgerVolumeFixture(
         }
     }
 
+    /**
+     * Builds `gl_account_daily_balance` from the seeded journals by the documented rebuild query.
+     *
+     * Not through `DailyBalanceProjectionService`: that would be one build per business date over
+     * two years of them, and this fixture wants the *shape* of a populated projection rather than a
+     * demonstration of the builder, which its own integration tests cover. The window function is
+     * what carries the opening balance forward, which is the property the checkpoint read depends
+     * on — a movements-only table would plan the same and answer differently.
+     */
+    private fun seedProjection(organisationId: UUID) {
+        dsl.execute(SEED_PROJECTION_SQL, organisationId)
+    }
+
     private fun now(): OffsetDateTime = OffsetDateTime.now()
 
     private fun branchCode(b: Int) = "B" + b.toString().padStart(BRANCH_CODE_WIDTH, '0')
@@ -572,6 +714,33 @@ class LedgerVolumeFixture(
         val END: LocalDate = LocalDate.of(2026, 12, 31)
 
         /** The set-based seed; see [seedJournals] for the shape it produces. */
+        val SEED_PROJECTION_SQL =
+            """
+            INSERT INTO gl_account_daily_balance (
+                organisation_id, gl_account_id, branch_id, currency_code, posting_date,
+                opening_signed_functional, debit_functional, credit_functional, line_count,
+                built_at, built_for_business_date
+            )
+            SELECT organisation_id, gl_account_id, branch_id, 'KES', posting_date,
+                   COALESCE(SUM(debit - credit) OVER (
+                       PARTITION BY gl_account_id, branch_id
+                       ORDER BY posting_date
+                       ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                   ), 0),
+                   debit, credit, lines, NOW(), posting_date
+            FROM (
+                SELECT jl.organisation_id, jl.gl_account_id, jl.branch_id, jl.posting_date,
+                       COALESCE(SUM(jl.functional_amount)
+                                FILTER (WHERE jl.direction = 'DEBIT'), 0)  AS debit,
+                       COALESCE(SUM(jl.functional_amount)
+                                FILTER (WHERE jl.direction = 'CREDIT'), 0) AS credit,
+                       COUNT(*)                                            AS lines
+                FROM journal_line jl
+                WHERE jl.organisation_id = ?
+                GROUP BY jl.organisation_id, jl.gl_account_id, jl.branch_id, jl.posting_date
+            ) daily
+            """.trimIndent()
+
         val SEED_JOURNALS_SQL =
             """
             WITH seq AS (
