@@ -323,7 +323,12 @@ class PostingEngine(
             // `1` because that is the truth for these postings, not a placeholder: a leg reaches
             // here only after [PostingLegsPolicy] refused every currency but the functional one.
             exchangeRate = UNITY,
-            sourceModule = prepared.request.source.sourceModule,
+            // The module that OWNS the position, which is the requesting module except where a leg
+            // says otherwise. A reversal is the one that says otherwise: accounting requests it and
+            // a product module owns what it moves, so taking the requester's module here would file
+            // the two halves of a reversed position under different keys of
+            // `idx_journal_line_subledger` (`INV-14`, and the ERD's definition of this column).
+            sourceModule = leg.subledgerModule ?: prepared.request.source.sourceModule,
             actorId = prepared.context.actorId,
         )
     }

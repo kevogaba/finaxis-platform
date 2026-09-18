@@ -42,6 +42,13 @@ enum class PostingRequestStatus {
  *
  * [subledgerReference] is the product-owned position this leg moves, carried on the line for
  * drill-down and control-account reconciliation only; it is descriptive, never a foreign key.
+ *
+ * [subledgerModule] names the module that **owns** that position, and is set only when the module
+ * requesting the posting is not the one that owns it. That happens on a reversal: accounting
+ * requests it, but the legs mirror a product module's position, and `journal_line.source_module`
+ * names the owner of the position a line moved rather than the requester of the posting. Left null,
+ * the line takes the requesting module, which is the same thing whenever a product module posts its
+ * own position.
  */
 data class PostingLeg(
     val accountId: UUID,
@@ -49,7 +56,14 @@ data class PostingLeg(
     val amount: MonetaryAmount,
     val narrative: String? = null,
     val subledgerReference: String? = null,
-)
+    val subledgerModule: String? = null,
+) {
+    init {
+        require(subledgerModule == null || subledgerReference != null) {
+            "A subledger module names the owner of a position, so it needs a position to name"
+        }
+    }
+}
 
 /**
  * One financial fact as the allocation rules see it: an amount, and the subsidiary-ledger position
