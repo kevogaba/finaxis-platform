@@ -247,6 +247,17 @@ class JournalReversalService(
         }
     }
 
+    /**
+     * The original line with its direction inverted, and with the module that owns its position.
+     *
+     * [PostingLeg.subledgerModule] is carried because a reversal is *requested* by accounting while
+     * its legs move a **product module's** positions, and `journal_line.source_module` names the
+     * owner of the position a line moved rather than the requester of the posting. Without it the
+     * reversal's lines take `accounting` as their module, and the two halves of a reversed position
+     * file under different keys of `idx_journal_line_subledger`: the sub-ledger drill-down returns
+     * the original debit and not the credit that cancels it, while the control account's total
+     * still agrees. That is the worse failure of the two, because it looks right in aggregate.
+     */
     private fun mirror(line: JournalLineView) =
         PostingLeg(
             accountId = line.accountId,
@@ -258,6 +269,7 @@ class JournalReversalService(
             amount = MonetaryAmount(line.amount, line.currencyCode),
             narrative = line.narrative,
             subledgerReference = line.subledgerReference,
+            subledgerModule = line.sourceModule.takeIf { line.subledgerReference != null },
         )
 
     /**

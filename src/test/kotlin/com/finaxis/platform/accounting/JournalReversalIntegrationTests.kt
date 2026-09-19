@@ -160,6 +160,41 @@ class JournalReversalIntegrationTests(
     }
 
     @Test
+    fun `a reversed position nets to zero under the key the drill-down reads`() {
+        val tenant = fx.provisionTenant("reversal-subledger-module")
+        val original = fx.postOriginal(tenant, debit = "400.00")
+
+        fx.inContext(tenant, tenant.checker) {
+            postingService.reverse(
+                fx.command(tenant, original.journalEntryId, reason = "Mis-keyed"),
+            )
+        }
+
+        // Q6 reads `idx_journal_line_subledger`, keyed on (organisation_id, source_module,
+        // subledger_reference) - the module that OWNS the position, not the one that requested the
+        // posting. A reversal is requested by accounting while its legs move a product module's
+        // position, so taking the requester's module would file the credit that cancels this
+        // position under `accounting`: the drill-down would show an open debit for a position the
+        // ledger has closed, while the control account's total still agreed. That is the worse
+        // failure of the two, because it looks right in aggregate.
+        assertEquals(
+            2,
+            linesForPosition(tenant, "savings", SUBLEDGER_POSITION),
+            "both halves of the position sit under the owning module's key",
+        )
+        assertEquals(
+            0,
+            linesForPosition(tenant, "accounting", SUBLEDGER_POSITION),
+            "and none under the module that merely requested the reversal",
+        )
+        assertEquals(
+            BigDecimal.ZERO.setScale(FUNCTIONAL_SCALE),
+            signedTotalForPosition(tenant, "savings", SUBLEDGER_POSITION),
+            "so the drill-down shows the position closed, exactly as the ledger has it",
+        )
+    }
+
+    @Test
     fun `a reversal is audited with the actor and the reason in the same transaction`() {
         val tenant = fx.provisionTenant("reversal-audit")
         val original = fx.postOriginal(tenant)
@@ -274,6 +309,34 @@ class JournalReversalIntegrationTests(
         }
         assertEquals(1, fx.reversalsOf(tenant, racedOriginal.journalEntryId))
     }
+
+    /** How many journal lines the Q6 drill-down key returns for one position. */
+    private fun linesForPosition(
+        tenant: JournalReversalFixture.Tenant,
+        sourceModule: String,
+        position: String,
+    ) = dsl.fetchCount(
+        JOURNAL_LINE,
+        JOURNAL_LINE.ORGANISATION_ID
+            .eq(tenant.organisationId)
+            .and(JOURNAL_LINE.SOURCE_MODULE.eq(sourceModule))
+            .and(JOURNAL_LINE.SUBLEDGER_REFERENCE.eq(position)),
+    )
+
+    /** The signed functional total of those lines, which a closed position leaves at zero. */
+    private fun signedTotalForPosition(
+        tenant: JournalReversalFixture.Tenant,
+        sourceModule: String,
+        position: String,
+    ) = dsl
+        .select(
+            org.jooq.impl.DSL
+                .sum(JOURNAL_LINE.SIGNED_FUNCTIONAL_AMOUNT),
+        ).from(JOURNAL_LINE)
+        .where(JOURNAL_LINE.ORGANISATION_ID.eq(tenant.organisationId))
+        .and(JOURNAL_LINE.SOURCE_MODULE.eq(sourceModule))
+        .and(JOURNAL_LINE.SUBLEDGER_REFERENCE.eq(position))
+        .fetchOne(0, BigDecimal::class.java)
 
     /**
      * Marks the transaction [PostingTransactionBoundary] opened rollback-only, from inside its
@@ -701,6 +764,12 @@ class JournalReversalIntegrationTests(
 
     private companion object {
         const val LATCH_TIMEOUT_SECONDS = 10L
+
+        /** The position `JournalReversalFixture` puts on its credit leg. */
+        const val SUBLEDGER_POSITION = "SAV-0001"
+
+        /** `journal_line.functional_amount` is `NUMERIC(23, 6)`. */
+        const val FUNCTIONAL_SCALE = 6
         const val FUTURE_TIMEOUT_SECONDS = 60L
 
         /**

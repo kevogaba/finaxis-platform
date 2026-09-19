@@ -428,6 +428,7 @@ class JooqJournalStore(
                 JOURNAL_LINE.FUNCTIONAL_AMOUNT,
                 JOURNAL_LINE.NARRATIVE,
                 JOURNAL_LINE.SUBLEDGER_REFERENCE,
+                JOURNAL_LINE.SOURCE_MODULE,
             ).from(JOURNAL_LINE)
             .where(JOURNAL_LINE.ORGANISATION_ID.eq(organisationId))
             .and(JOURNAL_LINE.JOURNAL_ENTRY_ID.`in`(journalEntryIds))
@@ -443,6 +444,7 @@ class JooqJournalStore(
                     functionalAmount = row.value7()!!,
                     narrative = row.value8(),
                     subledgerReference = row.value9(),
+                    sourceModule = row.value10()!!,
                 )
             }
     }

@@ -538,6 +538,7 @@ class PostingLineageServiceTests {
         functionalAmount = AMOUNT,
         narrative = null,
         subledgerReference = subledgerReference,
+        sourceModule = MODULE,
     )
 
     private fun sourceQuery(

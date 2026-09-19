@@ -200,6 +200,7 @@ data class JournalLineView(
     val functionalAmount: BigDecimal,
     val narrative: String?,
     val subledgerReference: String?,
+    val sourceModule: String,
 )
 
 /**
