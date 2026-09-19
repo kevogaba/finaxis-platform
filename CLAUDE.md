@@ -103,6 +103,13 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   completing, since a backdated posting is legal while the date is `CLOSED` — see
   `docs/adr/0027-derived-balance-projection-and-its-build-trigger.md`
 
+- `V15__accounting_branch_trial_balance_index.sql` — `idx_journal_line_branch_account_date`
+  `(organisation_id, branch_id, posting_date, gl_account_id) INCLUDE (direction,
+  functional_amount)`: the branch-scoped trial balance's own aggregate. The account-leading
+  `idx_journal_line_account_date` answers a *tenant-wide* report, and asked for one branch it has
+  to scan every account's whole window and discard the other branches; this one leads with the
+  branch, so the report is a single index-only range scan of exactly that branch's rows
+
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
 - `id` is the primary key, `UUID PRIMARY KEY DEFAULT uuidv7()`. **The application owns generation;
@@ -127,7 +134,8 @@ and `docs/architecture/accounting-foundation.md` holds the invariants. `V6` crea
 calendar and the chart of accounts from it, `V7` the journal tables, `V8` the posting-rule tables,
 `V9` control accounts and their reconciliation evidence, `V10` manual-journal drafts, `V11` the
 one-control-account-per-class uniqueness, `V12` the manual-journal external reference, `V13`
-the journal-line append guard, and `V14` the daily-balance projection. Do not invent accounting
+the journal-line append guard, `V14` the daily-balance projection, and `V15` the branch
+trial-balance index. Do not invent accounting
 tables or columns outside those documents.
 
 ## Authorization
