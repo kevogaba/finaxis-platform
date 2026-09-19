@@ -844,15 +844,43 @@ over ~16 million lines is survivable; an as-of balance over 1.4 billion lines is
 
 Its rules:
 
-- Keyed by account, branch, currency and business date.
+- Keyed by account, branch, **functional** currency and **`posting_date`**. Not the business date:
+  `posting_date` is the day the amounts belong to and the only column that selects a period
+  (`INV-9`), and a projection keyed on when a posting happened to be *recorded* could not answer an
+  as-of question at all. An earlier revision of this list said "business date" and was wrong.
 - **Written only for combinations that had movement on that day.** A sparse projection over 40
   branches and 2,000 accounts is small; a dense one is 29 million rows a year of mostly zeros.
-- Built by the **existing close-of-business pipeline**, not by a new scheduler and not
-  synchronously in the posting path (`INV-12`).
+- **Carrying a balance forward**, not only the day's movement, so an as-of balance is one backward
+  index range scan stopping at the first row rather than a sum over the key's history. This is what
+  makes the *"one row read per key"* the schema document promises true, and what gives #50 the
+  trusted checkpoint its statement contract is built on.
+- **Read behind a watermark, never at the latest projected row.** The projection holds the journals
+  recorded up to its watermark and no others, so a checkpoint is only safe strictly before the
+  earliest posting date any journal recorded since has touched. Taking it at the latest projected
+  posting date makes a posting backdated onto an already-projected day invisible to the checkpoint
+  *and* to the delta, which turns a correct ledger into a reported reconciliation break.
+- Built **outside the posting transaction** (`INV-12`) and by an existing pipeline rather than a
+  new scheduler: the build is driven by `BusinessDateService.advance`, not by `CobCompleted` — a
+  backdated posting is legal while the business date is `CLOSED`, so the set of journals recorded
+  on a business date is only closed once the tenant's date has moved off it. It is **not** an
+  externalised `BusinessDateAdvanced` consumed by a listener in accounting:
+  `AccountingBoundaryRuleTests` forbids AMQP, the outbox and JobRunr anywhere under
+  `com.finaxis.platform.accounting..`, so lifecycle
+  hosts the trigger and calls accounting through the `AccountingDayRollover` port after the advance
+  commits. See ADR 0027.
 - **Rebuildable by a documented deterministic query** that ships alongside it (`INV-13`), grouping
-  `journal_line` by `(organisation_id, gl_account_id, branch_id, currency_code, posting_date)`
-  and summing `functional_amount` per direction.
+  `journal_line` by `(organisation_id, gl_account_id, branch_id, posting_date)` and summing
+  `functional_amount` per direction. `functional_currency_code` is deliberately **not** a grouping
+  key — it is absent from both the key and the `INCLUDE` list of `idx_journal_line_account_date`,
+  so grouping by it would force a heap fetch per line — and is populated instead from the tenant's
+  frozen functional currency. The schema document carries the reasoning.
 - Reconciled against the journal by a proof contract; when they disagree, the journal wins.
+
+The column, constraint and index definitions, the rebuild query, the drift proof and the
+late-arrival rules are in
+[the accounting schema](../database/accounting-erd.md#column-definitions-for-the-issue-47-table);
+the reasoning behind the three decisions that were open is
+[ADR 0027](../adr/0027-derived-balance-projection-and-its-build-trigger.md).
 
 No other projection is approved by this document. A second one needs its own arithmetic showing
 that the query it serves is infeasible without it — not that it would be faster.
@@ -870,13 +898,24 @@ a statement, PostgreSQL still reads and discards the preceding 500,000 rows.
   change without breaking them.
 - **`from` and `to` are mandatory**, with a capped window — default 366 days — so no request can
   ask for the whole ledger (`INV-15`).
-- **Page size** is capped at `MAXIMUM_PAGE_SIZE = 100`, the constant already defined in
-  `src/main/kotlin/com/finaxis/platform/common/web/api/ApiPage.kt`.
+- **Page size** is capped by `finaxis.pagination.max-page-size`, the platform-wide ceiling bound in
+  `PaginationProperties` and itself bounded by `MAXIMUM_PAGE_SIZE = 100` in
+  `src/main/kotlin/com/finaxis/platform/common/web/api/ApiPage.kt`. Accounting reads the
+  configured value, never the constant: `common::web-api` is not one of accounting's
+  `allowedDependencies` and `MAXIMUM_PAGE_SIZE` is `internal`, so the constant is unreachable from
+  this module by design.
+
+**The application-layer half of this contract already exists**, and a Phase E read model inherits
+it rather than inventing one. `ChartOfAccountsService`, `PostingLineageService` and
+`ControlAccountReconciliationService` each take an opaque cursor and a page size validated against
+`PaginationProperties.maxPageSize`, and none of them uses `OFFSET`.
 
 `ApiPage` today is a page-number contract with a bounded offset helper, which is right for small
-administrative listings. Accounting listings add a keyset cursor variant that reuses the same size
-bounds and the same `ApiPage` envelope shape, so there is one page-size rule in the platform and
-not two. #51 owns that addition.
+administrative listings. The **web** envelope for a keyset page — the cursor's wire form and the
+`ApiPage` variant that carries it — is a different thing from the contract above, and belongs with
+the adapters that first need one. That is **#52**, which introduces accounting's controllers; a
+correction from an earlier revision, which assigned it to #51 and so put a web concern inside a
+read-model issue that ships no controller.
 
 ### Partitioning Posture And Evidence Threshold
 
@@ -893,8 +932,12 @@ a comfortable falsehood.
 
 What Phase B actually delivers, which is the part that matters:
 
-- `business_date` is `NOT NULL`, immutable, and present on **both** `journal_entry` and
-  `journal_line`, so a partition key exists whenever the conventions allow one.
+- `posting_date` is `NOT NULL`, immutable, and present on **both** `journal_entry` and
+  `journal_line`, so a partition key exists whenever the conventions allow one. An earlier revision
+  named `business_date` here, which is wrong twice over: `V7` puts `business_date` on
+  `journal_entry` only, and it is the wrong column anyway — `posting_date` is what every reporting
+  predicate and every read-path index is keyed on, and what a retention range would be expressed
+  in. `business_date` records when a posting was *made*, which is not how anyone slices the ledger.
 - Every reporting query already carries a date-range predicate, so query rewriting is not needed.
 - No table outside accounting holds a foreign key into `journal_line`, so detaching historical
   data breaks no other module.
@@ -964,8 +1007,10 @@ changes in the same commit as the number in the test.
 | #43 | The reversal model | `INV-5`, `INV-6` |
 | #44, #45 | Versioned, effective-dated posting rules and deterministic resolution | `INV-2`, `INV-9` |
 | #46 | Control accounts and the reconciliation proof contract | `INV-14` |
-| #47 | Rollups: `gl_account_daily_balance` and its rebuild query | `INV-13` |
-| #49, #50, #51 | The seven query patterns, the read models and the pagination contract | `INV-15` |
+| #47 | Rollups: `gl_account_daily_balance`, its rebuild query, its build trigger and its drift proof | `INV-13` |
+| #49 | Q1, Q3, Q4, Q5 and Q7; the trial balance, the GL ledger and the branch index they need | `INV-15` |
+| #50 | Q2 and Q7: the sub-ledger statement contract product modules implement | `INV-15` |
+| #51 | The statement read models over #47 and #49, and their balancing proofs | `INV-15` |
 | #52 | REST contracts for the accounting endpoints | `INV-15` |
 | #53 | Observability: posting latency, lock wait, reconciliation outcomes | `INV-12`, `INV-14` |
 | #54 | The `REVOKE UPDATE, DELETE` operational prerequisite and the partitioning threshold | `INV-5` |
@@ -991,6 +1036,8 @@ worse than no design record at all.
   append guard, and the standard a database trigger must meet here
 - [ADR 0025](../adr/0025-serializable-posting-and-the-covering-period-lock.md) — serializable
   posting, the covering-period lock, and what the isolation level does not supply
+- [ADR 0027](../adr/0027-derived-balance-projection-and-its-build-trigger.md) — the daily-balance
+  projection's shape, its build trigger, and how a backdated posting is folded back in
 - [Financial transaction atomicity](financial-transaction-atomicity.md) — the implementer's guide
 - [BIAN service landscape](bian-service-landscape.md) — module-to-Service-Domain mapping
 - [Foundation schema](../database/foundation-schema.md) — the conventions accounting inherits
