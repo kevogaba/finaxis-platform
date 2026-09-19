@@ -93,9 +93,24 @@ misrepresented as unit-testable business behavior. The current IAM suite measure
 Kotlin/JVM line map. New business modules should add similarly explicit, narrow coverage rules as
 they become stable public contracts.
 
-The `accounting` module deliberately has **no** coverage rule yet. At issue #31 it is contracts
-plus two adapters, so a ratio over that set would be either vacuous or misleading — a `0/0` line
-counter proves nothing. Its rule is added with the first real behaviour, in issue #40 or #41.
+The `accounting` module now carries its own 95% line-coverage floor, enforced by
+`jacocoAccountingCoverageVerification` and measured at 96% across the Phase E read models. It is a
+**second task** rather than a second rule on the IAM one: a JaCoCo `BUNDLE` rule is named after the
+project, so it cannot be scoped by package, and the only way to hold two modules to two floors is
+two verifications over two sets of class directories.
+
+The rule exists because it earned its place rather than as a target. Issue #50's
+`StatementWindowPolicy` shipped with documentation promising it validated every statement request,
+and nothing called it — the guard was unreachable, and an implementation trusting the promise would
+have applied an unbounded `LIMIT`. What surfaced it was the package sitting at 84% while the module
+sat at 96%: a floor per module is what keeps the newest code from being the weakest thing in it
+while the aggregate still passes.
+
+**A coverage rule that cannot fail is worse than none**, because it reads as assurance. This one was
+verified in both directions before it shipped: raised to 99% it fails and reports the true ratio;
+restored to 95% it passes. The first attempt passed at 99% — it had been pointed at
+`jacocoTestReport`'s `classDirectories`, which by then held individual class *files* rather than
+directories, so `fileTree()` of each yielded nothing and the rule measured an empty set.
 
 ## Suppressions
 

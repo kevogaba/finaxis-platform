@@ -660,6 +660,21 @@ val coverageExclusions =
         "**/ApiError*",
     )
 
+// What the accounting rule excludes, which is not what the platform-wide report excludes.
+//
+// The shared list ends with blanket glob patterns for Request, Response and ApiError classes.
+// They exist to keep web DTOs - data carriers with no behaviour - out of a ratio, and for IAM
+// they do exactly that. Applied to accounting they also remove RequestContextAccountingLookup,
+// an outbound adapter that resolves tenant and actor context and raises errors when it cannot:
+// real behaviour, and behaviour a change could break while this task went on reporting the same
+// number.
+//
+// Accounting has no web adapters yet - #52 introduces them - so those blanket patterns buy
+// nothing here and cost a live class. The IAM-scoped entries stay, because they are scoped by
+// path and cannot reach into accounting.
+val accountingCoverageExclusions =
+    coverageExclusions.filterNot { it in setOf("**/*Request*", "**/*Response*", "**/ApiError*") }
+
 tasks.jacocoTestReport {
     dependsOn(tasks.test)
     classDirectories.setFrom(
@@ -698,6 +713,60 @@ tasks.jacocoTestCoverageVerification {
                 counter = "LINE"
                 value = "COVEREDRATIO"
                 // Matches the documented IAM coverage contract in
+                // docs/development/static-analysis.md; keep the two in sync.
+                minimum = "0.95".toBigDecimal()
+            }
+        }
+    }
+}
+
+// The accounting module's own coverage floor.
+//
+// A second task rather than a second rule on the first, because a JaCoCo BUNDLE rule is named after
+// the project and so cannot be scoped by package: the only way to hold two modules to two floors is
+// two verifications over two sets of class directories.
+//
+// It is here because accounting is the financial system of record, and because coverage earned its
+// place empirically rather than as a target. Issue #50's StatementWindowPolicy shipped with
+// documentation promising it validated every statement request, and nothing called it - the guard
+// was unreachable. What surfaced it was the package sitting at 84% while the module sat at 96%,
+// which is a number somebody looks at. A floor per module keeps the newest code from being the
+// weakest thing in it while the aggregate still passes.
+tasks.register<JacocoCoverageVerification>("jacocoAccountingCoverageVerification") {
+    group = "verification"
+    description = "Verifies the accounting module's line coverage against its documented floor."
+    dependsOn(tasks.test)
+    executionData.setFrom(
+        tasks.test.map { it.extensions.getByType<JacocoTaskExtension>().destinationFile!! },
+    )
+    sourceDirectories.setFrom(files("src/main/kotlin"))
+    // The main source set's own output, not the report task's remapped `classDirectories`: that
+    // property has already been replaced by a set of individual class FILES, and `fileTree()` of a
+    // file is empty - which makes the rule pass over nothing at all. Caught by raising the floor to
+    // 99% and watching it still pass.
+    classDirectories.setFrom(
+        files(
+            sourceSets.main
+                .get()
+                .output.classesDirs.files
+                .map {
+                    fileTree(it) {
+                        // Accounting is the financial system of record: its application
+                        // services, domain policies and persistence adapters are all behaviour
+                        // worth holding to a floor. Generated jOOQ stays out through the shared
+                        // exclusions.
+                        include("com/finaxis/platform/accounting/**")
+                        exclude(accountingCoverageExclusions)
+                    }
+                },
+        ),
+    )
+    violationRules {
+        rule {
+            limit {
+                counter = "LINE"
+                value = "COVEREDRATIO"
+                // Matches the documented accounting coverage contract in
                 // docs/development/static-analysis.md; keep the two in sync.
                 minimum = "0.95".toBigDecimal()
             }
@@ -749,7 +818,13 @@ tasks.register("qualityGate") {
     group = "verification"
     description =
         "Runs the complete local quality gate, including static analysis, tests, coverage, and bootJar."
-    dependsOn("staticAnalysis", "check", "jacocoTestCoverageVerification", "bootJar")
+    dependsOn(
+        "staticAnalysis",
+        "check",
+        "jacocoTestCoverageVerification",
+        "jacocoAccountingCoverageVerification",
+        "bootJar",
+    )
 }
 
 tasks.check {

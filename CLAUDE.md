@@ -33,7 +33,8 @@ domain events rather than inventing another mechanism: transition `eventFactory`
 
 Known follow-ups (do not treat as bugs): `config` intentionally does not declare an
 `@ApplicationModule` because it is infrastructure wiring rather than a domain module; JaCoCo
-coverage verification is scoped to `iam` only; the 18 Spring Data JDBC entities in
+coverage verification is scoped to `iam` and `accounting`, each with its own 95% task, since a
+`BUNDLE` rule cannot be scoped by package; the 18 Spring Data JDBC entities in
 `FoundationJdbcEntities.kt` are convention scaffolding, not live write paths (all production
 writes use jOOQ) — see `docs/adr/0014-spring-data-jdbc-auditing.md`. `notifications` sends real
 welcome and organisation-invite emails over SMTP; see
@@ -286,7 +287,7 @@ daemon rather than assuming. Substituting an embedded database for the real cont
 resort, tells you less, and must be said out loud in the change if it happens.
 
 Run before finalizing any change. Shortcut: `./gradlew qualityGate` (staticAnalysis + check +
-JaCoCo verification + `bootJar`). Individually: `spotlessCheck`, `ktlintCheck`, `detekt`,
+both JaCoCo verifications + `bootJar`). Individually: `spotlessCheck`, `ktlintCheck`, `detekt`,
 `checkstyleMain checkstyleTest`, `pmdMain pmdTest`, `spotbugsMain spotbugsTest`, `test`.
 
 - Kotlin: Spotless (formatter), ktlint (via Spotless), Detekt (all rules, zero findings, KDoc
