@@ -55,7 +55,7 @@ import java.util.UUID
 class LedgerReportingService(
     private val ledger: LedgerReportingQueries,
     private val chart: ChartReportingQueries,
-    private val checkpoints: BalanceCheckpointQueries,
+    private val balanceSnapshot: LedgerBalanceSnapshot,
     private val balances: LedgerBalanceQuery,
     private val periods: FiscalPeriodStateStore,
     private val tenants: AccountingTenantLookup,
@@ -317,23 +317,13 @@ class LedgerReportingService(
         branchId: UUID?,
         currencyCode: String,
         fromDate: LocalDate,
-    ): Map<UUID, BigDecimal> {
-        val asOf = fromDate.minusDays(1)
-        val checkpoint = checkpoints.checkpoint(organisationId, branchId, currencyCode, asOf)
-        val opening = checkpoint.closingByAccount.toMutableMap()
-        val deltaFrom = checkpoint.checkpointDate.plusDays(1)
-        if (deltaFrom.isAfter(asOf)) {
-            return opening
-        }
-        ledger.movementsByAccount(organisationId, branchId, deltaFrom, asOf).forEach { movement ->
-            opening.merge(
-                movement.accountId,
-                movement.debit.subtract(movement.credit),
-                BigDecimal::add,
-            )
-        }
-        return opening
-    }
+    ): Map<UUID, BigDecimal> =
+        balanceSnapshot.signedBalancesAsOf(
+            organisationId = organisationId,
+            branchId = branchId,
+            currencyCode = currencyCode,
+            asOfDate = fromDate.minusDays(1),
+        )
 
     private fun provenBalanced(balance: TrialBalance): TrialBalance {
         if (!balance.balanced) {
