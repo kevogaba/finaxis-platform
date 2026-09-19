@@ -89,6 +89,19 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   `docs/adr/0024-journal-line-append-guard-and-trigger-policy.md` — the old "this repository has
   zero triggers" rule is withdrawn, and `V7`'s frozen header comment saying otherwise is superseded
   by `V13`'s own header
+- `V14__accounting_gl_account_daily_balance.sql` — `gl_account_daily_balance`, the **one** derived
+  balance projection the accounting foundation approves, plus `idx_journal_entry_business_date`
+  (which its incremental build enumerates through, and which carries `posting_date` in `INCLUDE`
+  for the reader) and `idx_gl_account_daily_balance_watermark`. Sparse (written only for an account,
+  branch, currency and posting date that moved) and carrying an opening balance forward, so an
+  as-of balance is a checkpoint plus a bounded journal delta rather than a scan from inception.
+  The checkpoint is taken strictly **before** the earliest posting date any journal recorded since
+  the watermark touches, never at the latest projected posting date: a posting backdated onto an
+  already-projected day would otherwise be invisible to both halves of the read. Never
+  authoritative: it is rebuildable from `journal_line` by a documented query, and when the two
+  disagree the journal wins. Built by the business-date **advance**, not by close-of-business
+  completing, since a backdated posting is legal while the date is `CLOSED` — see
+  `docs/adr/0027-derived-balance-projection-and-its-build-trigger.md`
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -113,8 +126,8 @@ See `docs/database/foundation-schema.md`, `docs/adr/0010-...`, and `docs/adr/001
 and `docs/architecture/accounting-foundation.md` holds the invariants. `V6` created the fiscal
 calendar and the chart of accounts from it, `V7` the journal tables, `V8` the posting-rule tables,
 `V9` control accounts and their reconciliation evidence, `V10` manual-journal drafts, `V11` the
-one-control-account-per-class uniqueness, `V12` the manual-journal external reference, and `V13`
-the journal-line append guard; the projection table is still design-only. Do not invent accounting
+one-control-account-per-class uniqueness, `V12` the manual-journal external reference, `V13`
+the journal-line append guard, and `V14` the daily-balance projection. Do not invent accounting
 tables or columns outside those documents.
 
 ## Authorization

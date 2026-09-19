@@ -44,6 +44,7 @@ class BusinessDateService(
     private val permissionGuard: PermissionGuard,
     private val auditService: AuditService,
     private val eventPublisher: TransitionEventPublisher,
+    private val dailyBalanceBuilds: DailyBalanceBuildScheduler,
     private val lockTimeout: TransactionLockBound,
     private val properties: BusinessDateProperties,
     private val clock: Clock,
@@ -117,6 +118,7 @@ class BusinessDateService(
                 eventToState = command.newBusinessDate.toString(),
             ),
         )
+        scheduleDailyBalanceBuild(command.organisationId, current.currentBusinessDate)
         return BusinessDateAdvanceResult(
             command.organisationId,
             current.currentBusinessDate,
@@ -298,6 +300,33 @@ class BusinessDateService(
                 cause = ex,
             )
         }
+    }
+
+    /**
+     * Hands the business date just left behind to accounting's derived balances.
+     *
+     * **Scheduled here, delivered after this transaction commits.** The adapter registers an
+     * after-commit synchronisation rather than enqueueing inline, because JobRunr's storage
+     * provider takes its own connection and an inline enqueue would survive a rolled-back advance -
+     * scheduling a build for a business date the tenant never left, against which the build's
+     * "this set is closed" reasoning does not hold. Running after the commit also keeps the rebuild
+     * off the `business_date` row lock every current-dated posting queues behind.
+     *
+     * **The date left, not the date arrived at.** Once the tenant's business date has moved past a
+     * day, no journal can ever again be recorded against it, so the set of journals the build
+     * enumerates is closed. That is also why this sits on the advance rather than on
+     * [completeCob]: a backdated posting into a still-open prior period is legal while the business
+     * date is `CLOSED`, so at close-of-business the set is still filling.
+     *
+     * Failure to enqueue fails the advance, which is the safer direction: an advance whose
+     * projection was never scheduled leaves a day that nothing will settle until the next rebuild
+     * reaches back for it, and the operator would have no reason to suspect it.
+     */
+    private fun scheduleDailyBalanceBuild(
+        organisationId: UUID,
+        businessDateLeft: LocalDate,
+    ) {
+        dailyBalanceBuilds.scheduleBuild(organisationId, businessDateLeft)
     }
 
     private fun requireActive(organisationId: UUID) {

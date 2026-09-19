@@ -127,9 +127,20 @@ fun interface ProofSnapshot {
  * The general-ledger side of a proof: the signed functional balance of one account as of a date,
  * optionally within one branch.
  *
- * One bounded aggregate over `idx_journal_line_account_date`, tenant first, posting date in the
- * key. Issue #47's daily-balance projection will answer this from one row; until then the account
- * index keeps it to the lines of one account, which is the bound `INV-15` asks for.
+ * Answered by
+ * [com.finaxis.platform.accounting.application.balances.DailyBalanceReader] as **the closest
+ * trusted checkpoint plus a bounded delta** — the latest day the daily-balance projection has for
+ * the account, plus the journal lines after it. An earlier revision of this port summed the
+ * account's lines from inception, which is the read the accounting foundation calls infeasible at
+ * production volume; reading the projection *alone* would have been worse, because the projection
+ * is built when the business date advances and so holds nothing for today, which is the date a
+ * proof is usually run for.
+ *
+ * **A null [branchId] means every branch, not head office.** No branch predicate is applied, so the
+ * result is the whole tenant. That is the opposite of what a null `branch_id` means on a projection
+ * row or a journal line, where it identifies a head-office or tenant-level posting; the two are
+ * reconciled inside the implementation, deliberately in one place, because reading one as the other
+ * turns every default reconciliation run into a `BREAK`.
  */
 fun interface LedgerBalanceQuery {
     /** `SUM(signed_functional_amount)` for the account as of [asOfDate], zero when no lines. */

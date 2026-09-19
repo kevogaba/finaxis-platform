@@ -62,11 +62,22 @@ only report or resolve against the currency, and `functionalCurrencyForPosting` 
 the same column - the only one a posting may decide its currency from once it holds the
 tenant-currency lock. The paragraph below says why the distinction exists.
 
-One port runs the other way. `AccountingLedgerActivity`, declared in the accounting root package
-and implemented by accounting's own persistence adapter, lets lifecycle ask *"has this tenant
-posted?"* before it accepts a `base_currency` setting change - the functional-currency freeze the
-accounting foundation requires. Lifecycle already depends on `accounting` for the ports above, so
-no new module edge is created.
+Two ports run the other way, both declared in the accounting root package and implemented inside
+accounting, and both called by lifecycle — which already depends on `accounting` for the ports
+above, so neither creates a module edge.
+
+`AccountingLedgerActivity` lets lifecycle ask *"has this tenant posted?"* before it accepts a
+`base_currency` setting change — the functional-currency freeze the accounting foundation requires.
+
+`AccountingDayRollover` lets lifecycle tell accounting that a tenant's business date has moved on,
+so accounting can settle the derived balances for the day just left. **This is the shape it is
+because of rule 4 below.** The natural implementation would have accounting consume the
+`BusinessDateAdvanced` event with its own listener and hand off to a JobRunr job; accounting may do
+neither, and no other module may write `gl_account_daily_balance` either. So lifecycle — which
+already holds `common::jobs` — enqueues the job inside the advance's transaction and calls this port
+from it after that transaction commits, outside the `business_date` row lock every current-dated
+posting queues behind. The ban stays absolute rather than being narrowed for a special case. See
+[ADR 0027](../adr/0027-derived-balance-projection-and-its-build-trigger.md).
 
 The same port also hands lifecycle the lock that makes the answer usable. Asking and then writing
 are one transaction and the tenant's first posting is another, and nothing about MVCC makes either

@@ -287,4 +287,7 @@ object PostingErrorCodes {
 
     /** The requested state change is not a legal transition from the period's current state. */
     const val PERIOD_TRANSITION_NOT_ALLOWED = "accounting.fiscal_period_transition_not_allowed"
+
+    /** A daily-balance proof or rebuild was asked for a range that ends before it starts. */
+    const val PROJECTION_RANGE_INVALID = "accounting.projection_range_invalid"
 }
