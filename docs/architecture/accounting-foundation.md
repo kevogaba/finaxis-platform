@@ -802,7 +802,7 @@ gap, and only that gap, is what justifies a projection.
 | # | Pattern | Served by |
 | --- | --- | --- |
 | **Q1** | GL account ledger between two dates | `idx_journal_line_account_date` on `(organisation_id, gl_account_id, posting_date, id)` with `INCLUDE (direction, functional_amount, branch_id, journal_entry_id)` |
-| **Q2** | Member or product statement between two dates | **Not the GL.** The product-owned subsidiary ledger, with its own index, owned by #50 |
+| **Q2** | Member or product statement between two dates | **Not the GL.** The product-owned subsidiary ledger, with its own index. The contract it implements is [subsidiary-ledger statements and balances](subledger-statements-and-balances.md); accounting's own view of a position, for reconciliation drill-down, is served by the Q6 index |
 | **Q3** | Opening balance, movements, closing balance for a period | Opening from `gl_account_daily_balance` as of the day before; movements from the Q1 index; closing computed, never stored twice |
 | **Q4** | Trial balance by date, period or branch | `idx_journal_line_branch_account_date` on `(organisation_id, branch_id, posting_date, gl_account_id)` with `INCLUDE (direction, functional_amount)` for a day or a short range; `gl_account_daily_balance` for a month or a year |
 | **Q5** | GL account drill-down: line to journal to source | `journal_line (organisation_id, journal_entry_id)`, the `journal_entry` primary key, `UNIQUE (organisation_id, entry_number)`, and `posting_request`'s unique source key |
@@ -993,6 +993,7 @@ a silently edited constant. They are calibrated on the seeded fixture, not on pr
 | Q7 | Keyset page 50 pages deep in history | 200 |
 | Rebuild | The projection's rebuild aggregate, one account, from a date | 300 |
 | Watermark | The earliest posting date recorded since the projection watermark | 50 |
+| Q2 | One position's opening balance, no lower date bound | 900 |
 
 A pull request that raises a budget must say why in the pull request body, and the number here
 changes in the same commit as the number in the test.
@@ -1011,7 +1012,7 @@ changes in the same commit as the number in the test.
 | #46 | Control accounts and the reconciliation proof contract | `INV-14` |
 | #47 | Rollups: `gl_account_daily_balance`, its rebuild query, its build trigger and its drift proof | `INV-13` |
 | #49 | Q1, Q3, Q4, Q5 and Q7; the trial balance, the GL ledger and the branch index they need | `INV-15` |
-| #50 | Q2 and Q7: the sub-ledger statement contract product modules implement | `INV-15` |
+| #50 | Q2 and Q7: the sub-ledger statement contract product modules implement, in [subsidiary-ledger statements and balances](subledger-statements-and-balances.md) | `INV-15` |
 | #51 | The statement read models over #47 and #49, and their balancing proofs | `INV-15` |
 | #52 | REST contracts for the accounting endpoints | `INV-15` |
 | #53 | Observability: posting latency, lock wait, reconciliation outcomes | `INV-12`, `INV-14` |

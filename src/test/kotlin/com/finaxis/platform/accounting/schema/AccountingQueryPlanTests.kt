@@ -260,6 +260,35 @@ class AccountingQueryPlanTests(
     }
 
     @Test
+    fun `Q2 a position's opening balance is one range scan of that position's own rows`() {
+        // The read issue #50's statement contract rests on. An opening balance is a question about
+        // everything that ever happened to a position, with no lower date bound at all - the shape
+        // most likely to be written as a scan. idx_journal_line_subledger's key is
+        // (organisation_id, source_module, subledger_reference, posting_date, id), which is this
+        // predicate in its own order, so the cost is bounded by how much THAT POSITION has moved
+        // rather than by the tenant's ledger. That distinction is the whole of the contract's
+        // boundedness obligation: an account's history grows with the tenant, a position's
+        // does not.
+        val plan =
+            explain(
+                """
+                SELECT COALESCE(SUM(signed_functional_amount), 0)
+                FROM journal_line
+                WHERE organisation_id = ? AND source_module = ? AND subledger_reference = ?
+                  AND posting_date <= ?
+                """.trimIndent(),
+                organisationId,
+                "savings",
+                LONG_LIVED_POSITION,
+                LedgerVolumeFixture.START.plusYears(1),
+            )
+
+        assertNoSeqScan(plan)
+        assertUsesIndex(plan, "idx_journal_line_subledger")
+        assertBlocksUnder(plan, Q2_BUDGET)
+    }
+
+    @Test
     fun `the as-of read finds the earliest unprojected posting date inside the header index`() {
         // What makes a checkpoint-plus-delta balance exact rather than merely fresh. The projection
         // holds the journals recorded up to its watermark and no others, so a checkpoint is only
@@ -461,6 +490,38 @@ class AccountingQueryPlanTests(
         const val Q6_BUDGET = 500
         const val Q7_BUDGET = 200
         const val WATERMARK_BUDGET = 50
+
+        /**
+         * One position's whole history, which is what an opening balance asks for.
+         *
+         * Larger than Q6's windowed budget because there is no lower date bound: the scan covers
+         * every line the position has, which is the read the contract permits precisely because a
+         * position's history is bounded by the position rather than by the tenant.
+         *
+         * Measured, not guessed: 1,016 lines of the long-lived position cost 680 shared blocks.
+         *
+         * Roughly two thirds of a block per line, because `idx_journal_line_subledger` carries
+         * neither `signed_functional_amount` nor `posting_date` as payload, so the aggregate takes
+         * a heap tuple per row. That is the honest cost of this read and the headroom above 680 is
+         * for plan drift, not for growth: what the budget asserts is that the work is proportional
+         * to **the position's** history and not the tenant's. A sequential scan of the fixture's
+         * 200,000 lines runs to several thousand blocks, so this still fails loudly if the index
+         * stops being used.
+         *
+         * The previous 600 was calibrated against `SAV-1`, which the fixture's even spread gave
+         * about eight lines — a budget that could not have detected any regression at all.
+         */
+        const val Q2_BUDGET = 900
+
+        /**
+         * The reference the volume fixture gives a deliberately long-lived position.
+         *
+         * Spread evenly, the fixture's 50,000 journals give each of 25,000 references about two
+         * journals - eight lines - and a block budget measured over eight lines proves nothing
+         * about the decade of movement the statement contract permits. One journal in a hundred
+         * carries this reference instead, which is roughly 500 journals and 2,000 lines.
+         */
+        const val LONG_LIVED_POSITION = "SAV-LONG"
         const val Q4_BUDGET = 4_000
 
         /**
@@ -796,7 +857,15 @@ class LedgerVolumeFixture(
             )
             SELECT ?, r.journal_id, leg, a.id, r.branch_id, r.period_id, r.posting_date,
                    CASE WHEN leg <= 2 THEN 'DEBIT' ELSE 'CREDIT' END,
-                   'KES', 50, 'KES', 50, 1, 'savings', 'SAV-' || (r.n % 25000), NOW()
+                   'KES', 50, 'KES', 50, 1, 'savings',
+                   -- One position in every hundred journals carries a dedicated reference, so the
+                   -- fixture holds a genuinely long-lived position: roughly 500 journals and 2,000
+                   -- lines, which is the decade of movement the Q2 budget is written for. Spread
+                   -- evenly by modulo, every reference occurs about twice, and a budget measured
+                   -- against eight lines cannot detect a regression on the workload the statement
+                   -- contract actually permits.
+                   CASE WHEN r.n % 100 = 0 THEN 'SAV-LONG'
+                        ELSE 'SAV-' || (r.n % 25000) END, NOW()
             FROM resolved r
             CROSS JOIN generate_series(1, 4) AS leg
             JOIN gl_account a

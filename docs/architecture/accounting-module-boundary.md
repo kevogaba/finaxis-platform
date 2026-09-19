@@ -52,6 +52,7 @@ on `lifecycle` and no module depends on `iam`.
 | `AccountingBusinessDateLookup` | `lifecycle` | `lifecycle.adapter.outbound.accounting.LifecycleAccountingBusinessDateAdapter` |
 | `AccountingTenantLookup` | `lifecycle` | `lifecycle.adapter.outbound.accounting.LifecycleAccountingTenantAdapter` |
 | `SubledgerProofProvider` | future product modules | none yet - a test provider proves the seam |
+| `SubledgerStatementProvider` | future product modules | `accounting.adapter.outbound.persistence.JooqGeneralLedgerPositionStatements` implements it for the **general ledger's own** view of a position, which is the reconciliation drill-down and the contract's proof of implementability - never a substitute for the owning module's own statement |
 
 `AccountingTenantLookup` also answers the tenant's **functional currency**, read from
 `organisation.base_currency_code`. That column, not the `base_currency` tenant setting, is the
