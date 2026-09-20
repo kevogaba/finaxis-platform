@@ -8,6 +8,8 @@ import com.finaxis.platform.accounting.SubledgerStatementCursor
 import com.finaxis.platform.accounting.SubledgerStatementProvider
 import com.finaxis.platform.accounting.SubledgerStatementQuery
 import com.finaxis.platform.accounting.application.GlAccountStore
+import com.finaxis.platform.accounting.application.RequiredSnapshotIsolation
+import com.finaxis.platform.accounting.application.SnapshotIsolationGuard
 import com.finaxis.platform.jooq.tables.references.JOURNAL_LINE
 import org.jooq.Condition
 import org.jooq.DSLContext
@@ -59,6 +61,7 @@ import java.util.UUID
 class JooqGeneralLedgerPositionStatements(
     private val dsl: DSLContext,
     private val accounts: GlAccountStore,
+    private val snapshots: SnapshotIsolationGuard,
 ) : SubledgerStatementProvider {
     override val providerName: String = PROVIDER_NAME
 
@@ -130,6 +133,99 @@ class JooqGeneralLedgerPositionStatements(
                     SubledgerStatementCursor(it.postingDate, it.movementId)
                 },
         )
+    }
+
+    /**
+     * `pg_current_snapshot()::text` — PostgreSQL's own MVCC snapshot, captured now and returned as
+     * the token [recordedBehindConsumedRange] later compares a row's *visibility* against, through
+     * `pg_visible_in_snapshot`, rather than a row's *id*.
+     *
+     * Not `pg_export_snapshot()`, which [PostgresProofSnapshot] uses for the reconciliation proof:
+     * an export is only adoptable by another session while the exporting transaction stays open,
+     * which fits a proof's two reads inside one request but not a statement walk spanning several
+     * requests, each its own transaction. A `pg_snapshot` value carries no such requirement — it
+     * can be stored, parsed back on an unrelated later connection, and compared.
+     *
+     * [snapshots] guards this the same way it guards [recordedBehindConsumedRange]: this call and
+     * the first page's own [movements] call must share one snapshot for the token to mean what
+     * [SubledgerStatementProvider.currentWatermark]'s KDoc promises — exactly what the first page's
+     * own movements read saw, no more, no less.
+     */
+    override fun currentWatermark(): String {
+        snapshots.requireStableSnapshot(
+            RequiredSnapshotIsolation.REPEATABLE_READ,
+            "A subledger statement's watermark",
+        )
+        return requireNotNull(
+            dsl.fetchValue(DSL.field("pg_current_snapshot()::text", String::class.java)),
+        ) {
+            "pg_current_snapshot() returned no snapshot identity"
+        }
+    }
+
+    /**
+     * The row-value mirror of [keysetAfter]: whether the ledger holds a line at or before
+     * [cursor]'s own `(posting_date, id)` position that was not yet visible when [cursor]'s
+     * watermark was minted.
+     *
+     * Reuses [positionPredicate] and [controlAccountIdFor] rather than re-deriving which lines
+     * belong to this position — the same bound [openingBalanceAt] and [movements] read within.
+     * `POSTING_DATE.le(cursor.postingDate)` alone would over-match: a line dated on the cursor's
+     * own day, with an id *greater* than [SubledgerStatementCursor.movementId], is a row
+     * [keysetAfter] on the very next page would still select — it is forward progress, not a
+     * backdated arrival. The row-value comparison below is [keysetAfter]'s own predicate flipped
+     * from `>` to `<=`, which is what lets the two cases be told apart on a day carrying many
+     * movements, exactly the case this file's own KDoc on [positionPredicate] and [keysetAfter]
+     * already calls out.
+     *
+     * `NOT pg_visible_in_snapshot(xmin::text::xid8, cursor.recordedThrough)` is the other half: a
+     * line at or before the cursor whose inserting transaction *was already visible* under the
+     * watermark was there when this walk began and is not what this method is asked to detect — it
+     * is simply a row an earlier page already served. This is deliberately **not** `id >
+     * cursor.recordedThrough`, which an earlier version of this method used: a `uuidv7()` id orders
+     * by when it was *generated* inside its inserting transaction, not by when that transaction
+     * *committed*, and a transaction that starts before the watermark is minted but stays open past
+     * it generates an id that still sorts before the watermark while its row becomes visible after.
+     * `pg_visible_in_snapshot` asks PostgreSQL's own MVCC machinery the commit-visibility question
+     * directly, from the line's `xmin` system column and the stored `pg_snapshot` token, with no
+     * such gap. `cursor.recordedThrough` is bound as a plain parameter, never interpolated into the
+     * SQL text, because a future public API accepting this cursor would be handing this value to
+     * PostgreSQL on a client's word.
+     *
+     * [snapshots] is asked first, before either this query or [movements]' own query runs, for the
+     * reason [SubledgerStatementProvider.recordedBehindConsumedRange]'s own KDoc gives at length:
+     * this check and the movements read that follows it must share one snapshot, or a line
+     * committed in the gap between two independent `READ COMMITTED` reads is invisible to both.
+     * `@Transactional(isolation = REPEATABLE_READ)` on a caller that joins an already-open
+     * transaction is a request Spring can silently drop, so this asks PostgreSQL what is actually
+     * in force rather than trusting the annotation - the same reasoning `ManualJournalService.get`
+     * and `ControlAccountReconciliationService.run` already act on.
+     */
+    override fun recordedBehindConsumedRange(
+        position: SubledgerPosition,
+        branchId: UUID?,
+        cursor: SubledgerStatementCursor,
+    ): Boolean {
+        snapshots.requireStableSnapshot(
+            RequiredSnapshotIsolation.REPEATABLE_READ,
+            "A subledger statement's stale-cursor check",
+        )
+        val controlAccountId = controlAccountIdFor(position) ?: return false
+        return dsl
+            .selectOne()
+            .from(JOURNAL_LINE)
+            .where(positionPredicate(position, branchId, controlAccountId))
+            .and(
+                DSL
+                    .row(JOURNAL_LINE.POSTING_DATE, JOURNAL_LINE.ID)
+                    .le(DSL.row(cursor.postingDate, cursor.movementId)),
+            ).and(
+                DSL.condition(
+                    "NOT pg_visible_in_snapshot(xmin::text::xid8, ?::pg_snapshot)",
+                    cursor.recordedThrough,
+                ),
+            ).limit(1)
+            .fetchOne() != null
     }
 
     /**

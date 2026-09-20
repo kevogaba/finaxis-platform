@@ -771,6 +771,46 @@ tasks.register<JacocoCoverageVerification>("jacocoAccountingCoverageVerification
                 minimum = "0.95".toBigDecimal()
             }
         }
+        // #143: a BUNDLE rule (the one above) computes a single ratio across every included
+        // class, so a small untested package can be diluted by a healthy module average and
+        // stay invisible to the gate - which is exactly what happened with
+        // StatementWindowPolicy during the #136 review: it sat at 84% while the module sat at
+        // 96%, and only reading the per-package HTML report surfaced it, not this task.
+        //
+        // JaCoCo lets one violationRules block hold several `rule { }` entries, each with its
+        // own `element`; a PACKAGE-scoped rule applies the same `classDirectories` this task
+        // already narrowed to `com.finaxis.platform.accounting.**`, but evaluates the ratio
+        // once per package instead of once for the whole set, so a thin package can no longer
+        // hide behind the aggregate.
+        rule {
+            element = "PACKAGE"
+            // JaCoCo's WildcardMatcher requires the literal '.' immediately before a trailing
+            // '*', so "com.finaxis.platform.accounting.*" matches every SUB-package but not the
+            // bare "com.finaxis.platform.accounting" package itself - and that top-level package
+            // is real and populated (AccountingPermissionGuard.kt, AccountingDayRollover.kt,
+            // SubledgerProofProvider.kt, and others). Both entries are needed so the rule
+            // actually covers every package under the accounting tree, not just its children.
+            includes =
+                listOf(
+                    "com.finaxis.platform.accounting",
+                    "com.finaxis.platform.accounting.*",
+                )
+            // Populate with dot-separated package-name patterns (JaCoCo's PACKAGE-rule syntax,
+            // not the file-path globs `exclude()` uses above) only for a package that earns the
+            // exemption documented in docs/development/static-analysis.md: one holding
+            // exclusively data classes, sealed hierarchies, or other value objects with no
+            // executable branch worth covering. Empty until a real per-package report names one.
+            excludes = listOf()
+            limit {
+                counter = "LINE"
+                value = "COVEREDRATIO"
+                // PLACEHOLDER - calibrate against a real per-package coverage report before
+                // merging. Do not raise this without first running
+                // ./gradlew jacocoAccountingCoverageVerification and reading the generated
+                // report to see the actual current per-package spread.
+                minimum = "0.80".toBigDecimal()
+            }
+        }
     }
 }
 

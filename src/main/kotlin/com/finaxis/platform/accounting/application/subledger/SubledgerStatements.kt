@@ -72,6 +72,9 @@ object StatementWindowPolicy {
     /** A cursor without its carried balance, or a carried balance without its cursor. */
     const val CURSOR_INVALID = "accounting.statement_cursor_invalid"
 
+    /** The ledger recorded a movement behind a statement's cursor mid-walk. */
+    const val CURSOR_STALE = "accounting.statement_cursor_stale"
+
     /**
      * Refuses a query a provider should never be asked to answer.
      *
@@ -179,6 +182,34 @@ object SubledgerStatementAssembler {
      *
      * Validating here, before [provider] is touched, is what makes the port's promise that a
      * provider never sees an unbounded request true rather than merely intended.
+     *
+     * On a mid-walk page, this also asks [SubledgerStatementProvider.recordedBehindConsumedRange]
+     * whether the ledger has recorded a movement behind [query]'s cursor since the walk began, and
+     * refuses the page with [StatementWindowPolicy.CURSOR_STALE] rather than serving one that
+     * would silently be short by that movement. That check does I/O — it is a provider call —
+     * which is why it lives here rather than in [StatementWindowPolicy.require]: that function
+     * stays pure, exactly as its own KDoc promises, and this is the one path with the database
+     * access to ask the question at all.
+     *
+     * [SubledgerStatementCursor.recordedThrough] is the walk's watermark: fixed once, on the first
+     * page, where `query.cursor` is still null and a fresh one is minted with
+     * [SubledgerStatementProvider.currentWatermark]; carried forward unchanged from `query.cursor`
+     * on every later page of the same walk, because a cursor that already has one built it from
+     * exactly this same expression on an earlier call. It is threaded through to [assemble] so the
+     * statement's own `nextCursor` carries it onward.
+     *
+     * Every call to this method makes **two separate calls** to [provider] — on the first page,
+     * [SubledgerStatementProvider.currentWatermark] here, then
+     * [SubledgerStatementProvider.movements] inside [assemble]; on a later page,
+     * [SubledgerStatementProvider.recordedBehindConsumedRange] here, then the same [movements] —
+     * and, being a pure function that touches no database itself, opens no transaction around
+     * either. A caller must therefore run this whole call inside one transaction at
+     * `REPEATABLE_READ` isolation or stronger, so the two provider calls read one consistent
+     * snapshot rather than two independent `READ COMMITTED` ones with a commit window open between
+     * them. `ManualJournalService.get` composes its own read pair under the identical obligation,
+     * for the identical reason. See
+     * [SubledgerStatementProvider.recordedBehindConsumedRange]'s KDoc for what a caller that skips
+     * this can miss.
      */
     fun statementOf(
         provider: SubledgerStatementProvider,
@@ -187,6 +218,19 @@ object SubledgerStatementAssembler {
         carriedBalance: BigDecimal? = null,
     ): SubledgerStatement {
         StatementWindowPolicy.require(query, maxPageSize, carriedBalance)
+        val cursor = query.cursor
+        val recordedThrough = cursor?.recordedThrough ?: provider.currentWatermark()
+        val stale =
+            cursor != null &&
+                provider.recordedBehindConsumedRange(query.position, query.branchId, cursor)
+        if (stale) {
+            throw InvalidOperationException(
+                code = StatementWindowPolicy.CURSOR_STALE,
+                safeDetail =
+                    "The ledger recorded a movement behind this statement's cursor; restart the " +
+                        "walk.",
+            )
+        }
         val opening =
             carriedBalance
                 ?: provider.openingBalanceAt(
@@ -194,7 +238,14 @@ object SubledgerStatementAssembler {
                     query.branchId,
                     query.fromDate.minusDays(1),
                 )
-        return assemble(query, opening, provider.movements(query), maxPageSize, carriedBalance)
+        return assemble(
+            query,
+            opening,
+            provider.movements(query),
+            maxPageSize,
+            carriedBalance,
+            recordedThrough,
+        )
     }
 
     /**
@@ -203,9 +254,22 @@ object SubledgerStatementAssembler {
      * [carriedBalance] is the previous page's [SubledgerStatement.closingSigned]. Absent on the
      * first page, where the provider's opening balance is the start.
      *
+     * [recordedThrough] is the walk's watermark (see [SubledgerStatementCursor.recordedThrough]):
+     * a fixed fence generated once when a walk's first page has no cursor yet, and carried forward
+     * unchanged on every later page of the same walk. This function has no [provider] to mint a
+     * fresh one from, unlike [statementOf], so its default is the same empty placeholder a
+     * provider's own cursor construction uses rather than a real watermark; a direct caller of this
+     * function reaching a first page - none exists in this codebase today, but the signature stays
+     * source-compatible for one that might - gets a statement with no watermark to carry forward
+     * rather than a call this function cannot make. It is written onto [page]'s own `nextCursor`
+     * rather than left as-is, overwriting whatever placeholder value the provider's cursor
+     * construction used - a provider never has to know about the watermark to build a pagination
+     * cursor, only to answer [SubledgerStatementProvider.recordedBehindConsumedRange].
+     *
      * The bounds are re-checked here so a caller reaching this directly is still refused, but the
      * check cannot protect the reads that produced [page] — it runs after them. [statementOf] is
-     * the path that does.
+     * the path that does, and it is also the only path that can ask a provider whether it recorded
+     * behind the cursor, since that check needs the provider this function never sees.
      */
     fun assemble(
         query: SubledgerStatementQuery,
@@ -213,6 +277,7 @@ object SubledgerStatementAssembler {
         page: com.finaxis.platform.accounting.SubledgerMovementPage,
         maxPageSize: Int,
         carriedBalance: BigDecimal? = null,
+        recordedThrough: String = query.cursor?.recordedThrough ?: "",
     ): SubledgerStatement {
         StatementWindowPolicy.require(query, maxPageSize, carriedBalance)
         val opening = carriedBalance ?: openingSigned
@@ -230,7 +295,7 @@ object SubledgerStatementAssembler {
             openingSigned = opening,
             movements = movements,
             closingSigned = running,
-            nextCursor = page.nextCursor,
+            nextCursor = page.nextCursor?.copy(recordedThrough = recordedThrough),
         )
     }
 }

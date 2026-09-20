@@ -97,6 +97,22 @@ back a movement may be dated at all, which for accounting is bounded by the open
 
 `a movement backdated behind a checkpoint still appears` in the conformance suite is this case.
 
+A second, narrower version of the same mistake sits inside a single walk rather than at its
+checkpoint: a movement backdated onto a day a page has already served, recorded after the walk
+began. `(posting_date, id)` ascending means that movement sorts *before* the cursor, so no later
+page can ever reach it — true even for a provider with no checkpoint at all, since it is a
+pagination-ordering problem, not a caching one. `SubledgerStatementCursor` carries a third field,
+`recordedThrough` — a watermark fixed once on the walk's first page and carried forward unchanged
+— and `SubledgerStatementProvider.recordedBehindConsumedRange` asks, before each later page is
+served, whether the ledger recorded anything at or before the cursor's own `(postingDate,
+movementId)` position after that watermark. The comparison is against the **whole cursor**, not
+just its date, because an ordinary same-day posting recorded after the cursor — one the very next
+page would reach on its own — must not be refused as if it were the unreachable case. A `true`
+answer refuses the page (`StatementWindowPolicy.CURSOR_STALE`) rather than silently serving a
+statement short by that movement. `a page is refused once the ledger has recorded behind its
+cursor` and `an ordinary same-day posting after the cursor does not refuse the next page` in the
+conformance suite are these two cases.
+
 ### 3. Reversals and corrections are movements, never filters
 
 A reversal is an ordinary movement of opposite sign. It nets out of the closing balance by
@@ -196,6 +212,8 @@ writes, and inherits every obligation above as an executable assertion.
 | `a statement's arithmetic holds and its closing balance is the balance at the window's end` | 6, and the closing/as-of equivalence |
 | `a running balance is carried across pages and no movement repeats or is dropped` | 4, 5, 6 |
 | `a movement backdated behind a checkpoint still appears` | 2 |
+| `a page is refused once the ledger has recorded behind its cursor` | 2 |
+| `an ordinary same-day posting after the cursor does not refuse the next page` | 2 |
 | `a reversal nets out rather than being hidden` | 3 |
 
 A contract stated only in a document is one each module interprets slightly differently, and the

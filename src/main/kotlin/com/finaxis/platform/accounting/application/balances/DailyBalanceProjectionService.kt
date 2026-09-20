@@ -267,6 +267,14 @@ class DailyBalanceProjectionService(
      * day the journal has and the projection does not is a missed build, and a day the projection
      * has and the journal does not is a phantom that would be added into a balance.
      *
+     * [query]'s `toDate` is clamped to [provableToDate] before the proof runs, so a range reaching
+     * past the build frontier is not reported as drift for days the build has simply not answered
+     * yet - see that method's KDoc for why the clamp cannot reuse
+     * [DailyBalanceReader.safeCheckpointDate]'s watermark bound directly. When the clamp would
+     * otherwise push the effective `toDate` before `fromDate` - meaning the whole requested range
+     * lies past the frontier - an empty result is returned directly, rather than handing the store
+     * a query whose bounds have inverted.
+     *
      * This is the backstop and not the mechanism. A projection whose correctness depended on
      * someone running this would be the second independent ledger issue #47 forbids.
      */
@@ -278,7 +286,51 @@ class DailyBalanceProjectionService(
             AccountingPermissions.RECONCILIATION_VIEW,
         )
         requireOrderedRange(query.fromDate, query.toDate)
-        return store.drift(query.organisationId, query.accountId, query.fromDate, query.toDate)
+        val provableTo = provableToDate(query.organisationId, query.toDate)
+        if (provableTo.isBefore(query.fromDate)) {
+            return emptyList()
+        }
+        return store.drift(query.organisationId, query.accountId, query.fromDate, provableTo)
+    }
+
+    /**
+     * The latest date [proveAccount] may safely compare against the journal, never later than
+     * [toDate] - and possibly earlier than the query's `fromDate`, which [proveAccount] itself
+     * checks for, since this method only ever moves the upper bound.
+     *
+     * **Bounded by the build frontier, not by [DailyBalanceReader.safeCheckpointDate]'s watermark
+     * bound**, even though the two look like the same problem restated. That method takes the
+     * watermark `W` itself as the conservative edge of what might still be missing, because a
+     * backdated posting takes no lock on `business_date` and one recorded with `business_date ==
+     * W` can still be racing the build that just settled `W`. It can afford that margin for free:
+     * whatever it excludes from the checkpoint is picked up again by the live
+     * [LedgerMovementSource.signedMovement] delta it always runs afterwards, so retreating the
+     * checkpoint costs a wider delta scan and never a wrong answer.
+     *
+     * A proof has no such delta to fall back on - a day this clamp excludes is a day nothing checks
+     * at all. Reusing `W` itself as the edge would exclude the watermark's *own* business date from
+     * every proof, which is both the day an operator most needs to check right after a build
+     * settles it and a day [settleDay] has already fully covered: it builds its window through
+     * `businessDate` inclusive, so every journal recorded with `business_date <= W` was in scope
+     * for the build that produced `W`. Only a journal recorded **after** `W` was not, so the
+     * frontier here sits one business day later than the reader's - at `W + 1`, the earliest
+     * business date [settleDay] has not yet had the chance to see.
+     *
+     * `P` is [LedgerMovementSource.earliestPostingDateRecordedAfter] from that point: the earliest
+     * posting date touched by any journal recorded on or after `W + 1`. Every day up to and
+     * including `P - 1` was covered by every build that has run; `P` itself, and every day after
+     * it, may yet gain a line no build has seen, so the proof stops at `P - 1`. With nothing
+     * recorded since `W`, `P` is null and the requested [toDate] is returned unchanged.
+     */
+    private fun provableToDate(
+        organisationId: UUID,
+        toDate: LocalDate,
+    ): LocalDate {
+        val watermark = store.projectionWatermark(organisationId) ?: return toDate
+        val earliestUnbuilt =
+            journal.earliestPostingDateRecordedAfter(organisationId, watermark.plusDays(1))
+                ?: return toDate
+        return minOf(toDate, earliestUnbuilt.minusDays(1))
     }
 
     /**

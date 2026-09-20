@@ -144,6 +144,68 @@ class DailyBalanceOperatorIntegrationTests(
     }
 
     @Test
+    fun `the proof clamps a range past the build frontier instead of reporting false drift`() {
+        val tenant = fixture.createTenant("projection-proof-frontier")
+        val built = LocalDate.of(2026, 8, 10)
+        val unbuilt = built.plusDays(1)
+        val requestedToDate = built.plusDays(5)
+        val actor =
+            actorWith(tenant.organisationId, "frontier", AccountingPermissions.RECONCILIATION_VIEW)
+        postJournal(tenant, businessDate = built, postingDate = built, amount = "100.000000")
+        projection.settleDay(tenant.organisationId, built)
+        // Recorded on a business date the last build never saw - the projection legitimately has
+        // no row for it yet. Without the clamp, the FULL OUTER JOIN behind the proof reports every
+        // one of these unbuilt days as MISSING_FROM_PROJECTION: drift that is not drift, just a
+        // question the build has not answered yet.
+        postJournal(tenant, businessDate = unbuilt, postingDate = unbuilt, amount = "25.000000")
+        // Corrupt the day that WAS built, so a clamp that (wrongly) empties the whole range - by
+        // inverting `toDate` below `fromDate` instead of narrowing it - cannot pass this test for
+        // the wrong reason.
+        corrupt(tenant.organisationId, tenant.debitAccountId)
+
+        val drift =
+            projection.proveAccount(
+                query(tenant.organisationId, tenant.debitAccountId, built, requestedToDate, actor),
+            )
+
+        assertEquals(1, drift.size, "the built day is still checked, its corruption still caught")
+        assertEquals(built, drift.single().postingDate, "only the built day is in range")
+        assertEquals(DriftKind.AMOUNTS_DISAGREE, drift.single().kind)
+    }
+
+    @Test
+    fun `the proof reports nothing when the whole requested range lies past the frontier`() {
+        val tenant = fixture.createTenant("projection-proof-frontier-empty")
+        val built = LocalDate.of(2026, 8, 10)
+        val unbuilt = built.plusDays(1)
+        val actor =
+            actorWith(
+                tenant.organisationId,
+                "frontier-empty",
+                AccountingPermissions.RECONCILIATION_VIEW,
+            )
+        postJournal(tenant, businessDate = built, postingDate = built, amount = "100.000000")
+        projection.settleDay(tenant.organisationId, built)
+        postJournal(tenant, businessDate = unbuilt, postingDate = unbuilt, amount = "25.000000")
+
+        // fromDate itself is past the frontier - no day in this range has been built yet, so there
+        // is nothing here the proof can safely check. It reports nothing rather than treat the
+        // journal's own line for `unbuilt` as a MISSING_FROM_PROJECTION defect.
+        val drift =
+            projection.proveAccount(
+                query(
+                    tenant.organisationId,
+                    tenant.debitAccountId,
+                    unbuilt,
+                    unbuilt.plusDays(4),
+                    actor,
+                ),
+            )
+
+        assertTrue(drift.isEmpty(), "nothing in an entirely-unbuilt range can be proven either way")
+    }
+
+    @Test
     fun `an operator repair never raises the tenant watermark`() {
         val tenant = fixture.createTenant("projection-repair-watermark")
         val built = LocalDate.of(2026, 8, 10)

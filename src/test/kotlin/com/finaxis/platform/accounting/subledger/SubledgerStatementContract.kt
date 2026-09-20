@@ -3,6 +3,7 @@ package com.finaxis.platform.accounting.subledger
 import com.finaxis.platform.accounting.ControlSubledgerKind
 import com.finaxis.platform.accounting.SubledgerMovementPage
 import com.finaxis.platform.accounting.SubledgerPosition
+import com.finaxis.platform.accounting.SubledgerStatementCursor
 import com.finaxis.platform.accounting.SubledgerStatementProvider
 import com.finaxis.platform.accounting.SubledgerStatementQuery
 import com.finaxis.platform.accounting.application.subledger.SubledgerStatement
@@ -21,17 +22,20 @@ import kotlin.test.fail
  * The conformance suite every [SubledgerStatementProvider] must pass.
  *
  * A future savings, share or loan module extends this, points [provider] at its own implementation
- * and [seed] at its own writes, and inherits the obligations issue #50 fixes rather than
- * re-deriving them. The point is that the obligations are **executable**: a contract stated only in
- * a document is one each module interprets slightly differently, and the differences surface as a
- * member's statement disagreeing with a control account.
+ * and [newPosition]/[record] at its own writes, and inherits the obligations issue #50 (and #142's
+ * stale-cursor fix) rather than re-deriving them. The point is that the obligations are
+ * **executable**: a contract stated only in a document is one each module interprets slightly
+ * differently, and the differences surface as a member's statement disagreeing with a control
+ * account.
  *
  * What it does not do is prescribe storage. A module owns its own rows, its own projection and its
- * own transaction boundaries; this asks only that the answers come out right, including the two
- * cases implementations get wrong — a movement backdated behind a checkpoint, and a reversal.
+ * own transaction boundaries; this asks only that the answers come out right, including the cases
+ * implementations get wrong — a movement backdated behind a checkpoint, a movement backdated
+ * mid-walk, and a reversal.
  *
- * Extending classes supply a seeded scenario through [seed] and nothing else. Every assertion below
- * is written against the port, so a module cannot satisfy it by reaching into accounting.
+ * Extending classes supply [newPosition], [record] and, where they keep one, [settle], and nothing
+ * else. Every assertion below is written against the port, so a module cannot satisfy it by
+ * reaching into accounting.
  */
 abstract class SubledgerStatementContract {
     /** One movement a scenario asks the implementation to record. */
@@ -45,19 +49,72 @@ abstract class SubledgerStatementContract {
     protected abstract fun provider(): SubledgerStatementProvider
 
     /**
-     * Records [movements] against a fresh position and returns it.
+     * Creates a fresh position with no movements recorded against it yet.
+     *
+     * Split out from [record] so a scenario that needs to interleave "record some movements, let a
+     * page be served, then record more" — the stale-cursor cases below — can hold the position
+     * across both calls rather than only ever seeing it fully seeded in one shot.
+     */
+    protected abstract fun newPosition(): SubledgerPosition
+
+    /**
+     * Records [movements] against an existing [position].
      *
      * [SeededMovement.recordedOn] is the date the movement was *recorded*, which may be later than
      * the date it is dated at — that is the backdated case, and an implementation that ignores the
-     * distinction will fail `a movement backdated behind a checkpoint still appears`.
+     * distinction will fail `a movement backdated behind a checkpoint still appears`. Calling this
+     * more than once against the same [position] is exactly how a movement recorded *after* an
+     * earlier call — and dated at or before a day an earlier call already covered — is arranged.
      */
-    protected abstract fun seed(movements: List<SeededMovement>): SubledgerPosition
+    protected abstract fun record(
+        position: SubledgerPosition,
+        movements: List<SeededMovement>,
+    )
+
+    /**
+     * Settles whatever checkpoint the implementation keeps, if any.
+     *
+     * A no-op by default: [SubledgerStatementProvider]'s own KDoc treats a checkpoint as something
+     * a *high-velocity* position needs, not every position, so most implementations of this
+     * contract keep none. One that does keep a checkpoint overrides this to build or advance it, so
+     * a scenario can arrange "the checkpoint was taken here" before recording movements the
+     * checkpoint must not have seen.
+     */
+    protected open fun settle(position: SubledgerPosition) {}
+
+    /**
+     * Creates a fresh position and records [movements] against it in one call.
+     *
+     * Every scenario that only needs a single seeded batch calls this and nothing else; only the
+     * stale-cursor scenarios below need [newPosition] and [record] as separate steps, so they call
+     * those directly instead.
+     */
+    private fun seed(movements: List<SeededMovement>): SubledgerPosition {
+        val position = newPosition()
+        record(position, movements)
+        return position
+    }
 
     /** The page size the suite walks with, small enough that the paging cases actually page. */
     protected open val pageSize: Int = 2
 
     /** The platform's page ceiling, which the assembler holds every request to. */
     protected open val maxPageSize: Int = 100
+
+    /**
+     * Runs [block] the way a real caller of [SubledgerStatementAssembler.statementOf] must: inside
+     * one transaction at `REPEATABLE_READ` isolation or stronger, so a mid-walk page's staleness
+     * check and its movements read - two separate provider calls - see one consistent snapshot
+     * rather than two independent `READ COMMITTED` ones with a commit window open between them.
+     *
+     * A no-op by default, because this contract does not prescribe storage and most conceivable
+     * implementations have no transaction manager of their own to demarcate one with. A
+     * JDBC-backed implementation - [GeneralLedgerStatementContractTests] among them - overrides
+     * this with a real transaction, so its mid-walk cases exercise the isolation
+     * [SubledgerStatementProvider.recordedBehindConsumedRange]'s own KDoc requires rather than
+     * merely asserting against a provider that happens not to check.
+     */
+    protected open fun <T> statementRead(block: () -> T): T = block()
 
     @Test
     fun `an opening balance is everything dated on or before the day the window opens`() {
@@ -169,6 +226,61 @@ abstract class SubledgerStatementContract {
     }
 
     @Test
+    fun `a page is refused once the ledger has recorded behind its cursor`() {
+        val position = newPosition()
+        record(
+            position,
+            listOf(movement(DAY_1, "-10.00"), movement(DAY_2, "-20.00"), movement(DAY_3, "-30.00")),
+        )
+        settle(position)
+
+        val firstPage = statement(position, DAY_1, DAY_5)
+        assertTrue(firstPage.nextCursor != null, "must produce a next page to page through")
+
+        // Backdated onto a day this walk already served, recorded after the walk began: no later
+        // page's keyset predicate could ever reach it, so serving one would be short by this.
+        record(position, listOf(movement(DAY_1, "-5.00")))
+
+        val failure =
+            runCatching {
+                statement(position, DAY_1, DAY_5, firstPage.nextCursor, firstPage.closingSigned)
+            }.exceptionOrNull()
+        assertTrue(
+            failure is InvalidOperationException,
+            "expected the stale cursor to be refused, got ${failure ?: "a statement"}",
+        )
+    }
+
+    @Test
+    fun `an ordinary same-day posting after the cursor does not refuse the next page`() {
+        // Three movements on one day, split across a page boundary by pageSize=2: the cursor after
+        // page one sits mid-day rather than on a day boundary, which is exactly the case a check
+        // that only compared dates - not the cursor's own id too - would misjudge.
+        val position = newPosition()
+        record(
+            position,
+            listOf(movement(DAY_1, "-10.00"), movement(DAY_2, "-20.00"), movement(DAY_2, "-5.00")),
+        )
+        settle(position)
+
+        val firstPage = statement(position, DAY_1, DAY_5)
+        assertTrue(firstPage.nextCursor != null, "must produce a next page to page through")
+
+        // Same day as the cursor, but recorded after it and therefore ordered after it in the
+        // keyset too - an ordinary posting the very next page reaches on its own, not a defect.
+        record(position, listOf(movement(DAY_2, "-30.00")))
+
+        val secondPage =
+            statement(position, DAY_1, DAY_5, firstPage.nextCursor, firstPage.closingSigned)
+
+        assertEquals(
+            BigDecimal("-65.00").stripTrailingZeros(),
+            secondPage.closingSigned.stripTrailingZeros(),
+            "a same-day posting ordered after the cursor is forward progress, not a stale cursor",
+        )
+    }
+
+    @Test
     fun `a reversal nets out rather than being hidden`() {
         val position =
             seed(
@@ -252,6 +364,18 @@ abstract class SubledgerStatementContract {
 
                 override fun movements(query: SubledgerStatementQuery): SubledgerMovementPage =
                     fail("movements were read for a query that must be refused first")
+
+                override fun currentWatermark(): String =
+                    fail("a watermark was minted for a query that must be refused first")
+
+                override fun recordedBehindConsumedRange(
+                    position: SubledgerPosition,
+                    branchId: UUID?,
+                    cursor: SubledgerStatementCursor,
+                ): Boolean =
+                    fail(
+                        "the stale-cursor check was asked for a query that must be refused first",
+                    )
             }
         val failure =
             runCatching {
@@ -276,7 +400,7 @@ abstract class SubledgerStatementContract {
         position: SubledgerPosition,
         fromDate: LocalDate,
         toDate: LocalDate,
-        cursor: com.finaxis.platform.accounting.SubledgerStatementCursor? = null,
+        cursor: SubledgerStatementCursor? = null,
         carried: BigDecimal? = null,
     ): SubledgerStatement {
         val query =
@@ -288,13 +412,16 @@ abstract class SubledgerStatementContract {
                 pageSize = pageSize,
             )
         // Through the orchestration rather than assembling two reads by hand, so every conformance
-        // test travels the path a caller travels - bounds first, provider afterwards.
-        return SubledgerStatementAssembler.statementOf(
-            provider = provider(),
-            query = query,
-            maxPageSize = maxPageSize,
-            carriedBalance = carried,
-        )
+        // test travels the path a caller travels - bounds first, provider afterwards - inside the
+        // transaction statementRead demarcates, exactly as a real caller must.
+        return statementRead {
+            SubledgerStatementAssembler.statementOf(
+                provider = provider(),
+                query = query,
+                maxPageSize = maxPageSize,
+                carriedBalance = carried,
+            )
+        }
     }
 
     protected companion object {
