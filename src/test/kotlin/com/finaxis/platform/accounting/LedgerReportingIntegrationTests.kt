@@ -2,6 +2,7 @@ package com.finaxis.platform.accounting
 
 import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.accounting.application.balances.DailyBalanceProjectionService
+import com.finaxis.platform.accounting.application.posting.PostingErrorCodes
 import com.finaxis.platform.accounting.application.reporting.AccountLedgerQuery
 import com.finaxis.platform.accounting.application.reporting.AccountRollupQuery
 import com.finaxis.platform.accounting.application.reporting.JournalLookupQuery
@@ -9,11 +10,13 @@ import com.finaxis.platform.accounting.application.reporting.LedgerReportingServ
 import com.finaxis.platform.accounting.application.reporting.TrialBalanceQuery
 import com.finaxis.platform.accounting.domain.AccountingPermissions
 import com.finaxis.platform.accounting.schema.JournalSchemaFixture
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.JOURNAL_ENTRY
+import com.finaxis.platform.jooq.tables.references.JOURNAL_LINE
 import com.finaxis.platform.jooq.tables.references.MEMBERSHIP_PERMISSION
 import com.finaxis.platform.jooq.tables.references.PERMISSION
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
@@ -28,6 +31,7 @@ import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -305,6 +309,19 @@ class LedgerReportingIntegrationTests(
         val mine = fixture.createTenant("report-isolation-mine")
         val theirs = fixture.createTenant("report-isolation-theirs")
         val actor = reader(mine.organisationId, "isolation")
+
+        // `createTenant` gives every tenant the same two account codes (1010 ASSET, 2010
+        // LIABILITY), so both tenants post to accounts that look identical on paper. They are
+        // still different rows: gl_account.id is a server-generated uuidv7 and journal_line's own
+        // foreign key ties gl_account_id to that account's organisation_id
+        // (fk_journal_line_account, V7). That FK makes an account-keyed movements query safe
+        // against a missing tenant predicate by construction - a journal_line row can never
+        // reference another tenant's account - so this half of the assertion cannot, by itself,
+        // tell a working tenant filter from one that was deleted. What it still catches is the
+        // other way a report crosses a tenant boundary: an organisationId argument swapped for
+        // the wrong query, or a chart lookup keyed on the wrong tenant, either of which would make
+        // "mine"'s total silently read as "theirs"'s amount, as zero, or as the sum of both.
+        postJournal(mine, REPORT_DAY, "100.000000")
         postJournal(theirs, REPORT_DAY, "999.000000")
 
         val balance =
@@ -317,8 +334,65 @@ class LedgerReportingIntegrationTests(
                 ),
             )
 
-        assertTrue(balance.lines.isEmpty())
-        assertEquals(BigDecimal.ZERO, balance.totalDebit)
+        assertEquals(2, balance.lines.size, "only mine's own debit and credit accounts")
+        assertEquals(
+            BigDecimal("100.000000"),
+            balance.totalDebit,
+            "mine's own amount, not theirs's and not the sum of both",
+        )
+        assertEquals(BigDecimal("100.000000"), balance.totalCredit)
+
+        // The one place in this reporting surface where the tenant predicate genuinely is the
+        // only thing between a reader and another tenant's row: entry_number is gapless *per
+        // tenant* (uq_journal_entry_number, V7), so "mine"'s first journal and "theirs"'s first
+        // journal are both numbered 1 - two different rows sharing a number that, unlike an
+        // account or branch id, carries no cross-tenant uniqueness guarantee at all. Drop the
+        // organisation_id predicate from the entry-number lookup and this stops resolving to
+        // exactly one row, so jOOQ's fetchOne() throws rather than silently handing back
+        // whichever tenant's journal happened to be read - failing loudly the moment that
+        // predicate goes missing, not quietly.
+        val mineJournal =
+            reports.journalByEntryNumber(JournalLookupQuery(mine.organisationId, actor, 1L))
+        assertEquals(
+            BigDecimal("100.000000"),
+            mineJournal.totalDebit,
+            "entry #1 for mine, never theirs's same-numbered journal",
+        )
+    }
+
+    @Test
+    fun `a trial balance refuses to answer once the ledger it reads no longer balances`() {
+        val tenant = fixture.createTenant("report-unbalanced-detection")
+        val actor = reader(tenant.organisationId, "unbalanced")
+        val journalId = postJournal(tenant, REPORT_DAY, "50.000000")
+
+        // The posting engine enforces INV-4 and refuses an unbalanced posting outright, so this
+        // refusal can never be reached through the normal posting API. Corrupting one line's
+        // amount directly via the test's own DSLContext, after a balanced journal has already
+        // landed, is this suite's own convention for proving a detection path - see
+        // `DailyBalanceProjectionIntegrationTests`'s equivalent direct update against
+        // `GL_ACCOUNT_DAILY_BALANCE`.
+        dsl
+            .update(JOURNAL_LINE)
+            .set(JOURNAL_LINE.FUNCTIONAL_AMOUNT, BigDecimal("999.000000"))
+            .where(JOURNAL_LINE.JOURNAL_ENTRY_ID.eq(journalId))
+            .and(JOURNAL_LINE.DIRECTION.eq("CREDIT"))
+            .execute()
+
+        val failure =
+            assertFailsWith<ConflictException>(
+                "a trial balance whose columns disagree must refuse rather than report",
+            ) {
+                reports.trialBalance(
+                    TrialBalanceQuery(
+                        organisationId = tenant.organisationId,
+                        actorId = actor,
+                        fromDate = REPORT_DAY,
+                        toDate = REPORT_DAY,
+                    ),
+                )
+            }
+        assertEquals(PostingErrorCodes.TRIAL_BALANCE_UNBALANCED, failure.code)
     }
 
     @Test

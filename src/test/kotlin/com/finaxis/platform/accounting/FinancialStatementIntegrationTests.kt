@@ -10,6 +10,7 @@ import com.finaxis.platform.accounting.application.reporting.TrialBalanceQuery
 import com.finaxis.platform.accounting.domain.AccountClass
 import com.finaxis.platform.accounting.domain.AccountingPermissions
 import com.finaxis.platform.accounting.schema.JournalSchemaFixture
+import com.finaxis.platform.accounting.support.RawLedgerBalanceFixture
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT
@@ -46,6 +47,7 @@ class FinancialStatementIntegrationTests(
     private val reports: LedgerReportingService,
 ) {
     private val fixture = JournalSchemaFixture(dsl)
+    private val rawLedger = RawLedgerBalanceFixture(dsl)
 
     @Test
     fun `a balance sheet balances, with unclosed earnings carried in equity`() {
@@ -80,6 +82,9 @@ class FinancialStatementIntegrationTests(
             "30 of income less 12 of expense, unclosed and therefore shown in equity",
         )
         assertEquals(sheet.totalAssets, sheet.totalLiabilitiesAndEquity)
+        // `balanced` alone is refused-by-construction and proves nothing on its own; this ties
+        // the sheet to a sum taken directly off `journal_line`, independently of the service.
+        rawLedger.assertTiesToRawLedger(sheet)
     }
 
     @Test
@@ -168,9 +173,20 @@ class FinancialStatementIntegrationTests(
         val actor = reader(tenant.organisationId, "rev")
         val cash = account(tenant.organisationId, "1100", "ASSET")
         val fees = account(tenant.organisationId, "4100", "INCOME")
-        post(tenant, DAY, cash, fees, "500.000000")
-        // The mirror image, which is what a reversal writes: the same accounts, opposite sides.
-        post(tenant, DAY, fees, cash, "500.000000")
+        val original = post(tenant, DAY, cash, fees, "500.000000")
+        // A genuine reversal - `entry_type = 'REVERSAL'` with `reverses_journal_entry_id`
+        // pointing back at the original - matching how
+        // `LedgerReportingIntegrationTests.reverse()` marks one for the identical claim about a
+        // trial balance, rather than an untyped mirror-image posting a reversal only resembles.
+        post(
+            tenant,
+            DAY,
+            fees,
+            cash,
+            "500.000000",
+            entryType = "REVERSAL",
+            reversesJournalEntryId = original,
+        )
 
         val sheet =
             statements.balanceSheet(
@@ -185,8 +201,24 @@ class FinancialStatementIntegrationTests(
                     toDate = DAY,
                 ),
             )
+        // The trial balance's movement columns are gross, not net. Checking them here tells a
+        // ledger that genuinely cancelled the two entries apart from one that silently dropped
+        // both of them - either reading would otherwise show the same net-zero result below.
+        val trial =
+            reports.trialBalance(
+                TrialBalanceQuery(
+                    organisationId = tenant.organisationId,
+                    actorId = actor,
+                    fromDate = DAY,
+                    toDate = DAY,
+                ),
+            )
+        val cashMovement = trial.lines.single { it.accountId == cash }
+        assertEquals(BigDecimal("500.000000"), cashMovement.debitMovement, "the original leg")
+        assertEquals(BigDecimal("500.000000"), cashMovement.creditMovement, "the reversal's leg")
 
         assertTrue(sheet.balanced)
+        rawLedger.assertTiesToRawLedger(sheet)
         assertEquals(
             BigDecimal.ZERO.setScale(SCALE),
             statement.netIncome.setScale(SCALE),
@@ -265,6 +297,7 @@ class FinancialStatementIntegrationTests(
             scoped.balanced,
             "a branch's own postings balance, because a journal cannot span",
         )
+        rawLedger.assertTiesToRawLedger(scoped)
         assertEquals(BigDecimal("300.000000"), scoped.totalAssets)
         assertEquals(BigDecimal("380.000000"), whole.totalAssets)
     }
@@ -339,6 +372,16 @@ class FinancialStatementIntegrationTests(
         )
     }
 
+    /**
+     * Writes one balanced two-line journal directly through the fixture and returns its id.
+     *
+     * [entryType] and [reversesJournalEntryId] default to an ordinary standalone entry. A caller
+     * proving something about a genuine reversal passes `"REVERSAL"` and the original journal's
+     * id, exactly as `entry_type` and `reverses_journal_entry_id` are set by
+     * `LedgerReportingIntegrationTests.reverse()` for the identical claim about a trial balance.
+     * The returned id is what such a caller needs to point the reversal back at.
+     */
+    @Suppress("LongParameterList")
     private fun post(
         tenant: JournalSchemaFixture.Tenant,
         postingDate: LocalDate,
@@ -346,10 +389,14 @@ class FinancialStatementIntegrationTests(
         creditAccountId: UUID,
         amount: String,
         branchId: UUID? = tenant.branchId,
-    ) {
+        entryType: String = "STANDARD",
+        reversesJournalEntryId: UUID? = null,
+    ): UUID {
         val journalId =
             fixture.insertJournalEntry(
                 tenant,
+                entryType = entryType,
+                reversesJournalEntryId = reversesJournalEntryId,
                 totalDebit = BigDecimal(amount),
                 totalCredit = BigDecimal(amount),
                 branchId = branchId,
@@ -376,6 +423,7 @@ class FinancialStatementIntegrationTests(
             postingDate = postingDate,
             branchId = branchId,
         )
+        return journalId
     }
 
     private fun account(

@@ -59,10 +59,43 @@ data class SubledgerStatementQuery(
  * PostgreSQL still reads and discards every earlier row, so the cost of a page grows with how deep
  * the reader has walked. The pair is a total order because the id is unique, which is what keeps
  * the next page exact on a day carrying many movements.
+ *
+ * [recordedThrough] is a **third, independent field**: a watermark fixed once when a walk's first
+ * page has no cursor yet, and carried forward unchanged on every later page of the *same* walk. It
+ * is not part of the keyset order and never moves the walk itself — `(postingDate, movementId)`
+ * still does that. Its job is to let a later page detect that the ledger recorded something
+ * *behind* what the walk has already consumed: `(posting_date, id) > cursor` can only move forward
+ * through ascending posting dates, so a movement backdated onto an already-served day sorts before
+ * the cursor and a keyset page alone can never reach it. See
+ * [SubledgerStatementProvider.recordedBehindConsumedRange] for how that arrival is detected —
+ * against **this whole cursor**, not just [postingDate], because the date alone cannot tell "behind
+ * the cursor" apart from "later in the same day's rows, still ahead of [movementId]" — and
+ * [com.finaxis.platform.accounting.application.subledger.SubledgerStatementAssembler] for where the
+ * watermark is generated and carried.
+ *
+ * The type is an opaque **provider-defined string**, not a row identifier, and that distinction is
+ * load-bearing. An earlier version of this field was the first page's own `uuidv7()` id, compared
+ * against later rows' ids directly — plausible, because `uuidv7()` looks time-ordered, and wrong,
+ * because it orders by when an id is *generated* inside its inserting transaction, not by when that
+ * transaction *commits* and the row becomes visible to another session. A transaction that starts
+ * before the watermark is minted and stays open past it can still generate an id that sorts before
+ * the watermark, and if that transaction then backdates its row onto an already-consumed page, an
+ * id comparison never catches it. [SubledgerStatementProvider.currentWatermark] and
+ * [SubledgerStatementProvider.recordedBehindConsumedRange] together define what this field actually
+ * holds and how it is compared; a provider's own choice of encoding only has to satisfy that
+ * contract, not carry a UUID's meaning.
+ *
+ * The default `= ""` exists only so a provider constructing a cursor for its own
+ * [SubledgerMovementPage.nextCursor] — which does not know about the watermark — compiles without
+ * naming a third argument; it is a harmless placeholder there because
+ * [com.finaxis.platform.accounting.application.subledger.SubledgerStatementAssembler] always
+ * overwrites it with the walk's real watermark before the cursor reaches a caller. A provider must
+ * never read this field for its own purposes.
  */
 data class SubledgerStatementCursor(
     val postingDate: LocalDate,
     val movementId: UUID,
+    val recordedThrough: String = "",
 )
 
 /**
@@ -156,7 +189,8 @@ data class SubledgerMovementPage(
  *
  * The window and page bounds are validated before a provider is called, the running balance is
  * computed once per page by the assembler, and the statement's shape is fixed here so that every
- * product module's statement reads the same way. A module supplies two reads and gets a statement.
+ * product module's statement reads the same way. A module supplies four reads - an opening balance,
+ * a page of movements, a watermark and a staleness check - and gets a statement.
  */
 interface SubledgerStatementProvider {
     /** A stable name recorded against statements this provider answers, e.g. `savings`. */
@@ -185,4 +219,94 @@ interface SubledgerStatementProvider {
      * `LIMIT` rather than re-validating it.
      */
     fun movements(query: SubledgerStatementQuery): SubledgerMovementPage
+
+    /**
+     * An opaque token standing for everything this provider's current transaction can see, right
+     * now — the walk's watermark, minted once.
+     *
+     * Asked **once, on a walk's first page**, before [movements] is called for it, exactly the way
+     * [recordedBehindConsumedRange] is asked before [movements] on every later page. The assembler
+     * carries the returned token forward unchanged, on every subsequent page's
+     * [SubledgerStatementCursor.recordedThrough], for [recordedBehindConsumedRange] to compare
+     * against.
+     *
+     * This method and [movements]' own first-page read must run inside the **same transaction**,
+     * at `REPEATABLE_READ` isolation or stronger, for the same reason given on
+     * [recordedBehindConsumedRange]: PostgreSQL fixes a `REPEATABLE READ` transaction's snapshot at
+     * its first statement and holds it for the transaction's whole life, so calling both from
+     * inside one transaction is what makes the token mean *exactly* "what the first page's own
+     * movements read saw" — no more, no less. A token minted from a snapshot the first page's own
+     * read does not share would be wrong in either direction: an earlier snapshot would later flag
+     * movements the first page legitimately served, and a later one would let through exactly the
+     * omission this mechanism exists to catch.
+     *
+     * An implementation may enforce the isolation requirement itself — as this module's own
+     * general-ledger provider does, with `SnapshotIsolationGuard` — rather than trust every caller
+     * to remember it. On PostgreSQL, `pg_current_snapshot()::text` is exactly this token:
+     * printable, storable, and comparable against a row's own visibility later through
+     * `pg_visible_in_snapshot`, without requiring the minting transaction to still be open —
+     * unlike `pg_export_snapshot()`, whose export is only adoptable by another session while the
+     * exporting transaction remains open, which a multi-page walk spanning several requests cannot
+     * promise.
+     */
+    fun currentWatermark(): String
+
+    /**
+     * Whether the ledger holds a movement, at or before [cursor]'s own position in the keyset
+     * order, that was not yet visible when [cursor]'s watermark was minted and can therefore never
+     * be reached by a later page.
+     *
+     * Asked **once per page after the first**, before [movements] is called for it — the assembler
+     * calls this and refuses the page rather than serving it if it returns `true`. That ordering
+     * exists because `(posting_date, id) > cursor` — the same row-value comparison [movements]
+     * itself uses — is the only thing that can move a keyset walk forward: a movement whose own
+     * `(posting_date, id)` sorts at or before [cursor] can never satisfy that comparison on any
+     * later page, no matter how that page's predicate is written. Detecting that a movement in
+     * exactly that position arrived after the walk began is therefore the only way to avoid
+     * silently serving a statement that is short by exactly that movement — the defect
+     * [SubledgerStatementCursor.recordedThrough] and this method exist to close.
+     *
+     * [cursor] is taken **whole, not as a bare posting date**, because the date alone cannot tell
+     * "behind the cursor" apart from "later in the cursor's own day, still ahead of it". A busy
+     * position posts several movements a day; an ordinary one recorded on the cursor's day with an
+     * id greater than [SubledgerStatementCursor.movementId] is exactly what the very next
+     * [movements] call is *for* — forward progress, not a defect — and a check that compared dates
+     * alone would refuse it as if it were the backdated case this method exists to catch. The exact
+     * test is the row value `(posting_date, id) <= (cursor.postingDate, cursor.movementId)`: the
+     * same comparison [movements]' own keyset predicate makes, simply inverted.
+     *
+     * [SubledgerStatementCursor.recordedThrough] on [cursor] is [currentWatermark]'s token from the
+     * walk's first page: "recorded after the watermark" means **not visible under that token**,
+     * checked against **commit visibility**, never against id order. An earlier version of this
+     * method compared `id > watermark` directly, reasoning that `uuidv7()` ids are time-ordered so
+     * generation order stands in for commit order. It does not: `uuidv7()` orders by when
+     * `DEFAULT uuidv7()` ran inside the inserting transaction, not by when that transaction
+     * committed and the row became visible to another session. A transaction that starts before
+     * the watermark is minted and stays open past it generates an id that still sorts before the
+     * watermark, and if it then backdates its row onto an already-consumed page, an id comparison
+     * never catches it — the same silent omission this method exists to close, reopened by the gap
+     * between an id being assigned and its insert becoming visible. On PostgreSQL,
+     * `pg_visible_in_snapshot` answers the right question directly, from a row's `xmin` and the
+     * stored token, with no such gap: a transaction's *commit* is what changes what a later
+     * snapshot can see, regardless of when that transaction happened to acquire its id.
+     *
+     * This method must run inside the **same transaction** [movements] is about to be asked from,
+     * at `REPEATABLE_READ` isolation or stronger — not merely at the same moment, one that shares
+     * one snapshot with it. Two independent `READ COMMITTED` reads each take their own snapshot,
+     * and a movement that commits between them is neither caught as stale nor included in the
+     * page: it is simply invisible to whichever read ran first. See
+     * `SubledgerStatementAssembler.statementOf` for where the two calls are made and the
+     * obligation this places on a caller, and `ManualJournalService.get` for the identical
+     * obligation elsewhere in this module. An
+     * implementation may enforce this itself — as this module's own general-ledger provider does,
+     * with `SnapshotIsolationGuard` — rather than trust every caller to remember it.
+     *
+     * The answer is bounded the same way [movements] and [openingBalanceAt] are: a range read over
+     * this position's own history, never the tenant's.
+     */
+    fun recordedBehindConsumedRange(
+        position: SubledgerPosition,
+        branchId: UUID?,
+        cursor: SubledgerStatementCursor,
+    ): Boolean
 }

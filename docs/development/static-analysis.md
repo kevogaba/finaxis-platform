@@ -112,6 +112,44 @@ restored to 95% it passes. The first attempt passed at 99% — it had been point
 `jacocoTestReport`'s `classDirectories`, which by then held individual class *files* rather than
 directories, so `fileTree()` of each yielded nothing and the rule measured an empty set.
 
+### Accounting package-level floor and exemption policy
+
+A module-wide `BUNDLE` rule computes one ratio across every included class, so a thin package can
+be diluted by a healthy module average and stay invisible to the gate. That is exactly what let
+`StatementWindowPolicy` ship unreachable during the #136 review: the package sat at 84% while the
+module sat at 96%, and only reading the per-package HTML report caught it, not the gate. Issue
+#143 closes that gap with a **second `rule { }` block** inside the same
+`jacocoAccountingCoverageVerification` task's `violationRules`, scoped `element = "PACKAGE"`. One
+task, two rules: the `BUNDLE` rule above still holds the module average, and the `PACKAGE` rule
+now holds every package inside it to its own floor, so a new package cannot hide behind an old
+one's history.
+
+The `PACKAGE` rule's `includes` needs two entries, not one:
+`["com.finaxis.platform.accounting", "com.finaxis.platform.accounting.*"]`. JaCoCo's
+`WildcardMatcher` requires the literal `.` immediately before a trailing `*`, so
+`"com.finaxis.platform.accounting.*"` alone matches every sub-package but never the bare
+`com.finaxis.platform.accounting` package itself — and that top-level package holds real,
+populated files. Dropping the bare entry silently exempts everything directly in it from the
+floor while still claiming to enforce one.
+
+The `PACKAGE` rule's minimum is a **placeholder** (see the comment beside it in `build.gradle.kts`)
+until it is calibrated against a real per-package report: run
+`./gradlew jacocoAccountingCoverageVerification`, read the generated report, and set the floor to
+the actual current spread rather than a guess.
+
+A package earns a listed exemption — in that same rule's `excludes` — only when it holds
+exclusively data classes, sealed hierarchies, or other value objects with **no executable branch
+worth covering**. A package that resolves context, validates input, or raises an error on an
+invalid state does not qualify, however small it is; that is exactly the behavior a floor exists to
+catch. The exemption list lives nowhere else — not in a second doc, not as a suppression comment
+elsewhere — so there is one place to audit it.
+
+**This list must be re-reviewed whenever a new package is added under
+`com.finaxis.platform.accounting`.** Adding a package and leaving it off both the floor's
+denominator and the exemption list is not a neutral default: an unreviewed package either fails
+the gate it was never checked against, or silently rides on an exemption it never earned. Treat
+that review as part of the change that adds the package, not a follow-up.
+
 ## Suppressions
 
 Prefer fixing code over suppressing rules.
