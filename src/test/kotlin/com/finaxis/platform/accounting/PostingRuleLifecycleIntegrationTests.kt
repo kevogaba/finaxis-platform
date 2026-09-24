@@ -19,12 +19,15 @@ import com.finaxis.platform.accounting.domain.PostingRulePolicy
 import com.finaxis.platform.accounting.domain.PostingRuleVersionStatus
 import com.finaxis.platform.accounting.domain.PostingSide
 import com.finaxis.platform.accounting.schema.JournalSchemaFixture
+import com.finaxis.platform.accounting.support.LockOverlapProbe
 import com.finaxis.platform.common.application.ApplicationException
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
 import com.finaxis.platform.jooq.tables.references.POSTING_REQUEST
+import com.finaxis.platform.jooq.tables.references.POSTING_RULE_VERSION
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.withRequestContext
@@ -33,9 +36,16 @@ import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestConstructor
+import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.support.TransactionTemplate
 import java.math.BigDecimal
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -60,6 +70,7 @@ class PostingRuleLifecycleIntegrationTests(
     private val journals: JournalReadStore,
     private val dsl: DSLContext,
     private val postingTransactions: PostingTransactionBoundary,
+    private val transactionManager: PlatformTransactionManager,
     organisationProvisioningService: OrganisationProvisioningService,
 ) {
     private val fx =
@@ -111,6 +122,7 @@ class PostingRuleLifecycleIntegrationTests(
                             MAKER,
                             first.id,
                             tenant.businessDate,
+                            first.rowVersion,
                             fx.legs(tenant),
                         ),
                     )
@@ -172,6 +184,7 @@ class PostingRuleLifecycleIntegrationTests(
                     MAKER,
                     version.id,
                     tenant.businessDate,
+                    rejected.rowVersion,
                     fx.legs(tenant).filter { it.side == PostingSide.DEBIT },
                 ),
             )
@@ -181,6 +194,252 @@ class PostingRuleLifecycleIntegrationTests(
                 withRequestContext { rules.submit(fx.transition(tenant, version.id, MAKER)) }
             }
         assertEquals("accounting.posting_rule_legs_one_sided", oneSided.code)
+    }
+
+    @Test
+    fun `a draft amendment prepared against an earlier view is refused, not applied`() {
+        val tenant = fx.provisionTenant("rule-stale-amend")
+        val version = fx.draftVersion(tenant, from = tenant.businessDate)
+
+        fun amend(
+            rowVersion: Long,
+            feeShare: String?,
+        ) = withRequestContext {
+            rules.amendDraft(
+                AmendPostingRuleVersionCommand(
+                    tenant.organisationId,
+                    MAKER,
+                    version.id,
+                    tenant.businessDate.plusDays(1),
+                    rowVersion,
+                    fx.legs(tenant, feeShare),
+                ),
+            )
+        }
+
+        // Two edits prepared from the same read: the first lands and moves the row version on.
+        val first = amend(version.rowVersion, feeShare = "10")
+        assertEquals(version.rowVersion + 1, first.rowVersion)
+        val stale =
+            assertFailsWith<ConflictException> { amend(version.rowVersion, feeShare = null) }
+        assertEquals(PostingErrorCodes.POSTING_RULE_VERSION_STALE, stale.code)
+
+        val after = fx.version(tenant, version.id)
+        assertEquals(first.rowVersion, after.rowVersion, "a refused amendment writes nothing")
+        assertEquals(
+            3,
+            withRequestContext { fx.preview(tenant, version.id, "100.00") }.legs.size,
+            "the first maker's three legs survive; the stale two-leg set never replaced them",
+        )
+
+        // Re-read and retried, the same edit is admitted.
+        assertEquals(first.rowVersion + 1, amend(after.rowVersion, feeShare = null).rowVersion)
+    }
+
+    @Test
+    fun `only a version's author amends or submits it, and the author can never approve it`() {
+        val tenant = fx.provisionTenant("rule-author")
+        val version = fx.draftVersion(tenant, from = tenant.businessDate)
+        val colleague = fx.approver(tenant, "rule-author-colleague")
+
+        val amendByOther =
+            assertFailsWith<ForbiddenOperationException> {
+                withRequestContext {
+                    rules.amendDraft(
+                        AmendPostingRuleVersionCommand(
+                            tenant.organisationId,
+                            colleague,
+                            version.id,
+                            tenant.businessDate,
+                            version.rowVersion,
+                            fx.legs(tenant, feeShare = "10"),
+                        ),
+                    )
+                }
+            }
+        assertEquals(PostingErrorCodes.POSTING_RULE_NOT_THE_MAKER, amendByOther.code)
+
+        // Another holder of posting_rule.submit cannot submit it on the author's behalf, which is
+        // what would have made the author eligible to approve the legs they wrote.
+        val submitByOther =
+            assertFailsWith<ForbiddenOperationException> {
+                withRequestContext { rules.submit(fx.transition(tenant, version.id, colleague)) }
+            }
+        assertEquals(PostingErrorCodes.POSTING_RULE_NOT_THE_MAKER, submitByOther.code)
+        assertEquals(PostingRuleVersionStatus.DRAFT, fx.version(tenant, version.id).status)
+
+        // A version another actor submitted before the author guard existed: the approval still
+        // refuses its author, not merely its submitter.
+        fx.submit(tenant, version)
+        dsl
+            .update(POSTING_RULE_VERSION)
+            .set(POSTING_RULE_VERSION.CREATED_BY, tenant.checker)
+            .where(POSTING_RULE_VERSION.ID.eq(version.id))
+            .execute()
+        val authorApproval =
+            assertFailsWith<ForbiddenOperationException> {
+                withRequestContext {
+                    rules.approve(
+                        fx.transition(tenant, version.id, tenant.checker),
+                    )
+                }
+            }
+        assertEquals(PostingErrorCodes.POSTING_RULE_SELF_APPROVAL, authorApproval.code)
+        assertEquals(
+            PostingRuleVersionStatus.PENDING_APPROVAL,
+            fx.version(tenant, version.id).status,
+        )
+
+        val approved =
+            withRequestContext { rules.approve(fx.transition(tenant, version.id, colleague)) }
+        assertEquals(PostingRuleVersionStatus.ACTIVE, approved.status)
+    }
+
+    @Test
+    fun `retirement cannot backdate a cutoff before the business date`() {
+        val tenant = fx.provisionTenant("rule-retire-backdated")
+        val version =
+            fx.activate(
+                tenant,
+                fx.draftVersion(tenant, from = tenant.businessDate.minusMonths(2)),
+            )
+        val retirer = fx.approver(tenant, "rule-retire-backdated")
+
+        val backdated =
+            assertFailsWith<InvalidOperationException> {
+                withRequestContext {
+                    fx.retire(
+                        tenant,
+                        version.id,
+                        retirer,
+                        effectiveTo = tenant.businessDate.minusDays(1),
+                    )
+                }
+            }
+        assertEquals(PostingErrorCodes.POSTING_RULE_WINDOW_INVALID, backdated.code)
+        val untouched = fx.version(tenant, version.id)
+        assertEquals(PostingRuleVersionStatus.ACTIVE, untouched.status)
+        assertNull(untouched.effectiveTo)
+        assertEquals(
+            version.id,
+            withRequestContext {
+                fx.dryRun(tenant, "10.00", tenant.businessDate.minusDays(1))
+            }.postingRuleVersionId,
+            "yesterday is still governed, so a prior-day correction can still be posted",
+        )
+
+        val retired = withRequestContext { fx.retire(tenant, version.id, retirer) }
+        assertEquals(tenant.businessDate, retired.effectiveTo)
+    }
+
+    /**
+     * A retirement and a business-date advance cannot interleave (Codex review on #146).
+     *
+     * The holder plays the advance: it moves the business date to tomorrow and keeps its
+     * transaction open. A retirement cutting off *today* then has to wait for it - which is only
+     * true if the check reads the date under a lock - and, once the advance commits, is judged
+     * against tomorrow and refused. A plain read would answer from the committed row, today, never
+     * block, and persist a cutoff that is already in the past by the time it commits.
+     */
+    @Test
+    fun `a retirement waits for a concurrent business-date advance and is judged after it`() {
+        val tenant = fx.provisionTenant("rule-retire-race")
+        val version =
+            fx.activate(
+                tenant,
+                fx.draftVersion(tenant, from = tenant.businessDate.minusMonths(1)),
+            )
+        val retirer = fx.approver(tenant, "rule-retire-race")
+        val probe = LockOverlapProbe(dsl)
+        val advanced = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val holderPid = AtomicInteger()
+
+        val retirement =
+            Executors.newVirtualThreadPerTaskExecutor().use { executor ->
+                val advance =
+                    executor.submit {
+                        TransactionTemplate(transactionManager).executeWithoutResult {
+                            holderPid.set(probe.currentBackendPid())
+                            dsl
+                                .update(BUSINESS_DATE)
+                                .set(
+                                    BUSINESS_DATE.CURRENT_BUSINESS_DATE,
+                                    tenant.businessDate.plusDays(1),
+                                ).where(BUSINESS_DATE.ORGANISATION_ID.eq(tenant.organisationId))
+                                .execute()
+                            advanced.countDown()
+                            assertTrue(release.await(LATCH_TIMEOUT, TimeUnit.SECONDS))
+                        }
+                    }
+                assertTrue(advanced.await(LATCH_TIMEOUT, TimeUnit.SECONDS))
+                val retire =
+                    executor.submit<Throwable?> {
+                        runCatching {
+                            withRequestContext { fx.retire(tenant, version.id, retirer) }
+                        }.exceptionOrNull()
+                    }
+                probe.awaitBlockedBehind(holderPid.get())
+                release.countDown()
+                advance.get(FUTURE_TIMEOUT, TimeUnit.SECONDS)
+                retire.get(FUTURE_TIMEOUT, TimeUnit.SECONDS)
+            }
+
+        val refused = assertIs<InvalidOperationException>(retirement)
+        assertEquals(PostingErrorCodes.POSTING_RULE_WINDOW_INVALID, refused.code)
+        assertEquals(PostingRuleVersionStatus.ACTIVE, fx.version(tenant, version.id).status)
+    }
+
+    @Test
+    fun `a draft is cancelled by its author, or recovered by a checker, and frees its rule`() {
+        val tenant = fx.provisionTenant("rule-cancel")
+        val draft = fx.draftVersion(tenant, from = tenant.businessDate)
+
+        val noReason =
+            assertFailsWith<InvalidOperationException> {
+                withRequestContext { rules.cancel(fx.transition(tenant, draft.id, MAKER)) }
+            }
+        assertEquals(PostingErrorCodes.POSTING_RULE_REASON_REQUIRED, noReason.code)
+        assertFailsWith<ForbiddenOperationException> {
+            withRequestContext {
+                rules.cancel(fx.transition(tenant, draft.id, STRANGER, reason = "Not mine"))
+            }
+        }
+
+        val cancelled =
+            withRequestContext {
+                rules.cancel(fx.transition(tenant, draft.id, MAKER, reason = "Wrong event"))
+            }
+        assertEquals(PostingRuleVersionStatus.CANCELLED, cancelled.status)
+        assertEquals("Wrong event", cancelled.statusReason)
+        assertEquals(listOf("CANCEL"), fx.transitionNames(tenant, draft.id))
+        assertTrue("posting_rule.cancel_version" in fx.auditActions(tenant))
+
+        // An orphan: its author is someone who can no longer act on it. A checker withdraws it,
+        // and the rule's next version can be started again.
+        val orphan = fx.draftVersion(tenant, from = tenant.businessDate)
+        dsl
+            .update(POSTING_RULE_VERSION)
+            .set(POSTING_RULE_VERSION.CREATED_BY, STRANGER)
+            .where(POSTING_RULE_VERSION.ID.eq(orphan.id))
+            .execute()
+        val recovered =
+            withRequestContext {
+                rules.cancel(
+                    fx.transition(tenant, orphan.id, tenant.checker, reason = "Author left"),
+                )
+            }
+        assertEquals(PostingRuleVersionStatus.CANCELLED, recovered.status)
+        val next = fx.activate(tenant, fx.draftVersion(tenant, from = tenant.businessDate))
+        assertEquals(PostingRuleVersionStatus.ACTIVE, next.status)
+
+        val terminal =
+            assertFailsWith<ConflictException> {
+                withRequestContext {
+                    rules.cancel(fx.transition(tenant, next.id, MAKER, reason = "Too late"))
+                }
+            }
+        assertEquals(PostingErrorCodes.POSTING_RULE_TRANSITION_NOT_ALLOWED, terminal.code)
     }
 
     @Test
@@ -407,5 +666,10 @@ class PostingRuleLifecycleIntegrationTests(
                 }
             }
         assertEquals(PostingRulePolicy.FACT_DUPLICATED, duplicated.code)
+    }
+
+    private companion object {
+        const val LATCH_TIMEOUT = 10L
+        const val FUTURE_TIMEOUT = 60L
     }
 }

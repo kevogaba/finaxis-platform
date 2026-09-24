@@ -158,7 +158,13 @@ object PostingErrorCodes {
     /** The requested state change is not a legal transition from the version's current state. */
     const val POSTING_RULE_TRANSITION_NOT_ALLOWED = "accounting.posting_rule_transition_not_allowed"
 
-    /** The actor who submitted or activated a version cannot also approve or retire it. */
+    /** Only a version's author may amend or submit it; `posting_rule_version.created_by`. */
+    const val POSTING_RULE_NOT_THE_MAKER = "accounting.posting_rule_not_the_maker"
+
+    /**
+     * The actor who authored or submitted a version cannot approve it, and the actor who activated
+     * it cannot retire it.
+     */
     const val POSTING_RULE_SELF_APPROVAL = "accounting.posting_rule_self_approval"
 
     /** A version's legs must be numbered 1..n without gaps and name existing postable accounts. */

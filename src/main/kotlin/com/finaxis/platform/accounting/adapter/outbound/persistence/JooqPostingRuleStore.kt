@@ -132,11 +132,13 @@ class JooqPostingRuleStore(
             .let(::toVersion)
     }
 
+    @Suppress("LongParameterList")
     override fun updateDraftVersion(
         organisationId: UUID,
         versionId: UUID,
         effectiveFrom: LocalDate,
         description: String?,
+        expectedRowVersion: Long,
         actorId: UUID,
     ): Boolean =
         dsl
@@ -149,6 +151,7 @@ class JooqPostingRuleStore(
             .where(POSTING_RULE_VERSION.ORGANISATION_ID.eq(organisationId))
             .and(POSTING_RULE_VERSION.ID.eq(versionId))
             .and(POSTING_RULE_VERSION.STATUS.eq(PostingRuleVersionStatus.DRAFT.name))
+            .and(POSTING_RULE_VERSION.ROW_VERSION.eq(expectedRowVersion))
             .execute() == 1
 
     @Suppress("LongParameterList")
@@ -277,6 +280,7 @@ class JooqPostingRuleStore(
             description = record.description,
             statusReason = record.statusReason,
             rowVersion = record.rowVersion!!,
+            createdBy = record.createdBy,
         )
 
     private fun toLeg(record: PostingRuleLegRecord) =

@@ -32,8 +32,10 @@ sentence.
 | `V11` | `uq_gl_account_control_kind` replacing `idx_gl_account_control` | #91 |
 | `V12` | `manual_journal.external_reference` | #92 |
 | `V13` | `fn_journal_line_append_guard` and `trg_journal_line_append_guard` on `journal_line` | #95 |
-| Then | `gl_account_daily_balance` and `idx_journal_entry_business_date` | #47 |
-| Then | `idx_journal_line_branch_account_date` | #49 |
+| `V14` | `gl_account_daily_balance`, `idx_journal_entry_business_date` and `idx_gl_account_daily_balance_watermark` | #47 |
+| `V15` | `idx_journal_line_branch_account_date` | #49 |
+| `V16` | `COMMENT ON COLUMN posting_request.request_fingerprint`, superseding `V7`'s comment, which listed the resolved legs | #128 |
+| `V17` | `chk_posting_rule_version_status` widened for `CANCELLED` | #127 |
 
 Issue #34's permission migration carries no accounting tables — only reference data.
 
@@ -456,6 +458,24 @@ statuses — `ACTIVE`, `SUPERSEDED`, `RETIRED` — all resolve a posting whose d
 range; the status says how the version's window came to be closed, not whether it may be used for
 the dates it covers. That is what lets a prior-period correction re-post under the version that was
 in force on its posting date.
+
+Closing a window never reaches back past the tenant's business date. Retirement refuses an
+`effective_to` earlier than the current business date with `POSTING_RULE_WINDOW_INVALID`, because
+a backdated cutoff would leave every date between it and today governed by no version, and a
+prior-period correction onto one of those dates would then fail with `POSTING_RULE_NOT_FOUND`
+instead of re-posting under the rule in force (issue #127). Retiring on the business date itself is
+admitted: that day stays governed.
+
+A draft can be withdrawn. `CANCEL` moves a `DRAFT` version to `CANCELLED`, which is terminal,
+never approved, outside `ex_posting_rule_version_no_overlap` and never selected by the resolver.
+It exists because only a version's author may amend or submit it and a rule admits one draft or
+pending version at a time, so a draft whose author left the tenant would otherwise freeze its rule.
+The author cancels under `posting_rule.update`; anyone else needs `posting_rule.approve`. A reason
+is mandatory, and the transition is logged and audited like every other.
+
+The content a checker approves is also the content its author last saw. An amendment carries the
+`row_version` its maker read and is refused as `POSTING_RULE_VERSION_STALE` if the version moved
+since, so two edits prepared from one view cannot silently overwrite each other's legs.
 
 ### A reconciliation compares two signed balances in the ledger's convention
 
@@ -1413,7 +1433,7 @@ carry the identifier pair and the standard mutable audit set; the reasoning for 
 | --- | --- | --- | --- |
 | `posting_rule_id` | `UUID` | no | Owning rule |
 | `version_number` | `INTEGER` | no | Ordinal within the rule, `1`-based |
-| `status` | `TEXT` | no | `DRAFT`, `PENDING_APPROVAL`, `ACTIVE`, `SUPERSEDED` or `RETIRED` |
+| `status` | `TEXT` | no | `DRAFT`, `PENDING_APPROVAL`, `ACTIVE`, `SUPERSEDED`, `RETIRED` or `CANCELLED` (`V17`) |
 | `status_reason` | `TEXT` | yes | Why the version is in its current state, including a rejection reason |
 | `effective_from` | `DATE` | no | First posting date the version governs, inclusive |
 | `effective_to` | `DATE` | yes | Last posting date, inclusive; `NULL` while open-ended |
@@ -1426,7 +1446,7 @@ carry the identifier pair and the standard mutable audit set; the reasoning for 
 | `uq_posting_rule_version_number` | `UNIQUE (organisation_id, posting_rule_id, version_number)` | Version numbers do not repeat within a rule |
 | `fk_posting_rule_version_rule` | `FOREIGN KEY (organisation_id, posting_rule_id)` | A version cannot belong to another tenant's rule |
 | `chk_posting_rule_version_number` | `CHECK (version_number > 0)` | Ordinals are 1-based |
-| `chk_posting_rule_version_status` | `CHECK (status IN (…))` | The five adopted states |
+| `chk_posting_rule_version_status` | `CHECK (status IN (…))` | The six adopted states; `V17` widened it for `CANCELLED` |
 | `chk_posting_rule_version_effective` | `CHECK (effective_to IS NULL OR effective_to >= effective_from)` | A window cannot end before it starts |
 | `chk_posting_rule_version_closed_when_ended` | `CHECK (status NOT IN ('SUPERSEDED', 'RETIRED') OR effective_to IS NOT NULL)` | A closed version has a closing date |
 | `chk_posting_rule_version_version` | `CHECK (row_version >= 0)` | Convention |
@@ -1583,6 +1603,7 @@ Plus the mutable audit set — a run is created once and moved to `RESOLVED` at 
 | `fk_control_account_reconciliation_run_branch` | `FOREIGN KEY (organisation_id, branch_id)` | A run cannot scope to another tenant's branch |
 | `chk_control_account_reconciliation_run_status` | `CHECK (status IN (…))` | The three adopted states |
 | `chk_control_account_reconciliation_run_matched` | `CHECK (status <> 'MATCHED' OR abs(gl_balance - subledger_balance) <= tolerance)` | A match is within its tolerance |
+| `chk_control_account_reconciliation_run_break` | `CHECK (status = 'MATCHED' OR abs(gl_balance - subledger_balance) > tolerance)` | The converse: a `BREAK`, or the `RESOLVED` break it becomes, is outside its tolerance. The verdict and the numbers must agree in both directions, or the table would accept evidence whose status contradicts the balances it stores |
 | `chk_control_account_reconciliation_run_resolved` | `CHECK (…)` | `RESOLVED` carries who, when and why, and nothing else does |
 | `chk_control_account_reconciliation_run_tolerance` | `CHECK (tolerance >= 0)` | A bound is non-negative |
 | `chk_control_account_reconciliation_run_currency` | `CHECK (currency_code ~ '^[A-Z]{3}$')` | The foundation currency regex |
@@ -1591,7 +1612,8 @@ Plus the mutable audit set — a run is created once and moved to `RESOLVED` at 
 
 | Index | Definition | Justifying query |
 | --- | --- | --- |
-| `idx_control_account_reconciliation_run_account_date` | `(organisation_id, gl_account_id, as_of_date DESC, id DESC)` | The account foreign key, and *"the runs of this control account, newest first"* |
+| `idx_control_account_reconciliation_run_account` | `(organisation_id, gl_account_id, id DESC)` | The run listing, whose keyset is `id` alone: with `as_of_date` between the equality prefix and `id`, the index below would force a sort of every matching run before the page limit applied |
+| `idx_control_account_reconciliation_run_account_date` | `(organisation_id, gl_account_id, as_of_date DESC, id DESC)` | The account foreign key, and *"the runs of this control account around this date, newest first"* |
 
 ### `idx_journal_line_subledger`
 
@@ -2182,10 +2204,10 @@ CREATE INDEX idx_journal_line_account_date
     INCLUDE (direction, functional_amount, branch_id, journal_entry_id);
 ```
 
-Deferred, with the issue that creates each:
+Deferred from #40, with the issue and migration that created each:
 
 - `idx_journal_line_branch_account_date (organisation_id, branch_id, posting_date, gl_account_id)
-  INCLUDE (direction, functional_amount)` — branch trial balance, issue #49.
+  INCLUDE (direction, functional_amount)` — branch trial balance, issue #49, created by `V15`.
 - `idx_journal_line_subledger (organisation_id, source_module, subledger_reference, posting_date,
   id) WHERE subledger_reference IS NOT NULL` — control-account reconciliation, created by `V9`.
 
@@ -2193,8 +2215,10 @@ Deferred, with the issue that creates each:
 
 - **`account_mapping`** — Apache Fineract ships both `acc_accounting_rule` and `acc_product_mapping`
   and a reviewer cannot tell which governs a given posting. Finaxis has one resolution path:
-  `posting_rule` → effective `posting_rule_version` → `posting_rule_leg` → account, with
-  `account_resolution = 'PRODUCT_PARAMETER'` as the single indirection point.
+  `posting_rule` → effective `posting_rule_version` → `posting_rule_leg` → `gl_account_id`, under
+  `account_resolution = 'FIXED_ACCOUNT'`, the only strategy the schema admits. The deferred
+  product-parameter strategy, which would add one indirection at the leg, is recorded in
+  [*`account_resolution` admits `FIXED_ACCOUNT` only*](#account_resolution-admits-fixed_account-only).
 - **`control_account`** — a control account *is* a GL account with no independent lifecycle.
   Classification lives on `gl_account.is_control_account` and `control_subledger_kind`.
 - **`gl_account_balance`** (an authoritative stored current balance) — a per-account write hotspot

@@ -22,6 +22,10 @@ import com.finaxis.platform.lifecycle.application.OrganisationProvisioningServic
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.boot.test.context.TestConfiguration
+import org.springframework.cache.CacheManager
+import org.springframework.cache.concurrent.ConcurrentMapCacheManager
+import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.test.context.TestConstructor
@@ -62,8 +66,20 @@ import kotlin.test.assertTrue
  * without the other's guarantee.
  *
  * See `docs/adr/0026-real-time-gates-on-the-serializable-posting-path.md`.
+ *
+ * **This class owns its permission cache** ([PrivatePermissionCache], issue #131). Two tests here
+ * depend on what `iam.effective-permissions` holds between two statements, and the suite's shared
+ * Redis cache is one every other class can clear: `AuthFlowIntegrationTests` and
+ * `EffectivePermissionResolverTests` clear it outright, and `RoleManagementService` evicts every
+ * membership holding a role. Under a loaded full-suite run one of those landed between the warm
+ * and the re-check and failed the stale-cache test on its precondition. An in-memory cache no
+ * other class can reach makes that precondition a property of this class rather than of suite
+ * ordering; what is under test is the gate's refusal to consult *any* cache, not Redis.
  */
-@Import(PostgresTestConfiguration::class)
+@Import(
+    PostgresTestConfiguration::class,
+    BreakGlassRevocationRaceIntegrationTests.PrivatePermissionCache::class,
+)
 @SpringBootTest
 @TestConstructor(autowireMode = TestConstructor.AutowireMode.ALL)
 class BreakGlassRevocationRaceIntegrationTests(
@@ -424,6 +440,22 @@ class BreakGlassRevocationRaceIntegrationTests(
             ) ||
             generateSequence(failure) { it.cause.takeIf { cause -> cause !== it } }
                 .any { it is SQLException && it.sqlState == SERIALIZATION_FAILURE }
+
+    /**
+     * An `iam.effective-permissions` cache only this class's context writes or clears.
+     *
+     * Declaring a [CacheManager] makes Spring Boot's Redis cache auto-configuration back off, so
+     * this is the context's only cache manager rather than a second one competing with it. The
+     * context is not shared with any other class, which is the cost - one extra context start - and
+     * exactly the isolation the stale-cache precondition needs.
+     */
+    @TestConfiguration(proxyBeanMethods = false)
+    class PrivatePermissionCache {
+        /** An in-memory cache holding the one cache name the resolver reads and writes. */
+        @Bean
+        fun privatePermissionCacheManager(): CacheManager =
+            ConcurrentMapCacheManager(EffectivePermissionResolver.CACHE_NAME)
+    }
 
     private companion object {
         /** The `V3` bootstrap administrator; `audit_event.actor_user_id` is a real foreign key. */

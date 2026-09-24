@@ -27,7 +27,6 @@ import com.finaxis.platform.accounting.domain.PostingRuleVersionStatus
 import com.finaxis.platform.accounting.domain.PostingRuleVersionTransition
 import com.finaxis.platform.common.application.ApplicationException
 import com.finaxis.platform.common.application.ConflictException
-import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
@@ -51,13 +50,18 @@ import java.util.UUID
  * Posting rules and their versions: creation, drafting, maker-checker lifecycle, and the two read
  * operations that answer "what would this post".
  *
- * The lifecycle follows the chart-of-accounts service exactly, because it is the same control:
- * approval requires `posting_rule.approve` and an actor who is not the version's most recent
- * submitter, resolved from `posting_rule_version_transition_log` under the **rule's** row lock -
- * every version transition of a rule takes that lock, so the answer cannot change underneath the
- * check. Activation is where a rule's head changes, so it is also where the previous head is
- * superseded: its window is closed the day before the successor's `effective_from`, in the same
- * transaction, and `ex_posting_rule_version_no_overlap` backs the arithmetic up.
+ * The lifecycle follows the chart-of-accounts service, because it is the same control: approval
+ * requires `posting_rule.approve` and an actor who is neither the version's most recent submitter,
+ * resolved from `posting_rule_version_transition_log`, nor its author,
+ * `posting_rule_version.created_by` - both read under the **rule's** row lock, which every version
+ * transition of a rule takes, so the answer cannot change underneath the check. Only the author
+ * amends or submits a draft, as only the maker touches a manual journal (issue #127): without that,
+ * an author could have another holder of `posting_rule.submit` submit the legs they wrote and then
+ * approve them, and a second maker could rewrite a draft the first one is about to submit. Those
+ * guards live in [PostingRuleGovernance]. Activation is where a rule's head changes, so it is also
+ * where the previous head is superseded: its window is closed the day before the successor's
+ * `effective_from`, in the same transaction, and `ex_posting_rule_version_no_overlap` backs the
+ * arithmetic up.
  *
  * A version's legs and `effective_from` are editable in `DRAFT` only. Once submitted they are what
  * the checker approves; once approved they are what historical postings cite. The store does not
@@ -82,7 +86,7 @@ import java.util.UUID
 class PostingRuleService(
     private val rules: PostingRuleStore,
     private val accounts: GlAccountStore,
-    private val makers: PostingRuleVersionMakerResolver,
+    private val governance: PostingRuleGovernance,
     private val permissions: AccountingPermissionGuard,
     private val transitions: TransitionExecutor,
     private val auditService: AuditService,
@@ -162,7 +166,18 @@ class PostingRuleService(
         return version
     }
 
-    /** Replaces a draft version's legs, effective-from date and description. */
+    /**
+     * Replaces a draft version's legs, effective-from date and description. Refused to anyone but
+     * the version's author, and refused from a stale view.
+     *
+     * [AmendPostingRuleVersionCommand.expectedRowVersion] is the row version the maker read, and it
+     * is compared against the version under the rule's lock. Until issue #127 nothing was compared:
+     * two edits prepared from one earlier view merely serialised on the lock, and the second
+     * silently replaced the first's whole leg set and `effective_from` while
+     * `POSTING_RULE_VERSION_STALE` advertised a protection that could never fire - the defect the
+     * manual-journal path had already fixed. The comparison runs before any leg is touched, so a
+     * refused amendment leaves the draft and its `row_version` exactly as they were.
+     */
     @Transactional
     fun amendDraft(command: AmendPostingRuleVersionCommand): PostingRuleVersion {
         permissions.requireTenantPermission(
@@ -171,6 +186,7 @@ class PostingRuleService(
             AccountingPermissions.POSTING_RULE_UPDATE,
         )
         val version = lockedVersion(command.organisationId, command.versionId)
+        governance.requireMaker(version, command.actorId)
         if (version.status != PostingRuleVersionStatus.DRAFT) {
             throw ConflictException(
                 code = PostingErrorCodes.POSTING_RULE_VERSION_NOT_EDITABLE,
@@ -178,6 +194,7 @@ class PostingRuleService(
                     "Only a DRAFT version can be amended; a ${version.status} version is frozen.",
             )
         }
+        governance.requireCurrentVersion(version, command.expectedRowVersion)
         validateLegs(command.organisationId, command.legs)
         rules.replaceLegs(command.organisationId, version.id, command.legs, command.actorId)
         if (!rules.updateDraftVersion(
@@ -185,18 +202,20 @@ class PostingRuleService(
                 version.id,
                 command.effectiveFrom,
                 command.description,
+                command.expectedRowVersion,
                 command.actorId,
             )
         ) {
-            throw ConflictException(
-                code = PostingErrorCodes.POSTING_RULE_VERSION_STALE,
-                safeDetail = "The version changed while it was being amended; reload and retry.",
-            )
+            // Defence in depth rather than a reachable branch: the version was compared under the
+            // rule's lock above. Kept so the port's compare-and-set stays honest for any future
+            // caller that does not hold the lock, and raised through the same helper so the two
+            // refusals cannot answer a retrying caller differently.
+            throw PostingRuleGovernance.staleEdit()
         }
         return requireNotNull(rules.findVersion(command.organisationId, version.id))
     }
 
-    /** Submits a draft for approval. The maker's act. */
+    /** Submits a draft for approval. The maker's act, and only the version's author may do it. */
     @Transactional
     fun submit(command: PostingRuleVersionTransitionCommand): PostingRuleVersion =
         move(
@@ -204,18 +223,20 @@ class PostingRuleService(
             PostingRuleVersionTransition.SUBMIT,
             AccountingPermissions.POSTING_RULE_SUBMIT,
         ) { version ->
+            governance.requireMaker(version, command.actorId)
             PostingRulePolicy.requireWellFormed(rules.findLegs(command.organisationId, version.id))
         }
 
     /**
      * Approves and activates a submitted version, making room for it among the approved windows.
      *
-     * Refuses the actor who submitted it. Supersession happens here and nowhere else: an open-ended
-     * `ACTIVE` version's window is closed the day before the new one's `effective_from`, so the two
-     * never govern the same date. A successor that would start before that head began is refused,
-     * because closing the head's window would leave dates it already governed with no version - and
-     * so is one that would reach back into a window already closed by an earlier supersession or by
-     * retirement, which no amount of closing can make room for.
+     * Refuses the actor who submitted it and the actor who authored it. Supersession happens here
+     * and nowhere else: an open-ended `ACTIVE` version's window is closed the day before the new
+     * one's `effective_from`, so the two never govern the same date. A successor that would start
+     * before that head began is refused, because closing the head's window would leave dates it
+     * already governed with no version - and so is one that would reach back into a window already
+     * closed by an earlier supersession or by retirement, which no amount of closing can make room
+     * for.
      */
     @Transactional
     fun approve(command: PostingRuleVersionTransitionCommand): PostingRuleVersion {
@@ -229,7 +250,7 @@ class PostingRuleService(
             PostingRuleVersionTransition.APPROVE,
             permissionCode = null,
         ) { version ->
-            requireDifferentActorFromTheSubmitter(command, version)
+            governance.requireDifferentActorFromTheMaker(command, version)
             val legs = rules.findLegs(command.organisationId, version.id)
             PostingRulePolicy.requireWellFormed(legs)
             requirePostableAccounts(command.organisationId, legs, lockAccounts = true)
@@ -249,7 +270,32 @@ class PostingRuleService(
         return move(command, PostingRuleVersionTransition.REJECT, permissionCode = null)
     }
 
-    /** Retires the rule's active head on [PostingRuleVersionTransitionCommand.effectiveTo]. */
+    /**
+     * Withdraws a `DRAFT` version, with a mandatory reason, so it stops blocking the rule's next
+     * version. Its author may do it under `posting_rule.update`; anyone else needs
+     * `posting_rule.approve` - the recovery path for a draft whose author can no longer act on it.
+     */
+    @Transactional
+    fun cancel(command: PostingRuleVersionTransitionCommand): PostingRuleVersion {
+        requireReason(command)
+        return move(
+            command,
+            PostingRuleVersionTransition.CANCEL,
+            permissionCode = null,
+        ) { version ->
+            governance.requireMayCancel(command, version)
+        }
+    }
+
+    /**
+     * Retires the rule's active head on [PostingRuleVersionTransitionCommand.effectiveTo].
+     *
+     * The cutoff may not precede the tenant's current business date (issue #127). A backdated
+     * `effective_to` would leave every posting date between it and today with no approved version,
+     * so a prior-period correction that must re-post under the rule in force on its posting date
+     * could no longer be made - the same settled-history principle [makeRoomFor] states for
+     * supersession. Retiring on the business date itself is admitted: that day stays governed.
+     */
     @Transactional
     fun retire(command: PostingRuleVersionTransitionCommand): PostingRuleVersion {
         permissions.requireTenantPermission(
@@ -270,13 +316,14 @@ class PostingRuleService(
             permissionCode = null,
             closeOn = closeOn,
         ) { version ->
-            requireDifferentActorFromTheApprover(command, version)
+            governance.requireDifferentActorFromTheApprover(command, version)
             if (closeOn.isBefore(version.effectiveFrom)) {
                 throw InvalidOperationException(
                     code = PostingErrorCodes.POSTING_RULE_WINDOW_INVALID,
                     safeDetail = "A version cannot be retired before the date it took effect.",
                 )
             }
+            governance.requireNotBeforeTheBusinessDate(command.organisationId, closeOn)
         }
     }
 
@@ -573,13 +620,26 @@ class PostingRuleService(
      * The audit action a transition records, or null when the transition log is the whole record.
      *
      * Approval and retirement both change what a product module will post and are `CRITICAL`;
-     * submission and rejection move a draft that has never governed anything.
+     * submission and rejection move a draft that has never governed anything. Cancellation is
+     * audited, at `HIGH`, because it can withdraw another administrator's work.
      */
     private fun auditActionFor(transition: PostingRuleVersionTransition): String? =
         when (transition) {
-            PostingRuleVersionTransition.APPROVE -> AccountingAuditActions.POSTING_RULE_APPROVE
-            PostingRuleVersionTransition.RETIRE -> AccountingAuditActions.POSTING_RULE_RETIRE
-            else -> null
+            PostingRuleVersionTransition.APPROVE -> {
+                AccountingAuditActions.POSTING_RULE_APPROVE
+            }
+
+            PostingRuleVersionTransition.RETIRE -> {
+                AccountingAuditActions.POSTING_RULE_RETIRE
+            }
+
+            PostingRuleVersionTransition.CANCEL -> {
+                AccountingAuditActions.POSTING_RULE_CANCEL_VERSION
+            }
+
+            else -> {
+                null
+            }
         }
 
     /** Locks the owning rule, then re-reads the version so the decision uses the locked state. */
@@ -614,42 +674,6 @@ class PostingRuleService(
                 "A ${current.status} posting-rule version cannot undergo ${transition.name}.",
             cause = ex,
         )
-    }
-
-    private fun requireDifferentActorFromTheSubmitter(
-        command: PostingRuleVersionTransitionCommand,
-        version: PostingRuleVersion,
-    ) {
-        val submitter =
-            makers.lastActorFor(
-                command.organisationId,
-                version.id,
-                PostingRuleVersionTransition.SUBMIT,
-            )
-        if (submitter != null && submitter == command.actorId) {
-            throw ForbiddenOperationException(
-                code = PostingErrorCodes.POSTING_RULE_SELF_APPROVAL,
-                safeDetail = "The actor who submitted a posting-rule version cannot approve it.",
-            )
-        }
-    }
-
-    private fun requireDifferentActorFromTheApprover(
-        command: PostingRuleVersionTransitionCommand,
-        version: PostingRuleVersion,
-    ) {
-        val approver =
-            makers.lastActorFor(
-                command.organisationId,
-                version.id,
-                PostingRuleVersionTransition.APPROVE,
-            )
-        if (approver != null && approver == command.actorId) {
-            throw ForbiddenOperationException(
-                code = PostingErrorCodes.POSTING_RULE_SELF_APPROVAL,
-                safeDetail = "The actor who activated a posting-rule version cannot retire it.",
-            )
-        }
     }
 
     /**
@@ -898,12 +922,19 @@ data class CreatePostingRuleVersionCommand(
     val description: String? = null,
 )
 
-/** Replaces a draft version's content. */
+/**
+ * Replaces a draft version's content.
+ *
+ * [expectedRowVersion] is the version's `row_version` as the maker read it, and it precedes [legs]
+ * so a positional call site written before it existed fails to compile rather than passing its
+ * effective-from date where the row version belongs.
+ */
 data class AmendPostingRuleVersionCommand(
     val organisationId: UUID,
     val actorId: UUID,
     val versionId: UUID,
     val effectiveFrom: LocalDate,
+    val expectedRowVersion: Long,
     val legs: List<PostingRuleLeg>,
     val description: String? = null,
 )

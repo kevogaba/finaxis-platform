@@ -85,6 +85,9 @@ object AccountingAuditActions {
      */
     const val POSTING_RULE_RETIRE = "posting_rule.retire"
 
+    /** A draft posting-rule version was withdrawn, by its author or by a recovering checker. */
+    const val POSTING_RULE_CANCEL_VERSION = "posting_rule.cancel_version"
+
     /** A control-account reconciliation break was resolved or overridden. */
     const val RECONCILIATION_RESOLVE = "reconciliation.resolve"
 

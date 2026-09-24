@@ -73,6 +73,23 @@ class JournalSchemaIntegrationTests(
     }
 
     @Test
+    fun `the fingerprint's column comment describes the caller's inputs, never the legs`() {
+        // V16 restates V7's comment, which listed "legs" among the fingerprint's inputs - the
+        // opposite of ADR 0023 and of PostingFingerprint. The operator reads this, not the ERD.
+        val comment =
+            dsl
+                .resultQuery(
+                    "SELECT col_description('posting_request'::regclass, attnum) FROM " +
+                        "pg_attribute WHERE attrelid = 'posting_request'::regclass " +
+                        "AND attname = 'request_fingerprint'",
+                ).fetchOne(0, String::class.java)
+                .orEmpty()
+        assertTrue("ADR 0023" in comment, "the comment cites its authority: $comment")
+        assertTrue("Never the resolved legs" in comment, "and states the exclusion: $comment")
+        assertTrue("currency and legs" !in comment, "V7's wording is gone: $comment")
+    }
+
+    @Test
     fun `a zero or negative line amount is rejected`() {
         val tenant = fixture.createTenant("journal-amount")
         val journalId = fixture.insertJournalEntry(tenant)

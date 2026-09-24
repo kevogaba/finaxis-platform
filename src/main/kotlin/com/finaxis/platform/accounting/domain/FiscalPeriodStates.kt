@@ -15,9 +15,13 @@ data class FiscalPeriodKey(
  * These four are the set `docs/database/accounting-erd.md` adopts and
  * `chk_accounting_fiscal_period_status` enforces, so the enum and the column cannot drift.
  *
- * `SOFT_CLOSED` is deliberately absent: the distinction it would draw — postings blocked for
- * ordinary users but open to a privileged few — is already expressed by [CLOSED] plus
- * `journal.post_prior_period`, so it would add a state without adding a capability.
+ * `SOFT_CLOSED` is deliberately absent because it would create a second, implicit reopening path:
+ * a state meaning *"closed unless you hold the right code"* lets a privileged caller post into a
+ * period nobody reopened and no transition log records, where the foundation makes reopening an
+ * explicit, audited, maker-checker transition. It is **not** absent because [CLOSED] plus
+ * `journal.post_prior_period` already expresses it - no permission posts into a [CLOSED] period,
+ * which `PostingPeriodResolver` refuses regardless of permission. See the ERD's fiscal-period
+ * section, which records that earlier, mistaken rationale.
  */
 enum class FiscalPeriodStatus {
     /** Provisioned but not yet open for posting. */

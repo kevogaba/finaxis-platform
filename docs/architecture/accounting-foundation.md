@@ -391,7 +391,7 @@ that supersedes the ADR the invariant comes from, not a code review comment.
 | **INV-7** | Every journal is traceable to exactly one durable source identity, and re-submitting the same source identity produces no second journal | `posting_request.source_reference` with `UNIQUE (organisation_id, source_module, source_reference)` |
 | **INV-8** | Every accounting row is organisation-scoped, every parent reference is a composite foreign key on `(organisation_id, parent_id)`, and every branch-attributable row carries `branch_id` | Composite foreign keys with `uq_<table>_organisation_id` targets, per [the accounting schema](../database/accounting-erd.md) |
 | **INV-9** | A journal binds to exactly one fiscal period, selected by its `posting_date` and no other column, and a journal may only be created while that period is open | Period resolution inside the posting transaction; `fiscal_period_id` on entry and line; the fiscal-period FSM |
-| **INV-10** | A privileged accounting operation requires a checker whose identity is persisted and who is not the maker | Permission codes (#34), the maker-resolution ports, the `require_maker_checker_*` tenant settings |
+| **INV-10** | A privileged accounting operation requires a checker whose identity is persisted and who is not the maker | Permission codes (#34), the maker-resolution ports, and different-actor guards each accounting service applies **unconditionally** — no tenant setting switches them off |
 | **INV-11** | Product modules never write accounting persistence and never choose GL accounts. They express posting intent; accounting resolves it | Spring Modulith `allowedDependencies`, the `accounting::posting` named interface, ArchUnit hexagonal rules |
 | **INV-12** | The source mutation, the subsidiary-ledger effect and the general-ledger effect commit in one PostgreSQL transaction. No `REQUIRES_NEW` and no async step between them, and no outbox **as the handoff between them**. Registering an outbox row for a downstream notification inside that same transaction is permitted and expected — it is transactional, and it carries no financial effect | [ADR 0018](../adr/0018-financial-transaction-atomicity-invariant.md), `FinancialTransactionAtomicityFixture` probes |
 | **INV-13** | Every balance and rollup is a projection, rebuildable from `journal_line` by a documented deterministic query, and is never a statutory source of truth | The rebuild query shipped with `gl_account_daily_balance` (#47) and its reconciliation proof |
@@ -675,7 +675,20 @@ identity is persisted and who is **not** the maker (`INV-10`):
 | Close a fiscal period | Determines what can still be posted — but see the note below |
 | Post a manual journal entry | Bypasses posting-rule resolution by definition |
 | Reverse a posted journal | Changes reported figures for a period that may already be closed |
-| Change tenant accounting settings, excluding the functional currency | Reinterprets reporting behaviour |
+| Change tenant accounting settings, excluding the functional currency¹ | Reinterprets reporting behaviour |
+
+¹ Not yet an operation: no accounting tenant setting and no service to change one exist. The row
+states the rule such a setting must follow when it is introduced.
+
+**Accounting has no maker-checker tenant setting.** The two `require_maker_checker_*` keys in
+`TenantSettingCatalog` — `require_maker_checker_for_user_invites` and
+`require_maker_checker_for_branch_creation` — are lifecycle concerns and govern nothing here.
+Every accounting operation above enforces its different-actor rule unconditionally, in
+`GlAccountLifecycleService`, `FiscalPeriodLifecycleService`, `PostingRuleService`,
+`ManualJournalService` and `JournalReversalService`, so no tenant can configure a single principal
+into approving their own ledger change. Posting rules and manual journals also restrict amendment and submission to the
+draft's own author; see
+[accounting authorization](../security/accounting-authorization.md#posting-rules).
 
 **Two actors attach to the step that cannot be undone, not to every step in a reversible pair.**
 `INV-10` asks for a checker whose identity is persisted and who is not the maker. For a fiscal

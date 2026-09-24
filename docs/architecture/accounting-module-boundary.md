@@ -14,8 +14,14 @@ so later work cannot accidentally couple a product module to ledger persistence.
 ## What this module owns
 
 - The general ledger: chart of accounts, fiscal calendar, posting requests, journals and journal
-  lines — all designed in [the accounting schema](../database/accounting-erd.md). The chart of
-  accounts and the fiscal calendar exist; the journal tables do not yet.
+  lines — all designed in [the accounting schema](../database/accounting-erd.md). Every table
+  that document designs now exists: `V6` created the fiscal calendar and the chart of accounts,
+  `V7` the journal tables (`posting_request`, `journal_entry`, `journal_line`), `V8` the
+  posting-rule tables, `V9` control accounts and their reconciliation evidence, `V10` manual-journal
+  drafts, `V11`–`V13` their hardening (one control account per class, the manual-journal external
+  reference, the journal-line append guard), `V14` the daily-balance projection and `V15` the
+  branch trial-balance index. `V16` carries no schema change, only a corrected column comment,
+  and `V17` admits a `CANCELLED` posting-rule version.
 - The public posting API product modules consume.
 - The narrow ports foundation modules implement on accounting's behalf.
 
@@ -207,14 +213,13 @@ invariant the codebase already held rather than forcing a change.
 
 | Missing | Issue |
 | --- | --- |
-| Ledger balance projections and daily rollups | #47 |
-| Trial balance, GL ledger and financial-statement read models | #49, #50, #51 |
 | Accounting REST adapters | #52 |
 
-Phase A and B items that this table used to list — the fiscal-calendar and chart-of-accounts
+Every other item this table used to list has shipped: the fiscal-calendar and chart-of-accounts
 schema (#36), the accounting permission catalogue (#34) and the fiscal-period concurrency
-semantics (#35) — have shipped, together with the GL-account domain (#37), the chart-of-accounts
-FSM (#38) and the fiscal-period lifecycle (#39).
+semantics (#35), the GL-account domain (#37), the chart-of-accounts FSM (#38) and the
+fiscal-period lifecycle (#39) in Phases A and B; the daily-balance projection (#47) and the trial
+balance, GL ledger and financial-statement read models (#49, #50, #51) in Phase E.
 
 One consequence of that state is worth stating plainly: `HexagonalArchitectureTest`'s web-adapter
 allow-list will need extending when the first accounting controller lands in #52 — there is no

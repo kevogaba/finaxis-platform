@@ -193,6 +193,32 @@ roles are:
 | `journal.submit` | `journal.approve` |
 | `posting_rule.submit` | `posting_rule.approve` |
 
+### Posting rules
+
+Posting rules decide which accounts every automated posting lands in, so their maker-checker rule is
+the manual journal's, not merely the chart of accounts', and it is enforced unconditionally in
+`PostingRuleService` (issue #127):
+
+| Act | Who may do it | Refusal |
+| --- | --- | --- |
+| Amend a `DRAFT` version | Its author (`posting_rule_version.created_by`), from the current `row_version` | `POSTING_RULE_NOT_THE_MAKER`, `POSTING_RULE_VERSION_STALE` |
+| Submit a version | Its author | `POSTING_RULE_NOT_THE_MAKER` |
+| Approve | A holder of `posting_rule.approve` who is neither the author nor the last submitter | `POSTING_RULE_SELF_APPROVAL` |
+| Cancel a `DRAFT` version | Its author under `posting_rule.update`, or anyone under `posting_rule.approve`, with a reason | `POSTING_RULE_REASON_REQUIRED` |
+| Reject back to `DRAFT` | A holder of `posting_rule.approve`, with a reason; rejection activates nothing, so it carries no actor rule | `POSTING_RULE_REASON_REQUIRED` |
+| Retire the active head | A holder of `posting_rule.approve` who did not approve it, on or after the business date | `POSTING_RULE_SELF_APPROVAL`, `POSTING_RULE_WINDOW_INVALID` |
+
+There is **no shared drafting pool**: a second administrator who disagrees with a draft rejects it
+or writes their own version once it is settled, rather than editing or submitting someone else's.
+Cancellation is the recovery path that rule would otherwise remove: a rule admits one draft or
+pending version at a time, so a draft whose author has left would block it for good. Letting a
+checker withdraw it grants no one the power to approve their own legs, because a cancelled version
+never governs anything.
+Because only the author submits, the author and the submitter are the same actor for every version,
+and the approval's author check is defence in depth - it still refuses the author of a version
+submitted by someone else before the author guard existed. Every refusal is decided under the
+rule's row lock, which every version transition takes.
+
 **Fiscal-period open and close are deliberately not a maker-checker pair.** They are two operations
 in a lifecycle, not two halves of an approval of the same act, so one role legitimately holds both
 — `ACCOUNTING_APPROVER` does. Treating them as a pair would force a second actor to open the period

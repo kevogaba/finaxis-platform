@@ -25,9 +25,11 @@ interface AccountingBusinessDateLookup {
     fun currentBusinessDate(organisationId: UUID): AccountingBusinessDate?
 
     /**
-     * The same value, read under a shared lock on the `business_date` row, for the one caller that
-     * decides whether a posting may still commit into the day: `PostingPeriodResolver`, after the
-     * idempotency claim.
+     * The same value, read under a shared lock on the `business_date` row, for the callers whose
+     * decision must not outlive the day it was made on: `PostingPeriodResolver`, deciding after
+     * the idempotency claim whether a posting may still commit into the day, and
+     * `PostingRuleGovernance`, refusing a posting-rule retirement that would reach back before the
+     * business date.
      *
      * A locking read, because nothing weaker closes the window. The posting reads the business date
      * *before* its claim - the resolved dates are fingerprinted, and that read cannot lock, because

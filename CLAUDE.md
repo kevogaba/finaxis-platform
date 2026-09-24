@@ -110,6 +110,12 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   `idx_journal_line_account_date` answers a *tenant-wide* report, and asked for one branch it has
   to scan every account's whole window and discard the other branches; this one leads with the
   branch, so the report is a single index-only range scan of exactly that branch's rows
+- `V16__accounting_posting_request_fingerprint_comment.sql` — one `COMMENT ON COLUMN`, no schema
+  change: restates `posting_request.request_fingerprint` as the ADR 0023 digest of the caller's
+  asserted inputs, never the resolved legs, superseding `V7`'s frozen comment that listed the legs
+- `V17__accounting_posting_rule_version_cancelled.sql` — widens `chk_posting_rule_version_status`
+  for `CANCELLED`, the terminal state a withdrawn draft moves to, so a draft whose author can no
+  longer act on it does not block its rule's next version for good
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -135,8 +141,9 @@ and `docs/architecture/accounting-foundation.md` holds the invariants. `V6` crea
 calendar and the chart of accounts from it, `V7` the journal tables, `V8` the posting-rule tables,
 `V9` control accounts and their reconciliation evidence, `V10` manual-journal drafts, `V11` the
 one-control-account-per-class uniqueness, `V12` the manual-journal external reference, `V13`
-the journal-line append guard, `V14` the daily-balance projection, and `V15` the branch
-trial-balance index. Do not invent accounting
+the journal-line append guard, `V14` the daily-balance projection, `V15` the branch
+trial-balance index, `V16` the corrected fingerprint comment, and `V17` the cancelled draft
+state. Do not invent accounting
 tables or columns outside those documents.
 
 ## Authorization
