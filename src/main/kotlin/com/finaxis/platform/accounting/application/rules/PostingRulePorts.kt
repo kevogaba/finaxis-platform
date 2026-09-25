@@ -89,12 +89,18 @@ interface PostingRuleVersionStore {
     /** Inserts a `DRAFT` version and returns it with its generated id. */
     fun createVersion(version: NewPostingRuleVersion): PostingRuleVersion
 
-    /** Replaces the editable fields of a version: effective-from and description. Draft only. */
+    /**
+     * Replaces the editable fields of a version: effective-from and description. Draft only.
+     *
+     * A compare-and-set on [expectedRowVersion] as well as on the `DRAFT` status: false when the
+     * version has left `DRAFT` or has been amended since the caller read it at that row version.
+     */
     fun updateDraftVersion(
         organisationId: UUID,
         versionId: UUID,
         effectiveFrom: LocalDate,
         description: String?,
+        expectedRowVersion: Long,
         actorId: UUID,
     ): Boolean
 

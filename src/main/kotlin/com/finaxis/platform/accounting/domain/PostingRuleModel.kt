@@ -32,6 +32,13 @@ enum class PostingRuleVersionStatus {
     /** Closed deliberately with no successor. */
     RETIRED,
 
+    /**
+     * Withdrawn while still a draft, so it never governed anything and never will. Terminal, and
+     * the only way a draft whose author can no longer act on it stops blocking its rule's next
+     * version (issue #127).
+     */
+    CANCELLED,
+
     ;
 
     /** Whether the version has been approved and may resolve postings inside its window. */
@@ -55,6 +62,9 @@ enum class PostingRuleVersionTransition {
 
     /** In force to closed with no successor. */
     RETIRE,
+
+    /** Draft to withdrawn, with a reason: by its author, or by a checker recovering an orphan. */
+    CANCEL,
 }
 
 /** A posting-rule version as the transition executor sees it. */
@@ -120,6 +130,11 @@ object PostingRuleVersionLifecycle {
                     PostingRuleVersionTransition.RETIRE,
                     PostingRuleVersionStatus.ACTIVE,
                     PostingRuleVersionStatus.RETIRED,
+                ),
+                definition(
+                    PostingRuleVersionTransition.CANCEL,
+                    PostingRuleVersionStatus.DRAFT,
+                    PostingRuleVersionStatus.CANCELLED,
                 ),
             ),
         )
@@ -197,6 +212,7 @@ data class PostingRuleVersion(
     val description: String?,
     val statusReason: String? = null,
     val rowVersion: Long = 0,
+    val createdBy: UUID? = null,
 ) {
     /** Whether the version governs [postingDate]: approved, and the date inside its window. */
     fun governs(postingDate: LocalDate): Boolean =

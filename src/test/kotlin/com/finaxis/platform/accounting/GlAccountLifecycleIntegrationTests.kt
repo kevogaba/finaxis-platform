@@ -25,6 +25,7 @@ import com.finaxis.platform.common.application.ApplicationException
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
+import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
 import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.MEMBERSHIP_PERMISSION
 import com.finaxis.platform.jooq.tables.references.PERMISSION
@@ -591,7 +592,7 @@ class GlAccountLifecycleIntegrationTests(
                         organisationId = organisationId,
                         actorId = MAKER,
                         ruleId = ruleId,
-                        effectiveFrom = LocalDate.of(2026, 1, 1),
+                        effectiveFrom = businessDate(organisationId),
                         legs =
                             listOf(
                                 ruleLeg(1, PostingSide.DEBIT, account.id),
@@ -615,12 +616,22 @@ class GlAccountLifecycleIntegrationTests(
                     actorId = MAKER,
                     versionId = version.id,
                     reason = "Superseded by manual process",
-                    effectiveTo = LocalDate.of(2026, 6, 30),
+                    // Retirement may not reach back before the business date (issue #127).
+                    effectiveTo = businessDate(organisationId),
                 ),
             )
         }
         return account
     }
+
+    private fun businessDate(organisationId: UUID): LocalDate =
+        requireNotNull(
+            dsl
+                .select(BUSINESS_DATE.CURRENT_BUSINESS_DATE)
+                .from(BUSINESS_DATE)
+                .where(BUSINESS_DATE.ORGANISATION_ID.eq(organisationId))
+                .fetchOne(BUSINESS_DATE.CURRENT_BUSINESS_DATE),
+        )
 
     /** A `DRAFT` account submitted by [MAKER] and approved by [checker], landing in `ACTIVE`. */
     private fun submittedAndApproved(

@@ -56,7 +56,9 @@ class PostingRuleWindowIntegrationTests(
                 tenant,
                 fx.draftVersion(tenant, from = tenant.businessDate.minusMonths(6)),
             )
-        val lastGoverned = tenant.businessDate.minusMonths(1)
+        // Retirement may not reach back before the business date (issue #127), so the retired
+        // window ends today and the successor, where one activates, takes effect tomorrow.
+        val lastGoverned = tenant.businessDate
         val retired =
             withRequestContext {
                 fx.retire(
@@ -114,7 +116,9 @@ class PostingRuleWindowIntegrationTests(
                 tenant,
                 fx.draftVersion(tenant, from = tenant.businessDate.minusMonths(6)),
             )
-        val lastGoverned = tenant.businessDate.minusMonths(1)
+        // Retirement may not reach back before the business date (issue #127), so the retired
+        // window ends today and the successor, where one activates, takes effect tomorrow.
+        val lastGoverned = tenant.businessDate
         withRequestContext {
             fx.retire(
                 tenant,
