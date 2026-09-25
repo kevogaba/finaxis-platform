@@ -88,10 +88,8 @@ jobs:
           docker push "$SHA_TAG"
           docker tag "$SOURCE_IMAGE" "$FLOATING_TAG"
           docker push "$FLOATING_TAG"
-          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
-            docker tag "$SOURCE_IMAGE" "${IMAGE_REPO}:latest"
-            docker push "${IMAGE_REPO}:latest"
-          fi
+          docker tag "$SOURCE_IMAGE" "${IMAGE_REPO}:latest"
+          docker push "${IMAGE_REPO}:latest"
 
       - name: Report the built image
         run: docker images "$IMAGE_REPO" --format '{{.Repository}}:{{.Tag}} {{.Size}}'

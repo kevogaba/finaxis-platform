@@ -30,7 +30,7 @@ server:
     max-keep-alive-requests: ${FINAXIS_TOMCAT_MAX_KEEP_ALIVE_REQUESTS:100}
     max-parameter-count: 1000
     accesslog:
-      enabled: false
+      enabled: ${FINAXIS_TOMCAT_ACCESSLOG_ENABLED:false}
 spring:
   application:
     name: platform
@@ -305,6 +305,7 @@ finaxis:
     paths:
       enabled: true
       excluded:
+        - /
         - /actuator/health/**
         - /actuator/prometheus
         - /error
