@@ -1124,6 +1124,15 @@ private class UserProvisioningFake :
         organisationId: UUID,
         branchId: UUID,
     ): UUID? = null
+
+    override fun updateBranch(command: UpdateBranchCommand) = false
+
+    override fun claimOpenParent(
+        organisationId: UUID,
+        parentBranchId: UUID,
+    ) = true
+
+    override fun lockBranchHierarchy(organisationId: UUID) = Unit
 }
 
 private class UserProvisioningEventCapture : TransitionEventPublisher {

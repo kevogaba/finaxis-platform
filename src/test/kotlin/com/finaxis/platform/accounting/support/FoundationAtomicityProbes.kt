@@ -1,6 +1,7 @@
 package com.finaxis.platform.accounting.support
 
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
+import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE_HISTORY
 import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT_DAILY_BALANCE
@@ -164,6 +165,20 @@ object FoundationAtomicityProbes {
                 .where(REFERENCE_SEQUENCE.ORGANISATION_ID.eq(organisationId))
                 .and(REFERENCE_SEQUENCE.SEQUENCE_CODE.eq("JOURNAL"))
                 .fetchOne(REFERENCE_SEQUENCE.NEXT_VALUE) ?: 0L
+        }
+
+    /**
+     * One branch's row version. A branch update changes the row in place, so counting rows cannot
+     * see it roll back; every write to the branch bumps this counter, and it is the probe for the
+     * in-place half of the branch update (issue #165).
+     */
+    fun branchRowVersion(branchId: UUID): AtomicityProbe =
+        AtomicityProbe("branch.row_version[$branchId]") { dsl ->
+            dsl
+                .select(BRANCH.ROW_VERSION)
+                .from(BRANCH)
+                .where(BRANCH.ID.eq(branchId))
+                .fetchOne(BRANCH.ROW_VERSION) ?: 0L
         }
 
     /** Manual-journal drafts for one organisation. */

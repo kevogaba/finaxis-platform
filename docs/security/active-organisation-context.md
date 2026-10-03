@@ -87,10 +87,10 @@ The selected branch **narrows operational authority; it does not scope tenant ad
   branch selected only tenant-scope assignments apply. This is what `@PreAuthorize` and the
   `/auth/me` permission list read, so operational work stays narrowed to the working branch.
 - *Administration of branches, branch assignments and BRANCH-scope role assignments* is **not**
-  hidden by the selected branch. A pinned caller can `GET`/submit/activate/suspend/reactivate/
-  close any branch of the tenant, and use `/tenant/branch-assignments` and BRANCH-scope
-  `/tenant/role-assignments` against any branch, provided the permission check passes. Previously
-  these returned a safe `404` for any branch other than the selected one (issue #154).
+  hidden by the selected branch. A pinned caller can `GET`/update (`PATCH`)/submit/activate/
+  suspend/reactivate/close any branch of the tenant, and use `/tenant/branch-assignments` and
+  BRANCH-scope `/tenant/role-assignments` against any branch, provided the permission check
+  passes. Previously these returned a safe `404` for any branch other than the selected one (issue #154).
 - *Authorization is still evaluated at the right scope.* The controller's `@PreAuthorize` is only
   a coarse gate on the selected-branch authority set. The application layer then decides, per
   target: branch lifecycle transitions and BRANCH-scope role assignment check the permission

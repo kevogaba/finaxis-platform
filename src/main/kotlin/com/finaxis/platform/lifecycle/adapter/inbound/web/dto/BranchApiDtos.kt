@@ -7,6 +7,7 @@ import jakarta.validation.constraints.Pattern
 import jakarta.validation.constraints.Size
 import java.time.Instant
 import java.time.LocalDate
+import java.util.Optional
 import java.util.UUID
 
 /** Request payload for creating a branch draft. */
@@ -33,6 +34,36 @@ data class CreateBranchRequest(
     @field:Schema(example = "Africa/Nairobi")
     val timezone: String,
     val address: Map<String, String> = emptyMap(),
+)
+
+// `@NotBlank` rejects null, and an optional field is allowed to be absent. `[\s\S]` rather than
+// `.` so a line break inside a value is accepted, as `@NotBlank` (used on create) accepts it, and
+// the pattern stays valid in the published JSON Schema.
+private const val NOT_BLANK = "[\\s\\S]*\\S[\\s\\S]*"
+
+/**
+ * Request payload for updating a draft or active branch.
+ *
+ * Every field is optional and an absent field is left unchanged. `parent_branch_id` distinguishes
+ * absent from an explicit JSON `null`, which detaches the branch from its parent; the other fields
+ * have no such value, so `null` is the same as absent. The branch code and type cannot be changed.
+ */
+data class UpdateBranchRequest(
+    @field:Pattern(regexp = NOT_BLANK, message = "must not be blank")
+    @field:Size(min = 2, max = 100)
+    @field:Schema(example = "Riverside Branch")
+    val branchName: String? = null,
+    @field:Schema(
+        type = "string",
+        format = "uuid",
+        nullable = true,
+        description = "Absent leaves the parent alone; an explicit null detaches the branch.",
+    )
+    val parentBranchId: Optional<UUID>? = null,
+    @field:Pattern(regexp = NOT_BLANK, message = "must not be blank")
+    @field:Schema(example = "Africa/Nairobi")
+    val timezone: String? = null,
+    val address: Map<String, String>? = null,
 )
 
 /** Request payload for submitting a branch draft for approval. */
