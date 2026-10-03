@@ -1,14 +1,17 @@
 package com.finaxis.platform.common.audit
 
 import com.finaxis.platform.common.application.ResourceNotFoundException
+import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import org.springframework.stereotype.Service
 import java.time.Instant
 import java.util.UUID
 
 /**
- * Read-side application service for paginated audit event queries. Every method is scoped to a
- * tenant; there is no cross-organisation lookup path.
+ * Read-side application service for paginated audit event queries. Every tenant method is scoped
+ * to, and authorised in, one organisation; there is no cross-organisation lookup path. The two
+ * `*ForPlatform` methods are the sole exception: they read one named organisation's log but
+ * authorise the actor in the reserved PLATFORM organisation instead.
  */
 @Service
 class AuditQueryService(
@@ -22,11 +25,20 @@ class AuditQueryService(
         actorId: UUID,
     ): AuditEventDetail {
         permissionGuard.requireTenantPermission(actorId, organisationId, "audit.view")
-        return queries.findById(eventId, organisationId)
-            ?: throw ResourceNotFoundException(
-                code = "audit_event_not_found",
-                safeDetail = "Audit event not found: $eventId",
-            )
+        return findOrThrow(eventId, organisationId)
+    }
+
+    /**
+     * Gets one detailed audit event of [organisationId] (a tenant, or the PLATFORM organisation
+     * itself) for a platform operator, who must hold `audit.view` in the PLATFORM organisation.
+     */
+    fun getForPlatform(
+        eventId: UUID,
+        organisationId: UUID,
+        actorId: UUID,
+    ): AuditEventDetail {
+        requirePlatformAuditView(actorId)
+        return findOrThrow(eventId, organisationId)
     }
 
     /** Lists audit events for a tenant, most recent first. */
@@ -110,6 +122,36 @@ class AuditQueryService(
         actorId: UUID,
     ): AuditEventPage {
         permissionGuard.requireTenantPermission(actorId, filter.organisationId, "audit.view")
+        return boundedSearch(filter)
+    }
+
+    /**
+     * Returns a bounded page of the log of [AuditEventFilter.organisationId] (a tenant, or the
+     * PLATFORM organisation itself) for a platform operator, who must hold `audit.view` in the
+     * PLATFORM organisation. Tenant users never reach this path.
+     */
+    fun searchForPlatform(
+        filter: AuditEventFilter,
+        actorId: UUID,
+    ): AuditEventPage {
+        requirePlatformAuditView(actorId)
+        return boundedSearch(filter)
+    }
+
+    private fun requirePlatformAuditView(actorId: UUID) =
+        permissionGuard.requireTenantPermission(actorId, PlatformOrganisation.ID, "audit.view")
+
+    private fun findOrThrow(
+        eventId: UUID,
+        organisationId: UUID,
+    ): AuditEventDetail =
+        queries.findById(eventId, organisationId)
+            ?: throw ResourceNotFoundException(
+                code = "audit_event_not_found",
+                safeDetail = "Audit event not found: $eventId",
+            )
+
+    private fun boundedSearch(filter: AuditEventFilter): AuditEventPage {
         if (filter.page < 0) {
             throw InvalidPageRequestException()
         }
