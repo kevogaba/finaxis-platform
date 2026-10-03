@@ -22,6 +22,7 @@ import com.finaxis.platform.lifecycle.application.ApproveUserCommand
 import com.finaxis.platform.lifecycle.application.BranchDraftResult
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.CreateBranchCommand
+import com.finaxis.platform.lifecycle.application.ReturnBranchCommand
 import com.finaxis.platform.lifecycle.application.SubmitBranchForApprovalCommand
 import com.finaxis.platform.lifecycle.application.UserApprovalResult
 import com.finaxis.platform.lifecycle.application.UserProvisioningService
@@ -54,6 +55,8 @@ import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.post
 import java.time.Instant
 import java.util.UUID
+
+private const val RETURN_BODY = "{\"reason\":\"Branch code has a typo.\"}"
 
 /**
  * Web contract of the platform-checker routes (#153): coarse authority gate, platform context
@@ -401,6 +404,104 @@ class PlatformTenantCheckerControllerTests
                         with(authentication(platformToken(emptySet())))
                     }.andExpect { status { isBadRequest() } }
             }
+        }
+
+        @Test
+        fun `platform return passes the path tenant the reason and the platform scope`() {
+            stubBranchDetail("DRAFT")
+
+            returnBranch(setOf("branch.activate")).andExpect {
+                status { isOk() }
+                jsonPath("$.id") { value(branchId.toString()) }
+                jsonPath("$.status") { value("DRAFT") }
+            }
+
+            verify(branchProvisioningService).returnForChanges(
+                argThat<ReturnBranchCommand> {
+                    organisationId == tenantId &&
+                        this.branchId == this@PlatformTenantCheckerControllerTests.branchId &&
+                        actorId == this@PlatformTenantCheckerControllerTests.actorId &&
+                        reason == "Branch code has a typo." &&
+                        scope == ActingScope.PLATFORM
+                },
+            )
+            // Never the branch.view gated read: a role holding only the mutation's permission
+            // would otherwise have the return rolled back.
+            verify(foundationQueryService)
+                .getBranchAfterAuthorizedMutation(eq(tenantId), eq(branchId))
+            verify(foundationQueryService, never()).getBranch(any(), any(), any())
+        }
+
+        @Test
+        fun `platform return is open to the maker or the checker authority and nobody else`() {
+            stubBranchDetail("DRAFT")
+
+            listOf("branch.create", "branch.activate").forEach { authority ->
+                returnBranch(setOf(authority)).andExpect { status { isOk() } }
+            }
+            returnBranch(setOf("audit.view")).andExpect { status { isForbidden() } }
+            // A tenant context never reaches the platform route, whatever it holds.
+            mockMvc
+                .post("${ApiPaths.PLATFORM_TENANTS}/$tenantId/branches/$branchId/return") {
+                    contentType = MediaType.APPLICATION_JSON
+                    content = RETURN_BODY
+                    with(authentication(tenantToken(setOf("branch.activate", "branch.create"))))
+                }.andExpect { status { isForbidden() } }
+
+            verify(branchProvisioningService, times(2)).returnForChanges(any())
+        }
+
+        @Test
+        fun `platform return requires a body with a reason of three to 500 characters`() {
+            listOf(null, "{}", "{\"reason\":null}").forEach { body ->
+                returnBranch(setOf("branch.activate"), body).andExpect {
+                    status { isBadRequest() }
+                    jsonPath("$.code") { value("invalid_json") }
+                }
+            }
+            listOf("", "  ", "ab", "x".repeat(501)).forEach { reason ->
+                returnBranch(
+                    setOf("branch.activate"),
+                    apiJsonCodec.mapper.writeValueAsString(mapOf("reason" to reason)),
+                ).andExpect {
+                    status { isBadRequest() }
+                    jsonPath("$.code") { value("validation_failed") }
+                }
+            }
+
+            verify(branchProvisioningService, never()).returnForChanges(any())
+        }
+
+        @Test
+        fun `platform return maps the service refusals and validates the idempotency key`() {
+            listOf(
+                ForbiddenOperationException() to 403,
+                ResourceNotFoundException() to 404,
+                ConflictException() to 409,
+            ).forEach { (refusal, expected) ->
+                doThrow(refusal).whenever(branchProvisioningService).returnForChanges(any())
+                returnBranch(setOf("branch.activate")).andExpect {
+                    status { isEqualTo(expected) }
+                }
+            }
+            val path = "${ApiPaths.PLATFORM_TENANTS}/$tenantId/branches/$branchId/return"
+            mockMvc.post(path).andExpect { status { isUnauthorized() } }
+            mockMvc
+                .post(path) {
+                    header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, "not-a-uuid")
+                    with(authentication(platformToken(emptySet())))
+                }.andExpect { status { isBadRequest() } }
+        }
+
+        private fun returnBranch(
+            authorities: Set<String>,
+            body: String? = RETURN_BODY,
+        ) = mockMvc.post("${ApiPaths.PLATFORM_TENANTS}/$tenantId/branches/$branchId/return") {
+            if (body != null) {
+                contentType = MediaType.APPLICATION_JSON
+                content = body
+            }
+            with(authentication(platformToken(authorities)))
         }
 
         private val branchActions =

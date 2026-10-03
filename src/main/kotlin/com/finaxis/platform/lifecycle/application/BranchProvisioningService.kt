@@ -224,6 +224,67 @@ class BranchProvisioningService(
         }
     }
 
+    /**
+     * Returns a pending branch to draft with a reason (ADR 0029, 3b). One transition, two intents,
+     * told apart by the actor: the branch's creator or latest submitter withdraws their own request
+     * and needs `branch.create`; anyone else returns it as a checker and needs `branch.activate`.
+     * A returned branch can be amended and resubmitted, and keeps its code and its creator.
+     *
+     * The permission asked depends on the class of actor, so classifying comes first; it reveals
+     * nothing, and a branch absent from the path organisation has no maker and so classifies as a
+     * return. Then permission, platform-organisation and branch 404, the platform checker window
+     * (a checker step only; a withdrawal grants nothing), the organisation state, and last the
+     * FSM's own state conflict.
+     */
+    @Transactional
+    fun returnForChanges(command: ReturnBranchCommand) {
+        val withdrawing =
+            isBranchMaker(
+                command.actorId,
+                command.organisationId,
+                command.branchId,
+                includeSubmitter = true,
+            )
+        requireBranchPermission(
+            command.actorId,
+            command.organisationId,
+            command.branchId,
+            if (withdrawing) "branch.create" else "branch.activate",
+            command.scope,
+        )
+        val platformChecker = command.scope == ActingScope.PLATFORM && !withdrawing
+        if (platformChecker) requirePlatformCheckerOpen(command.organisationId)
+        requireOrganisationAllowsBranch(command.organisationId)
+        lifecycleService.transition(
+            BranchTransitionCommand(
+                command.organisationId,
+                command.branchId,
+                BranchLifecycleTransition.RETURN_FOR_CHANGES,
+                TransitionCommand(reason = command.reason),
+            ),
+        )
+        // A withdrawal never carries the checker marker, even on the platform route: the marker
+        // means "an approval the tenant did not make for itself" in ADR 0028's review filter.
+        if (withdrawing) {
+            audit(
+                command.organisationId,
+                command.branchId.toString(),
+                "branch.withdraw",
+                command.actorId.toString(),
+                reason = command.reason,
+            )
+        } else if (platformChecker) {
+            audit(
+                command.organisationId,
+                command.branchId.toString(),
+                "branch.return_for_changes_as_platform_checker",
+                command.actorId.toString(),
+                mapOf(CHECKER_SCOPE to ActingScope.PLATFORM.name),
+                command.reason,
+            )
+        }
+    }
+
     /** Suspends a branch, preventing new operational assignments. */
     @Transactional
     fun suspend(command: SuspendBranchCommand) {
@@ -373,16 +434,29 @@ class BranchProvisioningService(
      * it submitted itself, so no single platform actor can both put a tenant's draft up for
      * approval and approve it (ADR 0028). The tenant route keeps the creator rule alone.
      */
-    private fun actedAsMaker(command: ActivateBranchCommand): Boolean {
-        if (command.actorId == SystemActor.ID) return false
-        val creator = lifecycleStore.createdBy(command.organisationId, command.branchId)
+    private fun actedAsMaker(command: ActivateBranchCommand): Boolean =
+        isBranchMaker(
+            command.actorId,
+            command.organisationId,
+            command.branchId,
+            includeSubmitter = command.scope == ActingScope.PLATFORM,
+        )
+
+    /**
+     * Whether [actorId] made the branch: its creator, or when [includeSubmitter] the actor of its
+     * latest SUBMIT. Read scoped to [organisationId], so a branch of another tenant has no maker.
+     */
+    private fun isBranchMaker(
+        actorId: java.util.UUID,
+        organisationId: java.util.UUID,
+        branchId: java.util.UUID,
+        includeSubmitter: Boolean,
+    ): Boolean {
+        if (actorId == SystemActor.ID) return false
+        val creator = lifecycleStore.createdBy(organisationId, branchId)
         val submitter =
-            if (command.scope == ActingScope.PLATFORM) {
-                lifecycleStore.submittedBy(command.organisationId, command.branchId)
-            } else {
-                null
-            }
-        return command.actorId == creator || command.actorId == submitter
+            if (includeSubmitter) lifecycleStore.submittedBy(organisationId, branchId) else null
+        return actorId == creator || actorId == submitter
     }
 
     /**
@@ -457,6 +531,7 @@ class BranchProvisioningService(
         action: String,
         actorId: String,
         metadata: Map<String, String> = emptyMap(),
+        reason: String? = null,
     ) {
         auditService.record(
             AuditCommand(
@@ -467,6 +542,7 @@ class BranchProvisioningService(
                 resourceType = "BRANCH",
                 resourceId = resourceId,
                 outcome = AuditOutcome.SUCCESS,
+                reason = reason,
                 metadata = metadata,
             ),
         )

@@ -37,6 +37,50 @@ class FoundationLifecycleTransitionTests {
     }
 
     @Test
+    fun `a pending branch returns to draft through exactly one declared edge`() {
+        val graph =
+            FoundationLifecycleDefinitions.branchGraph(
+                prerequisites = allowingPrerequisites,
+                organisationId = ORGANISATION_ID,
+                branchId = BRANCH_ID,
+            )
+
+        val returns =
+            graph.definitions().filter {
+                it.transition == BranchLifecycleTransition.RETURN_FOR_CHANGES
+            }
+
+        assertEquals(
+            listOf(BranchLifecycleState.PENDING_APPROVAL to BranchLifecycleState.DRAFT),
+            returns.map { it.from to it.to },
+        )
+        // Nothing else leaves a pending branch for DRAFT: one transition serves both intents.
+        assertEquals(
+            listOf(BranchLifecycleTransition.RETURN_FOR_CHANGES),
+            graph
+                .definitions()
+                .filter { it.to == BranchLifecycleState.DRAFT }
+                .map { it.transition },
+        )
+        // Every other state refuses it, and SUBMIT still resubmits the returned draft.
+        BranchLifecycleState.entries
+            .filter { it != BranchLifecycleState.PENDING_APPROVAL }
+            .forEach { state ->
+                assertFailsWith<TransitionException> {
+                    graph.requireDefinition(state, BranchLifecycleTransition.RETURN_FOR_CHANGES)
+                }
+            }
+        assertEquals(
+            BranchLifecycleState.PENDING_APPROVAL,
+            graph
+                .requireDefinition(
+                    BranchLifecycleState.DRAFT,
+                    BranchLifecycleTransition.SUBMIT,
+                ).to,
+        )
+    }
+
+    @Test
     fun `user lifecycle accepts only graph-declared transitions`() {
         assertMatrix(
             graph =

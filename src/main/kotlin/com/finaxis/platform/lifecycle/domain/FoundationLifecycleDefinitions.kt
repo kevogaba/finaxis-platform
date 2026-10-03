@@ -51,6 +51,7 @@ enum class BranchLifecycleState {
 enum class BranchLifecycleTransition {
     SUBMIT,
     ACTIVATE,
+    RETURN_FOR_CHANGES,
     SUSPEND,
     SUSPEND_DRAFT,
     SUSPEND_PENDING_APPROVAL,
@@ -295,6 +296,15 @@ object FoundationLifecycleDefinitions {
                         listOf(
                             branchActivationGuard(prerequisites, organisationId),
                         ),
+                ),
+                // One edge serves the checker's return and the maker's withdrawal (ADR 0029): the
+                // service tells them apart by actor. Internal event only, like the other way out
+                // of a pending branch, SUSPEND_PENDING_APPROVAL.
+                definition(
+                    BranchLifecycleTransition.RETURN_FOR_CHANGES,
+                    BranchLifecycleState.PENDING_APPROVAL,
+                    BranchLifecycleState.DRAFT,
+                    internalEventFactories(),
                 ),
             )
 

@@ -206,6 +206,15 @@ data class ActivateBranchCommand(
     val scope: ActingScope = ActingScope.TENANT,
 )
 
+/** Returns a pending branch to draft: a checker's return or the maker's own withdrawal. */
+data class ReturnBranchCommand(
+    val organisationId: UUID,
+    val branchId: UUID,
+    val reason: String,
+    val actorId: UUID,
+    val scope: ActingScope = ActingScope.TENANT,
+)
+
 /** Suspends an active branch. */
 data class SuspendBranchCommand(
     val organisationId: UUID,

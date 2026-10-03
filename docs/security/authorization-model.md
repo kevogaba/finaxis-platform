@@ -123,6 +123,28 @@ evaluated at the **target branch**, not the selected one (#154), by
 `BranchProvisioningService.update` rather than only at the controller, and a missing or foreign
 branch is `404` only after that check passes.
 
+## Branch return and withdrawal
+
+`POST /branches/{branch_id}/return` (and the platform route) is one transition, `PENDING_APPROVAL`
+to `DRAFT`, that asks for a different permission depending on who the caller is relative to the
+branch, with no new permission code (ADR 0029, 3b):
+
+| Caller | Intent | Permission | Scope |
+| --- | --- | --- | --- |
+| The branch's creator, or the actor of its latest `SUBMIT` | withdraw | `branch.create` | tenant: the target branch; platform: the platform organisation |
+| Anyone else | return as a checker | `branch.activate` | tenant: the target branch; platform: the platform organisation |
+
+The caller is classified first, from `created_by` and the latest submitter **read inside the path
+organisation**, so a branch of another tenant or an unknown id classifies as a return and reads the
+same. Classifying only chooses which permission is asked; the permission is then checked in the
+application service (`BranchProvisioningService.returnForChanges`), before any existence signal. A
+creator who also holds `branch.activate` is still a maker and needs `branch.create`; a maker who
+has lost `branch.create` cannot withdraw, but a non-maker holding `branch.activate` can still
+return. The controller's coarse gate is `branch.create` **or** `branch.activate` because it cannot
+know the class. A platform actor who returns as a checker is held to the ADR 0028 window and is
+audited with `checkerScope = PLATFORM`; a platform withdrawal is not windowed and carries no
+marker.
+
 ## Maker-checker and the platform checker
 
 Approvals are maker-checker: the actor that created a thing cannot approve it, whatever its
@@ -151,6 +173,7 @@ approving platform user's own account as its initial administrator cannot be app
 | `POST /platform/tenants/{tenant_id}/memberships/{membership_id}/activate` | `user.approve` | PLATFORM |
 | `POST /platform/tenants/{tenant_id}/branches/{branch_id}/activate` | `branch.activate` | PLATFORM |
 | `POST /platform/tenants/{tenant_id}/branches/{branch_id}/submit` | `branch.create` | PLATFORM |
+| `POST /platform/tenants/{tenant_id}/branches/{branch_id}/return` | `branch.activate` (checker) or `branch.create` (maker) | PLATFORM |
 | `POST /platform/tenants/{tenant_id}/branches` | `branch.create` | PLATFORM |
 
 Order of checks on every one of them: platform context, then the platform permission, then the
@@ -161,8 +184,9 @@ to approve or activate, and `ACTIVE` or `PROVISIONING` to create or submit a bra
 
 Every use is attributed to the platform actor in the tenant's audit log: the transition row, the
 `user.approve` row with metadata `checkerScope = PLATFORM`, and for a branch an extra
-`branch.submit_as_platform_checker` (submission) or `branch.activate_as_platform_checker`
-(activation) row, each with the same metadata. Filter on either to review them.
+`branch.submit_as_platform_checker` (submission), `branch.activate_as_platform_checker` (activation)
+or `branch.return_for_changes_as_platform_checker` (a branch it returned) row, each with the same
+metadata. Filter on any of them to review them.
 
 ## Caching and invalidation
 
