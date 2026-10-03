@@ -1,6 +1,5 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
-import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
@@ -324,7 +323,6 @@ class RoleAssignmentController(
     ) {
         if (scopeType == RoleAssignmentScopeType.BRANCH) {
             val targetBranchId = requireNotNull(branchId)
-            verifyBranchContext(caller, targetBranchId)
             permissionGuard.requireBranchPermission(
                 caller.actorId,
                 caller.activeOrganisationId,
@@ -338,15 +336,6 @@ class RoleAssignmentController(
             caller.activeOrganisationId,
             permissionCode,
         )
-    }
-
-    private fun verifyBranchContext(
-        caller: TenantCaller,
-        targetBranchId: UUID,
-    ) {
-        if (caller.activeBranchId != null && caller.activeBranchId != targetBranchId) {
-            throw ResourceNotFoundException(safeDetail = "Role assignment not found")
-        }
     }
 
     private fun RoleAssignmentSummary.toResponse() =

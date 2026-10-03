@@ -41,6 +41,10 @@ import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.ResponseStatus
 import org.springframework.web.bind.annotation.RestController
+import tools.jackson.core.JsonParser
+import tools.jackson.databind.DeserializationContext
+import tools.jackson.databind.ValueDeserializer
+import tools.jackson.databind.annotation.JsonDeserialize
 import java.util.UUID
 
 /**
@@ -105,12 +109,42 @@ data class SelectOrganisationResponse(
 
 /**
  * Request body for selecting the active branch within the active organisation.
+ *
+ * Omit `branch_id` (or send `null`) to clear the branch selection and work at institution level.
  */
 data class SelectBranchRequest(
-    @field:NotNull
-    @field:Schema(name = "branch_id")
-    val branchId: UUID?,
+    @field:Schema(
+        name = "branch_id",
+        nullable = true,
+        requiredMode = Schema.RequiredMode.NOT_REQUIRED,
+        description =
+            "Assigned branch to select. Omit or send null to clear the selection and obtain an " +
+                "institution-level (no branch) context.",
+    )
+    @field:JsonDeserialize(using = StrictUuidDeserializer::class)
+    val branchId: UUID? = null,
 )
+
+/**
+ * Reads a JSON string as a UUID and rejects anything else, including a blank string. The default
+ * UUID coercion reads `""` as null, which for `select-branch` would silently clear the pin; only
+ * an omitted or JSON-null `branch_id` may do that.
+ */
+internal class StrictUuidDeserializer : ValueDeserializer<UUID>() {
+    override fun deserialize(
+        parser: JsonParser,
+        context: DeserializationContext,
+    ): UUID {
+        val text = parser.valueAsString.orEmpty()
+        return runCatching { UUID.fromString(text).takeIf { text.length == UUID_TEXT_LENGTH } }
+            .getOrNull()
+            ?: context.reportInputMismatch(UUID::class.java, "Expected a UUID")
+    }
+
+    private companion object {
+        const val UUID_TEXT_LENGTH = 36
+    }
+}
 
 /**
  * Response returned after selecting an active branch context.
@@ -120,8 +154,8 @@ data class SelectBranchResponse(
     val organisationId: UUID,
     @field:Schema(name = "membership_id")
     val membershipId: UUID,
-    @field:Schema(name = "branch_id")
-    val branchId: UUID,
+    @field:Schema(name = "branch_id", nullable = true)
+    val branchId: UUID?,
     @field:Schema(name = "context_token")
     val contextToken: String,
     @field:Schema(name = "context_header")
@@ -184,13 +218,12 @@ class AuthSelectionReplayHandler(
         } else {
             val value =
                 apiJsonCodec.mapper.readValue(durableJson, SelectBranchReplayValue::class.java)
-            val branchId = requireNotNull(value.context.branchId)
             selectionService.revalidateBranchReplay(currentKeycloakSubject(), value.context)
             store(request, value.context)
             SelectBranchResponse(
                 organisationId = value.context.organisationId,
                 membershipId = value.context.membershipId,
-                branchId = branchId,
+                branchId = value.context.branchId,
                 contextToken = contextService.issue(value.context),
                 contextHeader =
                     com.finaxis.platform.iam.application.context
@@ -418,7 +451,9 @@ class AuthController(
         summary = "Select active branch",
         description =
             "Stores a branch selection inside the active organisation context after organisation " +
-                "selection.",
+                "selection. Omit branch_id (or send null) to clear the selection for any user, " +
+                "including a single-branch user who was auto-selected, and obtain an " +
+                "institution-level context for tenant administration.",
         security = [SecurityRequirement(name = "bearer-key")],
         parameters = [
             Parameter(
@@ -477,7 +512,7 @@ class AuthController(
         val result =
             service.selectBranch(
                 keycloakSubject(authentication),
-                requireNotNull(request.branchId),
+                request.branchId,
                 activeContext(authentication, session),
             )
         return SelectBranchResponse(

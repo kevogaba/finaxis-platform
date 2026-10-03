@@ -1,6 +1,5 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
-import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
@@ -8,7 +7,6 @@ import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.lifecycle.PermissionGuard
-import com.finaxis.platform.lifecycle.TenantCaller
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ActivateBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BranchDetailResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BranchDraftResultResponse
@@ -297,7 +295,6 @@ class BranchController(
         @PathVariable("branch_id") branchId: UUID,
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        verifyBranchContext(caller, branchId)
         val detail =
             foundationQueryService.getBranch(
                 caller.activeOrganisationId,
@@ -387,7 +384,6 @@ class BranchController(
         @RequestBody(required = false) request: SubmitBranchRequest?,
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        verifyBranchContext(caller, branchId)
         permissionGuard.requireBranchPermission(
             caller.actorId,
             caller.activeOrganisationId,
@@ -493,7 +489,6 @@ class BranchController(
         @RequestBody(required = false) request: ActivateBranchRequest?,
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        verifyBranchContext(caller, branchId)
         permissionGuard.requireBranchPermission(
             caller.actorId,
             caller.activeOrganisationId,
@@ -599,7 +594,6 @@ class BranchController(
         @RequestBody @Valid request: SuspendBranchRequest,
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        verifyBranchContext(caller, branchId)
         permissionGuard.requireBranchPermission(
             caller.actorId,
             caller.activeOrganisationId,
@@ -704,7 +698,6 @@ class BranchController(
         @RequestBody(required = false) request: ReactivateBranchRequest?,
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        verifyBranchContext(caller, branchId)
         permissionGuard.requireBranchPermission(
             caller.actorId,
             caller.activeOrganisationId,
@@ -809,7 +802,6 @@ class BranchController(
         @RequestBody @Valid request: CloseBranchRequest,
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        verifyBranchContext(caller, branchId)
         permissionGuard.requireBranchPermission(
             caller.actorId,
             caller.activeOrganisationId,
@@ -832,15 +824,6 @@ class BranchController(
                 caller,
             )
         return updated.toResponse()
-    }
-
-    private fun verifyBranchContext(
-        caller: TenantCaller,
-        targetBranchId: UUID,
-    ) {
-        if (caller.activeBranchId != null && caller.activeBranchId != targetBranchId) {
-            throw ResourceNotFoundException(safeDetail = "Branch not found: $targetBranchId")
-        }
     }
 
     private fun BranchSummary.toResponse() =

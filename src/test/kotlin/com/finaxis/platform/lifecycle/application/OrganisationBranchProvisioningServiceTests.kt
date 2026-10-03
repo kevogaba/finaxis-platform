@@ -4,6 +4,7 @@ import com.finaxis.platform.accounting.domain.MoneyPolicy
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
@@ -254,6 +255,7 @@ class OrganisationBranchProvisioningServiceTests {
 
         lifecyclePersistence.branches[organisationId to branchId] =
             aggregate(branchId, BranchLifecycleState.PENDING_APPROVAL, "BRANCH")
+        store.branchStates[organisationId to branchId] = BranchLifecycleState.PENDING_APPROVAL
 
         // Maker cannot activate
         assertFailsWith<ForbiddenOperationException> {
@@ -436,7 +438,7 @@ class OrganisationBranchProvisioningServiceTests {
         store.memberships[organisationId to userId] =
             MembershipSnapshot(MembershipLifecycleState.ACTIVE, MembershipType.STAFF)
 
-        assertFailsWith<ConflictException> {
+        assertFailsWith<ResourceNotFoundException> {
             branches.assignUser(
                 AssignUserToBranchCommand(
                     organisationId,
@@ -1290,5 +1292,101 @@ private class FakeInitialAdministratorBootstrapStore : InitialAdministratorBoots
                 updatedAt = java.time.Instant.now(),
                 rowVersion = record.rowVersion + 1,
             )
+    }
+}
+
+/** Target resolution and guard scope of the branch lifecycle and assignment operations. */
+class BranchTargetResolutionTests {
+    private val clock = Clock.fixed(Instant.parse("2026-07-14T10:00:00Z"), ZoneOffset.UTC)
+    private val lifecyclePersistence = LifecycleFake()
+    private val events = EventCapture()
+    private val audits = AuditCapture()
+    private val store = ProvisioningFake(lifecyclePersistence)
+    private val permissionGuard = mock(PermissionGuard::class.java)
+    private val branches =
+        BranchProvisioningService(
+            FoundationLifecycleService(
+                TransitionExecutor(clock, TransitionLogCapture(), events),
+                lifecyclePersistence,
+                lifecyclePersistence,
+                lifecyclePersistence,
+                AuditService(audits, clock),
+            ),
+            store,
+            store,
+            AuditService(audits, clock),
+            events,
+            permissionGuard,
+        )
+
+    @Test
+    fun `branch operations answer not found for a branch outside the organisation`() {
+        val organisationId = uuidV7()
+        val otherOrganisationId = uuidV7()
+        val foreignBranchId = uuidV7()
+        val userId = uuidV7()
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        store.branchStates[otherOrganisationId to foreignBranchId] = BranchLifecycleState.ACTIVE
+        store.memberships[organisationId to userId] =
+            MembershipSnapshot(MembershipLifecycleState.ACTIVE, MembershipType.STAFF)
+        val actorId = uuidV7()
+
+        assertFailsWith<ResourceNotFoundException> {
+            branches.activate(
+                ActivateBranchCommand(organisationId, foreignBranchId, "r", actorId, uuidV7()),
+            )
+        }
+        assertFailsWith<ResourceNotFoundException> {
+            branches.suspend(SuspendBranchCommand(organisationId, foreignBranchId, "r", actorId))
+        }
+        assertFailsWith<ResourceNotFoundException> {
+            branches.reactivate(
+                ReactivateBranchCommand(organisationId, foreignBranchId, "r", actorId),
+            )
+        }
+        assertFailsWith<ResourceNotFoundException> {
+            branches.close(CloseBranchCommand(organisationId, foreignBranchId, "r", actorId))
+        }
+        assertFailsWith<ResourceNotFoundException> {
+            branches.assignUser(
+                AssignUserToBranchCommand(
+                    organisationId,
+                    userId,
+                    foreignBranchId,
+                    BranchAssignmentType.OPERATE,
+                    actorId,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `branch operations ask the permission guard about the target branch`() {
+        val organisationId = uuidV7()
+        val branchId = uuidV7()
+        val userId = uuidV7()
+        val actorId = uuidV7()
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
+        store.memberships[organisationId to userId] =
+            MembershipSnapshot(MembershipLifecycleState.ACTIVE, MembershipType.STAFF)
+        lifecyclePersistence.branches[organisationId to branchId] =
+            aggregate(branchId, BranchLifecycleState.ACTIVE, "BRANCH")
+
+        branches.suspend(SuspendBranchCommand(organisationId, branchId, "r", actorId))
+        branches.assignUser(
+            AssignUserToBranchCommand(
+                organisationId,
+                userId,
+                branchId,
+                BranchAssignmentType.OPERATE,
+                actorId,
+            ),
+        )
+
+        verify(permissionGuard)
+            .requireBranchPermission(actorId, organisationId, branchId, "branch.suspend")
+        verify(permissionGuard)
+            .requireBranchPermission(actorId, organisationId, branchId, "user.assign_branch")
     }
 }

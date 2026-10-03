@@ -12,6 +12,7 @@ import com.finaxis.platform.jooq.tables.references.ROLE_PERMISSION
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
 import org.hamcrest.Matchers.containsInAnyOrder
+import org.hamcrest.Matchers.containsString
 import org.hamcrest.Matchers.hasItem
 import org.hamcrest.Matchers.hasItems
 import org.jooq.DSLContext
@@ -323,7 +324,8 @@ class AuthFlowIntegrationTests {
                 jsonPath("$.organisation_id") { value(LOCAL_ORGANISATION_ID) }
                 jsonPath("$.membership_id") { value(LOCAL_MEMBERSHIP_ID) }
                 jsonPath("$.context_header") { value(ActiveOrganisationContextService.HEADER) }
-                jsonPath("$.branch_id") { doesNotExist() }
+                jsonPath("$.branch_id") { value(null) }
+                content { string(containsString("\"branch_id\":null")) }
                 jsonPath("$.requires_branch_selection") { value(true) }
                 jsonPath("$.assigned_branch_ids") {
                     value(containsInAnyOrder(HEAD_OFFICE_BRANCH_ID, OPERATIONS_BRANCH_ID))

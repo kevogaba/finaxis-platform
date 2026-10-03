@@ -59,11 +59,60 @@ Authorization: Bearer <keycloak-jwt>
 Content-Type: application/json
 
 {
-  "branchId": "..."
+  "branch_id": "..."
 }
 ```
 
 The server verifies that the branch is assigned to the active membership and updates the same Redis-backed session context.
+
+### Clearing the branch selection
+
+`branch_id` is optional. Calling `POST /api/v1/auth/select-branch` with `{}` (or
+`{"branch_id": null}`) re-issues the same organisation context with **no** branch, for any user,
+including a single-branch user who was auto-selected by `select-organisation`. The response
+carries an explicit `"branch_id": null` (the property is present, not omitted) and a fresh
+`context_token`; the Redis-backed session is updated the same way as for a branch selection. The
+caller still needs the tenant-scope `auth.select_branch`, and no assigned-branch check applies
+because no branch is being selected. Auto-selection on `select-organisation` is unchanged:
+operational users are still pinned to their single branch on first login, and clearing the pin is
+an explicit action. A cleared context can be narrowed again by selecting a branch. A blank or
+malformed `branch_id` is rejected with `400`; only an omitted or JSON-null value clears.
+
+## What the selected branch does and does not do
+
+The selected branch **narrows operational authority; it does not scope tenant administration**.
+
+- *Effective permissions* are resolved for the selected branch: tenant-scope role assignments
+  always apply, and branch-scope role assignments apply only for the selected branch. With no
+  branch selected only tenant-scope assignments apply. This is what `@PreAuthorize` and the
+  `/auth/me` permission list read, so operational work stays narrowed to the working branch.
+- *Administration of branches, branch assignments and BRANCH-scope role assignments* is **not**
+  hidden by the selected branch. A pinned caller can `GET`/submit/activate/suspend/reactivate/
+  close any branch of the tenant, and use `/tenant/branch-assignments` and BRANCH-scope
+  `/tenant/role-assignments` against any branch, provided the permission check passes. Previously
+  these returned a safe `404` for any branch other than the selected one (issue #154).
+- *Authorization is still evaluated at the right scope.* The controller's `@PreAuthorize` is only
+  a coarse gate on the selected-branch authority set. The application layer then decides, per
+  target: branch lifecycle transitions and BRANCH-scope role assignment check the permission
+  against the **target** branch (`PermissionGuard.requireBranchPermission`: tenant-scope grants
+  plus branch-scope grants on that branch); branch assignment and revocation first require the
+  tenant-scope `user.assign_branch`/`user.revoke_branch`, then the permission on the target
+  branch; reads such as `GET /branches/{id}` and `GET /tenant/branch-assignments/{id}` check the
+  tenant-scope view permission. A caller whose only grant is a BRANCH-scope role on branch A
+  therefore passes the coarse gate while pinned to A, but is denied with `403` when targeting
+  branch B (covered by `BranchPinningIntegrationTests`).
+- *Unknown targets.* Once the permission check passes, a branch that does not exist in the active
+  tenant (or belongs to another tenant) answers `404` for submit, activate, suspend, reactivate,
+  close and assign/revoke; callers without the permission get `403` first, so the response never
+  reveals whether a branch exists. Genuine state conflicts (for example closing a draft) remain
+  `409`. BRANCH-scope role assignment is the exception: once the target-branch permission check
+  passes, `RoleManagementService.validateScope` requires the user to hold an active assignment to
+  the target branch and answers `409` when they do not (including an unknown or foreign
+  `branch_id`), not `404`.
+- *Branch-assignment search* `GET /tenant/branch-assignments`: an explicit `branch_id` filters by
+  that branch whatever is selected; without `branch_id` the list defaults to the selected branch
+  (when one is selected) and to all branches otherwise. To list across every branch, clear the
+  selection.
 
 Subsequent browser requests can rely on the `SESSION` cookie. They do not need to send `X-Active-Organisation-Context`.
 

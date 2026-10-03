@@ -613,7 +613,7 @@ class AuthSelectionServiceTests {
     }
 }
 
-private fun serviceWith(
+internal fun serviceWith(
     lookup: FakeMembershipLookup,
     emptyPermissions: Boolean = false,
     grantedPermissions: Set<String> = setOf("auth.select_organisation", "auth.select_branch"),
@@ -776,7 +776,7 @@ class AuthSelectionReplayPermissionTests {
     }
 }
 
-private class FakeMembershipLookup(
+internal class FakeMembershipLookup(
     private val userId: UUID? = null,
     private val userStatus: UserStatus? = UserStatus.ACTIVE,
     private val membership: MembershipSelection? = null,

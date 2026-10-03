@@ -270,6 +270,9 @@ class BranchProvisioningService(
         permissionCode: String,
     ) {
         permissionGuard.requireBranchPermission(actorId, organisationId, branchId, permissionCode)
+        // After the permission check so a caller without it cannot probe for existence. A branch
+        // outside the organisation reads as absent, whatever branch the caller has selected.
+        resourceNotFoundUnless(lifecycleStore.branchState(organisationId, branchId) != null)
     }
 
     private fun publishAssignment(command: AssignUserToBranchCommand) {
