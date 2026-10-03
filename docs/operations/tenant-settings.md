@@ -29,6 +29,15 @@ unknown keys instead of accepting arbitrary key/value pairs.
 | `business_date_auto_advance_enabled` | `BOOLEAN` | no | no | `false` |
 | `audit_retention_days` | `INT` | no | yes | none |
 
+`require_maker_checker_for_user_invites` and `require_maker_checker_for_branch_creation` are
+**inert**: nothing reads them, and maker-checker is unconditional for membership approval and
+branch activation. They are scheduled for removal in #164
+([ADR 0029](../adr/0029-approval-model-per-resource-extensions.md)), which must also retire
+any rows already stored for them: dropping the catalogue entries alone would leave those rows
+listed and impossible to deactivate (an unknown key is rejected). #164 chooses between a
+forward-only `V18+` migration closing the existing effective rows and a filter of the retired
+keys in list/get, and doing one of them is an acceptance condition of #164.
+
 Validation and canonicalization are catalog-owned:
 
 - `TIMEZONE`: must be an IANA zone id from `ZoneId.getAvailableZoneIds()`.
