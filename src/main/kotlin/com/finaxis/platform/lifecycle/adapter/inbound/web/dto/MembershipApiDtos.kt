@@ -1,9 +1,17 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web.dto
 
+import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.Size
 import java.time.Instant
 import java.util.UUID
+
+/** Optional decision remark for activating (approving) a pending membership. */
+data class ActivateMembershipRequest(
+    @field:Size(max = 500)
+    @field:Schema(example = "Checked against the signed request form.")
+    val reason: String? = null,
+)
 
 /** Request payload for suspending an active membership. */
 data class SuspendMembershipRequest(

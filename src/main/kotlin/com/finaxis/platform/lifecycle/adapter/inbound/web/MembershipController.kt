@@ -7,6 +7,7 @@ import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.lifecycle.PermissionGuard
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ActivateMembershipRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.MembershipDetailResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.MembershipSummaryResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReactivateMembershipRequest
@@ -197,7 +198,13 @@ class MembershipController(
     @PreAuthorize("hasAuthority('user.approve')")
     @Operation(
         summary = "Activate membership",
-        description = "Approves a pending membership and starts external provisioning when needed.",
+        description =
+            "Approves a pending membership and starts external provisioning when needed. The " +
+                "optional body `reason` (at most 500 characters) is a decision remark: it is " +
+                "stored as the membership's status reason when the membership activates in this " +
+                "call (200), and is always recorded on the `user.approve` audit row. On a 202 " +
+                "the membership activates later, without the remark, so it lives only on the " +
+                "audit row.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -271,6 +278,7 @@ class MembershipController(
     )
     fun activate(
         @PathVariable("membership_id") membershipId: UUID,
+        @RequestBody(required = false) @Valid request: ActivateMembershipRequest?,
     ): ResponseEntity<MembershipDetailResponse> {
         val caller = CallerContextResolver.getTenantCaller()
         permissionGuard.requireTenantPermission(
@@ -285,6 +293,7 @@ class MembershipController(
                     membershipId = membershipId,
                     approvedBy = caller.actorId,
                     requestId = uuidV7().toString(),
+                    reason = request?.reason,
                 ),
             )
         val response =

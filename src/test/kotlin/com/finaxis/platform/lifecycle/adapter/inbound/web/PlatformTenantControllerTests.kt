@@ -32,8 +32,10 @@ import com.finaxis.platform.lifecycle.application.query.TenantSummary
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.argThat
 import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.beans.factory.annotation.Autowired
@@ -361,6 +363,51 @@ class PlatformTenantControllerTests
                         jsonPath("$.status") { value("PROVISIONING") }
                     }
             }
+        }
+
+        @Test
+        fun `approve passes an optional decision remark to the command`() {
+            val orgId = uuidV7()
+            stubTenantDetail(orgId, "PROVISIONING")
+
+            withPlatformContext {
+                mockMvc
+                    .post("${ApiPaths.PLATFORM_TENANTS}/$orgId/approve") {
+                        contentType = MediaType.APPLICATION_JSON
+                        content = "{\"reason\":\"${"x".repeat(500)}\"}"
+                        with(authentication(platformToken(setOf("tenant.approve"))))
+                    }.andExpect { status { isAccepted() } }
+                mockMvc
+                    .post("${ApiPaths.PLATFORM_TENANTS}/$orgId/approve") {
+                        with(authentication(platformToken(setOf("tenant.approve"))))
+                    }.andExpect { status { isAccepted() } }
+            }
+
+            verify(organisationProvisioningService).approveProvisioning(
+                argThat<ApproveOrganisationProvisioningCommand> { reason == "x".repeat(500) },
+            )
+            verify(organisationProvisioningService).approveProvisioning(
+                argThat<ApproveOrganisationProvisioningCommand> { reason == null },
+            )
+        }
+
+        @Test
+        fun `approve rejects a remark over 500 characters before the service`() {
+            val orgId = uuidV7()
+
+            withPlatformContext {
+                mockMvc
+                    .post("${ApiPaths.PLATFORM_TENANTS}/$orgId/approve") {
+                        contentType = MediaType.APPLICATION_JSON
+                        content = "{\"reason\":\"${"x".repeat(501)}\"}"
+                        with(authentication(platformToken(setOf("tenant.approve"))))
+                    }.andExpect {
+                        status { isBadRequest() }
+                        jsonPath("$.code") { value("validation_failed") }
+                    }
+            }
+
+            verify(organisationProvisioningService, never()).approveProvisioning(any())
         }
 
         @Test
