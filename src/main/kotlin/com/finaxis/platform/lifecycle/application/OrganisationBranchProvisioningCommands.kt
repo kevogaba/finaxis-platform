@@ -72,6 +72,13 @@ data class RejectOrganisationProvisioningCommand(
     val requestId: UUID = uuidV7(),
 )
 
+/** Returns a pending organisation to draft so its maker can amend and resubmit it. */
+data class ReturnOrganisationForChangesCommand(
+    val organisationId: UUID,
+    val reason: String,
+    val actorId: UUID,
+)
+
 /** Suspends an active organisation while retaining all of its data. */
 data class SuspendOrganisationCommand(
     val organisationId: UUID,

@@ -29,6 +29,7 @@ enum class OrganisationLifecycleTransition {
     START_PROVISIONING,
     ACTIVATE,
     REJECT,
+    RETURN_FOR_CHANGES,
     SUSPEND,
     REACTIVATE,
     START_DEPROVISIONING,
@@ -210,6 +211,15 @@ object FoundationLifecycleDefinitions {
                 OrganisationLifecycleState.PENDING_APPROVAL,
                 OrganisationLifecycleState.REJECTED,
                 externalizedEventFactories(ORGANISATION_REJECTED_TARGET),
+            ),
+            // The checker's recoverable decision (ADR 0029, 3c): the maker amends the draft and
+            // resubmits it through the unchanged SUBMIT. REJECT stays terminal. Internal event
+            // only, like START_PROVISIONING: no consumer needs the exit.
+            definition(
+                OrganisationLifecycleTransition.RETURN_FOR_CHANGES,
+                OrganisationLifecycleState.PENDING_APPROVAL,
+                OrganisationLifecycleState.DRAFT,
+                internalEventFactories(),
             ),
             definition(
                 OrganisationLifecycleTransition.SUSPEND,

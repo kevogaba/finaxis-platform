@@ -23,6 +23,8 @@ data class TenantDetail(
     val baseCurrencyCode: String,
     val timezone: String,
     val status: String,
+    /** The reason recorded by the tenant's last transition, such as a return for changes. */
+    val statusReason: String?,
     val createdAt: Instant,
     val updatedAt: Instant,
 )

@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web.dto
 
 import com.fasterxml.jackson.annotation.JsonFormat
+import com.fasterxml.jackson.annotation.JsonInclude
 import com.finaxis.platform.lifecycle.application.InitialAdministratorDraft
 import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.Valid
@@ -147,6 +148,14 @@ data class SuspendTenantRequest(
     val reason: String,
 )
 
+/** Request payload for returning a pending tenant to draft for changes. */
+data class ReturnTenantRequest(
+    @field:NotBlank
+    @field:Size(min = 3, max = 500)
+    @field:Schema(example = "Registration number has a typo.")
+    val reason: String,
+)
+
 /** Optional decision remark for approving a submitted tenant. */
 data class ApproveTenantRequest(
     @field:Size(max = 500)
@@ -184,6 +193,17 @@ data class TenantDetailResponse(
     val baseCurrencyCode: String,
     val timezone: String,
     val status: String,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "Why the tenant is in its current status, as recorded by its last transition: a " +
+                "checker's reason for returning it to draft, or a decision remark. Always " +
+                "present, and `null` when the last transition recorded none.",
+        example = "Registration number has a typo.",
+    )
+    val statusReason: String? = null,
     val bootstrapStatus: String? = null,
     val bootstrapFailureCode: String? = null,
     val createdAt: Instant,

@@ -18,6 +18,7 @@ import java.time.OffsetDateTime
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -57,6 +58,23 @@ class JooqFoundationQueryStoreTests(
         val detail = store.findTenantById(orgId)
         assertNotNull(detail)
         assertEquals("org3", detail.tenantCode)
+    }
+
+    @Test
+    fun `findTenantById returns the status reason of the last transition`() {
+        val orgId = insertOrganisation("org3b", "Test Org 3b", "KE")
+        assertNull(assertNotNull(store.findTenantById(orgId)).statusReason)
+
+        dsl
+            .update(ORGANISATION)
+            .set(ORGANISATION.STATUS, "DRAFT")
+            .set(ORGANISATION.STATUS_REASON, "Registration number has a typo.")
+            .where(ORGANISATION.ID.eq(orgId))
+            .execute()
+
+        val detail = assertNotNull(store.findTenantById(orgId))
+        assertEquals("DRAFT", detail.status)
+        assertEquals("Registration number has a typo.", detail.statusReason)
     }
 
     @Test

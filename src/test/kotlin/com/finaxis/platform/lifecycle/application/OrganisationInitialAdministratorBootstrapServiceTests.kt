@@ -424,7 +424,7 @@ class OrganisationInitialAdministratorBootstrapServiceTests {
     }
 }
 
-private class BootstrapProvisioningFake(
+internal class BootstrapProvisioningFake(
     private val lifecycle: BootstrapLifecycleFake,
 ) : OrganisationLifecycleProvisioningStore,
     OrganisationBootstrapStore,
@@ -635,14 +635,14 @@ private class BootstrapProvisioningFake(
         )
 }
 
-private data class BootstrapAssignmentKey(
+internal data class BootstrapAssignmentKey(
     val organisationId: UUID,
     val userId: UUID,
     val branchId: UUID,
     val type: BranchAssignmentType,
 )
 
-private class BootstrapLifecycleFake :
+internal class BootstrapLifecycleFake :
     FoundationLifecycleReader,
     FoundationLifecycleWriter,
     com.finaxis.platform.lifecycle.domain.LifecyclePrerequisites {
@@ -727,7 +727,7 @@ private class BootstrapLifecycleFake :
     ) = true
 }
 
-private class BootstrapAuditCapture : AuditEventRepository {
+internal class BootstrapAuditCapture : AuditEventRepository {
     val events = mutableListOf<AuditEvent>()
 
     override fun save(event: AuditEvent) {
@@ -735,7 +735,7 @@ private class BootstrapAuditCapture : AuditEventRepository {
     }
 }
 
-private class BootstrapEventCapture : TransitionEventPublisher {
+internal class BootstrapEventCapture : TransitionEventPublisher {
     val events = mutableListOf<TransitionEvent>()
 
     override fun publish(event: TransitionEvent) {
@@ -743,7 +743,7 @@ private class BootstrapEventCapture : TransitionEventPublisher {
     }
 }
 
-private class BootstrapTransitionLogCapture : TransitionLogRepository {
+internal class BootstrapTransitionLogCapture : TransitionLogRepository {
     val logs = mutableListOf<TransitionLog>()
 
     override fun save(log: TransitionLog) {
@@ -757,7 +757,7 @@ private fun <S : Enum<S>> aggregate(
     type: String,
 ) = LifecycleAggregate(id, state, type, id, 0)
 
-private class FakeInitialAdminBootstrapStore : InitialAdministratorBootstrapStore {
+internal class FakeInitialAdminBootstrapStore : InitialAdministratorBootstrapStore {
     val records = mutableMapOf<UUID, InitialAdministratorBootstrapRecord>()
     val existingAdministrators = mutableMapOf<UUID, UUID>()
 

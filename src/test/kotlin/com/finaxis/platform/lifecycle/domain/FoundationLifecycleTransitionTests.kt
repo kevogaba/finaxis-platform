@@ -23,6 +23,56 @@ class FoundationLifecycleTransitionTests {
     }
 
     @Test
+    fun `a pending organisation returns to draft through exactly one declared edge`() {
+        val graph = FoundationLifecycleDefinitions.organisationGraph()
+
+        val returns =
+            graph.definitions().filter {
+                it.transition == OrganisationLifecycleTransition.RETURN_FOR_CHANGES
+            }
+
+        assertEquals(
+            listOf(
+                OrganisationLifecycleState.PENDING_APPROVAL to OrganisationLifecycleState.DRAFT,
+            ),
+            returns.map { it.from to it.to },
+        )
+        // Nothing else leaves a pending organisation for DRAFT, and REJECT stays terminal.
+        assertEquals(
+            listOf(OrganisationLifecycleTransition.RETURN_FOR_CHANGES),
+            graph
+                .definitions()
+                .filter { it.to == OrganisationLifecycleState.DRAFT }
+                .map { it.transition },
+        )
+        assertEquals(
+            emptyList(),
+            graph
+                .definitions()
+                .filter { it.from == OrganisationLifecycleState.REJECTED },
+        )
+        OrganisationLifecycleState.entries
+            .filter { it != OrganisationLifecycleState.PENDING_APPROVAL }
+            .forEach { state ->
+                assertFailsWith<TransitionException> {
+                    graph.requireDefinition(
+                        state,
+                        OrganisationLifecycleTransition.RETURN_FOR_CHANGES,
+                    )
+                }
+            }
+        // The returned draft resubmits through the unchanged SUBMIT edge.
+        assertEquals(
+            OrganisationLifecycleState.PENDING_APPROVAL,
+            graph
+                .requireDefinition(
+                    OrganisationLifecycleState.DRAFT,
+                    OrganisationLifecycleTransition.SUBMIT,
+                ).to,
+        )
+    }
+
+    @Test
     fun `branch lifecycle accepts only graph-declared transitions`() {
         assertMatrix(
             graph =

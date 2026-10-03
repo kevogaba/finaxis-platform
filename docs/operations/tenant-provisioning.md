@@ -22,6 +22,7 @@ stateDiagram-v2
     PENDING_APPROVAL --> PROVISIONING: START_PROVISIONING
     PROVISIONING --> ACTIVE: ACTIVATE
     PENDING_APPROVAL --> REJECTED: REJECT
+    PENDING_APPROVAL --> DRAFT: RETURN_FOR_CHANGES
     ACTIVE --> SUSPENDED: SUSPEND
     SUSPENDED --> ACTIVE: REACTIVATE
     ACTIVE --> DEPROVISIONING: START_DEPROVISIONING
@@ -42,6 +43,13 @@ Implemented transitions and effects:
   `finaxis.lifecycle.organisation.activated`.
 - `PENDING_APPROVAL` to `REJECTED`: `REJECT` preserves the draft and emits
   `finaxis.lifecycle.organisation.rejected`.
+- `PENDING_APPROVAL` to `DRAFT`: `RETURN_FOR_CHANGES` is the checker's recoverable decision
+  (`POST /api/v1/platform/tenants/{tenant_id}/return`, `tenant.reject`, reason required, caller
+  neither the requester nor the submitter). It publishes only an internal transition event. The
+  initial-administrator record goes back to a draft as `REJECT` leaves it, the maker amends the
+  draft (`PATCH`) and resubmits it (`SUBMIT`), and the reason is readable as `status_reason` on the
+  platform tenant detail and on `GET /tenant`. `REJECT` stays terminal. See
+  [lifecycle FSMs](../architecture/lifecycle-fsm.md#return-a-pending-tenant-to-draft-adr-0029-181).
 - `ACTIVE` to `SUSPENDED`: `SUSPEND` blocks operations and emits
   `finaxis.lifecycle.organisation.suspended`.
 - `SUSPENDED` to `ACTIVE`: `REACTIVATE` requires complete local setup and emits
