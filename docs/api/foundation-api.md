@@ -442,6 +442,25 @@ Create branch request and detail response:
 }
 ```
 
+`address` is a free-form map of string values: the detail response (tenant and platform `GET
+/branches/{branch_id}`, and every lifecycle response that returns the detail) echoes exactly the
+keys and values that were stored on create. A stored value that cannot be read back as such a map
+is answered as `{}` rather than failing the read.
+
+`opened_on` and `closed_on` are business dates (`dd-MM-yyyy`) taken from the tenant's current
+business date, never the wall clock, and are `null` until they apply:
+
+- `opened_on` is set when the branch first becomes `ACTIVE`, including the head office that tenant
+  approval activates. A suspend and reactivate does not move it.
+- `closed_on` is set when the branch is `CLOSED`. `CLOSED` only moves on to `ARCHIVED`, so it is
+  never cleared.
+
+Branches that predate this behaviour were backfilled once, best-effort, by migration `V18`: where
+a date was still `null`, it is the day of the branch's earliest transition into `ACTIVE` (or
+`CLOSED`) in the organisation's timezone. Those dates are approximate (the day the transition was
+recorded, not the business date at that moment), and a branch with no such transition on record
+keeps `null`. Dates stamped by the application are exact.
+
 ### Platform Tenant Administration
 
 Base path: `/api/v1/platform/tenants`. List filters: `q`, `status`, `country`,

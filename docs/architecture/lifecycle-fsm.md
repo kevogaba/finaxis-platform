@@ -35,6 +35,23 @@ active assignment unless the command has first revoked or reassigned it. User ac
 a Keycloak link or explicit invitation completion. Membership activation requires an active
 organisation and user, plus active branch and role assignments when operational access is needed.
 
+Branch transitions also stamp two columns in the same `UPDATE` that writes the new state
+(`JooqFoundationLifecyclePersistence.saveBranch`), from the organisation's current business date
+and not the wall clock: `opened_on` on entry to `ACTIVE` (only when still null, so a
+`REACTIVATE` keeps the first opening date, and the head office that tenant approval activates is
+stamped the same way) and `closed_on` on entry to `CLOSED`. `CLOSED` only moves on to `ARCHIVED`,
+so `closed_on` is never cleared.
+
+This only applies to transitions made after the release. Branches that already had such a
+transition on record (whatever state they are in now, including `SUSPENDED` and `ARCHIVED`) were
+backfilled once by the forward-only data migration `V18__branch_opened_closed_on_backfill.sql`,
+best-effort and approximate: the date of the earliest `branch_transition_log` row entering
+`ACTIVE` / `CLOSED`, in the organisation's timezone rather than the business date at that moment.
+A zone not in the IANA list (including offset ids such as `+03:00`, `UTC+03:00` or `GMT+3`) is
+dated in UTC and can be a day off. A branch with no such row keeps `NULL`. `closed_on` is clamped
+up to `opened_on`, and a derived `opened_on` down to a stored `closed_on`, so `chk_branch_dates`
+holds.
+
 ```mermaid
 stateDiagram-v2
     DRAFT --> PENDING_APPROVAL: SUBMIT

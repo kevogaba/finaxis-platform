@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.web.api.ApiJsonCodec
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
@@ -65,6 +66,7 @@ import java.util.UUID
 class BranchController(
     private val branchProvisioningService: BranchProvisioningService,
     private val foundationQueryService: FoundationQueryService,
+    private val apiJsonCodec: ApiJsonCodec,
     private val permissionGuard: PermissionGuard,
 ) {
     /**
@@ -847,7 +849,7 @@ class BranchController(
             parentBranchId = parentBranchId,
             status = status,
             timezone = timezone,
-            address = emptyMap(),
+            address = apiJsonCodec.branchAddress(addressJson),
             openedOn = openedOn,
             closedOn = closedOn,
             statusReason = statusReason,
