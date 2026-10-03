@@ -58,7 +58,6 @@ class TenantSettingsController(
         ApiResponse(
             responseCode = "200",
             description = "Tenant setting page",
-            content = [Content(schema = Schema(implementation = ApiPage::class))],
         ),
         ApiResponse(
             responseCode = "400",

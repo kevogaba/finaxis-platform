@@ -12,6 +12,7 @@ import com.finaxis.platform.iam.application.query.PermissionSummary
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.adapter.inbound.web.CallerContextResolver
 import io.swagger.v3.oas.annotations.Operation
+import io.swagger.v3.oas.annotations.Parameter
 import io.swagger.v3.oas.annotations.media.Content
 import io.swagger.v3.oas.annotations.media.Schema
 import io.swagger.v3.oas.annotations.responses.ApiResponse
@@ -50,7 +51,6 @@ class PermissionController(
         ApiResponse(
             responseCode = "200",
             description = "Permission page",
-            content = [Content(schema = Schema(implementation = ApiPage::class))],
         ),
         ApiResponse(
             responseCode = "400",
@@ -74,6 +74,14 @@ class PermissionController(
         @RequestParam(required = false) status: String?,
         @RequestParam(defaultValue = "0") @Min(0) page: Int,
         @RequestParam(defaultValue = "25") @Min(1) @Max(MAXIMUM_PAGE_SIZE) size: Int,
+        @Parameter(
+            description = "Field to sort by. Values are camelCase, unlike other wire names.",
+            schema =
+                Schema(
+                    allowableValues =
+                        ["permissionCode", "permissionName", "riskLevel", "status", "createdAt"],
+                ),
+        )
         @RequestParam(required = false, name = "sort_by") sortBy: String?,
         @RequestParam(required = false, name = "sort_dir") sortDir: String?,
     ): ApiPage<PermissionSummaryResponse> {

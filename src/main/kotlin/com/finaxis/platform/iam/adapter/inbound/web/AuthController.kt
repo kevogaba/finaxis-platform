@@ -239,7 +239,6 @@ class AuthController(
         ApiResponse(
             responseCode = "200",
             description = "Available branch page",
-            content = [Content(schema = Schema(implementation = ApiPage::class))],
         ),
         ApiResponse(
             responseCode = "401",
@@ -295,7 +294,6 @@ class AuthController(
         ApiResponse(
             responseCode = "200",
             description = "Available organisation page",
-            content = [Content(schema = Schema(implementation = ApiPage::class))],
         ),
         ApiResponse(
             responseCode = "401",
