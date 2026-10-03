@@ -9,6 +9,7 @@ import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
@@ -25,7 +26,11 @@ import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.TenantSettingValueType
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
+import org.mockito.kotlin.any
+import org.mockito.kotlin.doThrow
+import org.mockito.kotlin.whenever
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
@@ -37,6 +42,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
+@Suppress("LargeClass")
 class OrganisationBranchProvisioningServiceTests {
     private val clock = Clock.fixed(Instant.parse("2026-07-14T10:00:00Z"), ZoneOffset.UTC)
     private val lifecyclePersistence = LifecycleFake()
@@ -183,6 +189,47 @@ class OrganisationBranchProvisioningServiceTests {
             OrganisationLifecycleTransition.ACTIVATE.name,
             (events.events.last() as ExternalizedTransitionEvent).transition,
         )
+    }
+
+    @Test
+    fun `approval is refused when the approver is the draft's initial administrator`() {
+        val organisationId = activeDraft()
+        organisations.submitForApproval(SubmitOrganisationForApprovalCommand(organisationId))
+        val approver = uuidV7()
+        adminBootstrapStore.existingAdministrators[organisationId] = approver
+        events.events.clear()
+
+        val error =
+            assertFailsWith<ForbiddenOperationException> {
+                organisations.approveProvisioning(
+                    ApproveOrganisationProvisioningCommand(organisationId, actorId = approver),
+                )
+            }
+
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_INITIAL_ADMINISTRATOR, error.code)
+        assertEquals(
+            OrganisationLifecycleState.PENDING_APPROVAL,
+            lifecyclePersistence.organisations.getValue(organisationId).state,
+        )
+        assertTrue(events.events.isEmpty())
+        assertTrue(!store.headOffices.contains(organisationId))
+    }
+
+    @Test
+    fun `approval proceeds when the initial administrator is another or no account`() {
+        val withOther = activeDraft()
+        organisations.submitForApproval(SubmitOrganisationForApprovalCommand(withOther))
+        adminBootstrapStore.existingAdministrators[withOther] = uuidV7()
+        val withNone = activeDraft()
+        organisations.submitForApproval(SubmitOrganisationForApprovalCommand(withNone))
+
+        listOf(withOther, withNone).forEach {
+            organisations.approveProvisioning(ApproveOrganisationProvisioningCommand(it))
+            assertEquals(
+                OrganisationLifecycleState.ACTIVE,
+                lifecyclePersistence.organisations.getValue(it).state,
+            )
+        }
     }
 
     @Test
@@ -528,6 +575,7 @@ class OrganisationBranchProvisioningServiceTests {
             ),
         )
         assertExternalizedTarget("finaxis.lifecycle.branch.approval-requested")
+        assertTrue(audits.events.none { it.action == "branch.submit_as_platform_checker" })
 
         events.events.clear()
         branches.activate(
@@ -839,6 +887,7 @@ private class ProvisioningFake(
     val missingSetup = mutableSetOf<OrganisationSetupRequirement>()
     val organisationStates = mutableMapOf<UUID, OrganisationLifecycleState>()
     val branchStates = mutableMapOf<Pair<UUID, UUID>, BranchLifecycleState>()
+    val branchSubmitters = mutableMapOf<Pair<UUID, UUID>, UUID>()
     val memberships = mutableMapOf<Pair<UUID, UUID>, MembershipSnapshot>()
     val assignments = mutableSetOf<AssignmentKey>()
     var listResult = OrganisationPage(emptyList(), 0)
@@ -972,6 +1021,18 @@ private class ProvisioningFake(
         organisationId: UUID,
         branchId: UUID,
     ): UUID? = branchCreators[organisationId to branchId]
+
+    override fun hasActiveBranchBeyondBootstrap(organisationId: UUID): Boolean =
+        branchStates.any { (key, state) ->
+            key.first == organisationId &&
+                state == BranchLifecycleState.ACTIVE &&
+                branchCreators[key] != SystemActor.ID
+        }
+
+    override fun submittedBy(
+        organisationId: UUID,
+        branchId: UUID,
+    ): UUID? = branchSubmitters[organisationId to branchId]
 
     override fun userExists(userId: UUID) = true
 
@@ -1162,6 +1223,7 @@ private fun <S : Enum<S>> aggregate(
 
 private class FakeInitialAdministratorBootstrapStore : InitialAdministratorBootstrapStore {
     val records = mutableMapOf<UUID, InitialAdministratorBootstrapRecord>()
+    val existingAdministrators = mutableMapOf<UUID, UUID>()
 
     override fun createDraft(
         organisationId: UUID,
@@ -1274,6 +1336,9 @@ private class FakeInitialAdministratorBootstrapStore : InitialAdministratorBoots
                 rowVersion = record.rowVersion + 1,
             )
     }
+
+    override fun existingAdministratorUserId(organisationId: UUID): UUID? =
+        existingAdministrators[organisationId]
 
     override fun linkResolvedEntities(
         organisationId: UUID,
@@ -1388,5 +1453,374 @@ class BranchTargetResolutionTests {
             .requireBranchPermission(actorId, organisationId, branchId, "branch.suspend")
         verify(permissionGuard)
             .requireBranchPermission(actorId, organisationId, branchId, "user.assign_branch")
+    }
+}
+
+/**
+ * The platform-checker scope of branch creation, submission and activation (#153): the platform
+ * permission alone authorises the step, the tenant's own maker-checker rule still applies to the
+ * platform actor, and the checker step leaves an audit row naming the scope.
+ */
+class PlatformCheckerBranchTests {
+    private val clock = Clock.fixed(Instant.parse("2026-07-14T10:00:00Z"), ZoneOffset.UTC)
+    private val lifecyclePersistence = LifecycleFake()
+    private val events = EventCapture()
+    private val audits = AuditCapture()
+    private val store = ProvisioningFake(lifecyclePersistence)
+    private val permissionGuard = mock(PermissionGuard::class.java)
+    private val branches =
+        BranchProvisioningService(
+            FoundationLifecycleService(
+                TransitionExecutor(clock, TransitionLogCapture(), events),
+                lifecyclePersistence,
+                lifecyclePersistence,
+                lifecyclePersistence,
+                AuditService(audits, clock),
+            ),
+            store,
+            store,
+            AuditService(audits, clock),
+            events,
+            permissionGuard,
+        )
+    private val organisationId = uuidV7()
+    private val platformMaker = uuidV7()
+    private val platformChecker = uuidV7()
+
+    @Test
+    fun `platform branch creation needs the platform permission alone in a provisioning tenant`() {
+        store.organisationStates[organisationId] = OrganisationLifecycleState.PROVISIONING
+
+        val result = branches.createDraft(createCommand(ActingScope.PLATFORM))
+
+        assertEquals(BranchLifecycleState.DRAFT, result.status)
+        verify(permissionGuard).requirePlatformPermission(platformMaker, "branch.create")
+        verify(permissionGuard, never()).requireTenantPermission(any(), any(), any())
+    }
+
+    @Test
+    fun `tenant branch creation still asks the tenant permission only`() {
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+
+        branches.createDraft(createCommand(ActingScope.TENANT))
+
+        verify(
+            permissionGuard,
+        ).requireTenantPermission(platformMaker, organisationId, "branch.create")
+        verify(permissionGuard, never()).requirePlatformPermission(any(), any())
+    }
+
+    @Test
+    fun `platform branch creation keeps the tenant state rule and answers 404 for no tenant`() {
+        store.organisationStates[organisationId] = OrganisationLifecycleState.SUSPENDED
+
+        assertFailsWith<ConflictException> {
+            branches.createDraft(createCommand(ActingScope.PLATFORM))
+        }
+        assertFailsWith<ResourceNotFoundException> {
+            branches.createDraft(
+                createCommand(ActingScope.PLATFORM).copy(organisationId = uuidV7()),
+            )
+        }
+    }
+
+    @Test
+    fun `platform activation uses the platform permission and audits the checker scope`() {
+        val branchId = pendingPlatformBranch()
+
+        branches.activate(activateCommand(branchId, platformChecker))
+
+        assertEquals(
+            BranchLifecycleState.ACTIVE,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+        verify(permissionGuard).requirePlatformPermission(platformChecker, "branch.activate")
+        verify(permissionGuard, never()).requireBranchPermission(any(), any(), any(), any())
+        val audit = audits.events.single { it.action == "branch.activate_as_platform_checker" }
+        assertEquals(platformChecker.toString(), audit.actorId)
+        assertEquals(organisationId.toString(), audit.tenantId)
+        assertEquals(branchId.toString(), audit.resourceId)
+        assertEquals("PLATFORM", audit.metadata["checkerScope"])
+        assertTrue(
+            events.events.any {
+                (it as? ExternalizedTransitionEvent)?.target == "finaxis.lifecycle.branch.activated"
+            },
+        )
+    }
+
+    @Test
+    fun `a platform actor cannot activate the branch it created`() {
+        val branchId = pendingPlatformBranch()
+
+        assertFailsWith<ForbiddenOperationException> {
+            branches.activate(activateCommand(branchId, platformMaker))
+        }
+        assertEquals(
+            BranchLifecycleState.PENDING_APPROVAL,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+    }
+
+    @Test
+    fun `platform activation answers 404 for a branch of another tenant`() {
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        val otherOrganisationId = uuidV7()
+        val foreignBranchId = uuidV7()
+        store.branchStates[otherOrganisationId to foreignBranchId] =
+            BranchLifecycleState.PENDING_APPROVAL
+
+        assertFailsWith<ResourceNotFoundException> {
+            branches.activate(activateCommand(foreignBranchId, platformChecker))
+        }
+        assertFailsWith<ResourceNotFoundException> {
+            branches.activate(activateCommand(uuidV7(), platformChecker))
+        }
+    }
+
+    @Test
+    fun `platform activation is refused before any lookup when the permission is missing`() {
+        val branchId = pendingPlatformBranch()
+        doThrow(
+            org.springframework.security.access
+                .AccessDeniedException("no"),
+        ).whenever(permissionGuard)
+            .requirePlatformPermission(platformChecker, "branch.activate")
+
+        assertFailsWith<org.springframework.security.access.AccessDeniedException> {
+            branches.activate(activateCommand(branchId, platformChecker))
+        }
+        assertFailsWith<org.springframework.security.access.AccessDeniedException> {
+            branches.activate(activateCommand(uuidV7(), platformChecker))
+        }
+    }
+
+    @Test
+    fun `platform activation is refused while the tenant is not active`() {
+        val branchId = pendingPlatformBranch()
+        store.organisationStates[organisationId] = OrganisationLifecycleState.SUSPENDED
+
+        assertFailsWith<ConflictException> {
+            branches.activate(activateCommand(branchId, platformChecker))
+        }
+    }
+
+    @Test
+    fun `platform submission uses the platform permission`() {
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        val branchId = uuidV7()
+        store.branchStates[organisationId to branchId] = BranchLifecycleState.DRAFT
+        lifecyclePersistence.branches[organisationId to branchId] =
+            aggregate(branchId, BranchLifecycleState.DRAFT, "BRANCH")
+
+        branches.submitForApproval(
+            SubmitBranchForApprovalCommand(
+                organisationId = organisationId,
+                branchId = branchId,
+                actorId = platformMaker,
+                requestId = uuidV7(),
+                scope = ActingScope.PLATFORM,
+            ),
+        )
+
+        assertEquals(
+            BranchLifecycleState.PENDING_APPROVAL,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+        verify(permissionGuard).requirePlatformPermission(platformMaker, "branch.create")
+        verify(permissionGuard, never()).requireBranchPermission(any(), any(), any(), any())
+        val audit = audits.events.single { it.action == "branch.submit_as_platform_checker" }
+        assertEquals(platformMaker.toString(), audit.actorId)
+        assertEquals(organisationId.toString(), audit.tenantId)
+        assertEquals(branchId.toString(), audit.resourceId)
+        assertEquals("PLATFORM", audit.metadata["checkerScope"])
+    }
+
+    @Test
+    fun `a platform actor that submitted a branch cannot also activate it`() {
+        val tenantAdmin = uuidV7()
+        val branchId = pendingPlatformBranch()
+        store.branchCreators[organisationId to branchId] = tenantAdmin
+        store.branchSubmitters[organisationId to branchId] = platformMaker
+
+        assertFailsWith<ForbiddenOperationException> {
+            branches.activate(activateCommand(branchId, platformMaker))
+        }
+        assertEquals(
+            BranchLifecycleState.PENDING_APPROVAL,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+
+        branches.activate(activateCommand(branchId, platformChecker))
+        assertEquals(
+            BranchLifecycleState.ACTIVE,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+    }
+
+    @Test
+    fun `a tenant user who submitted a branch keeps the right to activate it`() {
+        val tenantAdmin = uuidV7()
+        val branchId = pendingPlatformBranch()
+        store.branchCreators[organisationId to branchId] = tenantAdmin
+        store.branchSubmitters[organisationId to branchId] = platformChecker
+
+        branches.activate(
+            activateCommand(branchId, platformChecker).copy(scope = ActingScope.TENANT),
+        )
+
+        assertEquals(
+            BranchLifecycleState.ACTIVE,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+    }
+
+    @Test
+    fun `platform submission is refused while the tenant is not open for branches`() {
+        val branchId = pendingPlatformBranch()
+        lifecyclePersistence.branches[organisationId to branchId] =
+            aggregate(branchId, BranchLifecycleState.DRAFT, "BRANCH")
+        store.branchStates[organisationId to branchId] = BranchLifecycleState.DRAFT
+        store.organisationStates[organisationId] = OrganisationLifecycleState.SUSPENDED
+
+        assertFailsWith<ConflictException> {
+            branches.submitForApproval(
+                SubmitBranchForApprovalCommand(
+                    organisationId = organisationId,
+                    branchId = branchId,
+                    actorId = platformMaker,
+                    requestId = uuidV7(),
+                    scope = ActingScope.PLATFORM,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `platform scope cannot act inside the platform organisation itself`() {
+        val platformOrganisationId = PlatformOrganisation.ID
+        val branchId = uuidV7()
+        store.organisationStates[platformOrganisationId] = OrganisationLifecycleState.ACTIVE
+        store.branchStates[platformOrganisationId to branchId] =
+            BranchLifecycleState.PENDING_APPROVAL
+
+        assertFailsWith<ResourceNotFoundException> {
+            branches.createDraft(
+                createCommand(ActingScope.PLATFORM).copy(organisationId = platformOrganisationId),
+            )
+        }
+        assertFailsWith<ResourceNotFoundException> {
+            branches.submitForApproval(
+                SubmitBranchForApprovalCommand(
+                    platformOrganisationId,
+                    branchId,
+                    null,
+                    platformMaker,
+                    uuidV7(),
+                    ActingScope.PLATFORM,
+                ),
+            )
+        }
+        assertFailsWith<ResourceNotFoundException> {
+            branches.activate(
+                activateCommand(
+                    branchId,
+                    platformChecker,
+                ).copy(organisationId = platformOrganisationId),
+            )
+        }
+        verify(permissionGuard).requirePlatformPermission(platformChecker, "branch.activate")
+    }
+
+    @Test
+    fun `the platform checker is closed once the tenant has an active branch of its own`() {
+        val branchId = pendingPlatformBranch()
+        store.branchCreators[organisationId to branchId] = uuidV7()
+        val ownBranch = uuidV7()
+        store.branchStates[organisationId to ownBranch] = BranchLifecycleState.ACTIVE
+        store.branchCreators[organisationId to ownBranch] = uuidV7()
+
+        val error =
+            assertFailsWith<ConflictException> {
+                branches.activate(activateCommand(branchId, platformChecker))
+            }
+        assertEquals(LifecycleErrorCodes.PLATFORM_CHECKER_CLOSED, error.code)
+        assertFailsWith<ConflictException> {
+            branches.submitForApproval(
+                SubmitBranchForApprovalCommand(
+                    organisationId,
+                    branchId,
+                    null,
+                    platformChecker,
+                    uuidV7(),
+                    ActingScope.PLATFORM,
+                ),
+            )
+        }
+        assertEquals(
+            BranchLifecycleState.PENDING_APPROVAL,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+        // The tenant's own checker is not bounded.
+        branches.activate(
+            activateCommand(branchId, platformChecker).copy(scope = ActingScope.TENANT),
+        )
+    }
+
+    @Test
+    fun `the bootstrap head office does not close the platform checker`() {
+        val branchId = pendingPlatformBranch()
+        val headOffice = uuidV7()
+        store.branchStates[organisationId to headOffice] = BranchLifecycleState.ACTIVE
+        store.branchCreators[organisationId to headOffice] = SystemActor.ID
+
+        branches.activate(activateCommand(branchId, platformChecker))
+
+        assertEquals(
+            BranchLifecycleState.ACTIVE,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+    }
+
+    @Test
+    fun `platform branch creation is not bounded by the tenant's own branches`() {
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        val ownBranch = uuidV7()
+        store.branchStates[organisationId to ownBranch] = BranchLifecycleState.ACTIVE
+        store.branchCreators[organisationId to ownBranch] = uuidV7()
+
+        branches.createDraft(createCommand(ActingScope.PLATFORM))
+    }
+
+    private fun createCommand(scope: ActingScope) =
+        CreateBranchCommand(
+            organisationId = organisationId,
+            branchCode = "BR-PLATFORM",
+            branchName = "Platform Branch",
+            branchType = "OPERATIONAL",
+            timezone = "UTC",
+            requestedBy = platformMaker,
+            scope = scope,
+        )
+
+    private fun activateCommand(
+        branchId: UUID,
+        actorId: UUID,
+    ) = ActivateBranchCommand(
+        organisationId = organisationId,
+        branchId = branchId,
+        actorId = actorId,
+        requestId = uuidV7(),
+        scope = ActingScope.PLATFORM,
+    )
+
+    private fun pendingPlatformBranch(): UUID {
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        lifecyclePersistence.organisations[organisationId] =
+            aggregate(organisationId, OrganisationLifecycleState.ACTIVE, "ORGANISATION")
+        val branchId = branches.createDraft(createCommand(ActingScope.PLATFORM)).branchId
+        lifecyclePersistence.branches[organisationId to branchId] =
+            aggregate(branchId, BranchLifecycleState.PENDING_APPROVAL, "BRANCH")
+        store.branchStates[organisationId to branchId] = BranchLifecycleState.PENDING_APPROVAL
+        return branchId
     }
 }

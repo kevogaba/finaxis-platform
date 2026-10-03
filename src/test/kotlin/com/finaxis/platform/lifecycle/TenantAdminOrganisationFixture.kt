@@ -2,7 +2,10 @@ package com.finaxis.platform.lifecycle
 
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.PlatformOrganisation
+import com.finaxis.platform.common.persistence.SystemActor
+import com.finaxis.platform.jooq.tables.references.PERMISSION
 import com.finaxis.platform.jooq.tables.references.ROLE
+import com.finaxis.platform.jooq.tables.references.ROLE_PERMISSION
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
 import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
@@ -78,13 +81,73 @@ class TenantAdminOrganisationFixture(
         )
     }
 
+    /** Grants [actorId] the platform org's read-only PLATFORM_SUPPORT role. */
+    fun grantPlatformSupport(actorId: UUID) {
+        grantRole(
+            organisationId = PlatformOrganisation.ID,
+            actorId = actorId,
+            roleCode = "PLATFORM_SUPPORT",
+            missingRoleMessage = "PLATFORM_SUPPORT role was not seeded for the platform org.",
+        )
+    }
+
+    /**
+     * Grants [actorId] a dedicated platform role holding exactly [permissionCodes] and nothing
+     * else, so a test can prove a route works with its advertised permission alone.
+     */
+    fun grantPlatformPermissionsOnly(
+        actorId: UUID,
+        vararg permissionCodes: String,
+    ) {
+        val now = OffsetDateTime.now()
+        val roleId =
+            requireNotNull(
+                dsl
+                    .insertInto(ROLE)
+                    .set(ROLE.ORGANISATION_ID, PlatformOrganisation.ID)
+                    .set(ROLE.ROLE_CODE, "PLATFORM_NARROW_${uuidV7()}")
+                    .set(ROLE.ROLE_NAME, "Narrow platform role")
+                    .set(ROLE.SYSTEM_ROLE, false)
+                    .set(ROLE.STATUS, "ACTIVE")
+                    .set(ROLE.CREATED_AT, now)
+                    .set(ROLE.CREATED_BY, SystemActor.ID)
+                    .set(ROLE.UPDATED_AT, now)
+                    .set(ROLE.UPDATED_BY, SystemActor.ID)
+                    .returning(ROLE.ID)
+                    .fetchOne()
+                    ?.id,
+            )
+        permissionCodes.forEach { code ->
+            val permissionId =
+                requireNotNull(
+                    dsl
+                        .select(PERMISSION.ID)
+                        .from(PERMISSION)
+                        .where(PERMISSION.PERMISSION_CODE.eq(code))
+                        .fetchOne(PERMISSION.ID),
+                ) { "$code must exist in the seeded catalogue" }
+            dsl
+                .insertInto(ROLE_PERMISSION)
+                .set(ROLE_PERMISSION.ORGANISATION_ID, PlatformOrganisation.ID)
+                .set(ROLE_PERMISSION.ROLE_ID, roleId)
+                .set(ROLE_PERMISSION.PERMISSION_ID, permissionId)
+                .set(ROLE_PERMISSION.GRANTED_AT, now)
+                .set(ROLE_PERMISSION.GRANTED_BY, SystemActor.ID)
+                .set(ROLE_PERMISSION.CREATED_AT, now)
+                .set(ROLE_PERMISSION.CREATED_BY, SystemActor.ID)
+                .set(ROLE_PERMISSION.UPDATED_AT, now)
+                .set(ROLE_PERMISSION.UPDATED_BY, SystemActor.ID)
+                .execute()
+        }
+        assignRole(PlatformOrganisation.ID, actorId, roleId)
+    }
+
     private fun grantRole(
         organisationId: UUID,
         actorId: UUID,
         roleCode: String,
         missingRoleMessage: String,
     ) {
-        val now = OffsetDateTime.now()
         val roleId =
             requireNotNull(
                 dsl
@@ -94,6 +157,15 @@ class TenantAdminOrganisationFixture(
                     .and(ROLE.ROLE_CODE.eq(roleCode))
                     .fetchOne(ROLE.ID),
             ) { missingRoleMessage }
+        assignRole(organisationId, actorId, roleId)
+    }
+
+    private fun assignRole(
+        organisationId: UUID,
+        actorId: UUID,
+        roleId: UUID,
+    ) {
+        val now = OffsetDateTime.now()
         dsl
             .insertInto(USER_ORGANISATION_MEMBERSHIP)
             .set(USER_ORGANISATION_MEMBERSHIP.ID, uuidV7())
@@ -101,6 +173,8 @@ class TenantAdminOrganisationFixture(
             .set(USER_ORGANISATION_MEMBERSHIP.USER_ID, actorId)
             .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, "ACTIVE")
             .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, "ADMIN")
+            // As the real bootstrap does: the first administrator is created by the system actor.
+            .set(USER_ORGANISATION_MEMBERSHIP.CREATED_BY, SystemActor.ID)
             .set(USER_ORGANISATION_MEMBERSHIP.CREATED_AT, now)
             .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT, now)
             .execute()

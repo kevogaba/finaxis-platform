@@ -565,7 +565,9 @@ class PlatformTenantController(
         ),
         ApiResponse(
             responseCode = "403",
-            description = "Forbidden or maker-checker violation",
+            description =
+                "Forbidden, maker-checker violation, or the approver is the account named as the " +
+                    "initial administrator (code `lifecycle.approver_is_initial_administrator`)",
             content = [
                 Content(
                     mediaType = "application/problem+json",

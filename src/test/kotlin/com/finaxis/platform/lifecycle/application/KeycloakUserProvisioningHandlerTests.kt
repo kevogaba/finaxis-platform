@@ -62,6 +62,7 @@ class KeycloakUserProvisioningHandlerTests {
             auditService,
             events,
             clock,
+            mock(com.finaxis.platform.lifecycle.PermissionGuard::class.java),
         )
     private val fakeBootstrapStore =
         object : InitialAdministratorBootstrapStore {
@@ -112,6 +113,8 @@ class KeycloakUserProvisioningHandlerTests {
                             },
                     )
             }
+
+            override fun existingAdministratorUserId(organisationId: UUID): UUID? = null
 
             override fun linkResolvedEntities(
                 organisationId: UUID,
@@ -458,6 +461,8 @@ private class ProvisioningWorkerStoreFake :
         organisationId: UUID,
         userId: UUID,
     ): Boolean = false
+
+    override fun hasActiveMembershipBeyondBootstrap(organisationId: UUID): Boolean = false
 
     override fun branchState(
         organisationId: UUID,

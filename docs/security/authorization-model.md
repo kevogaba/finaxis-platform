@@ -112,6 +112,47 @@ flowchart LR
     MP --> P
 ```
 
+## Maker-checker and the platform checker
+
+Approvals are maker-checker: the actor that created a thing cannot approve it, whatever its
+permissions. `UserProvisioningService.approveUser` refuses the actor that invited the membership
+**and the invited user themselves** (the checker is neither the maker nor the beneficiary), and
+`BranchProvisioningService.activate` refuses the actor that created the branch. Both compare
+user ids, so switching organisation context does not get round them.
+
+A freshly approved tenant has one user, the bootstrap `TENANT_ADMIN`, who is the maker of
+everything it creates and so cannot finish onboarding a second person or a first branch. The
+resolution is [ADR 0028](../adr/0028-platform-checker-for-first-tenant-approvals.md): a
+**platform-context** actor may be the audited checker of a tenant's pending membership or branch.
+The checker is neither the maker nor the beneficiary: the platform actor cannot approve what it
+created, a membership of its own account, or a branch it submitted itself. The tenant's own rule is
+unchanged, and the permission is checked in the **platform organisation**, never in the tenant, so
+no tenant membership is needed. Two separate bounds apply (409 `lifecycle.platform_checker_closed`
+otherwise): a pending membership can be checked by the platform only while the tenant has no
+`ACTIVE` membership beyond its bootstrap administrator, and a pending branch only while it has no
+`ACTIVE` branch beyond the bootstrap head office (the ones the system actor created). Only `ACTIVE`
+rows count, so suspending or revoking them reopens the route. A tenant draft that names the
+approving platform user's own account as its initial administrator cannot be approved by that user
+(403 `lifecycle.approver_is_initial_administrator`).
+
+| Route | Permission | Scope |
+| --- | --- | --- |
+| `POST /platform/tenants/{tenant_id}/memberships/{membership_id}/activate` | `user.approve` | PLATFORM |
+| `POST /platform/tenants/{tenant_id}/branches/{branch_id}/activate` | `branch.activate` | PLATFORM |
+| `POST /platform/tenants/{tenant_id}/branches/{branch_id}/submit` | `branch.create` | PLATFORM |
+| `POST /platform/tenants/{tenant_id}/branches` | `branch.create` | PLATFORM |
+
+Order of checks on every one of them: platform context, then the platform permission, then the
+path tenant's ownership of the id (404 otherwise; the platform organisation is never a valid
+`{tenant_id}`), then the tenant state and the maker/beneficiary rules. The tenant must be `ACTIVE`
+to approve or activate, and `ACTIVE` or `PROVISIONING` to create or submit a branch.
+`PLATFORM_SUPPORT` holds none of the permissions.
+
+Every use is attributed to the platform actor in the tenant's audit log: the transition row, the
+`user.approve` row with metadata `checkerScope = PLATFORM`, and for a branch an extra
+`branch.submit_as_platform_checker` (submission) or `branch.activate_as_platform_checker`
+(activation) row, each with the same metadata. Filter on either to review them.
+
 ## Caching and invalidation
 
 `RequestPermissionCache` is request-scoped. It memoizes permission resolution only for the current

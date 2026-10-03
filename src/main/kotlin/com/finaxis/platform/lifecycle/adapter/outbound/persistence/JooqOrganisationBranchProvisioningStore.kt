@@ -42,6 +42,7 @@ import com.finaxis.platform.lifecycle.application.OrganisationSummary
 import com.finaxis.platform.lifecycle.application.RevokeUserBranchAssignmentCommand
 import com.finaxis.platform.lifecycle.application.StoredSetting
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
+import com.finaxis.platform.lifecycle.domain.BranchLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import org.jooq.Condition
@@ -342,6 +343,32 @@ class JooqOrganisationBranchProvisioningStore(
             .where(BRANCH.ORGANISATION_ID.eq(organisationId))
             .and(BRANCH.ID.eq(branchId))
             .fetchOne(BRANCH.CREATED_BY)
+
+    override fun hasActiveBranchBeyondBootstrap(organisationId: UUID): Boolean =
+        dsl.fetchExists(
+            BRANCH,
+            BRANCH.ORGANISATION_ID
+                .eq(organisationId)
+                .and(BRANCH.STATUS.eq(BranchLifecycleState.ACTIVE.name))
+                .and(BRANCH.CREATED_BY.isDistinctFrom(SystemActor.ID)),
+        )
+
+    override fun submittedBy(
+        organisationId: UUID,
+        branchId: UUID,
+    ): UUID? =
+        dsl
+            .select(BRANCH_TRANSITION_LOG.CREATED_BY)
+            .from(BRANCH_TRANSITION_LOG)
+            .where(BRANCH_TRANSITION_LOG.ORGANISATION_ID.eq(organisationId))
+            // entity_id = branch_id (chk_branch_transition_log_entity); entity_id is what
+            // idx_branch_transition_log_organisation_entity (organisation_id, entity_id,
+            // created_at DESC) leads with, so this is a bounded index range rather than a scan.
+            .and(BRANCH_TRANSITION_LOG.ENTITY_ID.eq(branchId))
+            .and(BRANCH_TRANSITION_LOG.TRANSITION_NAME.eq(BranchLifecycleTransition.SUBMIT.name))
+            .orderBy(BRANCH_TRANSITION_LOG.CREATED_AT.desc(), BRANCH_TRANSITION_LOG.ID.desc())
+            .limit(1)
+            .fetchOne(BRANCH_TRANSITION_LOG.CREATED_BY)
 
     private fun now() = clock.instant().atOffset(ZoneOffset.UTC)
 }
