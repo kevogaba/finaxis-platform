@@ -269,6 +269,17 @@ tasks.withType<dev.detekt.gradle.Detekt>().configureEach {
     jvmTarget = "25"
 }
 
+configurations.matching { it.name == "detekt" }.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "org.jetbrains.kotlin") {
+            useVersion(
+                dev.detekt.gradle.plugin
+                    .getSupportedKotlinVersion(),
+            )
+        }
+    }
+}
+
 spotless {
     kotlin {
         target("src/**/*.kt")
