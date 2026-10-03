@@ -190,6 +190,12 @@ Ordinary mutations use `EXACT_RESPONSE` replay. Organisation and branch selectio
 stores only safe selection state, revalidates it, restores the browser session, and issues a
 fresh valid context token for the same selection.
 
+Before a response is stored it is checked for credential-like field names (`key`, `token`,
+`secret`, `session`, and so on, matched per word, so `api_key` is rejected). The one exemption is
+the `key` field of a response that is exactly the tenant-setting shape (`key`, `value`,
+`value_type`, `sensitive`, `platform_admin_only`) returned by `PUT /api/v1/tenant/settings/{key}`,
+where it names the setting rather than carrying a credential.
+
 ### Rate Limiting And Correlation
 
 Every response includes:

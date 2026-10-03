@@ -124,6 +124,48 @@ class SafeReplayResponseTests {
     }
 
     @Test
+    fun `tenant setting response is exempt for its setting key and survives revalidation`() {
+        val body = TENANT_SETTING_BODY
+
+        assertEquals(body, factory.fromLive(IdempotencyResponse(200, emptyMap(), body)).storedBody)
+        assertEquals(
+            body,
+            factory.fromStored(status = 200, headers = emptyMap(), storedBody = body).storedBody,
+        )
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+        strings = [
+            """{"key":"base_currency"}""",
+            """{"key":"base_currency","value":"KES"}""",
+            """{"outer":$TENANT_SETTING_BODY}""",
+            """[$TENANT_SETTING_BODY]""",
+            """{"key":"k","value":"v","value_type":"STRING","sensitive":false,""" +
+                """"platform_admin_only":false,"extra":1}""",
+            """{"nested":{"key":"k"},"value":"v","value_type":"STRING","sensitive":false,""" +
+                """"platform_admin_only":false}""",
+        ],
+    )
+    fun `a bare key outside the exact tenant setting response shape stays rejected`(body: String) {
+        assertFailsWith<IllegalArgumentException> {
+            factory.fromLive(IdempotencyResponse(200, emptyMap(), body))
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["api_key", "private_key", "access_token"])
+    fun `the tenant setting exemption does not cover other sensitive names`(field: String) {
+        val body =
+            """{"key":"k","value":"v","value_type":"STRING","sensitive":false,""" +
+                """"platform_admin_only":false,"$field":"must-not-persist"}"""
+
+        assertFailsWith<IllegalArgumentException> {
+            factory.fromLive(IdempotencyResponse(200, emptyMap(), body))
+        }
+    }
+
+    @Test
     fun `stored response is revalidated with the same sensitive alias rule`() {
         assertFailsWith<IllegalArgumentException> {
             factory.fromStored(
@@ -163,5 +205,11 @@ class SafeReplayResponseTests {
                 Modifier.isPublic(constructor.modifiers)
             },
         )
+    }
+
+    private companion object {
+        const val TENANT_SETTING_BODY =
+            """{"key":"base_currency","value":"KES","value_type":"CURRENCY",""" +
+                """"sensitive":false,"platform_admin_only":false}"""
     }
 }

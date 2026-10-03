@@ -71,7 +71,7 @@ class SafeReplayResponseFactory(
             "Replay response body exceeds the configured maximum size"
         }
         val parsed = parseJson(body)
-        rejectProhibitedFields(parsed)
+        rejectProhibitedFields(parsed, exemptField = tenantSettingKeyField(parsed))
         return ValidatedSafeReplayResponse(
             response.status,
             sanitizeHeaders(response.headers),
@@ -109,11 +109,25 @@ class SafeReplayResponseFactory(
             throw IllegalArgumentException("Replay response body must be valid JSON", failure)
         }
 
-    private fun rejectProhibitedFields(node: JsonNode) {
+    /**
+     * Returns `key` only for a root object that is exactly a tenant-setting response, where `key`
+     * names the setting (for example `base_currency`) rather than carrying a credential. Anything
+     * else with a bare `key` keeps failing the sensitive-name rule.
+     */
+    private fun tenantSettingKeyField(root: JsonNode): String? =
+        TENANT_SETTING_KEY_FIELD.takeIf {
+            root.isObject &&
+                root.properties().map { it.key }.toSet() == TENANT_SETTING_RESPONSE_FIELDS
+        }
+
+    private fun rejectProhibitedFields(
+        node: JsonNode,
+        exemptField: String? = null,
+    ) {
         when {
             node.isObject -> {
                 node.properties().forEach { (fieldName, value) ->
-                    require(!containsProhibitedFieldName(fieldName)) {
+                    require(fieldName == exemptField || !containsProhibitedFieldName(fieldName)) {
                         "Replay response body contains a prohibited field"
                     }
                     rejectProhibitedFields(value)
@@ -157,6 +171,10 @@ class SafeReplayResponseFactory(
         const val SUCCESS_STATUS_MAXIMUM: Int = 299
         const val NO_CONTENT_STATUS: Int = 204
         val STANDARD_SAFE_HEADERS: Set<String> = setOf("Location", "ETag")
+
+        const val TENANT_SETTING_KEY_FIELD = "key"
+        val TENANT_SETTING_RESPONSE_FIELDS: Set<String> =
+            setOf("key", "value", "value_type", "sensitive", "platform_admin_only")
 
         val CAMEL_CASE_BOUNDARY = Regex("([a-z0-9])([A-Z])")
         val ACRONYM_BOUNDARY = Regex("([A-Z]+)([A-Z][a-z])")
