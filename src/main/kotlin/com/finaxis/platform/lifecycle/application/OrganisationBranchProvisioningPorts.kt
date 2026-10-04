@@ -13,6 +13,20 @@ interface OrganisationLifecycleProvisioningStore {
     /** Resolves the current lifecycle state by the internal organisation identifier. */
     fun lifecycleState(organisationId: UUID): OrganisationLifecycleState?
 
+    /**
+     * Takes the organisation row's `FOR NO KEY UPDATE` lock and holds it to the end of the
+     * calling transaction, so everything the caller reads afterwards - the state, the bootstrap
+     * record - is the committed truth and cannot be replaced before the caller's own write. It is
+     * the lock the lifecycle transition's `UPDATE` takes anyway, taken early; it does not block
+     * the foreign-key checks of rows inserted for the organisation. Does nothing for an unknown
+     * organisation, whose absence the caller's next read reports.
+     *
+     * Requires an active transaction. Every provisioning decision locks the organisation
+     * **first**, before it touches the bootstrap record, which is the only order that is the same
+     * in all of them.
+     */
+    fun lockOrganisation(organisationId: UUID)
+
     /** Persists an organisation draft and returns its identifier. */
     fun createDraft(command: CreateOrganisationDraftCommand): UUID
 

@@ -83,6 +83,10 @@ class OrganisationProvisioningService(
     /** Amends an existing organisation draft before it is submitted. */
     @Transactional
     fun amendDraft(command: AmendOrganisationDraftCommand) {
+        // Lock before reading the state: an amendment writes the draft's own columns and the
+        // administrator block unconditionally, so it must not be judged a draft by a read that a
+        // concurrent submission has since made untrue.
+        lifecycleStore.lockOrganisation(command.organisationId)
         val state =
             lifecycleStore
                 .lifecycleState(command.organisationId)
@@ -106,6 +110,9 @@ class OrganisationProvisioningService(
     /** Validates metadata and moves a draft into the approval workflow. */
     @Transactional
     fun submitForApproval(command: SubmitOrganisationForApprovalCommand) {
+        // Lock first (see [approveProvisioning]): the metadata and administrator validated below
+        // are the ones that get submitted, not ones an amendment is about to replace.
+        lifecycleStore.lockOrganisation(command.organisationId)
         errorUnless(lifecycleStore.hasRequiredMetadata(command.organisationId), SafeError.CONFLICT)
         val record =
             adminBootstrapStore
@@ -133,9 +140,20 @@ class OrganisationProvisioningService(
         )
     }
 
-    /** Creates mandatory durable setup and activates an approved organisation atomically. */
+    /**
+     * Creates mandatory durable setup and activates an approved organisation atomically.
+     *
+     * The organisation row is locked **before** the bootstrap record is read, and the lock is held
+     * through the transition in this transaction (ADR 0029). The maker-checker rule and the
+     * initial-administrator refusal are judged against the submitter and the named administrator,
+     * and since the return edge exists a request can commit return, amend and resubmit and so
+     * replace both; an approval that read them first and locked second would approve the new
+     * submission on the old submitter's say-so. Locked first, it waits for such a request and
+     * reads what it left.
+     */
     @Transactional
     fun approveProvisioning(command: ApproveOrganisationProvisioningCommand) {
+        lifecycleStore.lockOrganisation(command.organisationId)
         val record =
             adminBootstrapStore
                 .find(command.organisationId)
@@ -191,6 +209,10 @@ class OrganisationProvisioningService(
     @Transactional
     fun rejectProvisioning(command: RejectOrganisationProvisioningCommand) {
         errorUnless(command.actorId != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
+        // Lock first (see [approveProvisioning]); it also gives this path the same lock order as
+        // the others, organisation then bootstrap record, where it used to take them the other
+        // way round.
+        lifecycleStore.lockOrganisation(command.organisationId)
         adminBootstrapStore.reject(command.organisationId)
 
         lifecycleService.transition(
@@ -207,16 +229,19 @@ class OrganisationProvisioningService(
      * actor needs `tenant.reject` and, as for [approveProvisioning], may be neither the requester
      * nor the submitter, so a maker cannot pull their own submission back through this route.
      *
-     * Permission first, so an unauthorised caller learns nothing; then the bootstrap record, whose
-     * absence (an unknown tenant, the platform organisation) is a 404; then the maker-checker
-     * rule; then the FSM's own state conflict. The transition runs before the record is reset, so
-     * a tenant that is not pending is refused without touching the record. The record then
-     * becomes a draft again, exactly as [rejectProvisioning] leaves it, and the amend and
-     * resubmit that follow re-establish what depends on it.
+     * Permission first, so an unauthorised caller learns nothing; then the organisation lock,
+     * before the record is read and held through the transition, for the reason given on
+     * [approveProvisioning]; then the bootstrap record, whose absence (an unknown tenant, the
+     * platform organisation) is a 404; then the maker-checker rule; then the FSM's own state
+     * conflict. The transition runs before the record is reset, so a tenant that is not pending
+     * is refused without touching the record. The record then becomes a draft again, exactly as
+     * [rejectProvisioning] leaves it, and the amend and resubmit that follow re-establish what
+     * depends on it.
      */
     @Transactional
     fun returnForChanges(command: ReturnOrganisationForChangesCommand) {
         permissionGuard.requirePlatformPermission(command.actorId, "tenant.reject")
+        lifecycleStore.lockOrganisation(command.organisationId)
         val record =
             adminBootstrapStore
                 .find(command.organisationId)

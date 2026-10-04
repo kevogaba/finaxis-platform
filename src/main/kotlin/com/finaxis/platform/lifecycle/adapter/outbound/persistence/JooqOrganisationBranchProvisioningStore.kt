@@ -100,6 +100,19 @@ class JooqOrganisationBranchProvisioningStore(
             ?: error("Insert into organisation returned no generated identifier.")
     }
 
+    override fun lockOrganisation(organisationId: UUID) {
+        // Outside a transaction the lock is released by the statement that took it.
+        check(TransactionSynchronizationManager.isActualTransactionActive()) {
+            "Locking an organisation for a provisioning decision requires an active transaction."
+        }
+        dsl
+            .select(ORGANISATION.ID)
+            .from(ORGANISATION)
+            .where(ORGANISATION.ID.eq(organisationId))
+            .forNoKeyUpdate()
+            .fetch()
+    }
+
     override fun amendDraft(command: AmendOrganisationDraftCommand) {
         val now = now()
         dsl

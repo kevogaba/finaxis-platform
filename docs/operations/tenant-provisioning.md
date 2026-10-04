@@ -72,6 +72,13 @@ Approval is organisation-first. `approveProvisioning` moves the organisation int
 `PROVISIONING`, creates the mandatory durable setup, verifies it, and then activates the
 organisation. A failure rolls back the local transaction; the organisation is not activated.
 
+`approveProvisioning` locks the organisation row before it reads the initial-administrator record
+and checks maker-checker, and holds the lock to the end of the transaction. A concurrent return,
+amend and resubmit therefore either completes first, and the approval is judged against the new
+submitter and administrator, or waits for the approval. `returnForChanges`, `rejectProvisioning`,
+`submitForApproval` and `amendDraft` lock the same way. An operator may see a decision wait on
+another for the length of that transaction.
+
 The implemented setup is:
 
 - default setting `settings.operational=true`;

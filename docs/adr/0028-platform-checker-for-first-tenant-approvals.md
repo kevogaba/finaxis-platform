@@ -133,6 +133,10 @@ checker step:
     already belongs to an account and that account is the approver, the approval answers 403
     `lifecycle.approver_is_initial_administrator`. If the account does not exist yet there is
     nothing to compare. The bootstrap is deliberately **not** exempted from the beneficiary rule.
+    The refusal, like the requester and submitter rule, is judged after `approveProvisioning` has
+    locked the organisation row, so it reads the submitter and the named administrator of the
+    submission it then approves, not those of one a concurrent return, amend and resubmit has
+    since replaced (ADR 0029, "Locking rule").
 
 ### Routes and permissions
 
