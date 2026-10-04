@@ -461,6 +461,9 @@ Base path: `/api/v1/platform/tenants`. List filters: `q`, `status`, `country`,
 | POST   | `/{tenant_id}/deprovision`     | Deprovision tenant  | `tenant.deprovision`         | mutation      |
 | POST   | `/{tenant_id}/bootstrap/retry` | Retry bootstrap     | `tenant.bootstrap_retry`     | mutation      |
 
+`POST /{tenant_id}/approve` takes an optional decision remark, see
+[Decision remarks](#decision-remarks).
+
 `base_currency_code` is the tenant's functional currency for every future journal line, so create
 and amend validate it against the ledger's own currency authority and not only against its shape:
 beyond the `^[A-Z]{3}$` pattern the request body enforces as a `400`, it must be an ISO 4217 code
@@ -566,8 +569,8 @@ Base path: `/api/v1/platform/tenants/{tenant_id}/memberships`.
 |--------|-----------------------------|-------------------------------------------------|----------------|----------|
 | POST   | `/{membership_id}/activate` | Approve a tenant membership as platform checker | `user.approve` | mutation |
 
-Takes no body and returns the membership as `GET /api/v1/tenant/memberships/{membership_id}`
-does: **200** when the membership became `ACTIVE`, **202** while Keycloak provisioning is queued.
+Takes an optional decision remark body (see [Decision remarks](#decision-remarks)) and returns the
+membership as `GET /api/v1/tenant/memberships/{membership_id}` does: **200** when the membership became `ACTIVE`, **202** while Keycloak provisioning is queued.
 The permission is checked in the platform organisation, and the returned membership needs no
 `membership.view`: the route works with `user.approve` alone. `404` when the membership is not in the
 path tenant, `409` when the tenant is not `ACTIVE`, the membership is not pending approval, or the
@@ -721,6 +724,40 @@ Membership response and revoke request:
   "reason": "User left the organisation."
 }
 ```
+
+#### Decision remarks
+
+Three approvals accept an **optional** JSON body carrying a remark. The body itself is optional and
+so is the field, so a call without one behaves exactly as before:
+
+| Route                                                                        | Permission       |
+|------------------------------------------------------------------------------|------------------|
+| `POST /api/v1/tenant/memberships/{membership_id}/activate`                   | `user.approve`   |
+| `POST /api/v1/platform/tenants/{tenant_id}/memberships/{membership_id}/activate` | `user.approve` |
+| `POST /api/v1/platform/tenants/{tenant_id}/approve`                          | `tenant.approve` |
+
+```json
+{
+  "reason": "Checked against the signed request form."
+}
+```
+
+`reason` is at most 500 characters; a longer one is `400` (`validation_failed`) and nothing is
+changed. The remark never changes who may approve. Replaying a request with the same
+`Idempotency-Key` and body returns the original response; the same key with a different body is
+the usual idempotency mismatch.
+
+Where the remark lands depends on the path, because a membership approval does not always activate
+the membership itself:
+
+| Route and outcome                                        | `status_reason`                      | Audit `reason`                            |
+|----------------------------------------------------------|--------------------------------------|-------------------------------------------|
+| Membership activate, **200** (invitee already has an identity) | membership `ACTIVATE` transition | `user.approve` and `membership.activate`  |
+| Membership activate, **202** (identity provisioning queued) | none; the membership stays `PENDING_APPROVAL` | `user.approve` only; the later job-driven `membership.activate` row carries no reason |
+| Tenant approve, **202**                                  | the organisation and its head office | the `START_PROVISIONING`, head office and organisation `ACTIVATE` transition rows |
+
+No status reason is added to a response body: the membership and tenant details do not expose one
+(the tenant's belongs to the tenant detail work), and branch details already do.
 
 ### Branch Assignments
 

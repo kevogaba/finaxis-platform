@@ -149,6 +149,7 @@ class UserProvisioningService(
             actorId = command.approvedBy,
             resourceType = USER,
             resourceId = snapshot.userId,
+            reason = command.reason,
             requestId = command.requestId,
             metadata =
                 mapOf(
@@ -441,7 +442,7 @@ class UserProvisioningService(
                 command.organisationId,
                 snapshot.id,
                 transition = MembershipLifecycleTransition.ACTIVATE,
-                command = transitionCommand(requestId = command.requestId),
+                command = transitionCommand(command.reason, command.requestId),
             ),
         )
         return true

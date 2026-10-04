@@ -270,6 +270,47 @@ class PlatformTenantCheckerControllerTests
         }
 
         @Test
+        fun `platform membership activation passes an optional decision remark`() {
+            whenever(userProvisioningService.approveUser(any())).thenReturn(approval(false))
+            stubMembershipDetail("ACTIVE")
+            val route = "${ApiPaths.PLATFORM_TENANTS}/$tenantId/memberships/$membershipId/activate"
+
+            mockMvc
+                .post(route) {
+                    contentType = MediaType.APPLICATION_JSON
+                    content = "{\"reason\":\"${"x".repeat(500)}\"}"
+                    with(authentication(platformToken(setOf("user.approve"))))
+                }.andExpect { status { isOk() } }
+            mockMvc
+                .post(route) { with(authentication(platformToken(setOf("user.approve")))) }
+                .andExpect { status { isOk() } }
+
+            verify(userProvisioningService).approveUser(
+                argThat<ApproveUserCommand> {
+                    reason == "x".repeat(500) && scope == ActingScope.PLATFORM
+                },
+            )
+            verify(userProvisioningService).approveUser(
+                argThat<ApproveUserCommand> { reason == null },
+            )
+        }
+
+        @Test
+        fun `platform membership activation rejects a remark over 500 characters`() {
+            mockMvc
+                .post("${ApiPaths.PLATFORM_TENANTS}/$tenantId/memberships/$membershipId/activate") {
+                    contentType = MediaType.APPLICATION_JSON
+                    content = "{\"reason\":\"${"x".repeat(501)}\"}"
+                    with(authentication(platformToken(setOf("user.approve"))))
+                }.andExpect {
+                    status { isBadRequest() }
+                    jsonPath("$.code") { value("validation_failed") }
+                }
+
+            verify(userProvisioningService, never()).approveUser(any())
+        }
+
+        @Test
         fun `platform membership activation answers 202 while identity provisioning is queued`() {
             whenever(userProvisioningService.approveUser(any())).thenReturn(approval(true))
             stubMembershipDetail("PENDING_APPROVAL")

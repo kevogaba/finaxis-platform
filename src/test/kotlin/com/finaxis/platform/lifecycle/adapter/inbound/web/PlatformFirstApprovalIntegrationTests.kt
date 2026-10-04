@@ -636,6 +636,233 @@ class PlatformFirstApprovalIntegrationTests
             assertEquals("QUEUED", bootstrapStatus(tenantId))
         }
 
+        @Test
+        fun `a remark on an immediate tenant activation is the status reason and audited`() {
+            val s = Scenario()
+            val email = "remark-${shortId()}@tenant.test"
+            seedIdentifiedUser(email)
+            val membershipId = s.inviteAsTenantAdmin(email, s.activeBranch())
+            val userId = idOf(membershipBody(s, membershipId), "user_id")
+            val secondAdmin = seedUser("tadmin2").also { fixture.grantTenantAdmin(s.tenantId, it) }
+            val key = uuidV7().toString()
+            val activatePath = "${ApiPaths.MEMBERSHIPS}/$membershipId/activate"
+            val body = remarkBody("Checked against the signed request form.")
+
+            val first =
+                tenantPostWithKey(activatePath, secondAdmin, s, key, body)
+                    .andExpect {
+                        status { isOk() }
+                        jsonPath("$.membership_status") { value("ACTIVE") }
+                    }.andReturn()
+                    .response.contentAsString
+            val replay =
+                tenantPostWithKey(activatePath, secondAdmin, s, key, body)
+                    .andExpect { status { isOk() } }
+                    .andReturn()
+                    .response.contentAsString
+
+            assertEquals(first, replay)
+            assertEquals(
+                "Checked against the signed request form.",
+                membershipStatusReason(membershipId),
+            )
+            assertEquals(
+                listOf("Checked against the signed request form."),
+                auditReasons(s.tenantId, "user.approve", userId),
+            )
+            assertEquals(
+                listOf("Checked against the signed request form."),
+                auditReasons(s.tenantId, "membership.activate", membershipId),
+            )
+            assertEquals(
+                1,
+                outboxRecords("finaxis.lifecycle.membership.activated", membershipId.toString()),
+            )
+        }
+
+        @Test
+        fun `a remark on the platform membership route is persisted`() {
+            val s = Scenario()
+            val branchId = s.activeBranch()
+            val withRemark = "remark-${shortId()}@tenant.test"
+            seedIdentifiedUser(withRemark)
+            val remarked = s.inviteAsTenantAdmin(withRemark, branchId)
+            val base = "${ApiPaths.PLATFORM_TENANTS}/${s.tenantId}/memberships"
+
+            val remark = remarkBody("First-line checker.")
+            platformPost("$base/$remarked/activate", s.platformChecker, remark)
+                .andExpect { status { isOk() } }
+
+            assertEquals("First-line checker.", membershipStatusReason(remarked))
+            assertEquals(
+                listOf("First-line checker."),
+                auditReasons(s.tenantId, "membership.activate", remarked),
+            )
+            val userId = idOf(membershipBody(s, remarked), "user_id")
+            assertEquals(
+                listOf("First-line checker."),
+                auditReasons(s.tenantId, "user.approve", userId),
+            )
+        }
+
+        @Test
+        fun `a remark on a queued activation lives only on the user approve audit row`() {
+            val s = Scenario()
+            val membershipId =
+                s.inviteAsTenantAdmin("queued-${shortId()}@tenant.test", s.activeBranch())
+            val userId = idOf(membershipBody(s, membershipId), "user_id")
+            val key = uuidV7().toString()
+            val path =
+                "${ApiPaths.PLATFORM_TENANTS}/${s.tenantId}/memberships/$membershipId/activate"
+            val body = remarkBody("Approved pending identity creation.")
+
+            val first =
+                platformPostWithKey(path, s.platformChecker, key, body)
+                    .andExpect {
+                        status { isAccepted() }
+                        jsonPath("$.membership_status") { value("PENDING_APPROVAL") }
+                    }.andReturn()
+                    .response.contentAsString
+            val replay =
+                platformPostWithKey(path, s.platformChecker, key, body)
+                    .andExpect { status { isAccepted() } }
+                    .andReturn()
+                    .response.contentAsString
+
+            assertEquals(first, replay)
+            assertEquals(
+                listOf("Approved pending identity creation."),
+                auditReasons(s.tenantId, "user.approve", userId),
+            )
+            assertEquals(null, membershipStatusReason(membershipId))
+            assertEquals(emptyList(), auditReasons(s.tenantId, "membership.activate", membershipId))
+        }
+
+        @Test
+        fun `a remark over 500 characters on either membership route is a 400`() {
+            val s = Scenario()
+            val email = "toolong-${shortId()}@tenant.test"
+            seedIdentifiedUser(email)
+            val membershipId = s.inviteAsTenantAdmin(email, s.activeBranch())
+            val secondAdmin = seedUser("tadmin3").also { fixture.grantTenantAdmin(s.tenantId, it) }
+            val tooLong = remarkBody("x".repeat(501))
+
+            val tenantRoute = "${ApiPaths.MEMBERSHIPS}/$membershipId/activate"
+            tenantPost(tenantRoute, secondAdmin, s.tenantId, tooLong)
+                .andExpect { status { isBadRequest() } }
+            platformPost(
+                "${ApiPaths.PLATFORM_TENANTS}/${s.tenantId}/memberships/$membershipId/activate",
+                s.platformChecker,
+                tooLong,
+            ).andExpect { status { isBadRequest() } }
+
+            assertEquals("PENDING_APPROVAL", membershipStatus(membershipId))
+        }
+
+        @Test
+        fun `a remark on tenant approval becomes the organisation status reason and is audited`() {
+            val maker = seedUser("rm-maker").also { fixture.grantPlatformSuperAdmin(it) }
+            val checker = seedUser("rm-checker").also { fixture.grantPlatformSuperAdmin(it) }
+            val tenantId = submittedTenant(maker, "admin-${shortId()}@tenant.test")
+            val path = "${ApiPaths.PLATFORM_TENANTS}/$tenantId/approve"
+            val key = uuidV7().toString()
+            val body = remarkBody("KYC pack reviewed.")
+
+            val first =
+                platformPostWithKey(path, checker, key, body)
+                    .andExpect {
+                        status { isAccepted() }
+                        jsonPath("$.status") { value("ACTIVE") }
+                    }.andReturn()
+                    .response.contentAsString
+            val replay =
+                platformPostWithKey(path, checker, key, body)
+                    .andExpect { status { isAccepted() } }
+                    .andReturn()
+                    .response.contentAsString
+
+            assertEquals(first, replay)
+            assertEquals("KYC pack reviewed.", tenantStatusReason(tenantId))
+            assertEquals(
+                listOf("KYC pack reviewed."),
+                auditReasons(tenantId, "organisation.activate", tenantId),
+            )
+        }
+
+        @Test
+        fun `tenant approval rejects an over-long remark and works without one`() {
+            val maker = seedUser("rl-maker").also { fixture.grantPlatformSuperAdmin(it) }
+            val checker = seedUser("rl-checker").also { fixture.grantPlatformSuperAdmin(it) }
+            val tenantId = submittedTenant(maker, "admin-${shortId()}@tenant.test")
+            val path = "${ApiPaths.PLATFORM_TENANTS}/$tenantId/approve"
+
+            platformPost(path, checker, remarkBody("x".repeat(501)))
+                .andExpect { status { isBadRequest() } }
+            assertEquals("PENDING_APPROVAL", tenantStatus(tenantId))
+
+            platformPost(path, checker).andExpect { status { isAccepted() } }
+            assertEquals("ACTIVE", tenantStatus(tenantId))
+            assertEquals(null, tenantStatusReason(tenantId))
+        }
+
+        private fun remarkBody(reason: String) =
+            apiJsonCodec.mapper.writeValueAsString(mapOf("reason" to reason))
+
+        private fun platformPostWithKey(
+            path: String,
+            actor: UUID,
+            key: String,
+            body: String,
+        ): ResultActionsDsl =
+            mockMvc.post(path) {
+                header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, key)
+                contentType = MediaType.APPLICATION_JSON
+                content = body
+                with(authentication(token(actor, PlatformOrganisation.ID, COARSE_AUTHORITIES)))
+            }
+
+        private fun tenantPostWithKey(
+            path: String,
+            actor: UUID,
+            s: Scenario,
+            key: String,
+            body: String,
+        ): ResultActionsDsl =
+            mockMvc.post(path) {
+                header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, key)
+                contentType = MediaType.APPLICATION_JSON
+                content = body
+                with(authentication(tenantToken(actor, s.tenantId)))
+            }
+
+        private fun membershipStatusReason(membershipId: UUID): String? =
+            dsl
+                .fetchOne(
+                    "SELECT status_reason FROM user_organisation_membership WHERE id = ?",
+                    membershipId,
+                )!!
+                .get(0, String::class.java)
+
+        private fun tenantStatusReason(tenantId: UUID): String? =
+            dsl
+                .fetchOne("SELECT status_reason FROM organisation WHERE id = ?", tenantId)!!
+                .get(0, String::class.java)
+
+        private fun auditReasons(
+            tenantId: UUID,
+            action: String,
+            entityId: UUID,
+        ): List<String?> =
+            dsl
+                .fetch(
+                    "SELECT reason FROM audit_event " +
+                        "WHERE organisation_id = ? AND action = ? AND entity_id = ? " +
+                        "ORDER BY event_time",
+                    tenantId,
+                    action,
+                    entityId,
+                ).map { it.get(0, String::class.java) }
+
         private fun provisionTenantThroughApi(): UUID {
             val maker = seedUser("tenant-maker").also { fixture.grantPlatformSuperAdmin(it) }
             val checker = seedUser("tenant-checker").also { fixture.grantPlatformSuperAdmin(it) }
