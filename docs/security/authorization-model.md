@@ -112,6 +112,17 @@ flowchart LR
     MP --> P
 ```
 
+## Branch update
+
+`PATCH /branches/{branch_id}` requires `branch.create`; there is no `branch.update` code. A branch's
+descriptive fields are the maker's to edit, the same maker who holds `branch.create` for create and
+submit (ADR 0029), and a new code would need a `V18` grant migration and a role review for no
+separation the maker-checker rule does not already give: the checker's `branch.activate` is
+unchanged and still cannot be exercised by the creator. As with the lifecycle routes it is
+evaluated at the **target branch**, not the selected one (#154), by
+`BranchProvisioningService.update` rather than only at the controller, and a missing or foreign
+branch is `404` only after that check passes.
+
 ## Maker-checker and the platform checker
 
 Approvals are maker-checker: the actor that created a thing cannot approve it, whatever its

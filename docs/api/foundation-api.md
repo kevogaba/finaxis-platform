@@ -398,6 +398,7 @@ Base path: `/api/v1/branches`. List filters: `q`, `status`, `type`, `sort_by`, `
 | GET    | `/`                       | Search branches in the active tenant | `branch.view`       | page     |
 | POST   | `/`                       | Create branch draft                  | `branch.create`     | mutation |
 | GET    | `/{branch_id}`            | Get branch                           | `branch.view`       | item     |
+| PATCH  | `/{branch_id}`            | Update branch                        | `branch.create`     | mutation |
 | POST   | `/{branch_id}/submit`     | Submit branch draft                  | `branch.create`     | mutation |
 | POST   | `/{branch_id}/activate`   | Activate branch                      | `branch.activate`   | mutation |
 | POST   | `/{branch_id}/suspend`    | Suspend branch                       | `branch.suspend`    | mutation |
@@ -446,6 +447,56 @@ Create branch request and detail response:
 /branches/{branch_id}`, and every lifecycle response that returns the detail) echoes exactly the
 keys and values that were stored on create. A stored value that cannot be read back as such a map
 is answered as `{}` rather than failing the read.
+
+#### Update branch
+
+`PATCH /api/v1/branches/{branch_id}` changes a branch's name, parent, timezone or address in place
+and answers `200` with the branch detail above, so the response carries the stored address and the
+`opened_on`/`closed_on` dates.
+
+```json
+{
+  "branch_name": "Riverside Branch",
+  "parent_branch_id": "33333333-3333-7333-8333-333333333333",
+  "timezone": "Africa/Kampala",
+  "address": { "city": "Kampala", "line_1": "3 Lake Road" }
+}
+```
+
+- **Partial update.** Every field is optional and an absent field is unchanged. At least one must
+  be present: `{}` is `400 validation_failed` and a missing body is `400 invalid_json`. A
+  supplied `address` **replaces** the stored map as a whole; it is not merged key by key.
+- **Clearing the parent.** `parent_branch_id` is the one field with a "none" value: an explicit
+  JSON `null` detaches the branch from its parent, while leaving the key out keeps the parent. For
+  the other fields `null` is the same as absent.
+- **Not updatable.** `branch_code` and `branch_type` are fixed once created; sending either is
+  `400 invalid_json` (unknown field), as is any other unknown field. Status changes only through
+  the lifecycle routes.
+- **State gate.** Only a `DRAFT` or `ACTIVE` branch can be updated (`409 conflict` otherwise:
+  `PENDING_APPROVAL`, `SUSPENDED`, `CLOSED`, `ARCHIVED`). `DRAFT` is allowed so a draft returned
+  for changes (ADR 0029) can be amended by its maker. The update does not change the status and
+  is not an FSM transition.
+- **Validation.** `branch_name` is 2-100 characters and not blank (`400 validation_failed`);
+  `timezone` must be a valid zone id (`422 invalid_operation`). `parent_branch_id` must be a
+  branch of the same organisation (`404 resource_not_found` otherwise, as on create), must not be
+  the branch itself, and must not be a descendant of it (`422 invalid_operation`), and must not be
+  `CLOSED` or `ARCHIVED` (`409 conflict`: closing refuses a branch with active children, so this
+  is the same business rule, reported the way a closure guard reports it). The check applies to a
+  `DRAFT` branch too; create itself only requires that the parent exists. Moving a branch
+  serialises with other parent changes in the tenant, so two concurrent moves cannot together
+  form a cycle.
+- **Permission.** `branch.create`, the permission the branch's maker already holds for
+  create and submit (ADR 0029); no new permission code. It is checked in the application service
+  against the **target branch** whatever branch the caller has selected, then a missing or foreign
+  branch is `404`, then the state is checked (`409`).
+- **Audit and idempotency.** Writes a `branch.update` audit row whose metadata lists the changed
+  field **names** (`changedFields`, for example `branch_name,address`) and never their values.
+  Accepts an optional `Idempotency-Key`; a replay returns the stored response and applies the
+  update once. The row version is incremented by each update, and a status change that commits
+  first makes the update `409` rather than overwriting it.
+
+The platform route has no equivalent: a platform administrator creates, submits and activates a
+tenant's branch but does not edit it.
 
 `opened_on` and `closed_on` are business dates (`dd-MM-yyyy`) taken from the tenant's current
 business date, never the wall clock, and are `null` until they apply:

@@ -120,6 +120,7 @@ Foundation:
 | `bootstrapSubmissionAttempts(org)` | The bootstrap row's attempt counter, which is updated rather than inserted |
 | `outboxRecordRows(aggregateId)` | Namastack outbox rows mentioning an aggregate |
 | `eventPublicationRows()` | Spring Modulith event publications |
+| `branchRowVersion(branchId)` | A branch's `row_version`, bumped by every in-place write; the probe for the branch update (issue #165), a non-financial path that uses the fixture because its probes are generic |
 
 Ledger, added by issue #41:
 
@@ -165,6 +166,11 @@ plus post-commit visibility:
 | Failure after event registration | Throw after `BusinessDateService.advance` has written history, audit and the event | All three roll back; the business date is unchanged |
 | Nested transactional services | Submit an already-submitted organisation, so the FSM rejects across two nested `@Transactional` proxies | Transition log and outbox unchanged; the `REQUIRES_NEW` rejection audit **survives** |
 | Post-commit visibility | None — hold the transaction open | History, audit and outbox rows are invisible to a second connection until commit |
+
+The branch update is not a financial path but proves itself on the same fixture
+(`BranchUpdateAtomicityIntegrationTests`, issue #165): its row change and audit row roll back, and
+become visible, together; two cycle-forming moves cannot both commit; and a close racing a move
+under the branch being closed cannot leave a closed branch with an active child.
 
 The accounting suites extend the same gate to the ledger's own write paths:
 

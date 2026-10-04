@@ -158,6 +158,34 @@ data class CreateBranchCommand(
     val scope: ActingScope = ActingScope.TENANT,
 )
 
+/**
+ * Changes some of a branch's descriptive fields in place; a null field is left unchanged.
+ *
+ * The parent is the one field where null is also a value (a branch with no parent), so it carries
+ * [changesParent]: `false` leaves the parent alone, `true` sets it to [parentBranchId] - which may
+ * be null to detach the branch. The code and type are never updatable.
+ */
+data class UpdateBranchCommand(
+    val organisationId: UUID,
+    val branchId: UUID,
+    val actorId: UUID,
+    val branchName: String? = null,
+    val changesParent: Boolean = false,
+    val parentBranchId: UUID? = null,
+    val timezone: String? = null,
+    val address: Map<String, String>? = null,
+) {
+    /** The wire names of the fields this command changes, in a stable order. */
+    val changedFields: List<String>
+        get() =
+            listOfNotNull(
+                "branch_name".takeIf { branchName != null },
+                "parent_branch_id".takeIf { changesParent },
+                "timezone".takeIf { timezone != null },
+                "address".takeIf { address != null },
+            )
+}
+
 /** Submits a branch draft to approval. */
 data class SubmitBranchForApprovalCommand(
     val organisationId: UUID,
