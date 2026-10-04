@@ -8,6 +8,7 @@ import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.AmendTenantDraftRequest
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ApproveTenantRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateTenantDraftRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.DeprovisionTenantRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReactivateTenantRequest
@@ -527,7 +528,10 @@ class PlatformTenantController(
     @PreAuthorize("hasAuthority('tenant.approve')")
     @Operation(
         summary = "Approve tenant",
-        description = "Approves a submitted tenant and queues initial administrator setup.",
+        description =
+            "Approves a submitted tenant and queues initial administrator setup. The optional " +
+                "body `reason` (at most 500 characters) is a decision remark recorded on the " +
+                "approval's transitions and audit rows.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -598,6 +602,7 @@ class PlatformTenantController(
     )
     fun approve(
         @PathVariable("tenant_id") tenantId: UUID,
+        @RequestBody(required = false) @Valid request: ApproveTenantRequest?,
     ): TenantDetailResponse {
         val caller = CallerContextResolver.getPlatformCaller()
         permissionGuard.requirePlatformPermission(caller.actorId, "tenant.approve")
@@ -605,6 +610,7 @@ class PlatformTenantController(
         val command =
             ApproveOrganisationProvisioningCommand(
                 organisationId = tenantId,
+                reason = request?.reason,
                 actorId = caller.actorId,
                 requestId = uuidV7(),
             )

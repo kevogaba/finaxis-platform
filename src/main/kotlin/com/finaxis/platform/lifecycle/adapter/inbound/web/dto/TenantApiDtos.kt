@@ -147,6 +147,13 @@ data class SuspendTenantRequest(
     val reason: String,
 )
 
+/** Optional decision remark for approving a submitted tenant. */
+data class ApproveTenantRequest(
+    @field:Size(max = 500)
+    @field:Schema(example = "KYC pack reviewed.")
+    val reason: String? = null,
+)
+
 /** Request payload for reactivating a suspended tenant. */
 data class ReactivateTenantRequest(
     @field:Size(max = 500)

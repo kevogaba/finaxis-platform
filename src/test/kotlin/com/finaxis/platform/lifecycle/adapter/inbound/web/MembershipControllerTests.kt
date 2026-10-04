@@ -18,6 +18,7 @@ import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReactivateMembershipRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.RevokeMembershipRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SuspendMembershipRequest
+import com.finaxis.platform.lifecycle.application.ApproveUserCommand
 import com.finaxis.platform.lifecycle.application.UserApprovalResult
 import com.finaxis.platform.lifecycle.application.UserProvisioningService
 import com.finaxis.platform.lifecycle.application.query.LifecycleIamReadService
@@ -27,8 +28,10 @@ import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.argThat
 import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.beans.factory.annotation.Autowired
@@ -227,6 +230,53 @@ class MembershipControllerTests
                     status { isOk() }
                     jsonPath("$.membership_status") { value("ACTIVE") }
                 }
+        }
+
+        @Test
+        fun `activate passes an optional decision remark to the approval command`() {
+            val tenantId = uuidV7()
+            val membershipId = uuidV7()
+            val userId = uuidV7()
+            whenever(userProvisioningService.approveUser(any())).thenReturn(
+                approvalResult(userId, membershipId, keycloakRequested = false),
+            )
+            stubMembershipDetail(tenantId, membershipId, "ACTIVE", userId)
+
+            mockMvc
+                .post("${ApiPaths.MEMBERSHIPS}/$membershipId/activate") {
+                    contentType = MediaType.APPLICATION_JSON
+                    content = "{\"reason\":\"${"x".repeat(500)}\"}"
+                    with(authentication(tenantToken(setOf("user.approve"), tenantId)))
+                }.andExpect { status { isOk() } }
+            mockMvc
+                .post("${ApiPaths.MEMBERSHIPS}/$membershipId/activate") {
+                    with(authentication(tenantToken(setOf("user.approve"), tenantId)))
+                }.andExpect { status { isOk() } }
+
+            verify(userProvisioningService).approveUser(
+                argThat<ApproveUserCommand> { reason == "x".repeat(500) },
+            )
+            verify(userProvisioningService).approveUser(
+                argThat<ApproveUserCommand> { reason == null },
+            )
+        }
+
+        @Test
+        fun `activate rejects a remark over 500 characters before the service`() {
+            val tenantId = uuidV7()
+            val membershipId = uuidV7()
+
+            mockMvc
+                .post("${ApiPaths.MEMBERSHIPS}/$membershipId/activate") {
+                    contentType = MediaType.APPLICATION_JSON
+                    content = "{\"reason\":\"${"x".repeat(501)}\"}"
+                    with(authentication(tenantToken(setOf("user.approve"), tenantId)))
+                }.andExpect {
+                    status { isBadRequest() }
+                    jsonPath("$.code") { value("validation_failed") }
+                }
+
+            verify(userProvisioningService, never()).approveUser(any())
         }
 
         @Test

@@ -5,6 +5,7 @@ import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ActivateMembershipRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.MembershipDetailResponse
 import com.finaxis.platform.lifecycle.application.ActingScope
 import com.finaxis.platform.lifecycle.application.ApproveUserCommand
@@ -19,11 +20,13 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse
 import io.swagger.v3.oas.annotations.responses.ApiResponses
 import io.swagger.v3.oas.annotations.security.SecurityRequirement
 import io.swagger.v3.oas.annotations.tags.Tag
+import jakarta.validation.Valid
 import org.springframework.http.ResponseEntity
 import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.validation.annotation.Validated
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 import java.util.UUID
@@ -55,7 +58,10 @@ class PlatformTenantMembershipController(
             "Approves a pending membership of the path tenant on the tenant's behalf and starts " +
                 "external provisioning when needed. Requires `user.approve` in the platform " +
                 "organisation. The inviter cannot approve their own invitation, whether a tenant " +
-                "user or a platform administrator; the action is audited with the platform actor.",
+                "user or a platform administrator; the action is audited with the platform " +
+                "actor. The optional body `reason` (at most 500 characters) is stored as the " +
+                "membership's status reason on a 200 and always recorded on the `user.approve` " +
+                "audit row; on a 202 it lives only on that audit row.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -75,6 +81,16 @@ class PlatformTenantMembershipController(
             responseCode = "202",
             description = "Keycloak provisioning queued",
             content = [Content(schema = Schema(implementation = MembershipDetailResponse::class))],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description = "Invalid request body (for example a reason over 500 characters)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
         ),
         ApiResponse(
             responseCode = "401",
@@ -128,6 +144,7 @@ class PlatformTenantMembershipController(
     fun activate(
         @PathVariable("tenant_id") tenantId: UUID,
         @PathVariable("membership_id") membershipId: UUID,
+        @RequestBody(required = false) @Valid request: ActivateMembershipRequest?,
     ): ResponseEntity<MembershipDetailResponse> {
         val caller = CallerContextResolver.getPlatformCaller()
         val result =
@@ -138,6 +155,7 @@ class PlatformTenantMembershipController(
                     approvedBy = caller.actorId,
                     requestId = uuidV7().toString(),
                     scope = ActingScope.PLATFORM,
+                    reason = request?.reason,
                 ),
             )
         // The approval above authorised the caller on this membership; the response echoes it

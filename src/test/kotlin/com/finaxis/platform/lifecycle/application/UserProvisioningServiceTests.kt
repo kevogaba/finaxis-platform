@@ -42,6 +42,8 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
+// One class per service keeps the private in-memory fakes it shares in a single file.
+@Suppress("LargeClass")
 class UserProvisioningServiceTests {
     private val clock = Clock.fixed(Instant.parse("2026-07-14T11:00:00Z"), ZoneOffset.UTC)
     private val fake = UserProvisioningFake()
@@ -188,6 +190,75 @@ class UserProvisioningServiceTests {
         assertFalse(approval.keycloakProvisioningRequested)
         assertEquals(MembershipLifecycleState.ACTIVE, approval.membershipStatus)
         assertEquals(MembershipLifecycleTransition.ACTIVATE.name, logs.logs.last().transition)
+    }
+
+    @Test
+    fun `a decision remark on an immediate activation reaches the transition and both audits`() {
+        val context = activeInvitationContext()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        fake.identityLinks += userId
+        val invitation = service.inviteUser(inviteCommand(context))
+
+        service.approveUser(
+            ApproveUserCommand(
+                context.org,
+                invitation.membershipId,
+                context.checker,
+                reason = "Verified against the signed request form.",
+            ),
+        )
+
+        val activate = logs.logs.last { it.transition == "ACTIVATE" }
+        assertEquals("Verified against the signed request form.", activate.reason)
+        assertEquals(
+            "Verified against the signed request form.",
+            audits.events.single { it.action == "user.approve" }.reason,
+        )
+        assertEquals(
+            "Verified against the signed request form.",
+            audits.events.single { it.action == "membership.activate" }.reason,
+        )
+    }
+
+    @Test
+    fun `a decision remark on a queued activation is on the user approve audit row only`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+
+        val approval =
+            service.approveUser(
+                ApproveUserCommand(
+                    context.org,
+                    invitation.membershipId,
+                    context.checker,
+                    reason = "Approved pending identity creation.",
+                ),
+            )
+
+        assertTrue(approval.keycloakProvisioningRequested)
+        assertEquals(
+            "Approved pending identity creation.",
+            audits.events.single { it.action == "user.approve" }.reason,
+        )
+        assertTrue(
+            logs.logs.none { it.reason == "Approved pending identity creation." },
+            "the remark describes the membership decision, not the user-account transitions",
+        )
+    }
+
+    @Test
+    fun `an approval without a remark records none`() {
+        val context = activeInvitationContext()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        fake.identityLinks += userId
+        val invitation = service.inviteUser(inviteCommand(context))
+
+        service.approveUser(
+            ApproveUserCommand(context.org, invitation.membershipId, context.checker),
+        )
+
+        assertEquals(null, audits.events.single { it.action == "user.approve" }.reason)
+        assertEquals(null, logs.logs.last { it.transition == "ACTIVATE" }.reason)
     }
 
     @Test
