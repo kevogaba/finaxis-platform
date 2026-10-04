@@ -217,6 +217,25 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   `required_view_permissions`. Re-runnable, with pre- and post-condition asserts in-file; it
   raises, naming the codes, if the catalogue holds a permission it cannot classify — see
   `docs/security/authorization-model.md` ("Catalogue metadata") and ADR 0030
+- `V23__seeded_admin_roles_hold_every_permission_of_their_scope.sql` — **data only, no schema**:
+  the owner's rule that an administrator role holds EVERYTHING in its scope. Every
+  existing tenant's seeded `TENANT_ADMIN` and the bootstrap `local-admin` (organisation
+  `FINAXIS-LOCAL`, pinned by organisation, code and `system_role`) are granted every `ACTIVE`
+  `grant_scope = 'TENANT'` code they lack (accounting maker and checker and the two break-glass
+  codes included) and lose the platform-only `tenant.*` codes, the file's only deletion
+  (access-neutral: they are evaluated only in the PLATFORM organisation);
+  `PLATFORM_SUPER_ADMIN` is topped up to every `ACTIVE` code; `PLATFORM_SUPPORT` gains
+  `auth.select_organisation`, `iam.profile.read` and the platform reads (still no accounting);
+  `IAM_ADMIN` + `branch.view`, `BRANCH_MANAGER` + `user.revoke_branch` and `user.view`,
+  `BRANCH_OPERATOR` + `branch.view` in every tenant. A seeded role is `system_role` plus its seeded
+  code; a tenant-customised (`system_role = FALSE`) role is never touched, and the API cannot edit
+  a seeded one. `local.admin` and `local.checker` become full tenant administrators: rotate or
+  deactivate them in production. Idempotent, with pre- and post-condition asserts in-file; the
+  effective-permission cache is cleared on every start, so it applies on the first request. **A
+  later migration that adds an `ACTIVE` permission must grant it to the administrators it belongs
+  to**, copying `V23`'s step 1a and step 2 for every tenant's `TENANT_ADMIN` (the drift test sees
+  only `PLATFORM_SUPER_ADMIN` and `local-admin`) — see `docs/security/authorization-model.md` and
+  ADR 0030
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -246,9 +265,10 @@ the journal-line append guard, `V14` the daily-balance projection, `V15` the bra
 trial-balance index, `V16` the corrected fingerprint comment, and `V17` the cancelled draft
 state. `V18` is a data backfill of the branch lifecycle dates, `V19` a foundation permission
 seed (`branch.update`), `V20` a foundation CHECK pinning the platform organisation to `ACTIVE`,
-`V21` the move of branch approval to `branch.approve` (deprecating `branch.activate`) and `V22`
-the permission catalogue's kind, grant scope and view requirements; none is accounting. Do not
-invent accounting tables or columns outside those documents.
+`V21` the move of branch approval to `branch.approve` (deprecating `branch.activate`), `V22`
+the permission catalogue's kind, grant scope and view requirements, and `V23` the seeded
+administrator roles' grants; none is accounting. Do not invent accounting tables or columns
+outside those documents.
 
 ## Authorization
 
@@ -264,6 +284,13 @@ invent accounting tables or columns outside those documents.
 - A migration that adds a permission code must also insert its `kind`, its `grant_scope` and, for
   a `MUTATION`, the `permission_view_requirement` rows naming the view(s) it implies (ADR 0030;
   `V22` made the columns `NOT NULL`). `PermissionCatalogueMetadataTests` fails otherwise.
+- The seeded **administrator roles hold every permission of their scope** and are derived, never
+  listed: a newly approved tenant's `TENANT_ADMIN` is every `ACTIVE` permission with
+  `grant_scope = 'TENANT'`, read from the catalogue at seeding time (and by the readiness check);
+  `PLATFORM_SUPER_ADMIN` is every `ACTIVE` code. The non-admin bundles stay purpose-built lists in
+  `OrganisationBootstrapDefaults`. No NON-admin default bundle may hold a break-glass code
+  (`fiscal_period.reopen`, `journal.post_prior_period`); the administrators do, and use stays
+  audited and lock-checked. `V23` applied this to existing tenants.
 - Maker-checker: a platform-context actor holding the permission in the platform organisation may
   be the audited checker of a pending membership only while the tenant has no ACTIVE member beyond
   its bootstrap administrator, and of a pending branch only while it has no ACTIVE branch beyond

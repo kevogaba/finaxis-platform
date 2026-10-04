@@ -86,8 +86,11 @@ The implemented setup is:
 - a `HEAD_OFFICE` branch that is submitted and activated if it is not already active;
 - default reference sequences `MEMBER`, `TRANSACTION`, and `JOURNAL`;
 - organisation-local system roles from the global permission catalogue:
-  `TENANT_ADMIN`, `TENANT_AUDITOR`, `IAM_ADMIN`, `BRANCH_MANAGER`,
-  and `BRANCH_OPERATOR`.
+  `TENANT_ADMIN`, `TENANT_AUDITOR`, `IAM_ADMIN`, `BRANCH_MANAGER`, `BRANCH_OPERATOR`,
+  `ACCOUNTING_OPERATOR` and `ACCOUNTING_APPROVER`. `TENANT_ADMIN` holds every `ACTIVE` permission
+  of tenant scope, read from the catalogue's `grant_scope` when the role is seeded (see
+  [the authorization model](../security/authorization-model.md)); the other bundles are explicit
+  lists.
 
 The global permission catalogue is seeded by Flyway with `permission_code`, `module_code`,
 `risk_level`, and status. It includes the retained `tenant.*` codes:

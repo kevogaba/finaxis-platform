@@ -92,8 +92,16 @@ class BreakGlassRevocationRaceIntegrationTests(
     engine: PostingEngine,
     organisationProvisioningService: OrganisationProvisioningService,
 ) {
+    // The actor is a plain member, NOT the tenant administrator: since the administrator
+    // holds journal.post_prior_period, which would leave every revocation here with no effect.
     private val posting =
-        PostingTenantFixture(dsl, organisationProvisioningService, engine, ACTOR)
+        PostingTenantFixture(
+            dsl,
+            organisationProvisioningService,
+            engine,
+            ACTOR,
+            administrator = false,
+        )
 
     private val grants = BreakGlassGrantFixture(dsl)
 

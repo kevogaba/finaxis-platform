@@ -35,19 +35,29 @@ migration.
 Organisation approval creates these organisation-local system roles from the catalogue (in code,
 not in a migration):
 
-- `TENANT_ADMIN`: all baseline permissions, plus the accounting configuration and oversight codes
-  (not manual journal preparation, approval, reversal, prior-period posting, reconciliation
-  resolution or period reopening);
+- `TENANT_ADMIN`: **every `ACTIVE` permission whose `grant_scope` is `TENANT`** (66 today): the
+  foundation, audit, settings and business-date codes and every accounting code, maker and checker
+  alike, including the two break-glass codes `fiscal_period.reopen` and
+  `journal.post_prior_period`. It is **derived from the catalogue, not listed**: approval reads the
+  `TENANT` codes from `permission` when it seeds the role, and the readiness check behind tenant
+  reactivation reads them the same way, so a new `ACTIVE` tenant-scope code reaches the next
+  tenant's administrator with no code edit. It holds none of the `PLATFORM`-scope codes (the
+  `tenant.*` lifecycle codes, `user.activate`, `user.suspend`, `user.deactivate`,
+  `tenant_setting.manage_platform`), which are evaluated only in the PLATFORM organisation and
+  would be inert in a tenant, and not the `DEPRECATED` `branch.activate`. The per-resource actor
+  guards (no self-approval of a user, branch, GL account, posting rule or journal) apply to an
+  administrator like anyone else, and use of a break-glass code stays audited and lock-checked;
 - `TENANT_AUDITOR`: read-only across the platform — `audit.view`, `business_date.view`,
   `tenant.view`, `branch.view`, `user.view`, `membership.view`, `branch_assignment.view`,
   `role.view`, `role_assignment.view`, `permission.view`, `settings.view`, the six accounting
   reads (`gl_account.view`, `fiscal_period.view`, `journal.view`, `posting_rule.view`,
   `reconciliation.view`, `accounting_report.view`), and the session codes
   `auth.select_organisation`, `auth.select_branch`, `iam.profile.read`;
-- `IAM_ADMIN`: user, role, and audit administration permissions;
-- `BRANCH_MANAGER`: branch lifecycle, branch assignment, business-date view, and
-  `accounting_report.view` permissions;
-- `BRANCH_OPERATOR`: `business_date.view`;
+- `IAM_ADMIN`: user, role, and audit administration permissions, plus `branch.view` (it assigns
+  users to branches and must be able to list them);
+- `BRANCH_MANAGER`: branch lifecycle, branch assignment (assign **and** `user.revoke_branch`),
+  `user.view`, business-date view, and `accounting_report.view` permissions;
+- `BRANCH_OPERATOR`: `business_date.view` and `branch.view`;
 - `ACCOUNTING_OPERATOR`: the accounting maker bundle — prepares and submits, never approves;
 - `ACCOUNTING_APPROVER`: the accounting checker bundle — approves and posts, never prepares.
 
@@ -57,15 +67,58 @@ not in a migration):
 - `tenant_code=PLATFORM`;
 - system roles `PLATFORM_SUPER_ADMIN` and `PLATFORM_SUPPORT`.
 
-`PLATFORM_SUPER_ADMIN` is granted every row in `permission` by a set-based
-`INSERT … SELECT … FROM permission`, so the superset role can never drift behind the catalogue as
-it did when permissions were added across several migrations. `PLATFORM_SUPPORT` receives
-`audit.view` and `business_date.view`. These are still modelled as roles in the reserved
+`PLATFORM_SUPER_ADMIN` holds every `ACTIVE` code in `permission`: V2 granted every row by a
+set-based `INSERT … SELECT … FROM permission`, each later catalogue migration repeated the grant for
+its own codes, and `V23` re-asserts the whole set (the drift test `SeededRolesDriftTests` fails the
+build when a catalogue code is not held). `PLATFORM_SUPPORT` is the read-only support role: since
+`V23` it holds `audit.view`, `business_date.view`, **`auth.select_organisation` and
+`iam.profile.read`** (without which it could never select the PLATFORM organisation and the two
+reads were unusable) and the platform reads `tenant.view`, `branch.view`, `user.view`,
+`membership.view`, `branch_assignment.view`, `role.view`, `role_assignment.view` and
+`permission.view`. It holds no accounting code. These are still modelled as roles in the reserved
 organisation, not as special runtime role-name checks.
 
 `audit.view` held in the PLATFORM organisation is also the permission for the platform audit
 endpoints (the platform log and any tenant's log); see
 [audit logging](audit-logging.md#rest-read-endpoints-and-the-platform-permission-model).
+
+## Seeded administrator roles (V23)
+
+The owner's rule is that an administrator role has access to **everything in its scope**. Scope is
+`permission.grant_scope` (below): the seeded tenant administrator holds every `ACTIVE` `TENANT`
+code, the platform administrator every `ACTIVE` code.
+
+- **New tenants.** `OrganisationBootstrapDefaults` lists only the non-administrator bundles;
+  `TENANT_ADMIN` is the catalogue's `ACTIVE` `TENANT` codes, read when the role is seeded.
+  `hasDefaultRolesAndPermissions` (the readiness check behind approval and `reactivate`) derives the
+  same bundle, so the grant and the check cannot disagree.
+- **Existing tenants.** `V23__seeded_admin_roles_hold_every_permission_of_their_scope.sql` brings
+  every existing seeded `TENANT_ADMIN`, and the bootstrap tenant's `local-admin`, to the same set,
+  and removes the ten inert `tenant.*` rows from `TENANT_ADMIN`. Without it a suspended tenant
+  approved before the release could not be reactivated (the readiness check would find the derived
+  bundle missing on its role). A seeded role is a `system_role` row with a seeded code; a
+  tenant-customised role (`system_role = FALSE`) is never touched, and the API cannot edit a seeded
+  role (`RoleManagementService.requireMutable`), so there is no tenant edit to preserve. Direct
+  `membership_permission` `DENY` overrides survive.
+- **The cache.** Effective permissions are cached and the migration writes the tables directly; the
+  application clears the cache on every start (`EffectivePermissionCacheStartupClearer`), so the
+  change takes effect on the first request of a new instance.
+- **Going forward.** A migration that adds an `ACTIVE` permission must grant it to the
+  administrators it belongs to. `SeededRolesDriftTests` checks the migrated database, but it
+  sees only `PLATFORM_SUPER_ADMIN` and the bootstrap `local-admin`, so the migration must copy
+  `V23`'s step 1a and step 2 statements for every tenant's `TENANT_ADMIN`; a tenant that misses a
+  code fails closed (reactivation answers 409).
+- **Authority increase.** Every tenant administrator gains the manual-journal maker and checker
+  codes, `journal.reverse`, `reconciliation.resolve` and the two break-glass codes. The invariant
+  is now "no **non-admin** default bundle holds a break-glass code"
+  ([accounting authorization](accounting-authorization.md#break-glass-permissions)). The bootstrap
+  `local.admin` and `local.checker` become full administrators of `FINAXIS-LOCAL`; see
+  [production hardening](production-hardening.md).
+- **Other bundles.** `IAM_ADMIN` + `branch.view`; `BRANCH_MANAGER` + `user.revoke_branch` and
+  `user.view`; `BRANCH_OPERATOR` + `branch.view`; `PLATFORM_SUPPORT` as above;
+  `TENANT_AUDITOR` unchanged (`accounting_report.export` stays withheld until an export route
+  exists). Every seeded bundle holds a mutation only with the views `permission_view_requirement`
+  pairs with it (ADR 0030).
 
 ## Catalogue metadata
 
@@ -105,9 +158,9 @@ platform administrator therefore cannot be derived as "the `PLATFORM` codes" alo
 the `tenant.*` and `user.*` mutations without `tenant.view` and `user.view`, which ADR 0030
 forbids. Deriving it needs its own decision, and probably its own metadata.
 
-The platform administrator holds every code. Deriving the seeded tenant administrator from this
-column ("an admin holds every code of its scope") is intended, but is a separate decision and
-change; no role is touched by `V22`.
+The platform administrator holds every code. The seeded tenant administrator is derived from this
+column ("an admin holds every code of its scope", see "Seeded administrator roles"); `V22` itself
+touched no role, and `V23` applied the rule.
 
 **`permission_view_requirement`** pairs a `MUTATION` with each view it requires: 61 rows for the 60
 mutations, because `user.invite` needs two. A role or a caller that holds the mutation must also
@@ -146,10 +199,9 @@ enforcement: it fails for a `MUTATION` with no requirement, a `VIEW` or `CONTEXT
 required code that is not a `VIEW`, and an `ACTIVE` mutation that requires a view that is not
 `ACTIVE` (runtime honours only `ACTIVE` codes). A `DEPRECATED` mutation such as `branch.activate`
 may still name an `ACTIVE` view. The same test is also **strict** about seeded roles: it fails if
-the platform roles or any default bundle built in code hold a mutation without its views (today none
-does), and for the bootstrap `local-admin` role it fails on any violation outside an explicit
-allow-list (today empty; a future known violation is added there with a comment rather than the
-test being switched off). The runtime does not yet refuse such a role; a later change does.
+the platform roles, the bootstrap `local-admin` role or any default bundle built in code hold a
+mutation without its views (today none does). The runtime does not yet refuse such a role;
+a later change does.
 
 ## Role administration
 

@@ -25,13 +25,15 @@ import kotlin.test.assertTrue
  * as `UserProvisioningService.approveUser` already enforces and as the accounting FSM guards will
  * — **not** by splitting permissions across roles. A role holding both `submit` and `approve` is
  * therefore legitimate: it means a holder may perform either act on *different* records, not both
- * acts on the same one. `TENANT_ADMIN` deliberately holds both, exactly as the bootstrap
- * `local-admin` role does, so a two-actor flow works out of the box.
+ * acts on the same one. `TENANT_ADMIN` deliberately holds both, as does the bootstrap
+ * `local-admin` role, so a two-actor flow works out of the box.
  *
  * What these tests protect is narrower and still worth protecting: the two *dedicated* maker and
- * checker roles must genuinely model the split, and no default bundle may carry a break-glass code.
- * Runtime authorization never evaluates a role name, so these bundles are conveniences rather than
- * a security boundary.
+ * checker roles must genuinely model the split, and no *non-admin* default bundle may carry a
+ * break-glass code. The administrator roles hold every permission of their scope, so
+ * `TENANT_ADMIN` does hold them; use stays audited and lock-checked at enforcement. Runtime
+ * authorization never evaluates a role name, so these bundles are conveniences rather than a
+ * security boundary.
  */
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -64,12 +66,13 @@ class AccountingSeparationOfDutiesPolicyTests(
     }
 
     @Test
-    fun `no default role carries a break-glass accounting permission`() {
+    fun `no non-admin default role carries a break-glass accounting permission`() {
         val organisationId = fixture.createActiveOrganisation("sod-breakglass", ACTOR_ID)
         val bundles = defaultRoleBundles(organisationId)
 
         val violations =
             bundles
+                .filterKeys { it != ADMIN_ROLE }
                 .mapValues { (_, codes) -> codes intersect AccountingPermissions.BREAK_GLASS }
                 .filterValues { it.isNotEmpty() }
 
@@ -77,8 +80,31 @@ class AccountingSeparationOfDutiesPolicyTests(
             emptyMap(),
             violations,
             "reopening a closed period and posting into a prior one are granted deliberately per " +
-                "tenant, never inherited from a default bundle",
+                "tenant, never inherited from a non-admin default bundle",
         )
+        // Spelled out, so the invariant cannot quietly shrink to the roles the filter keeps.
+        listOf("TENANT_AUDITOR", "IAM_ADMIN", "BRANCH_MANAGER", "BRANCH_OPERATOR").forEach {
+            assertTrue(it in bundles, "expected the default role $it")
+            assertEquals(
+                emptySet(),
+                bundles.getValue(it) intersect AccountingPermissions.BREAK_GLASS,
+            )
+        }
+    }
+
+    @Test
+    fun `the tenant administrator holds the break-glass codes because it holds everything`() {
+        // The owner's rule: an admin role holds EVERY permission of its scope. The
+        // break-glass codes stay audited and lock-checked where they are enforced, and every
+        // per-resource actor guard (no self-approval) still applies to the administrator.
+        val organisationId = fixture.createActiveOrganisation("sod-admin", ACTOR_ID)
+        val admin = defaultRoleBundles(organisationId).getValue(ADMIN_ROLE)
+
+        assertEquals(
+            AccountingPermissions.BREAK_GLASS,
+            admin intersect AccountingPermissions.BREAK_GLASS,
+        )
+        assertEquals(AccountingPermissions.ALL, admin intersect AccountingPermissions.ALL)
     }
 
     @Test
@@ -208,6 +234,7 @@ class AccountingSeparationOfDutiesPolicyTests(
 
     private companion object {
         const val PRODUCTION_SOURCE_ROOT = "src/main/kotlin"
+        const val ADMIN_ROLE = "TENANT_ADMIN"
 
         /** A call that actually enforces a permission, as opposed to merely naming a code. */
         val ENFORCEMENT_MARKER = Regex("""require(BreakGlass|Tenant|Branch)Permission\s*\(""")

@@ -423,8 +423,13 @@ class JooqFoundationLifecyclePersistenceTests(
             persistence.findOrganisation(organisationId)?.state,
         )
         assertEquals(DEFAULT_ROLE_CODES, roleCodes(organisationId))
-        assertEquals(REQUIRED_PERMISSION_CODES, baselinePermissionCodes())
-        assertEquals(REQUIRED_PERMISSION_CODES.size, tenantAdminPermissionCount(organisationId))
+        // TENANT_ADMIN holds EVERY active tenant-scope code and nothing else: derived from
+        // permission.grant_scope at seeding time, not listed. The platform-only tenant.* lifecycle
+        // codes are inert in a tenant and are no longer granted to it.
+        val tenantAdmin = rolePermissionCodes(organisationId, "TENANT_ADMIN")
+        assertEquals(activeTenantScopeCodes(), tenantAdmin)
+        assertTrue(TENANT_ADMIN_SPOT_CHECKS.all { it in tenantAdmin }, "$tenantAdmin")
+        assertTrue(PLATFORM_ONLY_SPOT_CHECKS.none { it in tenantAdmin }, "$tenantAdmin")
         assertEquals(IAM_ADMIN_PERMISSION_CODES, rolePermissionCodes(organisationId, "IAM_ADMIN"))
         // branch.approve is the one permission that approves a branch (#208); a new tenant never
         // receives the deprecated branch.activate.
@@ -451,27 +456,15 @@ class JooqFoundationLifecyclePersistenceTests(
             .filterNotNull()
             .toSet()
 
-    private fun baselinePermissionCodes(): Set<String> =
+    private fun activeTenantScopeCodes(): Set<String> =
         dsl
             .select(PERMISSION.PERMISSION_CODE)
             .from(PERMISSION)
-            .where(PERMISSION.PERMISSION_CODE.`in`(REQUIRED_PERMISSION_CODES))
+            .where(PERMISSION.GRANT_SCOPE.eq("TENANT"))
+            .and(PERMISSION.STATUS.eq("ACTIVE"))
             .fetch(PERMISSION.PERMISSION_CODE)
             .filterNotNull()
             .toSet()
-
-    private fun tenantAdminPermissionCount(organisationId: UUID): Int =
-        dsl
-            .selectCount()
-            .from(ROLE_PERMISSION)
-            .join(ROLE)
-            .on(ROLE_PERMISSION.ROLE_ID.eq(ROLE.ID))
-            .join(PERMISSION)
-            .on(ROLE_PERMISSION.PERMISSION_ID.eq(PERMISSION.ID))
-            .where(ROLE.ORGANISATION_ID.eq(organisationId))
-            .and(ROLE.ROLE_CODE.eq("TENANT_ADMIN"))
-            .and(PERMISSION.PERMISSION_CODE.`in`(REQUIRED_PERMISSION_CODES))
-            .fetchOne(0, Int::class.java) ?: 0
 
     private fun rolePermissionCodes(
         organisationId: UUID,
@@ -713,62 +706,33 @@ class JooqFoundationLifecyclePersistenceTests(
                 "role_assignment.view",
                 "permission.view",
                 "audit.view",
+                // So the administrator who assigns a user to a branch can list the branches.
+                "branch.view",
                 "auth.select_organisation",
                 "auth.select_branch",
                 "iam.profile.read",
             )
-        val REQUIRED_PERMISSION_CODES =
+        val TENANT_ADMIN_SPOT_CHECKS =
+            setOf(
+                "audit.view",
+                "branch.approve",
+                "business_date.reopen",
+                "journal.approve",
+                "journal.create_manual",
+                "journal.post_prior_period",
+                "fiscal_period.reopen",
+                "reconciliation.resolve",
+                "accounting_report.export",
+            )
+        val PLATFORM_ONLY_SPOT_CHECKS =
             setOf(
                 "tenant.create",
-                "tenant.submit_for_approval",
                 "tenant.approve",
-                "tenant.activate",
                 "tenant.suspend",
-                "tenant.deprovision",
-                "tenant.view",
-                "tenant.update_draft",
-                "tenant.reject",
-                "tenant.reactivate",
                 "tenant.bootstrap_retry",
-                "branch.create",
-                "branch.update",
-                "branch.approve",
-                "branch.suspend",
-                "branch.close",
-                "branch.view",
-                "branch.reactivate",
-                "user.view",
-                "user.invite",
-                "user.approve",
-                "user.assign_branch",
-                "user.assign_role",
-                "user.revoke_branch",
-                "user.revoke_role",
-                "membership.view",
-                "membership.suspend",
-                "membership.reactivate",
-                "membership.revoke",
-                "branch_assignment.view",
-                "role.create",
-                "role.update",
-                "role.assign_permission",
-                "role.view",
-                "role.activate",
-                "role.deactivate",
-                "role.remove_permission",
-                "role_assignment.view",
-                "permission.view",
-                "audit.view",
-                "settings.view",
-                "settings.update",
-                "business_date.view",
-                "business_date.advance",
-                "business_date.reopen",
-                "cob.start",
-                "cob.complete",
-                "auth.select_organisation",
-                "auth.select_branch",
-                "iam.profile.read",
+                "user.activate",
+                "tenant_setting.manage_platform",
+                "branch.activate",
             )
     }
 }
