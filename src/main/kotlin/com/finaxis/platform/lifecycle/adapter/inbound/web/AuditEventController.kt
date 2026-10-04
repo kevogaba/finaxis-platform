@@ -49,7 +49,6 @@ class AuditEventController(
         ApiResponse(
             responseCode = "200",
             description = "Audit event page",
-            content = [Content(schema = Schema(implementation = ApiPage::class))],
         ),
         ApiResponse(
             responseCode = "400",

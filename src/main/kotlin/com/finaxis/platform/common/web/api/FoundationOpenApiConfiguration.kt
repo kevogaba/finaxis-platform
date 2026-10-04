@@ -12,6 +12,7 @@ import io.swagger.v3.oas.models.media.StringSchema
 import io.swagger.v3.oas.models.parameters.Parameter
 import io.swagger.v3.oas.models.security.SecurityScheme
 import org.springdoc.core.customizers.GlobalOperationCustomizer
+import org.springdoc.core.customizers.OpenApiCustomizer
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.web.method.HandlerMethod
@@ -47,6 +48,39 @@ class FoundationOpenApiConfiguration {
             operation
         }
 
+    /**
+     * Renames every published schema property to the wire name [ApiJsonCodec] really reads and
+     * writes. Springdoc resolves schemas with its own camelCase Jackson 2 mapper, so without this
+     * a client generated from the document sends camelCase and is rejected with `invalid_json`.
+     * The naming strategy is taken from the codec's mapper, so the two cannot drift apart.
+     */
+    @Bean
+    fun wireNamingOpenApiCustomizer(apiJsonCodec: ApiJsonCodec): OpenApiCustomizer =
+        OpenApiCustomizer { openApi ->
+            val naming = apiJsonCodec.mapper.serializationConfig().propertyNamingStrategy
+            publishedSchemas(openApi).forEach {
+                it.renameProperties { name ->
+                    naming.nameForField(null, null, name)
+                }
+            }
+        }
+
+    /**
+     * Documents the `sort_dir` values every list endpoint accepts. The service layer upper-cases
+     * the value, so the lower-case spelling is accepted too, but the canonical form is published.
+     */
+    @Bean
+    fun sortDirectionOperationCustomizer(): GlobalOperationCustomizer =
+        GlobalOperationCustomizer { operation, _ ->
+            operation.parameters
+                ?.filter { it.name == SORT_DIR_PARAMETER && it.`$ref` == null }
+                ?.forEach { parameter ->
+                    parameter.description = "Sort direction. Case-insensitive."
+                    parameter.schema = StringSchema().apply { enum = SORT_DIRECTIONS }
+                }
+            operation
+        }
+
     private fun apiInfo(): Info =
         Info()
             .title("Finaxis Platform API")
@@ -63,7 +97,6 @@ class FoundationOpenApiConfiguration {
                     .bearerFormat("JWT"),
             ).addPublicSchema<ApiProblem>()
             .addPublicSchema<ApiViolation>()
-            .addPublicSchema<ApiPage<*>>()
             .addPublicSchema<ApiPageMetadata>()
             .addSchemas(
                 "BusinessDate",
@@ -133,6 +166,28 @@ class FoundationOpenApiConfiguration {
         return this
     }
 
+    private fun publishedSchemas(openApi: OpenAPI): List<Schema<*>> =
+        openApi.components
+            ?.schemas
+            ?.values
+            .orEmpty() +
+            openApi.paths
+                ?.values
+                .orEmpty()
+                .flatMap { it.readOperations() }
+                .flatMap { operation ->
+                    (
+                        operation.requestBody
+                            ?.content
+                            ?.values
+                            .orEmpty()
+                    ) +
+                        operation.responses
+                            ?.values
+                            .orEmpty()
+                            .flatMap { it.content?.values.orEmpty() }
+                }.mapNotNull { it.schema }
+
     private fun headerParameter(
         name: String,
         description: String,
@@ -156,6 +211,22 @@ class FoundationOpenApiConfiguration {
         // operations that run before an active organisation context exists. Every other
         // operation, including AuthController.selectBranch()/.availableBranches() and every
         // platform-administration controller, resolves its caller from that context.
+        const val SORT_DIR_PARAMETER = "sort_dir"
+        val SORT_DIRECTIONS = listOf("ASC", "DESC")
         val CONTEXT_FREE_AUTH_OPERATIONS = setOf("availableOrganisations", "selectOrganisation")
     }
+}
+
+private fun Schema<*>.renameProperties(rename: (String) -> String) {
+    val renamed = properties?.entries?.associate { (name, schema) -> rename(name) to schema }
+    if (renamed != null) {
+        properties = LinkedHashMap(renamed)
+        required = required?.map(rename)
+    }
+    properties?.values?.forEach { it.renameProperties(rename) }
+    listOfNotNull(items, additionalProperties as? Schema<*>)
+        .plus(allOf.orEmpty())
+        .plus(anyOf.orEmpty())
+        .plus(oneOf.orEmpty())
+        .forEach { it.renameProperties(rename) }
 }

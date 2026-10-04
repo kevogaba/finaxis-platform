@@ -66,7 +66,10 @@ platform-admin-only keys. See
 
 JSON field names are `snake_case` at the API boundary. Kotlin DTO properties such as
 `tenantCode`, `bootstrapStatus`, and `sendApplicationInvite` serialize as `tenant_code`,
-`bootstrap_status`, and `send_application_invite`.
+`bootstrap_status`, and `send_application_invite`. The published OpenAPI document uses the same
+names: `OpenApiWireNamingContractTests` fails if a schema property is not `snake_case`, if a list
+endpoint's `items` is not a named schema, or if a request body built from the published
+property names is rejected by the codec.
 
 Date and time formats:
 
@@ -96,7 +99,23 @@ Every collection endpoint returns `ApiPage<T>`:
 
 Collection query parameters always include `page` and `size`. `page` is zero-based and defaults
 to `0`. `size` defaults to `25`; valid values are `1` through `100`. Resource-specific filter,
-search, and sort parameters are listed with each table below.
+search, and sort parameters are listed with each table below. In the OpenAPI document each list
+response is a typed page schema such as `ApiPageRoleSummaryResponse` whose `items` reference the
+item schema.
+
+`sort_dir` accepts `ASC` or `DESC`, case-insensitively. `sort_by` values are **camelCase**, unlike
+every other wire name, and are published as an enum per endpoint:
+
+| Endpoint | `sort_by` values |
+| --- | --- |
+| `GET /tenant/roles` | `roleCode`, `roleName`, `status`, `createdAt` |
+| `GET /tenant/permissions` | `permissionCode`, `permissionName`, `riskLevel`, `status`, `createdAt` |
+| `GET /platform/tenants` | `tenantCode`, `displayName`, `countryCode`, `createdAt` |
+| `GET /branches`, `GET /platform/tenants/{tenant_id}/branches` | `branchCode`, `branchName`, `branchType`, `status`, `createdAt` |
+
+`GET /tenant/memberships` and `GET /tenant/branch-assignments` do not sort: they ignore
+`sort_by` and `sort_dir` like any unknown query parameter, and the OpenAPI document does not
+publish them. Other list endpoints do not accept sort parameters.
 
 ### Errors
 
@@ -592,7 +611,7 @@ Invite request and response:
 ### Memberships
 
 Base path: `/api/v1/tenant/memberships`. List filters: `q`, `membership_status`,
-`membership_type`, `sort_by`, `sort_dir`, `page`, `size`.
+`membership_type`, `page`, `size`. This list does not sort; see [Pagination](#pagination).
 
 | Method | Path                          | Summary                         | Permission              | Shape    |
 |--------|-------------------------------|---------------------------------|-------------------------|----------|
@@ -631,7 +650,8 @@ Membership response and revoke request:
 ### Branch Assignments
 
 Base path: `/api/v1/tenant/branch-assignments`. List filters: `branch_id`,
-`assignment_type`, `status`, `sort_by`, `sort_dir`, `page`, `size`.
+`assignment_type`, `status`, `page`, `size`. This list does not sort; see
+[Pagination](#pagination).
 
 | Method | Path               | Summary                   | Permission               | Shape    |
 |--------|--------------------|---------------------------|--------------------------|----------|
