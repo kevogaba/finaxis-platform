@@ -12,11 +12,13 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BranchDetailRespon
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BranchDraftResultResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BranchSummaryResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateBranchRequest
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReturnBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SubmitBranchRequest
 import com.finaxis.platform.lifecycle.application.ActingScope
 import com.finaxis.platform.lifecycle.application.ActivateBranchCommand
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.CreateBranchCommand
+import com.finaxis.platform.lifecycle.application.ReturnBranchCommand
 import com.finaxis.platform.lifecycle.application.SubmitBranchForApprovalCommand
 import com.finaxis.platform.lifecycle.application.query.BranchDetail
 import com.finaxis.platform.lifecycle.application.query.BranchFilter
@@ -512,6 +514,115 @@ class PlatformTenantBranchController(
                 reason = request?.reason,
                 actorId = caller.actorId,
                 requestId = uuidV7(),
+                scope = ActingScope.PLATFORM,
+            ),
+        )
+        return foundationQueryService
+            .getBranchAfterAuthorizedMutation(
+                tenantId,
+                branchId,
+            ).toResponse()
+    }
+
+    /**
+     * Returns a pending tenant branch to draft, or withdraws it, as a platform administrator.
+     */
+    @PostMapping("/{branch_id}/return")
+    @IdempotentMutation(scope = IdempotencyScopeKind.PLATFORM)
+    @PreAuthorize("hasAnyAuthority('branch.create', 'branch.activate')")
+    @Operation(
+        summary = "Return or withdraw tenant branch as platform administrator",
+        description =
+            "Returns a pending branch of the path tenant to draft with a required reason. The " +
+                "branch's creator or latest submitter withdraws their own request and needs " +
+                "`branch.create` in the platform organisation, with no window; anyone else " +
+                "returns it as the audited platform checker, needs `branch.activate` in the " +
+                "platform organisation, and only while the tenant has no active branch beyond " +
+                "its bootstrap head office.",
+        parameters = [
+            Parameter(
+                name = "Idempotency-Key",
+                description = "Optional UUID; the server generates one when omitted.",
+                `in` = ParameterIn.HEADER,
+                schema = Schema(type = "string", format = "uuid"),
+            ),
+        ],
+    )
+    @ApiResponses(
+        ApiResponse(
+            responseCode = "200",
+            description = "Branch returned to draft",
+            content = [Content(schema = Schema(implementation = BranchDetailResponse::class))],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description =
+                "Missing body or reason (`invalid_json`), or a reason that is blank or not " +
+                    "3 to 500 characters (`validation_failed`)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden, not in platform context, or lacking the intent's permission",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description =
+                "Tenant or branch not found (the platform organisation is never a valid tenant)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "409",
+            description =
+                "Branch is not pending approval, the tenant is not active or provisioning, or " +
+                    "a checker's return finds the tenant with an active branch beyond its " +
+                    "bootstrap head office (code `lifecycle.platform_checker_closed`)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+    )
+    fun returnForChanges(
+        @PathVariable("tenant_id") tenantId: UUID,
+        @PathVariable("branch_id") branchId: UUID,
+        @RequestBody @Valid request: ReturnBranchRequest,
+    ): BranchDetailResponse {
+        val caller = CallerContextResolver.getPlatformCaller()
+        branchProvisioningService.returnForChanges(
+            ReturnBranchCommand(
+                organisationId = tenantId,
+                branchId = branchId,
+                reason = request.reason,
+                actorId = caller.actorId,
                 scope = ActingScope.PLATFORM,
             ),
         )

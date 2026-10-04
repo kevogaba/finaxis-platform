@@ -80,6 +80,14 @@ data class ActivateBranchRequest(
     val reason: String? = null,
 )
 
+/** Request payload for returning a pending branch to draft or withdrawing it. */
+data class ReturnBranchRequest(
+    @field:NotBlank
+    @field:Size(min = 3, max = 500)
+    @field:Schema(example = "Branch code has a typo.")
+    val reason: String,
+)
+
 /** Request payload for suspending an active branch. */
 data class SuspendBranchRequest(
     @field:NotBlank
