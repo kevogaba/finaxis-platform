@@ -221,10 +221,44 @@ class BranchUpdatePermissionMigrationTests(
             )!!,
         )
 
+    /**
+     * `V22` made `permission.kind` and `permission.grant_scope` NOT NULL, and `V19`'s insert
+     * (frozen) predates them, so re-running it verbatim would be refused. The columns are relaxed
+     * for the run, and the re-inserted `branch.update` is classified and paired with `branch.view`
+     * exactly as `V22` does, before they are made NOT NULL again, all in one transaction.
+     */
     private fun runMigration() {
-        jdbcTemplate.execute(
-            ClassPathResource(MIGRATION).inputStream.use { it.readAllBytes().decodeToString() },
-        )
+        transactionTemplate.executeWithoutResult {
+            jdbcTemplate.execute(
+                "ALTER TABLE permission ALTER COLUMN kind DROP NOT NULL, " +
+                    "ALTER COLUMN grant_scope DROP NOT NULL",
+            )
+            jdbcTemplate.execute(
+                ClassPathResource(MIGRATION).inputStream.use {
+                    it.readAllBytes().decodeToString()
+                },
+            )
+            jdbcTemplate.update(
+                """
+                UPDATE permission SET kind = 'MUTATION', grant_scope = 'TENANT'
+                WHERE permission_code = 'branch.update' AND kind IS NULL
+                """.trimIndent(),
+            )
+            jdbcTemplate.update(
+                """
+                INSERT INTO permission_view_requirement (
+                    permission_id, required_view_permission_id, created_at, updated_at
+                )
+                SELECT m.id, v.id, NOW(), NOW() FROM permission m, permission v
+                WHERE m.permission_code = 'branch.update' AND v.permission_code = 'branch.view'
+                ON CONFLICT ON CONSTRAINT uq_permission_view_requirement DO NOTHING
+                """.trimIndent(),
+            )
+            jdbcTemplate.execute(
+                "ALTER TABLE permission ALTER COLUMN kind SET NOT NULL, " +
+                    "ALTER COLUMN grant_scope SET NOT NULL",
+            )
+        }
     }
 
     private fun statusOf(code: String): String? =
@@ -245,6 +279,7 @@ class BranchUpdatePermissionMigrationTests(
         val id = "(SELECT id FROM permission WHERE permission_code = 'branch.update')"
         jdbcTemplate.update("DELETE FROM role_permission WHERE permission_id = $id")
         jdbcTemplate.update("DELETE FROM membership_permission WHERE permission_id = $id")
+        jdbcTemplate.update("DELETE FROM permission_view_requirement WHERE permission_id = $id")
         jdbcTemplate.update("DELETE FROM permission WHERE permission_code = 'branch.update'")
     }
 

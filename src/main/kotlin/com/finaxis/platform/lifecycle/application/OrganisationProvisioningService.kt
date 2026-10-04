@@ -294,7 +294,7 @@ class OrganisationProvisioningService(
         // The caller's permission first, then the platform refusal, then the first read: an
         // unauthorised caller learns neither whether the tenant exists nor that this one is
         // special.
-        permissionGuard.requireRetryPermission(command)
+        permissionGuard.requirePlatformPermission(command.caller.actorId, "tenant.bootstrap_retry")
         auditService.requireNotPlatformOrganisation(
             command.organisationId,
             "tenant.bootstrap_retry",

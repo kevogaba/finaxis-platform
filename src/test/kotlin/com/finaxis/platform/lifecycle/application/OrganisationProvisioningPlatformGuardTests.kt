@@ -11,7 +11,6 @@ import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.PlatformCaller
-import com.finaxis.platform.lifecycle.TenantCaller
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
@@ -202,23 +201,6 @@ class OrganisationProvisioningPlatformGuardTests {
         }
 
         verify(permissionGuard).requirePlatformPermission(actor, "tenant.bootstrap_retry")
-    }
-
-    @Test
-    fun `retry bootstrap checks the tenant permission before refusing a tenant caller`() {
-        val actor = uuidV7()
-
-        assertRefused("tenant.bootstrap_retry", actor) {
-            organisations.retryBootstrap(
-                RetryInitialAdministratorBootstrapCommand(
-                    platformId,
-                    TenantCaller(actor, platformId),
-                ),
-            )
-        }
-
-        verify(permissionGuard)
-            .requireTenantPermission(actor, platformId, "tenant.bootstrap_retry")
     }
 
     @Test

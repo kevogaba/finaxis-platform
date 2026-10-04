@@ -7,15 +7,11 @@ import com.finaxis.platform.iam.application.query.BranchAssignmentDetail
 import com.finaxis.platform.iam.application.query.BranchAssignmentFilter
 import com.finaxis.platform.iam.application.query.BranchAssignmentSummary
 import com.finaxis.platform.iam.application.query.IamAssignmentQueries
-import com.finaxis.platform.iam.application.query.IamPermissionQueries
 import com.finaxis.platform.iam.application.query.IamRoleQueries
 import com.finaxis.platform.iam.application.query.IamUserQueries
 import com.finaxis.platform.iam.application.query.MembershipDetail
 import com.finaxis.platform.iam.application.query.MembershipFilter
 import com.finaxis.platform.iam.application.query.MembershipSummary
-import com.finaxis.platform.iam.application.query.PermissionDetail
-import com.finaxis.platform.iam.application.query.PermissionFilter
-import com.finaxis.platform.iam.application.query.PermissionSummary
 import com.finaxis.platform.iam.application.query.RoleAssignmentDetail
 import com.finaxis.platform.iam.application.query.RoleAssignmentFilter
 import com.finaxis.platform.iam.application.query.RoleAssignmentSummary
@@ -43,15 +39,15 @@ import java.util.UUID
 
 /**
  * jOOQ implementation of the IAM query ports.
- * Executes database reads for users, roles, assignments, permissions, and memberships.
+ * Executes database reads for users, roles, assignments, role grants, and memberships. The
+ * permission catalogue reads live in [JooqIamPermissionQueries].
  */
 @Component
 class JooqIamAdministrationQueries(
     private val dsl: DSLContext,
 ) : IamUserQueries,
     IamRoleQueries,
-    IamAssignmentQueries,
-    IamPermissionQueries {
+    IamAssignmentQueries {
     override fun searchUsers(
         organisationId: UUID,
         filter: UserInTenantFilter,
@@ -498,72 +494,6 @@ class JooqIamAdministrationQueries(
                 )
             }
 
-    override fun searchPermissions(filter: PermissionFilter): ApiPage<PermissionSummary> {
-        var condition: Condition = DSL.noCondition()
-        filter.status?.let { condition = condition.and(PERMISSION.STATUS.eq(it)) }
-        filter.riskLevel?.let { condition = condition.and(PERMISSION.RISK_LEVEL.eq(it)) }
-        filter.q?.let { q ->
-            val query = "%$q%"
-            condition =
-                condition.and(
-                    PERMISSION.PERMISSION_CODE
-                        .likeIgnoreCase(query)
-                        .or(PERMISSION.PERMISSION_NAME.likeIgnoreCase(query)),
-                )
-        }
-
-        val total = dsl.fetchCount(PERMISSION, condition).toLong()
-        val offset =
-            boundedPageOffset(filter.page, filter.size, total)
-                ?: return apiPageOf(emptyList(), filter.page, filter.size, total)
-        val items =
-            dsl
-                .select(
-                    PERMISSION.ID,
-                    PERMISSION.PERMISSION_CODE,
-                    PERMISSION.PERMISSION_NAME,
-                    PERMISSION.MODULE_CODE,
-                    PERMISSION.RISK_LEVEL,
-                    PERMISSION.STATUS,
-                ).from(PERMISSION)
-                .where(condition)
-                .orderBy(
-                    permissionSortOrder(permissionSortField(filter.sortBy), filter.sortDir),
-                    PERMISSION.ID.desc(),
-                ).limit(filter.size)
-                .offset(offset)
-                .fetch { record ->
-                    PermissionSummary(
-                        id = requireNotNull(record.get(PERMISSION.ID)),
-                        permissionCode = requireNotNull(record.get(PERMISSION.PERMISSION_CODE)),
-                        permissionName = requireNotNull(record.get(PERMISSION.PERMISSION_NAME)),
-                        moduleCode = requireNotNull(record.get(PERMISSION.MODULE_CODE)),
-                        riskLevel = requireNotNull(record.get(PERMISSION.RISK_LEVEL)),
-                        status = requireNotNull(record.get(PERMISSION.STATUS)),
-                    )
-                }
-
-        return apiPageOf(items, filter.page, filter.size, total)
-    }
-
-    override fun findPermissionById(id: UUID): PermissionDetail? =
-        dsl
-            .selectFrom(PERMISSION)
-            .where(PERMISSION.ID.eq(id))
-            .fetchOne { record ->
-                PermissionDetail(
-                    id = requireNotNull(record.id),
-                    permissionCode = requireNotNull(record.permissionCode),
-                    permissionName = requireNotNull(record.permissionName),
-                    moduleCode = requireNotNull(record.moduleCode),
-                    description = record.description,
-                    riskLevel = requireNotNull(record.riskLevel),
-                    status = requireNotNull(record.status),
-                    createdAt = requireNotNull(record.createdAt).toInstant(),
-                    updatedAt = requireNotNull(record.updatedAt).toInstant(),
-                )
-            }
-
     override fun listRolePermissions(
         organisationId: UUID,
         roleId: UUID,
@@ -652,20 +582,6 @@ class JooqIamAdministrationQueries(
         }
 
     private fun roleSortOrder(
-        field: org.jooq.Field<*>,
-        sortDir: String?,
-    ): org.jooq.SortField<*> = if (sortDir?.uppercase() == "ASC") field.asc() else field.desc()
-
-    private fun permissionSortField(sortBy: String?): org.jooq.Field<*> =
-        when (sortBy) {
-            "permissionCode" -> PERMISSION.PERMISSION_CODE
-            "permissionName" -> PERMISSION.PERMISSION_NAME
-            "riskLevel" -> PERMISSION.RISK_LEVEL
-            "status" -> PERMISSION.STATUS
-            else -> PERMISSION.CREATED_AT
-        }
-
-    private fun permissionSortOrder(
         field: org.jooq.Field<*>,
         sortDir: String?,
     ): org.jooq.SortField<*> = if (sortDir?.uppercase() == "ASC") field.asc() else field.desc()

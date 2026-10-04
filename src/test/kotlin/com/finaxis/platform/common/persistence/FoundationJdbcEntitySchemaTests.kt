@@ -62,6 +62,25 @@ class FoundationJdbcEntitySchemaTests(
         )
     }
 
+    @Test
+    fun `the permission entity maps every mandatory column the table has`() {
+        // V22 added two NOT NULL columns without a default; the scaffold must not fall behind.
+        val mandatory =
+            jdbcTemplate
+                .queryForList(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'permission'
+                      AND is_nullable = 'NO' AND column_default IS NULL
+                    """.trimIndent(),
+                    String::class.java,
+                ).filterNotNull()
+        val mapped = MAPPED_ENTITIES.single { it.table == "permission" }.columns
+
+        assertEquals(emptyList(), mandatory.filterNot { it in mapped }.sorted())
+    }
+
     private fun tableExists(table: String): Boolean =
         jdbcTemplate.queryForObject(
             """

@@ -636,7 +636,12 @@ class JooqOrganisationBootstrapStore(
 private fun String.toDisplayName(): String =
     replace('_', ' ').lowercase().replaceFirstChar(Char::titlecase)
 
-private object OrganisationBootstrapDefaults {
+/**
+ * The default role bundles every newly approved tenant is seeded with. `internal`, not `private`,
+ * so the permission-catalogue test can check each bundle against the catalogue's view
+ * requirements (ADR 0030) without approving a fixture tenant.
+ */
+internal object OrganisationBootstrapDefaults {
     const val HEAD_OFFICE_CODE = "HEAD_OFFICE"
     val SEQUENCE_CODES = listOf("MEMBER", "TRANSACTION", "JOURNAL")
     private val BASELINE_PERMISSION_CODES =

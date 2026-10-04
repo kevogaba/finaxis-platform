@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
@@ -62,6 +63,9 @@ class OrganisationProvisioningServiceRetryBootstrapAuditIntegrationTests(
             .set(USER_ACCOUNT.UPDATED_BY, SystemActor.ID)
             .execute()
         val organisationId = fixture.createActiveOrganisation("retry-audit", actorId)
+        // Retry is a platform operation: the actor must hold tenant.bootstrap_retry in the
+        // PLATFORM organisation, which no tenant role confers.
+        fixture.grantPlatformSuperAdmin(actorId)
         adminBootstrapStore.updateStatus(
             organisationId,
             InitialAdministratorBootstrapStatus.FAILED,
@@ -76,7 +80,7 @@ class OrganisationProvisioningServiceRetryBootstrapAuditIntegrationTests(
                 organisationProvisioningService.retryBootstrap(
                     RetryInitialAdministratorBootstrapCommand(
                         organisationId,
-                        TenantCaller(actorId, organisationId),
+                        PlatformCaller(actorId, PlatformOrganisation.ID),
                     ),
                 )
             }

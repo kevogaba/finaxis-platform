@@ -1,7 +1,7 @@
 package com.finaxis.platform.lifecycle.application
 
 import com.finaxis.platform.common.id.uuidV7
-import com.finaxis.platform.lifecycle.FoundationCaller
+import com.finaxis.platform.lifecycle.PlatformCaller
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
@@ -357,9 +357,13 @@ data class BusinessDateView(
     val status: String,
 )
 
-/** Command to retry failed initial administrator bootstrap process. */
+/**
+ * Command to retry failed initial administrator bootstrap process. Platform operators only:
+ * `tenant.bootstrap_retry` is a platform-scope permission, evaluated in the PLATFORM
+ * organisation, so no tenant caller can issue it.
+ */
 data class RetryInitialAdministratorBootstrapCommand(
     val organisationId: UUID,
-    val caller: FoundationCaller,
+    val caller: PlatformCaller,
     val requestId: String? = null,
 )

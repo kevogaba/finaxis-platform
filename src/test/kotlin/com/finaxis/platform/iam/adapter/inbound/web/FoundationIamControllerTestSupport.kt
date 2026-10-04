@@ -180,6 +180,9 @@ abstract class FoundationIamControllerTestSupport(
             "IAM",
             "LOW",
             "ACTIVE",
+            "VIEW",
+            "TENANT",
+            emptyList(),
         )
 
     protected fun permissionDetail(permissionId: UUID) =
@@ -191,6 +194,9 @@ abstract class FoundationIamControllerTestSupport(
             null,
             "LOW",
             "ACTIVE",
+            "VIEW",
+            "TENANT",
+            emptyList(),
             NOW,
             NOW,
         )

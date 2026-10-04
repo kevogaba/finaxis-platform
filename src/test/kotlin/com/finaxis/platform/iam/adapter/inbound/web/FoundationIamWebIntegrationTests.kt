@@ -159,6 +159,29 @@ class FoundationIamWebIntegrationTests
                 }.andExpect {
                     status { isOk() }
                     jsonPath("$.items[0].permission_code") { value("permission.view") }
+                    jsonPath("$.items[0].kind") { value("VIEW") }
+                    jsonPath("$.items[0].grant_scope") { value("TENANT") }
+                    jsonPath("$.items[0].required_view_permissions") { isEmpty() }
+                }
+
+            // The catalogue publishes which views a mutation implies (ADR 0030).
+            mockMvc
+                .get(ApiPaths.PERMISSIONS) {
+                    param("q", "user.invite")
+                    with(
+                        authentication(
+                            tenantToken(makerId, organisationId, setOf("permission.view")),
+                        ),
+                    )
+                }.andExpect {
+                    status { isOk() }
+                    jsonPath("$.items[0].permission_code") { value("user.invite") }
+                    jsonPath("$.items[0].kind") { value("MUTATION") }
+                    jsonPath("$.items[0].grant_scope") { value("TENANT") }
+                    jsonPath("$.items[0].required_view_permissions[0]") {
+                        value("membership.view")
+                    }
+                    jsonPath("$.items[0].required_view_permissions[1]") { value("user.view") }
                 }
 
             // 3. Invite a user and assign the newly created role through its dedicated route.
