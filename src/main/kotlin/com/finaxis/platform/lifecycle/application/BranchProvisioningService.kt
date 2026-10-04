@@ -169,7 +169,7 @@ class BranchProvisioningService(
                 command.organisationId,
                 command.branchId,
                 BranchLifecycleTransition.SUBMIT,
-                TransitionCommand(reason = command.reason),
+                TransitionCommand(reason = command.reason?.value),
             ),
         )
         if (command.scope == ActingScope.PLATFORM) {
@@ -212,7 +212,7 @@ class BranchProvisioningService(
                 command.organisationId,
                 command.branchId,
                 BranchLifecycleTransition.ACTIVATE,
-                TransitionCommand(reason = command.reason),
+                TransitionCommand(reason = command.reason?.value),
             ),
         )
         if (command.scope == ActingScope.PLATFORM) {
@@ -262,7 +262,7 @@ class BranchProvisioningService(
                 command.organisationId,
                 command.branchId,
                 BranchLifecycleTransition.RETURN_FOR_CHANGES,
-                TransitionCommand(reason = command.reason),
+                TransitionCommand(reason = command.reason.value),
             ),
         )
         // A withdrawal never carries the checker marker, even on the platform route: the marker
@@ -273,7 +273,7 @@ class BranchProvisioningService(
                 command.branchId.toString(),
                 "branch.withdraw",
                 command.actorId.toString(),
-                reason = command.reason,
+                reason = command.reason.value,
             )
         } else if (platformChecker) {
             audit(
@@ -282,7 +282,7 @@ class BranchProvisioningService(
                 "branch.return_for_changes_as_platform_checker",
                 command.actorId.toString(),
                 mapOf(CHECKER_SCOPE to ActingScope.PLATFORM.name),
-                command.reason,
+                command.reason.value,
             )
         }
     }
@@ -301,7 +301,7 @@ class BranchProvisioningService(
                 command.organisationId,
                 command.branchId,
                 BranchLifecycleTransition.SUSPEND,
-                TransitionCommand(reason = command.reason),
+                TransitionCommand(reason = command.reason.value),
             ),
         )
     }
@@ -324,7 +324,7 @@ class BranchProvisioningService(
                 command.organisationId,
                 command.branchId,
                 BranchLifecycleTransition.REACTIVATE,
-                TransitionCommand(reason = command.reason),
+                TransitionCommand(reason = command.reason?.value),
             ),
         )
     }
@@ -349,7 +349,7 @@ class BranchProvisioningService(
                 command.organisationId,
                 command.branchId,
                 transition,
-                TransitionCommand(reason = command.reason),
+                TransitionCommand(reason = command.reason.value),
             ),
         )
     }

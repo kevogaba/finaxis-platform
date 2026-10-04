@@ -26,6 +26,8 @@ import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisionin
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStore
 import com.finaxis.platform.lifecycle.application.OrganisationDraftResult
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
+import com.finaxis.platform.lifecycle.application.ReactivateOrganisationCommand
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
 import com.finaxis.platform.lifecycle.application.query.TenantDetail
 import com.finaxis.platform.lifecycle.application.query.TenantSummary
@@ -56,7 +58,10 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.header
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import java.time.Instant
 import java.util.UUID
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
+@Suppress("LargeClass") // One endpoint-per-test suite for one controller; splitting buys nothing.
 @WebMvcTest(controllers = [PlatformTenantController::class], useDefaultFilters = false)
 @AutoConfigureMockMvc
 @Import(
@@ -386,7 +391,12 @@ class PlatformTenantControllerTests
             }
 
             verify(organisationProvisioningService).approveProvisioning(
-                argThat<ApproveOrganisationProvisioningCommand> { reason == "x".repeat(500) },
+                argThat<ApproveOrganisationProvisioningCommand> {
+                    reason?.value ==
+                        "x".repeat(
+                            500,
+                        )
+                },
             )
             verify(organisationProvisioningService).approveProvisioning(
                 argThat<ApproveOrganisationProvisioningCommand> { reason == null },
@@ -492,6 +502,92 @@ class PlatformTenantControllerTests
             }
 
             verify(organisationProvisioningService).reactivate(any())
+        }
+
+        @Test
+        fun `reactivate rejects a reason over 500 characters before the service`() {
+            val orgId = uuidV7()
+
+            // 1001 characters used to reach organisation.status_reason VARCHAR(1000) and surface
+            // as a 500; 501 was stored and echoed.
+            listOf(501, 1001).forEach { length ->
+                withPlatformContext {
+                    reactivateTenant(orgId, "{\"reason\":\"${"x".repeat(length)}\"}")
+                        .andExpect {
+                            status { isBadRequest() }
+                            jsonPath("$.code") { value("validation_failed") }
+                        }
+                }
+            }
+
+            verify(organisationProvisioningService, never()).reactivate(any())
+        }
+
+        @Test
+        fun `reactivate validates the body before the permission is evaluated`() {
+            val orgId = uuidV7()
+
+            withPlatformContext {
+                reactivateTenant(
+                    orgId,
+                    "{\"reason\":\"${"x".repeat(501)}\"}",
+                    permissions = setOf("tenant.view"),
+                ).andExpect { status { isBadRequest() } }
+            }
+        }
+
+        @Test
+        fun `reactivate accepts 500 characters, no body, an empty object and a blank reason`() {
+            val orgId = uuidV7()
+            stubTenantDetail(orgId, "ACTIVE")
+            val bodies =
+                listOf(
+                    "{\"reason\":\"${"x".repeat(500)}\"}",
+                    null,
+                    "{}",
+                    "{\"reason\":null}",
+                    "{\"reason\":\"   \"}",
+                )
+
+            bodies.forEach { body ->
+                withPlatformContext {
+                    reactivateTenant(orgId, body).andExpect { status { isOk() } }
+                }
+            }
+
+            verify(organisationProvisioningService, org.mockito.kotlin.times(bodies.size))
+                .reactivate(any())
+        }
+
+        @Test
+        fun `reactivate hands the service a trimmed reason or none for a blank one`() {
+            val orgId = uuidV7()
+            stubTenantDetail(orgId, "ACTIVE")
+
+            withPlatformContext {
+                reactivateTenant(orgId, "{\"reason\":\"  Review done \"}")
+                    .andExpect { status { isOk() } }
+                reactivateTenant(orgId, "{\"reason\":\"   \"}").andExpect { status { isOk() } }
+            }
+
+            val captor = org.mockito.kotlin.argumentCaptor<ReactivateOrganisationCommand>()
+            verify(organisationProvisioningService, org.mockito.kotlin.times(2))
+                .reactivate(captor.capture())
+            assertEquals("Review done", captor.firstValue.reason?.value)
+            assertNull(captor.secondValue.reason)
+        }
+
+        private fun reactivateTenant(
+            orgId: UUID,
+            body: String?,
+            permissions: Set<String> = setOf("tenant.reactivate"),
+        ) = mockMvc.post("${ApiPaths.PLATFORM_TENANTS}/$orgId/reactivate") {
+            header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())
+            if (body != null) {
+                contentType = MediaType.APPLICATION_JSON
+                content = body
+            }
+            with(authentication(platformToken(permissions)))
         }
 
         @Test

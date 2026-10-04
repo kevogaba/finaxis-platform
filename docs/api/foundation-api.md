@@ -984,6 +984,52 @@ The membership detail does not expose a status reason. The platform tenant detai
 `status_reason` (see [Platform Tenant Administration](#platform-tenant-administration)), and so
 does the branch detail.
 
+#### Reason bounds
+
+Every lifecycle `reason` is validated twice: by Bean Validation on the request body, and again by
+the application layer's value objects, so a non-HTTP caller cannot bypass the bound. A rejection
+from either layer is `400` (`validation_failed`) and changes nothing: no state change, no
+transition row, no audit row. Whether a reason is required is carried by the type: `Reason`
+(required, non-null) or `DecisionRemark` (optional, nullable). The text is trimmed before it is
+stored or audited. The minimum is measured after trimming; the maximum is checked on the raw
+request text by Bean Validation and again after trimming by the value object, so a reason padded
+past 500 characters is rejected even if its trimmed text would fit.
+
+- **Required, 3 to 500 characters and not blank (`Reason`):** tenant suspend, return, reject and
+  deprovision; branch suspend, close and return (withdraw; return also on the platform routes);
+  membership suspend and revoke; user suspend and deactivate.
+- **Optional, at most 500 characters (`DecisionRemark`):** branch submit, activate and reactivate
+  (submit and activate also on the platform routes), tenant approve and reactivate, membership
+  activate and reactivate, user reactivate.
+
+An optional `reason` may be omitted: `{}`, `{"reason": null}` and a blank `reason` are all
+accepted and record no reason. An absent body is accepted wherever the body itself is optional
+(the branch, tenant approve and reactivate, and membership activate and reactivate routes); user
+reactivate still requires a body, `{}` being enough. The tenant-setting, business-date and role
+reasons are not bounded by this rule.
+
+Behaviour changes (#206). The optional bodies of
+`POST /api/v1/branches/{branch_id}/submit`, `.../activate` and `.../reactivate` and of
+`POST /api/v1/platform/tenants/{tenant_id}/reactivate` previously skipped Bean Validation, so
+the advertised 500 character limit was not enforced:
+
+- a `reason` of 501 to 1000 characters was accepted, stored, echoed and audited (`200`); it is now
+  `400 validation_failed`;
+- on tenant reactivate a `reason` of 1001 or more characters overflowed
+  `organisation.status_reason VARCHAR(1000)` and surfaced as `500`; it is now
+  `400 validation_failed`;
+- a padded `reason` is now stored and audited trimmed (`"  Audit done "` is recorded as
+  `"Audit done"`);
+- a blank optional `reason` (`""`, `"   "`) is now recorded as no reason (`NULL`); it used to be
+  stored as the blank string;
+- the bounds are measured after trimming, so `"  ab  "` on a required route is now
+  `400 validation_failed`, where it used to pass the 3 character minimum.
+
+As on every route that validates its body, validation runs before the permission check, so a
+caller without the permission who sends an over-long `reason` receives `400`, not `403`. Every
+`@RequestBody` DTO that carries constraints must be `@Valid`; the architecture test
+`RequestBodyValidationArchitectureTest` enforces it.
+
 ### Branch Assignments
 
 Base path: `/api/v1/tenant/branch-assignments`. List filters: `branch_id`,

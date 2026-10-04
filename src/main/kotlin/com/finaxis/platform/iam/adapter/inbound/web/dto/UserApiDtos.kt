@@ -1,7 +1,9 @@
 package com.finaxis.platform.iam.adapter.inbound.web.dto
 
 import com.finaxis.platform.lifecycle.application.BranchAssignmentType
+import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.MembershipType
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.RoleAssignmentScopeType
 import jakarta.validation.Valid
 import jakarta.validation.constraints.Email
@@ -73,20 +75,20 @@ data class UserInTenantSummaryResponse(
 /** Request payload for suspending a global user account. */
 data class SuspendUserRequest(
     @field:NotBlank
-    @field:Size(min = 3, max = 500)
+    @field:Size(min = Reason.MIN_LENGTH, max = Reason.MAX_LENGTH)
     val reason: String,
 )
 
 /** Request payload for reactivating a global user account. */
 data class ReactivateUserRequest(
-    @field:Size(max = 500)
+    @field:Size(max = DecisionRemark.MAX_LENGTH)
     val reason: String? = null,
 )
 
 /** Request payload for deactivating a global user account. */
 data class DeactivateUserRequest(
     @field:NotBlank
-    @field:Size(min = 3, max = 500)
+    @field:Size(min = Reason.MIN_LENGTH, max = Reason.MAX_LENGTH)
     val reason: String,
 )
 

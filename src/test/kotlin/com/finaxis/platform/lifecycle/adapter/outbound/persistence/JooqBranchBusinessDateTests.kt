@@ -10,8 +10,10 @@ import com.finaxis.platform.lifecycle.application.ActivateBranchCommand
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.CloseBranchCommand
 import com.finaxis.platform.lifecycle.application.CreateBranchCommand
+import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.application.ReactivateBranchCommand
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.SubmitBranchForApprovalCommand
 import com.finaxis.platform.lifecycle.application.SuspendBranchCommand
 import com.finaxis.platform.lifecycle.withRequestContext
@@ -71,10 +73,20 @@ class JooqBranchBusinessDateTests(
         setBusinessDate(organisationId, LocalDate.of(2031, 3, 10))
         withRequestContext {
             branchProvisioningService.suspend(
-                SuspendBranchCommand(organisationId, branchId, "Audit hold", checker),
+                SuspendBranchCommand(
+                    organisationId,
+                    branchId,
+                    Reason.required("Audit hold"),
+                    checker,
+                ),
             )
             branchProvisioningService.reactivate(
-                ReactivateBranchCommand(organisationId, branchId, "Audit done", checker),
+                ReactivateBranchCommand(
+                    organisationId,
+                    branchId,
+                    DecisionRemark.optional("Audit done"),
+                    checker,
+                ),
             )
         }
         assertEquals(opening to null, branchDates(branchId))
@@ -83,7 +95,12 @@ class JooqBranchBusinessDateTests(
         setBusinessDate(organisationId, closing)
         withRequestContext {
             branchProvisioningService.close(
-                CloseBranchCommand(organisationId, branchId, "Branch relocated", checker),
+                CloseBranchCommand(
+                    organisationId,
+                    branchId,
+                    Reason.required("Branch relocated"),
+                    checker,
+                ),
             )
         }
         assertEquals(opening to closing, branchDates(branchId))

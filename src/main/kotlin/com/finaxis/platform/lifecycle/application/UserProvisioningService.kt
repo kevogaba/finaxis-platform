@@ -149,7 +149,7 @@ class UserProvisioningService(
             actorId = command.approvedBy,
             resourceType = USER,
             resourceId = snapshot.userId,
-            reason = command.reason,
+            reason = command.reason?.value,
             requestId = command.requestId,
             metadata =
                 mapOf(
@@ -176,7 +176,7 @@ class UserProvisioningService(
                 command.organisationId,
                 command.userId,
                 transition = UserLifecycleTransition.SUSPEND,
-                command = transitionCommand(command.reason, command.requestId),
+                command = transitionCommand(command.reason.value, command.requestId),
             ),
         )
         audit(
@@ -185,7 +185,7 @@ class UserProvisioningService(
             command.actorId,
             USER,
             command.userId,
-            command.reason,
+            command.reason.value,
             command.requestId,
         )
     }
@@ -198,7 +198,7 @@ class UserProvisioningService(
                 command.organisationId,
                 command.userId,
                 transition = UserLifecycleTransition.REACTIVATE,
-                command = transitionCommand(command.reason, command.requestId),
+                command = transitionCommand(command.reason?.value, command.requestId),
             ),
         )
         audit(
@@ -207,7 +207,7 @@ class UserProvisioningService(
             command.actorId,
             USER,
             command.userId,
-            command.reason,
+            command.reason?.value,
             command.requestId,
         )
     }
@@ -220,7 +220,7 @@ class UserProvisioningService(
                 command.organisationId,
                 command.userId,
                 transition = UserLifecycleTransition.START_DEACTIVATION,
-                command = transitionCommand(command.reason, command.requestId),
+                command = transitionCommand(command.reason.value, command.requestId),
             ),
         )
         lifecycleService.transition(
@@ -228,7 +228,7 @@ class UserProvisioningService(
                 command.organisationId,
                 command.userId,
                 transition = UserLifecycleTransition.COMPLETE_DEACTIVATION,
-                command = transitionCommand(command.reason, command.requestId),
+                command = transitionCommand(command.reason.value, command.requestId),
             ),
         )
         audit(
@@ -237,7 +237,7 @@ class UserProvisioningService(
             command.actorId,
             USER,
             command.userId,
-            command.reason,
+            command.reason.value,
             command.requestId,
         )
         deactivationAssignmentRevoker.revoke(command)
@@ -252,7 +252,7 @@ class UserProvisioningService(
                 command.organisationId,
                 command.membershipId,
                 transition = membershipRevocationTransition(snapshot.status),
-                command = transitionCommand(command.reason, command.requestId),
+                command = transitionCommand(command.reason.value, command.requestId),
             ),
         )
         val branchRevocations =
@@ -273,7 +273,7 @@ class UserProvisioningService(
             actorId = command.actorId,
             resourceType = MEMBERSHIP,
             resourceId = command.membershipId,
-            reason = command.reason,
+            reason = command.reason.value,
             requestId = command.requestId,
             metadata =
                 mapOf(
@@ -293,7 +293,7 @@ class UserProvisioningService(
                 command.organisationId,
                 command.membershipId,
                 transition = MembershipLifecycleTransition.SUSPEND,
-                command = transitionCommand(command.reason, command.requestId),
+                command = transitionCommand(command.reason.value, command.requestId),
             ),
         )
         audit(
@@ -302,7 +302,7 @@ class UserProvisioningService(
             command.actorId,
             USER,
             snapshot.userId,
-            command.reason,
+            command.reason.value,
             command.requestId,
         )
     }
@@ -316,7 +316,7 @@ class UserProvisioningService(
                 command.organisationId,
                 command.membershipId,
                 transition = MembershipLifecycleTransition.REACTIVATE,
-                command = transitionCommand(command.reason, command.requestId),
+                command = transitionCommand(command.reason?.value, command.requestId),
             ),
         )
         audit(
@@ -325,7 +325,7 @@ class UserProvisioningService(
             command.actorId,
             USER,
             snapshot.userId,
-            command.reason,
+            command.reason?.value,
             command.requestId,
         )
     }
@@ -442,7 +442,7 @@ class UserProvisioningService(
                 command.organisationId,
                 snapshot.id,
                 transition = MembershipLifecycleTransition.ACTIVATE,
-                command = transitionCommand(command.reason, command.requestId),
+                command = transitionCommand(command.reason?.value, command.requestId),
             ),
         )
         return true

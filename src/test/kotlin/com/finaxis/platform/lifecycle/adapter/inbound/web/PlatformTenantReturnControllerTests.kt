@@ -18,6 +18,7 @@ import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationTo
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStore
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.ReturnOrganisationForChangesCommand
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
 import com.finaxis.platform.lifecycle.application.query.TenantDetail
@@ -131,7 +132,7 @@ class PlatformTenantReturnControllerTests
             verify(organisationProvisioningService).returnForChanges(
                 ReturnOrganisationForChangesCommand(
                     organisationId = orgId,
-                    reason = "Registration number has a typo.",
+                    reason = Reason.required("Registration number has a typo."),
                     actorId = actor,
                 ),
             )

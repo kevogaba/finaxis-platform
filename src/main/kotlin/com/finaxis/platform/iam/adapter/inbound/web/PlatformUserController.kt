@@ -18,7 +18,9 @@ import com.finaxis.platform.iam.application.query.UserInTenantSummary
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.adapter.inbound.web.CallerContextResolver
 import com.finaxis.platform.lifecycle.application.DeactivateUserCommand
+import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.ReactivateUserCommand
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.SuspendUserCommand
 import com.finaxis.platform.lifecycle.application.UserProvisioningService
 import io.swagger.v3.oas.annotations.Operation
@@ -196,7 +198,7 @@ class PlatformUserLifecycleController(
                 organisationId = PlatformOrganisation.ID,
                 userId = userId,
                 actorId = caller.actorId,
-                reason = request.reason,
+                reason = Reason.required(request.reason),
                 requestId = uuidV7().toString(),
             ),
         )
@@ -242,7 +244,7 @@ class PlatformUserLifecycleController(
                 organisationId = PlatformOrganisation.ID,
                 userId = userId,
                 actorId = caller.actorId,
-                reason = request.reason,
+                reason = DecisionRemark.optional(request.reason),
                 requestId = uuidV7().toString(),
             ),
         )
@@ -287,7 +289,7 @@ class PlatformUserLifecycleController(
                 organisationId = PlatformOrganisation.ID,
                 userId = userId,
                 actorId = caller.actorId,
-                reason = request.reason,
+                reason = Reason.required(request.reason),
                 requestId = uuidV7().toString(),
             ),
         )

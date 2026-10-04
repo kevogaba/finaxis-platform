@@ -12,6 +12,7 @@ import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.CreateBranchCommand
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.ReturnBranchCommand
 import com.finaxis.platform.lifecycle.application.SubmitBranchForApprovalCommand
 import org.jooq.DSLContext
@@ -101,7 +102,12 @@ class BranchReturnAtomicityIntegrationTests(
         actor: UUID,
     ) = withRequestContext {
         branchProvisioningService.returnForChanges(
-            ReturnBranchCommand(organisationId, branchId, "Typo in the branch name.", actor),
+            ReturnBranchCommand(
+                organisationId,
+                branchId,
+                Reason.required("Typo in the branch name."),
+                actor,
+            ),
         )
     }
 

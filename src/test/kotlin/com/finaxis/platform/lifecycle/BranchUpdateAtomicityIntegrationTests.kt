@@ -13,6 +13,7 @@ import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.CloseBranchCommand
 import com.finaxis.platform.lifecycle.application.CreateBranchCommand
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.SubmitBranchForApprovalCommand
 import com.finaxis.platform.lifecycle.application.UpdateBranchCommand
 import org.jooq.DSLContext
@@ -271,7 +272,7 @@ class BranchUpdateAtomicityIntegrationTests(
         checker: UUID,
     ) = withRequestContext {
         branchProvisioningService.close(
-            CloseBranchCommand(organisationId, branchId, "Consolidated", checker),
+            CloseBranchCommand(organisationId, branchId, Reason.required("Consolidated"), checker),
         )
     }
 

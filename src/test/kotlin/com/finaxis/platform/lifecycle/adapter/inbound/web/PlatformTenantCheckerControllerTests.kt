@@ -22,6 +22,7 @@ import com.finaxis.platform.lifecycle.application.ApproveUserCommand
 import com.finaxis.platform.lifecycle.application.BranchDraftResult
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.CreateBranchCommand
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.ReturnBranchCommand
 import com.finaxis.platform.lifecycle.application.SubmitBranchForApprovalCommand
 import com.finaxis.platform.lifecycle.application.UserApprovalResult
@@ -243,7 +244,7 @@ class PlatformTenantCheckerControllerTests
             verify(branchProvisioningService, times(2)).submitForApproval(any())
             verify(branchProvisioningService, times(2)).activate(any())
             verify(branchProvisioningService).submitForApproval(
-                argThat<SubmitBranchForApprovalCommand> { reason == "x".repeat(500) },
+                argThat<SubmitBranchForApprovalCommand> { reason?.value == "x".repeat(500) },
             )
         }
 
@@ -290,7 +291,7 @@ class PlatformTenantCheckerControllerTests
 
             verify(userProvisioningService).approveUser(
                 argThat<ApproveUserCommand> {
-                    reason == "x".repeat(500) && scope == ActingScope.PLATFORM
+                    reason?.value == "x".repeat(500) && scope == ActingScope.PLATFORM
                 },
             )
             verify(userProvisioningService).approveUser(
@@ -421,7 +422,7 @@ class PlatformTenantCheckerControllerTests
                     organisationId == tenantId &&
                         this.branchId == this@PlatformTenantCheckerControllerTests.branchId &&
                         actorId == this@PlatformTenantCheckerControllerTests.actorId &&
-                        reason == "Branch code has a typo." &&
+                        reason.value == "Branch code has a typo." &&
                         scope == ActingScope.PLATFORM
                 },
             )

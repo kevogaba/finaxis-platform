@@ -157,7 +157,9 @@ because that gate would otherwise reject a role holding only the advertised perm
 mutation and roll it back. The read stays bound to the path tenant, so an id of another tenant is
 still 404, and the checker already holds authority over the resource it has just changed; the
 response shape is unchanged. The optional bodies of branch submit and activate are validated like
-the tenant routes' (`reason` at most 500 characters).
+the tenant routes' (`reason` at most 500 characters): both route families mark the body `@Valid`
+(the tenant branch routes did not until #206, which also added a guard test that fails any
+constrained `@RequestBody` that is not).
 
 No new permission code is introduced, so there is no migration: `PLATFORM_SUPER_ADMIN` already
 holds all three. `PLATFORM_SUPPORT` holds none and cannot use any of the routes.

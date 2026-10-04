@@ -145,7 +145,7 @@ class OrganisationProvisioningService(
             OrganisationTransitionCommand(
                 command.organisationId,
                 OrganisationLifecycleTransition.SUBMIT,
-                TransitionCommand(reason = command.reason),
+                TransitionCommand(reason = command.reason?.value),
             ),
         )
     }
@@ -190,7 +190,7 @@ class OrganisationProvisioningService(
             OrganisationTransitionCommand(
                 command.organisationId,
                 OrganisationLifecycleTransition.START_PROVISIONING,
-                TransitionCommand(reason = command.reason),
+                TransitionCommand(reason = command.reason?.value),
             ),
         )
         lifecycleStore.saveSettings(command.organisationId, DEFAULT_SETTINGS, SYSTEM_ACTOR)
@@ -203,7 +203,7 @@ class OrganisationProvisioningService(
             bootstrapStore,
             auditService,
             command.organisationId,
-            command.reason,
+            command.reason?.value,
         )
         bootstrapStore.createDefaultReferenceSequences(command.organisationId)
         bootstrapStore.createDefaultRoles(command.organisationId)
@@ -215,7 +215,7 @@ class OrganisationProvisioningService(
             OrganisationTransitionCommand(
                 command.organisationId,
                 OrganisationLifecycleTransition.ACTIVATE,
-                TransitionCommand(reason = command.reason),
+                TransitionCommand(reason = command.reason?.value),
             ),
         )
     }
@@ -239,7 +239,7 @@ class OrganisationProvisioningService(
             OrganisationTransitionCommand(
                 command.organisationId,
                 OrganisationLifecycleTransition.REJECT,
-                TransitionCommand(reason = command.reason),
+                TransitionCommand(reason = command.reason.value),
             ),
         )
     }
@@ -279,7 +279,7 @@ class OrganisationProvisioningService(
             OrganisationTransitionCommand(
                 command.organisationId,
                 OrganisationLifecycleTransition.RETURN_FOR_CHANGES,
-                TransitionCommand(reason = command.reason),
+                TransitionCommand(reason = command.reason.value),
             ),
         )
         adminBootstrapStore.reject(command.organisationId)
@@ -354,7 +354,7 @@ class OrganisationProvisioningService(
             OrganisationTransitionCommand(
                 command.organisationId,
                 OrganisationLifecycleTransition.SUSPEND,
-                TransitionCommand(reason = command.reason),
+                TransitionCommand(reason = command.reason.value),
             ),
         )
     }
@@ -371,7 +371,7 @@ class OrganisationProvisioningService(
             OrganisationTransitionCommand(
                 command.organisationId,
                 OrganisationLifecycleTransition.REACTIVATE,
-                TransitionCommand(reason = command.reason),
+                TransitionCommand(reason = command.reason?.value),
             ),
         )
     }
@@ -409,7 +409,7 @@ class OrganisationProvisioningService(
             OrganisationTransitionCommand(
                 command.organisationId,
                 transition,
-                TransitionCommand(reason = command.reason),
+                TransitionCommand(reason = command.reason.value),
             ),
         )
     }
@@ -421,7 +421,7 @@ class OrganisationProvisioningService(
                     command.organisationId,
                     branch.branchId,
                     branchSuspensionTransition(branch.status),
-                    TransitionCommand(reason = command.reason),
+                    TransitionCommand(reason = command.reason.value),
                 ),
             )
         }
@@ -434,7 +434,7 @@ class OrganisationProvisioningService(
                     command.organisationId,
                     membership.membershipId,
                     transition = membershipDeprovisioningTransition(membership.status),
-                    command = TransitionCommand(reason = command.reason),
+                    command = TransitionCommand(reason = command.reason.value),
                 ),
             )
         }
@@ -451,7 +451,7 @@ class OrganisationProvisioningService(
                         "assignmentId" to assignment.assignmentId.toString(),
                         "assignmentType" to assignment.assignmentType,
                     ),
-                reason = command.reason,
+                reason = command.reason.value,
             )
         }
     }
@@ -461,7 +461,7 @@ class OrganisationProvisioningService(
             OrganisationTransitionCommand(
                 command.organisationId,
                 OrganisationLifecycleTransition.COMPLETE_DEPROVISIONING,
-                TransitionCommand(reason = command.reason),
+                TransitionCommand(reason = command.reason.value),
             ),
         )
     }

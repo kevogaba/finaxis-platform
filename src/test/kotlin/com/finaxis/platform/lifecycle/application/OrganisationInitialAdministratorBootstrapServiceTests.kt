@@ -300,7 +300,7 @@ class OrganisationInitialAdministratorBootstrapServiceTests {
         organisations.rejectProvisioning(
             RejectOrganisationProvisioningCommand(
                 organisationId = organisationId,
-                reason = "Documents incomplete",
+                reason = Reason.required("Documents incomplete"),
                 actorId = uuidV7(),
             ),
         )
