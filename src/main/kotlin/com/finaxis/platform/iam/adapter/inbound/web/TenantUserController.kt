@@ -2,6 +2,7 @@ package com.finaxis.platform.iam.adapter.inbound.web
 
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
+import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
@@ -100,7 +101,11 @@ class TenantUserController(
     @PreAuthorize("hasAuthority('user.invite')")
     @Operation(
         summary = "Invite tenant user",
-        description = "Records a tenant user invitation and its requested access assignments.",
+        description =
+            "Records a tenant user invitation and its requested access assignments. Refusals " +
+                "are atomic, so a refused invitation leaves no row: 409 for a state conflict " +
+                "(including a concurrent duplicate), 422 for a bad role or branch reference in " +
+                "the body.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -117,6 +122,64 @@ class TenantUserController(
             content = [
                 Content(
                     schema = Schema(implementation = UserInvitationResultResponse::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description =
+                "Invalid request: a malformed field, a branch-scoped role without a branch, or " +
+                    "no branch or role assignment (`validation_failed`)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description =
+                "Unauthenticated",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description =
+                "Forbidden",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "409",
+            description =
+                "Conflict: the user already has a membership in the organisation, the username " +
+                    "is taken, or the organisation is not active (`conflict`)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "422",
+            description =
+                "A role or branch in the body is unknown, belongs to another organisation or is " +
+                    "not active, or a tenant-scoped role names a branch (`invalid_operation`)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
                 ),
             ],
         ),

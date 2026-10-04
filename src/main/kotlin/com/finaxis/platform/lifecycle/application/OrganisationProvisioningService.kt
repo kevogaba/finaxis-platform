@@ -64,7 +64,8 @@ class OrganisationProvisioningService(
             command.initialSettings.map { (key, rawValue) ->
                 StoredSetting.fromCatalog(key, rawValue)
             }
-        val organisationId = lifecycleStore.createDraft(command)
+        queryStore.requireTenantCodeFree(command.tenantCode, except = null)
+        val organisationId = translatingDuplicateTenantCode { lifecycleStore.createDraft(command) }
         adminBootstrapStore.createDraft(organisationId, command.admin, command.requestedBy)
         lifecycleStore.saveSettings(organisationId, settings, command.requestedBy)
         bootstrapStore.ensureBusinessDate(
@@ -101,7 +102,8 @@ class OrganisationProvisioningService(
         validateAdmin(command.admin)
         errorUnless(command.actorId != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
 
-        lifecycleStore.amendDraft(command)
+        queryStore.requireTenantCodeFree(command.tenantCode, except = command.organisationId)
+        translatingDuplicateTenantCode { lifecycleStore.amendDraft(command) }
         adminBootstrapStore.amendDraft(command.organisationId, command.admin)
 
         audit(

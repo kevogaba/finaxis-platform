@@ -33,6 +33,7 @@ import org.mockito.Mockito.mock
 import org.mockito.Mockito.verify
 import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.whenever
+import org.springframework.dao.DuplicateKeyException
 import org.springframework.security.access.AccessDeniedException
 import java.time.Clock
 import java.time.Instant
@@ -42,6 +43,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 // One class per service keeps the private in-memory fakes it shares in a single file.
@@ -110,42 +112,289 @@ class UserProvisioningServiceTests {
     }
 
     @Test
-    fun `invitation rejects inactive organisation`() {
+    fun `invitation to an inactive organisation is a 409 conflict that writes nothing`() {
         val context = activeInvitationContext()
         fake.organisationStates[context.org] = OrganisationLifecycleState.SUSPENDED
 
-        assertFailsWith<IllegalArgumentException> {
-            service.inviteUser(inviteCommand(context))
-        }
+        val failure =
+            assertFailsWith<ConflictException> { service.inviteUser(inviteCommand(context)) }
+
+        assertEquals("conflict", failure.code)
+        assertEquals("User invitations require an active organisation.", failure.safeDetail)
+        assertNothingWritten()
     }
 
     @Test
-    fun `invitation rejects missing ordinary branch assignment`() {
+    fun `invitation without a branch assignment for an ordinary member is a 400`() {
         val context = activeInvitationContext()
 
-        assertFailsWith<IllegalArgumentException> {
-            service.inviteUser(inviteCommand(context).copy(branchAssignments = emptyList()))
-        }
+        val failure =
+            assertFailsWith<InvalidRequestException> {
+                service.inviteUser(inviteCommand(context).copy(branchAssignments = emptyList()))
+            }
+
+        assertEquals("validation_failed", failure.code)
+        assertEquals("At least one branch assignment is required.", failure.safeDetail)
+        assertNothingWritten()
     }
 
     @Test
-    fun `invitation rejects missing role assignment`() {
+    fun `invitation without a role assignment is a 400`() {
         val context = activeInvitationContext()
 
-        assertFailsWith<IllegalArgumentException> {
-            service.inviteUser(inviteCommand(context).copy(roleAssignments = emptyList()))
-        }
+        val failure =
+            assertFailsWith<InvalidRequestException> {
+                service.inviteUser(inviteCommand(context).copy(roleAssignments = emptyList()))
+            }
+
+        assertEquals("validation_failed", failure.code)
+        assertEquals("At least one role assignment is required.", failure.safeDetail)
+        assertNothingWritten()
     }
 
     @Test
-    fun `invitation rejects duplicate active membership`() {
+    fun `invitation with a malformed email or a blank name is a 400 that writes nothing`() {
+        val context = activeInvitationContext()
+        val base = inviteCommand(context)
+
+        listOf(
+            base.copy(email = "user@localhost") to "A valid email address is required.",
+            base.copy(email = " ") to "A valid email address is required.",
+            base.copy(username = " ") to "Username is required.",
+            base.copy(displayName = " ") to "Display name is required.",
+        ).forEach { (command, detail) ->
+            val failure = assertFailsWith<InvalidRequestException> { service.inviteUser(command) }
+            assertEquals("validation_failed", failure.code)
+            assertEquals(detail, failure.safeDetail)
+        }
+        assertNothingWritten()
+    }
+
+    @Test
+    fun `invitation naming an unknown inactive or foreign role is a 422 that writes nothing`() {
+        val context = activeInvitationContext()
+        val foreignRole = uuidV7()
+        fake.roles += uuidV7() to foreignRole
+        val unknownRole = uuidV7()
+
+        listOf(unknownRole, foreignRole).forEach { roleId ->
+            val failure =
+                assertFailsWith<InvalidOperationException> {
+                    service.inviteUser(
+                        inviteCommand(context)
+                            .copy(
+                                roleAssignments =
+                                    listOf(
+                                        RoleAssignmentRequest(
+                                            roleId,
+                                            RoleAssignmentScopeType.TENANT,
+                                        ),
+                                    ),
+                            ),
+                    )
+                }
+            assertEquals("invalid_operation", failure.code)
+            assertEquals(
+                "A role in the request was not found or is not active in the organisation.",
+                failure.safeDetail,
+            )
+            assertFalse(failure.safeDetail.contains(roleId.toString()))
+        }
+        assertNothingWritten()
+    }
+
+    @Test
+    fun `invitation naming an unknown suspended or foreign branch is a 422 that writes nothing`() {
+        val context = activeInvitationContext()
+        val suspended = uuidV7()
+        fake.branchStates[context.org to suspended] = BranchLifecycleState.SUSPENDED
+        val foreign = uuidV7()
+        fake.branchStates[uuidV7() to foreign] = BranchLifecycleState.ACTIVE
+        val unknown = uuidV7()
+
+        listOf(unknown, suspended, foreign).forEach { branchId ->
+            val withAssignment =
+                inviteCommand(context)
+                    .copy(
+                        branchAssignments =
+                            listOf(BranchAssignmentRequest(branchId, BranchAssignmentType.HOME)),
+                    )
+            val withPrimary = inviteCommand(context).copy(primaryBranchId = branchId)
+            val withScopedRole =
+                inviteCommand(context)
+                    .copy(
+                        roleAssignments =
+                            listOf(
+                                RoleAssignmentRequest(
+                                    context.role,
+                                    RoleAssignmentScopeType.BRANCH,
+                                    branchId,
+                                ),
+                            ),
+                    )
+            listOf(withAssignment, withPrimary, withScopedRole).forEach { command ->
+                val failure =
+                    assertFailsWith<InvalidOperationException> { service.inviteUser(command) }
+                assertEquals("invalid_operation", failure.code)
+                assertEquals(
+                    "A branch in the request was not found or is not active in the organisation.",
+                    failure.safeDetail,
+                )
+                assertFalse(failure.safeDetail.contains(branchId.toString()))
+            }
+        }
+        assertNothingWritten()
+    }
+
+    @Test
+    fun `invitation of a user who already has a membership is a 409 that writes nothing`() {
         val context = activeInvitationContext()
         val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
-        fake.addMembership(context.org, userId, MembershipLifecycleState.ACTIVE)
+        val membershipId = fake.addMembership(context.org, userId, MembershipLifecycleState.ACTIVE)
+        val users = fake.users.size
 
-        assertFailsWith<IllegalArgumentException> {
-            service.inviteUser(inviteCommand(context))
-        }
+        val failure =
+            assertFailsWith<ConflictException> { service.inviteUser(inviteCommand(context)) }
+
+        assertEquals("conflict", failure.code)
+        assertEquals(
+            "This user already has a membership in the selected organisation.",
+            failure.safeDetail,
+        )
+        assertEquals(users, fake.users.size)
+        assertEquals(setOf(context.org to membershipId), fake.memberships.keys)
+        assertTrue(fake.branchAssignments.isEmpty())
+        assertTrue(fake.roleAssignments.isEmpty())
+        assertTrue(audits.events.isEmpty())
+    }
+
+    @Test
+    fun `invitation of a revoked member is the same 409 and creates no second membership`() {
+        val context = activeInvitationContext()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        fake.addMembership(context.org, userId, MembershipLifecycleState.REVOKED)
+
+        assertFailsWith<ConflictException> { service.inviteUser(inviteCommand(context)) }
+
+        assertEquals(1, fake.memberships.size)
+        assertTrue(audits.events.isEmpty())
+    }
+
+    @Test
+    fun `invitation of a new email with a username already taken is a 409`() {
+        val context = activeInvitationContext()
+        fake.addUser("someone-else@example.test", "Member", UserLifecycleState.ACTIVE)
+
+        val failure =
+            assertFailsWith<ConflictException> { service.inviteUser(inviteCommand(context)) }
+
+        assertEquals("conflict", failure.code)
+        assertEquals("That username is already in use.", failure.safeDetail)
+        assertEquals(1, fake.users.size)
+        assertTrue(fake.memberships.isEmpty())
+    }
+
+    @Test
+    fun `a lost race at the unique index is the same 409 and writes nothing`() {
+        // The pre-checks are a courtesy: two concurrent invitations for one new email both pass
+        // them and the loser fails uq_user_account_lower_email / _username.
+        val context = activeInvitationContext()
+        fake.duplicateOnCreateUser = true
+
+        val failure =
+            assertFailsWith<ConflictException> { service.inviteUser(inviteCommand(context)) }
+
+        assertEquals("conflict", failure.code)
+        assertEquals(
+            "A user with this email or username already exists; retry the invitation.",
+            failure.safeDetail,
+        )
+        assertIs<DuplicateKeyException>(failure.cause)
+        assertNothingWritten()
+    }
+
+    @Test
+    fun `approving a membership with no branch assignment is a 409 that changes nothing`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        fake.branchAssignments.clear()
+
+        val failure = assertFailsWith<ConflictException> { approve(context, invitation) }
+
+        assertEquals("conflict", failure.code)
+        assertEquals(
+            "The membership cannot be approved until the user has an active branch assignment.",
+            failure.safeDetail,
+        )
+        assertApprovalChangedNothing(context, invitation)
+    }
+
+    @Test
+    fun `approving a membership with no role assignment is a 409 that changes nothing`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        fake.roleAssignments.clear()
+
+        val failure = assertFailsWith<ConflictException> { approve(context, invitation) }
+
+        assertEquals(
+            "The membership cannot be approved until the user has an active role assignment.",
+            failure.safeDetail,
+        )
+        assertApprovalChangedNothing(context, invitation)
+    }
+
+    @Test
+    fun `an auditor membership needs no branch assignment but still needs a role`() {
+        val context = activeInvitationContext()
+        val userId = fake.addUser("aud@example.test", "aud", UserLifecycleState.ACTIVE)
+        fake.identityLinks += userId
+        val membershipId =
+            fake.addMembership(
+                context.org,
+                userId,
+                MembershipLifecycleState.PENDING_APPROVAL,
+                MembershipType.AUDITOR,
+            )
+        fake.membershipInviters[context.org to membershipId] = context.actor
+        val command = ApproveUserCommand(context.org, membershipId, context.checker)
+
+        assertFailsWith<ConflictException> { service.approveUser(command) }
+
+        fake.roleAssignments += RoleAssignmentKey(context.org, userId, context.role, null)
+        assertEquals(MembershipLifecycleState.ACTIVE, service.approveUser(command).membershipStatus)
+    }
+
+    @Test
+    fun `approving a user who cannot start identity provisioning is a 409 with no change`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        fake.users.getValue(invitation.userId).state = UserLifecycleState.SUSPENDED
+
+        val failure = assertFailsWith<ConflictException> { approve(context, invitation) }
+
+        assertEquals(
+            "The user account is not in a state that allows identity provisioning.",
+            failure.safeDetail,
+        )
+        assertEquals(UserLifecycleState.SUSPENDED, fake.users.getValue(invitation.userId).state)
+        assertApprovalChangedNothing(context, invitation)
+    }
+
+    @Test
+    fun `approving a linked user who cannot be activated is a 409 with no change`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        fake.identityLinks += invitation.userId
+        fake.users.getValue(invitation.userId).state = UserLifecycleState.SUSPENDED
+
+        val failure = assertFailsWith<ConflictException> { approve(context, invitation) }
+
+        assertEquals(
+            "The user account is not in a state that allows the membership to be activated.",
+            failure.safeDetail,
+        )
+        assertApprovalChangedNothing(context, invitation)
     }
 
     @Test
@@ -789,6 +1038,41 @@ class UserProvisioningServiceTests {
         assertTrue(audits.events.any { it.action == "membership.reactivate" })
     }
 
+    private fun approve(
+        context: InvitationContext,
+        invitation: UserInvitationResult,
+    ) = service.approveUser(
+        ApproveUserCommand(context.org, invitation.membershipId, context.checker, "req-1"),
+    )
+
+    private fun assertNothingWritten() {
+        assertTrue(fake.users.isEmpty())
+        assertTrue(fake.memberships.isEmpty())
+        assertTrue(fake.branchAssignments.isEmpty())
+        assertTrue(fake.roleAssignments.isEmpty())
+        assertTrue(audits.events.isEmpty())
+    }
+
+    private fun assertApprovalChangedNothing(
+        context: InvitationContext,
+        invitation: UserInvitationResult,
+    ) {
+        assertEquals(
+            MembershipLifecycleState.PENDING_APPROVAL,
+            fake.memberships.getValue(context.org to invitation.membershipId).state,
+        )
+        assertTrue(fake.dispatches.isEmpty())
+        assertTrue(
+            events.externalTargets().none {
+                it.contains("keycloak-provisioning") ||
+                    it.contains("application-invite") ||
+                    it.contains("membership.activated")
+            },
+        )
+        assertTrue(logs.logs.isEmpty())
+        assertTrue(audits.events.none { it.action == "user.approve" })
+    }
+
     private fun activeInvitationContext(): InvitationContext {
         val context =
             InvitationContext(
@@ -848,6 +1132,7 @@ private class UserProvisioningFake :
     val branchAssignments = mutableSetOf<BranchAssignmentKey>()
     val roleAssignments = mutableSetOf<RoleAssignmentKey>()
     val dispatches = mutableSetOf<DispatchRecord>()
+    var duplicateOnCreateUser = false
 
     fun addUser(
         email: String,
@@ -883,13 +1168,19 @@ private class UserProvisioningFake :
     override fun findUserIdByEmail(email: String): UUID? =
         userEmails.entries.firstOrNull { it.value.equals(email, ignoreCase = true) }?.key
 
+    override fun usernameInUse(username: String): Boolean =
+        usernames.values.any { it.equals(username, ignoreCase = true) }
+
     override fun createUserAccount(
         email: String,
         username: String,
         displayName: String,
         phoneE164: String?,
         actorId: UUID,
-    ): UUID = addUser(email, username, UserLifecycleState.DRAFT, displayName)
+    ): UUID {
+        if (duplicateOnCreateUser) throw DuplicateKeyException("uq_user_account_lower_email")
+        return addUser(email, username, UserLifecycleState.DRAFT, displayName)
+    }
 
     override fun userStatus(userId: UUID): UserLifecycleState? = users[userId]?.state
 

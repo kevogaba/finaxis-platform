@@ -364,6 +364,25 @@ class PlatformTenantCheckerControllerTests
         }
 
         @Test
+        fun `platform activation prerequisites not met is a 409 problem with a request id`() {
+            val detail =
+                "The membership cannot be approved until the user has an active role assignment."
+            whenever(userProvisioningService.approveUser(any()))
+                .thenThrow(ConflictException(safeDetail = detail))
+
+            mockMvc
+                .post("${ApiPaths.PLATFORM_TENANTS}/$tenantId/memberships/$membershipId/activate") {
+                    with(authentication(platformToken(setOf("user.approve"))))
+                }.andExpect {
+                    status { isConflict() }
+                    content { contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON) }
+                    jsonPath("$.code") { value("conflict") }
+                    jsonPath("$.detail") { value(detail) }
+                    jsonPath("$.request_id") { isNotEmpty() }
+                }
+        }
+
+        @Test
         fun `application failures map to 403 404 and 409`() {
             val authorities = setOf("user.approve", "branch.approve")
             whenever(userProvisioningService.approveUser(any()))
