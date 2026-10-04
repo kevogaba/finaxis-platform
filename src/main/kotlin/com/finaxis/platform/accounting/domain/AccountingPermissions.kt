@@ -139,9 +139,12 @@ object AccountingPermissions {
     val REPORTING: Set<String> = setOf(ACCOUNTING_REPORT_VIEW, ACCOUNTING_REPORT_EXPORT)
 
     /**
-     * Codes that must never appear in a default role bundle. Reopening a closed period and posting
-     * into a prior one are exceptional operations, granted deliberately per tenant rather than
-     * inherited by anyone who happens to hold an accounting role.
+     * Codes that must never appear in a NON-ADMIN default role bundle. Reopening a closed period
+     * and posting into a prior one are exceptional operations, granted deliberately per tenant
+     * rather than inherited by anyone who happens to hold an accounting role. The administrator
+     * roles (`TENANT_ADMIN`, the bootstrap `local-admin`, `PLATFORM_SUPER_ADMIN`) hold every
+     * permission of their scope and so hold them; use stays audited and lock-checked where it is
+     * enforced.
      */
     val BREAK_GLASS: Set<String> = setOf(FISCAL_PERIOD_REOPEN, JOURNAL_POST_PRIOR_PERIOD)
 

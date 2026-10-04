@@ -138,7 +138,9 @@ class AccountingPermissionCatalogueTests(
     }
 
     @Test
-    fun `the bootstrap local admin holds only the tenant configuration subset`() {
+    fun `the bootstrap local admin holds every accounting code, break-glass included`() {
+        // V5 gave it a ten-code configuration subset. V23 completes it: an administrator
+        // role holds every permission of its scope, and every accounting code is tenant scope.
         val codes =
             dsl
                 .select(PERMISSION.PERMISSION_CODE)
@@ -151,11 +153,10 @@ class AccountingPermissionCatalogueTests(
                 .filterNotNull()
                 .toSet()
 
-        assertEquals(EXPECTED_LOCAL_ADMIN_ACCOUNTING_CODES, codes)
+        assertEquals(AccountingPermissions.ALL, codes)
         assertEquals(
-            emptySet(),
+            AccountingPermissions.BREAK_GLASS,
             codes intersect AccountingPermissions.BREAK_GLASS,
-            "break-glass codes are granted deliberately per tenant, never by the bootstrap",
         )
     }
 
@@ -186,19 +187,5 @@ class AccountingPermissionCatalogueTests(
         val PLATFORM_SUPPORT_ROLE_ID: UUID =
             UUID.fromString("50000000-0000-0000-0000-000000000002")
         val LOCAL_ADMIN_ROLE_ID: UUID = UUID.fromString("77777777-7777-7777-7777-777777777777")
-
-        val EXPECTED_LOCAL_ADMIN_ACCOUNTING_CODES =
-            setOf(
-                "gl_account.view",
-                "gl_account.create",
-                "gl_account.update",
-                "gl_account.submit",
-                "gl_account.approve",
-                "gl_account.deactivate",
-                "fiscal_period.view",
-                "fiscal_period.open",
-                "posting_rule.view",
-                "accounting_report.view",
-            )
     }
 }

@@ -38,6 +38,20 @@ internal class PermissionMigrationSeeder(
         organisationId: UUID,
         roleCode: String,
         vararg permissionCodes: String,
+    ): UUID = insertRole(organisationId, roleCode, false, permissionCodes)
+
+    /** A seeded (`system_role`) role, the shape the application's default roles have. */
+    fun systemRole(
+        organisationId: UUID,
+        roleCode: String,
+        vararg permissionCodes: String,
+    ): UUID = insertRole(organisationId, roleCode, true, permissionCodes)
+
+    private fun insertRole(
+        organisationId: UUID,
+        roleCode: String,
+        systemRole: Boolean,
+        permissionCodes: Array<out String>,
     ): UUID {
         val roleId = uuidV7()
         jdbcTemplate.update(
@@ -45,12 +59,13 @@ internal class PermissionMigrationSeeder(
             INSERT INTO role (
                 id, organisation_id, role_code, role_name, system_role, status, created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, FALSE, 'ACTIVE', NOW(), NOW())
+            ) VALUES (?, ?, ?, ?, ?, 'ACTIVE', NOW(), NOW())
             """.trimIndent(),
             roleId,
             organisationId,
             roleCode,
             roleCode,
+            systemRole,
         )
         permissionCodes.forEach { code ->
             jdbcTemplate.update(

@@ -147,19 +147,30 @@ class FoundationSeedDataTests(
     }
 
     @Test
-    fun `platform support holds only its two operational read permissions`() {
-        val actual =
+    fun `platform support holds its operational reads and what it needs to enter the platform`() {
+        val actual = codesHeldBy("50000000-0000-0000-0000-000000000002")
+        // V2 gave it two reads it could never exercise, because nothing let it select the PLATFORM
+        // organisation. V23 adds the selection, the profile read and the platform reads.
+        assertEquals(PLATFORM_SUPPORT_PERMISSION_CODES.sorted(), actual.sorted())
+    }
+
+    @Test
+    fun `platform super admin holds every active code`() {
+        assertEquals(
+            emptyList(),
             jdbcTemplate.queryForList(
                 """
-                SELECT p.permission_code
-                FROM role_permission rp
-                JOIN permission p ON p.id = rp.permission_id
-                WHERE rp.role_id = '50000000-0000-0000-0000-000000000002'
+                SELECT p.permission_code FROM permission p
+                WHERE p.status = 'ACTIVE' AND NOT EXISTS (
+                    SELECT 1 FROM role_permission rp
+                    WHERE rp.permission_id = p.id
+                      AND rp.role_id = '50000000-0000-0000-0000-000000000001'
+                )
                 ORDER BY p.permission_code
                 """.trimIndent(),
                 String::class.java,
-            )
-        assertEquals(listOf("audit.view", "business_date.view"), actual)
+            ),
+        )
     }
 
     @Test
@@ -196,21 +207,34 @@ class FoundationSeedDataTests(
     }
 
     @Test
-    fun `bootstrap administrator can invite and approve tenant users`() {
-        val actual =
+    fun `bootstrap administrator holds every active tenant-scope permission`() {
+        val held = codesHeldBy(LOCAL_ADMIN_ROLE_ID)
+        val tenantScope =
             jdbcTemplate
                 .queryForList(
-                    """
-                    SELECT p.permission_code
-                    FROM role_permission rp
-                    JOIN permission p ON p.id = rp.permission_id
-                    WHERE rp.role_id = '77777777-7777-7777-7777-777777777777'
-                    """.trimIndent(),
+                    "SELECT permission_code FROM permission " +
+                        "WHERE grant_scope = 'TENANT' AND status = 'ACTIVE'",
                     String::class.java,
                 ).filterNotNull()
 
-        assertEquals(expectedLocalAdminPermissionCodes.sorted(), actual.sorted())
+        // V3 and V4 gave it 33 codes, V23 all of its scope: it is the tenant administrator
+        // local.admin and local.checker actually log in with, and audit.view was never among them.
+        assertEquals(tenantScope.sorted(), held.sorted())
+        assertTrue(listOf("user.invite", "user.approve", "audit.view").all { it in held })
+        assertTrue("tenant.create" !in held, "a platform-only code is inert in a tenant")
     }
+
+    private fun codesHeldBy(roleId: String): List<String> =
+        jdbcTemplate
+            .queryForList(
+                """
+                SELECT p.permission_code
+                FROM role_permission rp
+                JOIN permission p ON p.id = rp.permission_id AND p.status = 'ACTIVE'
+                WHERE rp.role_id = '$roleId'
+                """.trimIndent(),
+                String::class.java,
+            ).filterNotNull()
 
     @Test
     fun `a distinct bootstrap checker exists to approve the administrator's first invitation`() {
@@ -247,40 +271,19 @@ class FoundationSeedDataTests(
         const val CHECKER_USER_ID = "dddddddd-dddd-dddd-dddd-dddddddddd01"
         const val EXPECTED_CATALOGUE_SIZE = 81
 
-        val expectedLocalAdminPermissionCodes =
+        val PLATFORM_SUPPORT_PERMISSION_CODES =
             listOf(
-                "accounting_report.view",
-                "auth.select_branch",
+                "audit.view",
                 "auth.select_organisation",
-                "branch.reactivate",
                 "branch.view",
                 "branch_assignment.view",
-                "fiscal_period.open",
-                "fiscal_period.view",
-                "gl_account.approve",
-                "gl_account.create",
-                "gl_account.deactivate",
-                "gl_account.submit",
-                "gl_account.update",
-                "gl_account.view",
+                "business_date.view",
                 "iam.profile.read",
-                "membership.reactivate",
-                "membership.revoke",
-                "membership.suspend",
                 "membership.view",
                 "permission.view",
-                "posting_rule.view",
-                "role.activate",
-                "role.deactivate",
-                "role.remove_permission",
                 "role.view",
                 "role_assignment.view",
-                "settings.view",
-                "user.approve",
-                "user.assign_branch",
-                "user.invite",
-                "user.revoke_branch",
-                "user.revoke_role",
+                "tenant.view",
                 "user.view",
             )
 

@@ -76,16 +76,18 @@ running a proof is safe and accepting a break is the control failure itself.
 composable bundles.** `ACCOUNTING_OPERATOR` (maker: prepares and submits) and `ACCOUNTING_APPROVER`
 (checker: approves and posts) are created in Kotlin at organisation-approval time by
 `JooqOrganisationBranchProvisioningStore.createDefaultRoles`, from
-`OrganisationBootstrapDefaults.ROLE_PERMISSIONS`. They appear in no migration and nothing anywhere
-evaluates a role name.
+`OrganisationBootstrapDefaults` (and, for `TENANT_ADMIN`, the catalogue's `grant_scope`, since
+`V23`). They appear in no migration and nothing anywhere evaluates a role name.
 
-**`PLATFORM_SUPPORT` receives nothing.** Platform staff must not read tenant financial data by
-default; a support-escalation path into a tenant ledger is a separate, audited decision.
+**`PLATFORM_SUPPORT` receives no accounting code.** Platform staff must not read tenant financial
+data by default; a support-escalation path into a tenant ledger is a separate, audited decision.
 `PLATFORM_SUPER_ADMIN` still holds the whole catalogue, granted by a set-based
 `INSERT … SELECT … FROM permission` repeated in `V5` because V2's equivalent ran once and cannot
 pick up later codes.
 
-**The bootstrap `local-admin` role receives exactly ten configuration codes** —
+**The bootstrap `local-admin` role receives exactly ten configuration codes** (completed by
+`V23`, which gives it every tenant-scope code: an administrator role holds everything in its
+scope) —
 `gl_account.view`/`.create`/`.update`/`.submit`/`.approve`/`.deactivate`, `fiscal_period.view`,
 `fiscal_period.open`, `posting_rule.view`, `accounting_report.view` — so a fresh deployment can
 build a chart of accounts and open a period without anyone holding operational or break-glass
@@ -94,9 +96,12 @@ rights. `gl_account.approve` is included because `V4` already seeded a second bo
 flow is exercisable out of the box with two distinct actors, which is precisely the gap `V4`
 existed to close.
 
-**Break-glass appears in no default bundle.** `fiscal_period.reopen` and
+**Break-glass appears in no non-admin default bundle.** `fiscal_period.reopen` and
 `journal.post_prior_period` are named by `AccountingPermissions.BREAK_GLASS` and are granted
-deliberately, per tenant, never inherited from a bundle.
+deliberately, per tenant, never inherited from a non-admin bundle. (Amended by `V23`: this read "no
+default bundle" until the owner ruled that an administrator role holds every permission of its
+scope, so the administrator roles hold them; see
+[accounting authorization](../security/accounting-authorization.md#break-glass-permissions).)
 
 **Separation of duties is enforced by actor identity at the transition, not by splitting
 permissions across roles.** The approver must differ from the submitter, as

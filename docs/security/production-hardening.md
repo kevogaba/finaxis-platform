@@ -21,6 +21,20 @@ Production session cookies are `Secure` and `SameSite=Strict`.
 The application always sends content-type-options, frame-options, and referrer-policy headers.
 Production additionally enables HSTS and CSP.
 
+## Bootstrap identities
+
+`V3` seeds a demo tenant, `FINAXIS-LOCAL`, with two demo identities, `local.admin` and
+`local.checker`, linked to Keycloak subjects. Since `V23` both are **full tenant
+administrators** of that tenant: the `local-admin` role they hold carries every `ACTIVE`
+tenant-scope permission, `role.assign_permission`, `business_date.reopen` and the accounting
+break-glass codes included. They were already powerful (the first administrator and the second
+actor that can approve the first's invitations); they now hold everything in the tenant.
+
+**A production deployment must rotate or deactivate both identities, or deactivate the
+`FINAXIS-LOCAL` memberships, before the deployment is exposed.** `V3`'s header already says to
+rotate `local.admin`; the widening makes leaving them in place more costly. A deployment that never
+needs the demo tenant should suspend or deprovision it.
+
 ## Documentation and required secret
 
 springdoc and Scalar stay enabled unconditionally in every profile, including production; both are

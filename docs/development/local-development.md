@@ -34,7 +34,10 @@ Local users:
 
 Flyway seeds the matching application users, organisation, membership, branches, role,
 and permissions. `local.checker` holds the same `local-admin` role so it can approve
-`local.admin`'s invitations - `local.admin` cannot approve its own. The local profile
+`local.admin`'s invitations - `local.admin` cannot approve its own. Since `V23` that role holds
+every tenant-scope permission, so both are full administrators of `FINAXIS-LOCAL`: rotate or
+deactivate them in any deployment that is exposed (see
+[production hardening](../security/production-hardening.md)). The local profile
 additionally seeds the platform membership needed for the full smoke path. The seeded
 organisation and branch IDs are intentionally stable so smoke tests can be scripted.
 
