@@ -16,6 +16,7 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BranchSummaryRespo
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CloseBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReactivateBranchRequest
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReturnBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SubmitBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SuspendBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.UpdateBranchRequest
@@ -24,6 +25,7 @@ import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.CloseBranchCommand
 import com.finaxis.platform.lifecycle.application.CreateBranchCommand
 import com.finaxis.platform.lifecycle.application.ReactivateBranchCommand
+import com.finaxis.platform.lifecycle.application.ReturnBranchCommand
 import com.finaxis.platform.lifecycle.application.SubmitBranchForApprovalCommand
 import com.finaxis.platform.lifecycle.application.SuspendBranchCommand
 import com.finaxis.platform.lifecycle.application.UpdateBranchCommand
@@ -639,6 +641,110 @@ class BranchController(
                 caller,
             )
         return updated.toResponse()
+    }
+
+    /**
+     * Returns a pending branch to draft, or withdraws it.
+     */
+    @PostMapping("/{branch_id}/return")
+    @IdempotentMutation(scope = IdempotencyScopeKind.TENANT)
+    @PreAuthorize("hasAnyAuthority('branch.create', 'branch.activate')")
+    @Operation(
+        summary = "Return or withdraw branch",
+        description =
+            "Returns a branch that is pending approval to draft with a required reason, so its " +
+                "maker can amend and resubmit it. The same call serves two intents, told apart " +
+                "by the caller: the branch's creator or latest submitter withdraws their own " +
+                "request and needs `branch.create`; anyone else returns it as a checker and " +
+                "needs `branch.activate`. The branch keeps its code and its creator.",
+        parameters = [
+            Parameter(
+                name = "Idempotency-Key",
+                description = "Optional UUID; the server generates one when omitted.",
+                `in` = ParameterIn.HEADER,
+                schema = Schema(type = "string", format = "uuid"),
+            ),
+        ],
+    )
+    @ApiResponses(
+        ApiResponse(
+            responseCode = "200",
+            description = "Branch returned to draft",
+            content = [Content(schema = Schema(implementation = BranchDetailResponse::class))],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description =
+                "Missing body or reason (`invalid_json`), or a reason that is blank or not " +
+                    "3 to 500 characters (`validation_failed`)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Caller lacks the permission its intent needs",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description = "Branch not found",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "409",
+            description =
+                "Branch is not pending approval, or the tenant is not active or provisioning",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+    )
+    fun returnForChanges(
+        @PathVariable("branch_id") branchId: UUID,
+        @RequestBody @Valid request: ReturnBranchRequest,
+    ): BranchDetailResponse {
+        val caller = CallerContextResolver.getTenantCaller()
+        branchProvisioningService.returnForChanges(
+            ReturnBranchCommand(
+                organisationId = caller.activeOrganisationId,
+                branchId = branchId,
+                reason = request.reason,
+                actorId = caller.actorId,
+            ),
+        )
+        // The service has authorised the permission its intent needs on this very branch; a role
+        // holding only that permission has no tenant-wide branch.view, and a gated read here would
+        // roll the return back with a 403.
+        return foundationQueryService
+            .getBranchAfterAuthorizedMutation(caller.activeOrganisationId, branchId)
+            .toResponse()
     }
 
     /**

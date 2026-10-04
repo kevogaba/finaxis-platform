@@ -26,9 +26,11 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateBranchReques
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReactivateBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SubmitBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SuspendBranchRequest
+import com.finaxis.platform.lifecycle.application.ActingScope
 import com.finaxis.platform.lifecycle.application.ActivateBranchCommand
 import com.finaxis.platform.lifecycle.application.BranchDraftResult
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
+import com.finaxis.platform.lifecycle.application.ReturnBranchCommand
 import com.finaxis.platform.lifecycle.application.UpdateBranchCommand
 import com.finaxis.platform.lifecycle.application.query.BranchDetail
 import com.finaxis.platform.lifecycle.application.query.BranchSummary
@@ -534,6 +536,7 @@ class BranchControllerTests
                     HttpMethod.POST to ApiPaths.BRANCHES,
                     HttpMethod.POST to "$branchRoute/submit",
                     HttpMethod.POST to "$branchRoute/activate",
+                    HttpMethod.POST to "$branchRoute/return",
                     HttpMethod.POST to "$branchRoute/suspend",
                     HttpMethod.POST to "$branchRoute/reactivate",
                     HttpMethod.POST to "$branchRoute/close",
@@ -758,6 +761,123 @@ class BranchControllerTests
                 .getBranch(any(), any(), any())
         }
 
+        @Test
+        fun `return passes the target branch and reason and answers the ungated detail`() {
+            val tenantId = uuidV7()
+            val targetBranchId = uuidV7()
+            val selectedBranchId = uuidV7()
+            stubUpdateResponse(tenantId, targetBranchId, "DRAFT")
+
+            returnBranch(targetBranchId, tenantId, selectedBranchId = selectedBranchId).andExpect {
+                status { isOk() }
+                jsonPath("$.id") { value(targetBranchId.toString()) }
+                jsonPath("$.status") { value("DRAFT") }
+            }
+
+            val captor = org.mockito.kotlin.argumentCaptor<ReturnBranchCommand>()
+            verify(branchProvisioningService).returnForChanges(captor.capture())
+            assertEquals(tenantId, captor.firstValue.organisationId)
+            assertEquals(targetBranchId, captor.firstValue.branchId)
+            assertEquals("Valid reason", captor.firstValue.reason)
+            assertEquals(ActingScope.TENANT, captor.firstValue.scope)
+            // The permission depends on who the actor is, so the service decides it; the
+            // controller must not pin a single one, and the response must not need branch.view.
+            verify(permissionGuard, org.mockito.kotlin.never())
+                .requireBranchPermission(any(), any(), any(), any())
+            verify(foundationQueryService, org.mockito.kotlin.never())
+                .getBranch(any(), any(), any())
+        }
+
+        @Test
+        fun `return is open to either the maker or the checker authority and to nobody else`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            stubUpdateResponse(tenantId, branchId, "DRAFT")
+
+            listOf("branch.create", "branch.activate").forEach { authority ->
+                returnBranch(branchId, tenantId, permissions = setOf(authority))
+                    .andExpect { status { isOk() } }
+            }
+            returnBranch(branchId, tenantId, permissions = setOf("branch.view"))
+                .andExpect { status { isForbidden() } }
+
+            verify(branchProvisioningService, org.mockito.kotlin.times(2)).returnForChanges(any())
+        }
+
+        @Test
+        fun `return requires a body with a reason of three to 500 characters`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+
+            // A missing body, an absent reason or a null reason cannot be deserialised.
+            listOf(null, "{}", "{\"reason\":null}").forEach { body ->
+                returnBranch(branchId, tenantId, body = body).andExpect {
+                    status { isBadRequest() }
+                    jsonPath("$.code") { value("invalid_json") }
+                }
+            }
+            // A present but blank or out-of-range reason fails Bean Validation.
+            listOf("", "  ", "ab", "x".repeat(501)).forEach { reason ->
+                returnBranch(
+                    branchId,
+                    tenantId,
+                    body = apiJsonCodec.mapper.writeValueAsString(mapOf("reason" to reason)),
+                ).andExpect {
+                    status { isBadRequest() }
+                    jsonPath("$.code") { value("validation_failed") }
+                }
+            }
+
+            verify(branchProvisioningService, org.mockito.kotlin.never()).returnForChanges(any())
+        }
+
+        @Test
+        fun `return accepts reasons of exactly three and 500 characters`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            stubUpdateResponse(tenantId, branchId, "DRAFT")
+
+            listOf("abc", "x".repeat(500)).forEach { reason ->
+                returnBranch(
+                    branchId,
+                    tenantId,
+                    body = apiJsonCodec.mapper.writeValueAsString(mapOf("reason" to reason)),
+                ).andExpect { status { isOk() } }
+            }
+        }
+
+        @Test
+        fun `return surfaces the service refusals as problems`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+
+            listOf(
+                ForbiddenOperationException() to 403,
+                ResourceNotFoundException() to 404,
+                ConflictException() to 409,
+            ).forEach { (refusal, expected) ->
+                whenever(branchProvisioningService.returnForChanges(any())).doAnswer {
+                    throw refusal
+                }
+                returnBranch(branchId, tenantId).andExpect { status { isEqualTo(expected) } }
+            }
+        }
+
+        private fun returnBranch(
+            branchId: UUID,
+            tenantId: UUID,
+            permissions: Set<String> = setOf("branch.activate"),
+            selectedBranchId: UUID? = branchId,
+            body: String? = REASON_BODY,
+        ) = mockMvc.post("${ApiPaths.BRANCHES}/$branchId/return") {
+            header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())
+            if (body != null) {
+                contentType = MediaType.APPLICATION_JSON
+                content = body
+            }
+            with(authentication(tenantToken(permissions, tenantId, selectedBranchId)))
+        }
+
         private fun patch(
             branchId: UUID,
             tenantId: UUID,
@@ -868,7 +988,9 @@ class BranchControllerTests
                     )
                 }
 
-                path.endsWith("/suspend") || path.endsWith("/close") -> {
+                path.endsWith("/suspend") ||
+                    path.endsWith("/close") ||
+                    path.endsWith("/return") -> {
                     "{\"reason\":\"Valid reason\"}"
                 }
 

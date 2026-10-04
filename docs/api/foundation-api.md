@@ -401,6 +401,7 @@ Base path: `/api/v1/branches`. List filters: `q`, `status`, `type`, `sort_by`, `
 | PATCH  | `/{branch_id}`            | Update branch                        | `branch.create`     | mutation |
 | POST   | `/{branch_id}/submit`     | Submit branch draft                  | `branch.create`     | mutation |
 | POST   | `/{branch_id}/activate`   | Activate branch                      | `branch.activate`   | mutation |
+| POST   | `/{branch_id}/return`     | Return or withdraw a pending branch  | `branch.activate` (checker) or `branch.create` (maker) | mutation |
 | POST   | `/{branch_id}/suspend`    | Suspend branch                       | `branch.suspend`    | mutation |
 | POST   | `/{branch_id}/reactivate` | Reactivate branch                    | `branch.reactivate` | mutation |
 | POST   | `/{branch_id}/close`      | Close branch                         | `branch.close`      | mutation |
@@ -512,6 +513,64 @@ a date was still `null`, it is the day of the branch's earliest transition into 
 recorded, not the business date at that moment), and a branch with no such transition on record
 keeps `null`. Dates stamped by the application are exact.
 
+#### Return or withdraw a pending branch
+
+`POST /api/v1/branches/{branch_id}/return` sends a branch that is `PENDING_APPROVAL` back to
+`DRAFT` ([ADR 0029](../adr/0029-approval-model-per-resource-extensions.md), issue #180) and answers
+`200` with the branch detail (`status` `DRAFT`, `status_reason` the reason). The body is required:
+
+```json
+{ "reason": "Branch name has a typo." }
+```
+
+`reason` is 3 to 500 characters and not blank. A missing or unreadable body, or an absent or `null`
+`reason`, is `400 invalid_json`; a blank or out-of-range `reason` is `400 validation_failed`.
+There is no `422`. Validation runs when the body is bound, before any permission or existence
+check.
+
+One route serves two intents, told apart by **who the caller is** relative to the branch, never by
+a flag in the request:
+
+| Intent | Caller | Permission | Audit rows |
+|--------|--------|------------|------------|
+| **Withdraw** | the branch's creator, or the actor of its latest `SUBMIT` | `branch.create` | `branch.return_for_changes` (FSM) and `branch.withdraw`, both with the reason |
+| **Return for changes** | anyone else | `branch.activate` | `branch.return_for_changes` (FSM) |
+
+- **No new permission code.** A creator who also holds `branch.activate` is still a maker for this
+  branch, so is classified as withdrawing and needs `branch.create`. A creator or submitter who has
+  since lost `branch.create` cannot withdraw, but a non-maker holding `branch.activate` can still
+  return the branch.
+- **Maker-checker.** Returning is the one decision a maker may take on their own branch: it hands
+  the branch back to them and can never activate anything. The creator rule (and, on the platform
+  route, the submitter rule) keeps applying to every later `ACTIVATE`; a branch the creator drafted
+  cannot be activated by the creator however many times it loops.
+- **Check order.** The permission asked depends on the caller, so the caller is classified first
+  (reading `created_by` and the latest submitter, scoped to the path organisation; a branch absent
+  from it has neither, so it classifies as a return and a missing branch looks the same as another
+  tenant's). Then: the permission for that intent against the **target branch** (`403`, before any
+  existence signal); the branch (`404`); the organisation state (`409`); the branch state (`409`).
+- **State.** Only `PENDING_APPROVAL` can be returned; `DRAFT`, `ACTIVE`, `SUSPENDED`, `CLOSED` and
+  `ARCHIVED` answer `409 conflict` and change nothing. The branch keeps its code, its parent and
+  its `created_by`, and **the code stays taken** (`uq_branch_organisation_code` ignores status), so
+  a withdrawn branch is amended, not recreated.
+- **Organisation state.** The tenant must be `ACTIVE` or `PROVISIONING`, as for creating or
+  platform-submitting a branch (`409`, or `404` for no such organisation); a `SUSPENDED` or
+  `DEPROVISIONING` tenant is frozen. Permission resolution already refuses a tenant caller whose
+  organisation is not `ACTIVE` (`403`), so the `409` is the platform route's in practice.
+- **Amend and resubmit.** A returned branch is a `DRAFT`: `PATCH /api/v1/branches/{branch_id}`
+  (see [Update branch](#update-branch)) amends it and `POST .../submit` resubmits it. `submit` is
+  unchanged, so the submitter of the new request is whoever resubmits.
+- **Events.** None. The transition publishes an internal event only; consumers of
+  `finaxis.lifecycle.branch.approval-requested` see a repeat per resubmission with no event for the
+  return in between (see [transactional outbox](../architecture/transactional-outbox-amqp.md)).
+- **Response and idempotency.** The detail is read back without `branch.view`, so a role holding
+  only `branch.activate` or only `branch.create` gets the result of its own return. The route
+  accepts an optional `Idempotency-Key`; a replay returns the stored response and returns the
+  branch once.
+
+The platform route is `POST /api/v1/platform/tenants/{tenant_id}/branches/{branch_id}/return`
+(see [Platform Tenant Branches](#platform-tenant-branches)).
+
 ### Platform Tenant Administration
 
 Base path: `/api/v1/platform/tenants`. List filters: `q`, `status`, `country`,
@@ -616,6 +675,7 @@ Base path: `/api/v1/platform/tenants/{tenant_id}/branches`. List filters: `q`, `
 | GET    | `/{branch_id}`          | Get tenant branch                                  | `branch.view`     | item     |
 | POST   | `/{branch_id}/submit`   | Submit a tenant branch draft for approval          | `branch.create`   | mutation |
 | POST   | `/{branch_id}/activate` | Activate a tenant branch as platform checker       | `branch.activate` | mutation |
+| POST   | `/{branch_id}/return`   | Return a pending tenant branch to draft, or withdraw it | `branch.activate` (checker) or `branch.create` (maker) | mutation |
 
 The create request and branch responses use the same fields as tenant-facing branches. Every
 permission above is checked in the **platform** organisation only: no tenant membership or tenant
@@ -630,6 +690,19 @@ Submit and activate are also bounded: **409 `lifecycle.platform_checker_closed`*
 has an `ACTIVE` branch that the system actor did not create (the bootstrap head office does not
 count). See
 [Platform checker while a tenant has no approvers of its own](#platform-checker-while-a-tenant-has-no-approvers-of-its-own).
+
+`return` takes the required `{"reason": "..."}` body and behaves as the tenant route
+([Return or withdraw a pending branch](#return-or-withdraw-a-pending-branch)), with the permission
+checked **in the platform organisation**: a platform actor who is neither the creator nor the
+latest submitter **returns as the audited platform checker** (`branch.activate`) and is bounded
+exactly like activation (**409 `lifecycle.platform_checker_closed`** once the tenant has its own
+`ACTIVE` branch); one who is the creator or latest submitter **withdraws** (`branch.create`), which
+is not bounded, because taking back one's own request grants nothing. A platform withdrawal writes
+`branch.withdraw` with no `checkerScope`; only a return as a checker writes
+`branch.return_for_changes_as_platform_checker` with `checkerScope = PLATFORM`. The check order is
+the permission, then `404` for the platform organisation as `tenant_id`, then `404` for a branch
+outside the path tenant, then (checker only) the window, then the tenant state (`ACTIVE` or
+`PROVISIONING`, else `409`), then the branch state (`409`).
 
 ### Platform Tenant Memberships
 
@@ -1150,8 +1223,9 @@ There are two separate bounds, one per kind of item, and each answers **409
 
 - **membership activate** works only while the tenant has no `ACTIVE` membership that the system
   actor did not create (the bootstrap administrator does not count);
-- **branch submit and activate** work only while the tenant has no `ACTIVE` branch that the system
-  actor did not create (the bootstrap head office does not count).
+- **branch submit, activate and return as a checker** work only while the tenant has no `ACTIVE`
+  branch that the system actor did not create (the bootstrap head office does not count). A
+  platform **withdrawal** of one's own pending branch is not bounded.
 
 The two do not depend on each other, so the four steps above all pass: step 2 does not close the
 membership bound, and step 4 does not need a branch bound. Only `ACTIVE` rows count, so suspending
@@ -1165,9 +1239,9 @@ Tenant users still cannot approve their own invitations or activate their own br
 platform administrator cannot approve what it created, its own membership, or a branch it
 submitted. The approval is attributed to the platform actor in the tenant's audit log, with
 `checkerScope = PLATFORM` in the `user.approve` metadata and, for a branch, a
-`branch.submit_as_platform_checker` row on submission and a `branch.activate_as_platform_checker`
-row on activation. A membership approved this way raises the same activation event as a tenant
-approval.
+`branch.submit_as_platform_checker` row on submission, a `branch.activate_as_platform_checker` row
+on activation and a `branch.return_for_changes_as_platform_checker` row for a branch it returned. A
+membership approved this way raises the same activation event as a tenant approval.
 
 Approval creates the durable tenant prerequisites atomically and queues the bootstrap. The
 bootstrap state is exposed on `TenantDetailResponse.bootstrap_status`:

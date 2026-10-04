@@ -24,6 +24,7 @@ stateDiagram-v2
 stateDiagram-v2
     DRAFT --> PENDING_APPROVAL: SUBMIT
     PENDING_APPROVAL --> ACTIVE: ACTIVATE
+    PENDING_APPROVAL --> DRAFT: RETURN_FOR_CHANGES
     ACTIVE --> SUSPENDED: SUSPEND
     SUSPENDED --> ACTIVE: REACTIVATE
     ACTIVE --> CLOSED: CLOSE
@@ -108,15 +109,37 @@ its `eventFactories`. The membership activation factory produces an
 `ExternalizedTransitionEvent`; the notifications module consumes it after Namastack externalizes
 it to RabbitMQ.
 
+## Return or withdraw a pending branch (ADR 0029, #180)
+
+The branch graph has one edge out of `PENDING_APPROVAL` back to `DRAFT`,
+`BranchLifecycleTransition.RETURN_FOR_CHANGES`, with a required reason (3 to 500 characters)
+persisted as `status_reason`, in the transition log and on the audit row. It is a state change
+only: the branch keeps its code, its parent and its `created_by`, so the code stays taken and the
+branch is amended (`PATCH /branches/{id}`, allowed in `DRAFT`) and resubmitted (`SUBMIT`) rather
+than recreated. The edge has no guard of its own; `BranchProvisioningService.returnForChanges`
+checks the organisation (`ACTIVE` or `PROVISIONING`) before the FSM answers the state conflict.
+
+One transition serves two intents, told apart by the actor, not by a second edge: the branch's
+creator or latest submitter **withdraws** (permission `branch.create`), anyone else **returns** it
+as a checker (`branch.activate`). The FSM writes `branch.return_for_changes` for both; a withdrawal
+adds `branch.withdraw`, and a platform actor returning as a checker adds
+`branch.return_for_changes_as_platform_checker` with `checkerScope = PLATFORM` and is bounded like
+activation (ADR 0028); a platform withdrawal is not. The order of checks is classify, permission,
+platform-organisation and branch 404, platform window (checker only), organisation state, then the
+FSM state. See [foundation API](../api/foundation-api.md#return-or-withdraw-a-pending-branch) and
+[authorization model](../security/authorization-model.md#branch-return-and-withdrawal).
+
+The transition uses `internalEventFactories()` and publishes no externalized event, as
+`SUSPEND_PENDING_APPROVAL` does. Consumers of `branch.approval-requested` therefore see a repeat on
+each resubmission with no exit event in between; externalizing a `*.returned-for-changes` event is
+a follow-up of its own if a consumer needs it
+([transactional outbox](transactional-outbox-amqp.md)).
+
 ## Planned transitions (ADR 0029)
 
-**Accepted but not yet implemented.** The graphs above do not contain these edges; they are
-recorded here so the plan is findable, and this section must be rewritten as each lands.
+**Accepted but not yet implemented.** The organisation graph above does not contain this edge; it
+is recorded here so the plan is findable, and this section must be rewritten when it lands.
 
-- Branch: `PENDING_APPROVAL --> DRAFT: RETURN_FOR_CHANGES` (reason required; a checker returns, or
-  the maker withdraws; internal event only). **Accepted, planned after #165** (branch update, now
-  in place): without it a returned draft could not be amended, closed, suspended or recreated.
-  Issue #180.
 - Organisation: `PENDING_APPROVAL --> DRAFT: RETURN_FOR_CHANGES` (reason required; checker only;
   internal event only). **Accepted, planned** (#181). `REJECT` stays terminal.
 
