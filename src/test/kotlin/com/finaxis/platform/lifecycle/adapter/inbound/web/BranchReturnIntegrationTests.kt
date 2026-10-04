@@ -642,7 +642,8 @@ class BranchReturnIntegrationTests
                 header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())
                 contentType = MediaType.APPLICATION_JSON
                 content = body
-                with(authentication(makerToken()))
+                // Amending takes branch.update, which branch.create alone no longer gives (#203).
+                with(authentication(tenantToken(maker, "branch.update")))
             }
 
         private fun post(

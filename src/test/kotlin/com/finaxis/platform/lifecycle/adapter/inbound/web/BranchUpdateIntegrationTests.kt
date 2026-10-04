@@ -206,10 +206,10 @@ class BranchUpdateIntegrationTests
             val body = """{"branch_name":"Hijacked"}"""
 
             // Authorised in their own tenant, but the branch is not theirs: absent, not forbidden.
-            patch(branchId, body, token(otherOwner, otherOrganisation, "branch.create"))
+            patch(branchId, body, token(otherOwner, otherOrganisation, "branch.update"))
                 .andExpect { status { isNotFound() } }
 
-            // Holds a role but not branch.create: refused at the gate.
+            // Holds a role but not branch.update: refused at the gate.
             patch(branchId, body, token(maker, organisationId, "branch.view"))
                 .andExpect { status { isForbidden() } }
 
@@ -217,15 +217,15 @@ class BranchUpdateIntegrationTests
         }
 
         @Test
-        fun `a member who can read branches but lacks branch create is refused by the service`() {
+        fun `a member who can read branches but lacks branch update is refused by the service`() {
             val branchId = createBranch()
             val body = """{"branch_name":"Hijacked"}"""
             // A member whose role can read branches (so the controller's read-back would succeed)
-            // but holds no branch.create grant, with the authority only on the token: it is the
+            // but holds no branch.update grant, with the authority only on the token: it is the
             // service's own permission check that refuses, and nothing changes.
             val reader = seedUser("reader")
             fixture.grantTenantPermissionsOnly(organisationId, reader, "branch.view")
-            patch(branchId, body, token(reader, organisationId, "branch.create"))
+            patch(branchId, body, token(reader, organisationId, "branch.update"))
                 .andExpect { status { isForbidden() } }
             assertEquals(0L, branchColumn(branchId, BRANCH.ROW_VERSION))
             assertTrue(updateAudits(branchId).isEmpty())
@@ -233,18 +233,18 @@ class BranchUpdateIntegrationTests
         }
 
         @Test
-        fun `a maker holding only branch create updates the branch and gets the detail back`() {
+        fun `an editor holding only branch update updates the branch and gets the detail back`() {
             val branchId = createBranch()
             // No branch.view anywhere: the response must not depend on a read permission the
             // maker was never granted, or the committed update would be rolled back with a 403.
             val tenantMaker = seedUser("tenant-maker")
-            fixture.grantTenantPermissionsOnly(organisationId, tenantMaker, "branch.create")
+            fixture.grantTenantPermissionsOnly(organisationId, tenantMaker, "branch.update")
             val branchMaker = seedUser("branch-maker")
             fixture.grantBranchPermissionsOnly(
                 organisationId,
                 branchId,
                 branchMaker,
-                "branch.create",
+                "branch.update",
             )
 
             listOf(
@@ -254,7 +254,7 @@ class BranchUpdateIntegrationTests
                 patch(
                     branchId,
                     """{"branch_name":"$name"}""",
-                    token(actor, organisationId, "branch.create"),
+                    token(actor, organisationId, "branch.update"),
                 ).andExpect {
                     status { isOk() }
                     jsonPath("$.id") { value(branchId.toString()) }
@@ -267,9 +267,55 @@ class BranchUpdateIntegrationTests
         }
 
         @Test
+        fun `a maker holding only branch create can no longer update the branch`() {
+            val branchId = createBranch()
+            val body = """{"branch_name":"Maker Edit"}"""
+            // A maker-only role: it may draft and submit, but is no longer a branch editor, so it
+            // cannot change a live branch with no checker (#203). The branch.create token reaches
+            // the controller gate and is refused there; the branch.update token passes the gate
+            // with no matching grant behind it, so the service's own check refuses it.
+            val tenantMaker = seedUser("create-only-maker")
+            fixture.grantTenantPermissionsOnly(organisationId, tenantMaker, "branch.create")
+            val branchMaker = seedUser("create-only-branch-maker")
+            fixture.grantBranchPermissionsOnly(
+                organisationId,
+                branchId,
+                branchMaker,
+                "branch.create",
+            )
+
+            listOf(tenantMaker, branchMaker).forEach { actor ->
+                patch(branchId, body, token(actor, organisationId, "branch.create"))
+                    .andExpect { status { isForbidden() } }
+                patch(branchId, body, token(actor, organisationId, "branch.update"))
+                    .andExpect { status { isForbidden() } }
+            }
+
+            assertEquals(0L, branchColumn(branchId, BRANCH.ROW_VERSION))
+            assertTrue(updateAudits(branchId).isEmpty())
+        }
+
+        @Test
+        fun `an unknown branch is not found for an editor and forbidden for a non-editor`() {
+            val unknown = uuidV7()
+            val body = """{"branch_name":"Ghost"}"""
+            val createOnly = seedUser("ghost-create-only")
+            fixture.grantTenantPermissionsOnly(organisationId, createOnly, "branch.create")
+            val editor = seedUser("ghost-editor")
+            fixture.grantTenantPermissionsOnly(organisationId, editor, "branch.update")
+
+            // The permission is checked before existence: a caller who may not edit branches learns
+            // nothing about which ids exist.
+            patch(unknown, body, token(createOnly, organisationId, "branch.update"))
+                .andExpect { status { isForbidden() } }
+            patch(unknown, body, token(editor, organisationId, "branch.update"))
+                .andExpect { status { isNotFound() } }
+        }
+
+        @Test
         fun `a caller pinned to another branch updates the target branch`() {
             val branchId = createBranch()
-            val pinned = token(maker, organisationId, "branch.create", pinnedTo = headOfficeId())
+            val pinned = token(maker, organisationId, "branch.update", pinnedTo = headOfficeId())
 
             patch(branchId, """{"branch_name":"Pinned Edit"}""", pinned).andExpect {
                 status { isOk() }
@@ -386,7 +432,7 @@ class BranchUpdateIntegrationTests
         private fun patch(
             branchId: UUID,
             body: String,
-            token: AppPrincipalAuthenticationToken = makerToken(),
+            token: AppPrincipalAuthenticationToken = editorToken(),
         ): ResultActionsDsl =
             mockMvc.patch("${ApiPaths.BRANCHES}/$branchId") {
                 header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())
@@ -404,7 +450,7 @@ class BranchUpdateIntegrationTests
                 header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, key)
                 contentType = MediaType.APPLICATION_JSON
                 content = body
-                with(authentication(makerToken()))
+                with(authentication(editorToken()))
             }.andReturn()
             .response
 
@@ -473,6 +519,8 @@ class BranchUpdateIntegrationTests
                 }
 
         private fun makerToken() = token(maker, organisationId, "branch.create")
+
+        private fun editorToken() = token(maker, organisationId, "branch.update")
 
         private fun checkerToken(
             permission: String,

@@ -11,9 +11,10 @@ Read this with [active organisation context](active-organisation-context.md),
 
 ## Permission catalogue and roles
 
-The global catalogue in `permission` holds **80 permission codes**: 54 foundation codes seeded by
-`V2__platform_reference_data.sql` and 26 accounting codes seeded by
-`V5__accounting_permission_catalogue.sql`. Each has a stable `permission_code`, `module_code`,
+The global catalogue in `permission` holds **81 permission codes**: 54 foundation codes seeded by
+`V2__platform_reference_data.sql`, 26 accounting codes seeded by
+`V5__accounting_permission_catalogue.sql`, and `branch.update`, added to the `branch` module by
+`V19__branch_update_permission.sql` (#203). Each has a stable `permission_code`, `module_code`,
 `risk_level`, `system_permission`, and status. Module codes are `tenant`, `branch`, `iam`,
 `audit`, `settings`, and `accounting`; risk levels are `LOW`, `MEDIUM`, `HIGH`, and `CRITICAL`.
 
@@ -114,14 +115,26 @@ flowchart LR
 
 ## Branch update
 
-`PATCH /branches/{branch_id}` requires `branch.create`; there is no `branch.update` code. A branch's
-descriptive fields are the maker's to edit, the same maker who holds `branch.create` for create and
-submit (ADR 0029), and a new code would need a `V18` grant migration and a role review for no
-separation the maker-checker rule does not already give: the checker's `branch.activate` is
-unchanged and still cannot be exercised by the creator. As with the lifecycle routes it is
-evaluated at the **target branch**, not the selected one (#154), by
-`BranchProvisioningService.update` rather than only at the controller, and a missing or foreign
-branch is `404` only after that check passes.
+`PATCH /branches/{branch_id}` requires **`branch.update`** (risk `HIGH`, module `branch`), not
+`branch.create`. An edit to a `DRAFT` branch is the maker's own correction, but the same route also
+edits an `ACTIVE` branch, which has already been approved, and with `branch.create` a custom
+maker-only role could change a live branch with no checker anywhere in the path. A separate code
+lets an owner withhold live edits from makers and grant them on purpose. The one person who may
+create or submit a draft and the one who activates it are still different people (`branch.activate`
+is unchanged and still cannot be exercised by the creator); `branch.update` adds no approval, it
+only separates who may amend. As with the lifecycle routes it is evaluated at the **target
+branch**, not the selected one (#154), by `BranchProvisioningService.update` rather than only at
+the controller, and a missing or foreign branch is `404` only after that check passes, so a caller
+without `branch.update` gets `403` for a real branch and an unknown id alike.
+
+`V19__branch_update_permission.sql` seeds the code and **copies the grant**: every role (and every
+direct membership override, `ALLOW` or `DENY` alike) that held `branch.create` on the day it ran
+also holds `branch.update`, so nobody who could `PATCH` before loses the ability, and a role
+without `branch.create` receives nothing. After that the two codes are independent. To take `PATCH`
+away from a role, revoke `branch.update`; revoking `branch.create` no longer does. For organisations
+approved from then on, `TENANT_ADMIN` and `BRANCH_MANAGER` (the roles that already carry
+`branch.create`) are seeded with `branch.update`; `TENANT_AUDITOR`, `IAM_ADMIN` and
+`BRANCH_OPERATOR` are not. The platform-operator routes never offered `PATCH`.
 
 ## Branch return and withdrawal
 
@@ -221,7 +234,51 @@ The cache key includes membership id and selected branch id, so branch switches 
 another branch's permissions.
 
 `PermissionCacheInvalidator` evicts cached selections when role grants or role assignments change.
-It can also clear the entire effective-permission cache.
+It can also clear the entire effective-permission cache (with `invalidate()`, because the Redis
+cache's `clear()` may run on its asynchronous writer and return before the keys are gone). On
+Redis both act on the running instance's own schema-version namespace (below) through the Spring
+cache API.
+
+**The Redis keys are namespaced by the applied schema version.** The cache lives in Redis with no
+time-to-live, so it outlives a deployment, and a Flyway migration that changes who holds a
+permission writes the tables directly and cannot evict anything. A key is therefore
+`iam.effective-permissions:v<N>::<membership_id>:<branch_id|none>`, where `N` is the highest Flyway
+version applied when the instance started (read after migrations ran, by
+`EffectivePermissionCacheConfiguration`; `none` if Flyway reports nothing). An instance on a newer
+schema never reads what an older release wrote, and an older instance never reads what a newer one
+wrote. A cache manager that is not Redis (Caffeine, a concurrent map, no-op in tests) is not
+configured by this and is unaffected.
+
+**The cache is also cleared on every application start.**
+`EffectivePermissionCacheStartupClearer` clears this instance's namespace and then deletes the keys
+of every schema version (`iam.effective-permissions:*`, the pre-versioning
+`iam.effective-permissions::` included), once all singletons exist, which is after Flyway has run
+and before the web server accepts traffic. It logs one info line. If Redis is unreachable at that
+moment the clear is logged as a warning and the boot continues, because an unreachable cache cannot serve stale entries
+either; entries of the same schema version written before an out-of-band change could then
+survive a Redis that returns later until the next start or a role or assignment change, so an
+operator seeing that warning should restart once Redis is back.
+
+What this protects, and what it does not:
+
+- **A permission migration (`V19` is the first; every later one inherits it) is effective on the
+  first request of a new instance with no operator action.** The namespace is what makes a
+  **rolling deploy** safe: an instance of the previous release can miss the cache, resolve a
+  permission set before the migration commits and write it after the new instance's start-up
+  clear, but it writes into its own (older) namespace, which the new instance never reads. During
+  the rollout old instances keep serving their own namespace, so they still answer the
+  pre-migration way (for `V19`, a `branch.create` holder still passes their old gate) until they
+  are replaced; their entries are removed by the next start-up sweep.
+- **A role or assignment change handled by a new instance evicts its own namespace only.** An old
+  instance still running during a rolling deploy can serve a revoked grant from its namespace
+  until it is replaced; this adds nothing to the per-instance eviction limit that already exists
+  (the set of cached branch selections per membership is held in each instance's memory).
+- **SQL run outside Flyway while instances stay up is not covered.** The schema version does not
+  change and nothing evicts, so a manual `INSERT`/`UPDATE` of `role_permission`,
+  `membership_permission` or `permission` needs the cache flushed: restart the instances (the
+  start-up clear), or delete the keys, for example
+  `redis-cli --scan --pattern 'iam.effective-permissions:*' | xargs -r redis-cli unlink`. Prefer a
+  Flyway migration, which the namespace and the start-up clear cover.
 
 **Break-glass checks read neither cache.** `AuthorizationService.requireBreakGlassPermission`
 answers from `PermissionResolutionQueries.lockedBreakGlassGrant`, a locking read of the rows that

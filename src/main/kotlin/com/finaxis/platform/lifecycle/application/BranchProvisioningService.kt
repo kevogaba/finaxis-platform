@@ -78,8 +78,10 @@ class BranchProvisioningService(
     /**
      * Updates a draft or active branch's name, parent, timezone or address in place. A draft is
      * amendable so a returned or withdrawn one can be corrected; a branch that is pending approval,
-     * suspended or closed is not. `branch.create` is the permission, as for every other action a
-     * branch's maker takes (ADR 0029), and it is checked against the target branch.
+     * suspended or closed is not. `branch.update` is the permission, not `branch.create`: editing a
+     * live branch is a higher-trust act than drafting one, and a maker-only role must not be able
+     * to do it with no checker (issue #203). It is checked against the target branch, before any
+     * signal of whether that branch exists.
      */
     @Transactional
     fun update(command: UpdateBranchCommand) {
@@ -87,7 +89,7 @@ class BranchProvisioningService(
             command.actorId,
             command.organisationId,
             command.branchId,
-            "branch.create",
+            "branch.update",
         )
         conflictUnless(
             lifecycleStore.branchState(command.organisationId, command.branchId) in

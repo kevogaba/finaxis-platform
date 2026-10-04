@@ -76,7 +76,7 @@ class BranchUpdateServiceTests {
         service.update(command())
 
         verify(store).updateBranch(command())
-        verify(guard).requireBranchPermission(actorId, organisationId, branchId, "branch.create")
+        verify(guard).requireBranchPermission(actorId, organisationId, branchId, "branch.update")
     }
 
     @ParameterizedTest
@@ -97,11 +97,27 @@ class BranchUpdateServiceTests {
     fun `checks the permission before it looks the branch up`() {
         doThrow(ForbiddenOperationException())
             .whenever(guard)
-            .requireBranchPermission(actorId, organisationId, branchId, "branch.create")
+            .requireBranchPermission(actorId, organisationId, branchId, "branch.update")
 
         assertFailsWith<ForbiddenOperationException> { service.update(command()) }
 
         verify(store, never()).branchState(any(), any())
+        verify(store, never()).updateBranch(any())
+    }
+
+    @Test
+    fun `a branch create grant alone does not authorise an update`() {
+        // The guard refuses everything but branch.create, as it would for a maker-only role: the
+        // service must ask for branch.update, so the refusal reaches the caller (#203).
+        givenBranch()
+        doThrow(ForbiddenOperationException())
+            .whenever(guard)
+            .requireBranchPermission(actorId, organisationId, branchId, "branch.update")
+
+        assertFailsWith<ForbiddenOperationException> { service.update(command()) }
+
+        verify(guard, never())
+            .requireBranchPermission(actorId, organisationId, branchId, "branch.create")
         verify(store, never()).updateBranch(any())
     }
 
@@ -111,7 +127,7 @@ class BranchUpdateServiceTests {
 
         assertFailsWith<ResourceNotFoundException> { service.update(command()) }
 
-        verify(guard).requireBranchPermission(actorId, organisationId, branchId, "branch.create")
+        verify(guard).requireBranchPermission(actorId, organisationId, branchId, "branch.update")
         verify(store, never()).updateBranch(any())
     }
 
