@@ -391,7 +391,7 @@ catalogue** (`TenantSettingCatalog.kt`), not wired to behaviour.
   `deactivate` (like `createOrUpdate`) calls `TenantSettingCatalog.require`, so once the
   definition is gone the mutation API rejects the key as unknown and cannot close the row. The
   misleading settings would stay visible indefinitely. #164 must therefore do one of: a
-  forward-only `V20+` migration that closes the existing effective rows for those two keys, or an
+  forward-only `V21+` migration that closes the existing effective rows for those two keys, or an
   explicit filter of the retired keys in the `list` and `get` paths. Which one is #164's
   decision; that one of them ships with the catalogue change is an **acceptance condition of
   #164**. This ADR itself still adds no migration.

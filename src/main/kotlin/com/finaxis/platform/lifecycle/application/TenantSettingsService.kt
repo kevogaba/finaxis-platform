@@ -4,7 +4,7 @@ import com.finaxis.platform.accounting.AccountingLedgerActivity
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.audit.Redacted
-import com.finaxis.platform.common.persistence.PlatformOrganisation
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionEventPublisher

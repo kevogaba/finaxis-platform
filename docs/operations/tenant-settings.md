@@ -35,7 +35,7 @@ branch activation. They are scheduled for removal in #164
 ([ADR 0029](../adr/0029-approval-model-per-resource-extensions.md)), which must also retire
 any rows already stored for them: dropping the catalogue entries alone would leave those rows
 listed and impossible to deactivate (an unknown key is rejected). #164 chooses between a
-forward-only `V20+` migration closing the existing effective rows and a filter of the retired
+forward-only `V21+` migration closing the existing effective rows and a filter of the retired
 keys in list/get, and doing one of them is an acceptance condition of #164.
 
 Validation and canonicalization are catalog-owned:

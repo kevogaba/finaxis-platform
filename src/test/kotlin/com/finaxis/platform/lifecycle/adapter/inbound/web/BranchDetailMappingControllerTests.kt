@@ -1,7 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
-import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.web.api.ApiExceptionHandler
 import com.finaxis.platform.common.web.api.ApiJsonCodec
 import com.finaxis.platform.common.web.api.ApiProblemFactory

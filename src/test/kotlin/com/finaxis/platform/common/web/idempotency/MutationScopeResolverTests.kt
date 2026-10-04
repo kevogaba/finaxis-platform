@@ -1,10 +1,10 @@
 package com.finaxis.platform.common.web.idempotency
 
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.context.RequestContext
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.context.TenantContext
-import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.web.api.ApiJsonCodec
 import org.junit.jupiter.api.Test
 import org.springframework.mock.web.MockHttpServletRequest

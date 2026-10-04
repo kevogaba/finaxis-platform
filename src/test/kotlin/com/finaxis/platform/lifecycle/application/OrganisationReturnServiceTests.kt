@@ -6,8 +6,8 @@ import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
-import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.InternalTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionExecutor
@@ -176,14 +176,30 @@ class OrganisationReturnServiceTests {
     }
 
     @Test
-    fun `an unknown tenant and the platform organisation are not found`() {
-        listOf(uuidV7(), PlatformOrganisation.ID).forEach { target ->
-            assertFailsWith<ResourceNotFoundException> {
+    fun `an unknown tenant is not found`() {
+        assertFailsWith<ResourceNotFoundException> {
+            organisations.returnForChanges(
+                ReturnOrganisationForChangesCommand(uuidV7(), RETURN_REASON, uuidV7()),
+            )
+        }
+    }
+
+    @Test
+    fun `the platform organisation is refused as a conflict, not hidden as not found`() {
+        // The platform organisation is the resource addressed here, not a route under a tenant, so
+        // it answers 409 with the protection message (issue #205); the 404 is for unknown ids.
+        val failure =
+            assertFailsWith<ConflictException> {
                 organisations.returnForChanges(
-                    ReturnOrganisationForChangesCommand(target, RETURN_REASON, uuidV7()),
+                    ReturnOrganisationForChangesCommand(
+                        PlatformOrganisation.ID,
+                        RETURN_REASON,
+                        uuidV7(),
+                    ),
                 )
             }
-        }
+
+        assertEquals(LifecycleErrorCodes.PLATFORM_ORGANISATION_PROTECTED, failure.code)
     }
 
     @Test

@@ -2,7 +2,7 @@ package com.finaxis.platform.lifecycle.adapter.inbound.web
 
 import com.finaxis.platform.common.audit.AuditEventFilter
 import com.finaxis.platform.common.audit.AuditQueryService
-import com.finaxis.platform.common.persistence.PlatformOrganisation
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.api.apiPageOf

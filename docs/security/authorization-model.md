@@ -214,7 +214,8 @@ approving platform user's own account as its initial administrator cannot be app
 
 Order of checks on every one of them: platform context, then the platform permission, then the
 path tenant's ownership of the id (404 otherwise; the platform organisation is never a valid
-`{tenant_id}`), then the tenant state and the maker/beneficiary rules. The tenant must be `ACTIVE`
+`{tenant_id}`, see [below](#the-platform-organisation-is-never-a-tenant)), then the tenant state
+and the maker/beneficiary rules. The tenant must be `ACTIVE`
 to approve or activate, and `ACTIVE` or `PROVISIONING` to create or submit a branch.
 `PLATFORM_SUPPORT` holds none of the permissions.
 
@@ -223,6 +224,46 @@ Every use is attributed to the platform actor in the tenant's audit log: the tra
 `branch.submit_as_platform_checker` (submission), `branch.activate_as_platform_checker` (activation)
 or `branch.return_for_changes_as_platform_checker` (a branch it returned) row, each with the same
 metadata. Filter on any of them to review them.
+
+## The platform organisation is never a tenant
+
+The reserved `PLATFORM` organisation (`00000000-0000-0000-0000-000000000000`, seeded by `V2`) is the
+identity every platform principal authenticates against. It is never a tenant to be acted on, and
+the rule has two answers depending on what the route does with it:
+
+| Route | Answer for the platform organisation |
+| --- | --- |
+| A route **under** a tenant, with the platform organisation as `{tenant_id}`: platform branch and user routes (`/platform/tenants/{tenant_id}/branches/**`, `/memberships/**`) | `404`, after the permission check: it is not a valid parent for these |
+| A **lifecycle action on the tenant itself**: `PATCH`, `submit`, `approve`, `reject`, `return`, `suspend`, `reactivate`, `deprovision` and `bootstrap/retry` on `/platform/tenants/{tenant_id}` | `409` `lifecycle.platform_organisation_protected`: "The platform organisation cannot be suspended, deprovisioned or otherwise changed through the tenant lifecycle." |
+
+The second is a refusal rather than a `404` because the organisation exists and a caller holding the
+permission is entitled to know why the action is unavailable. Suspending it makes the application
+refuse every platform principal, and deprovisioning it also revokes every platform membership;
+recovery would be only by direct SQL. The check order is the platform permission (`403`), then this
+refusal, then any lock or read, so an unauthorised caller learns nothing about the organisation.
+
+Three layers hold the line, each correct without the others (#205):
+
+1. `OrganisationProvisioningService` refuses it on every method that takes a tenant id and mutates
+   or transitions it, through one shared guard. Each refusal is first recorded as a `DENIED` audit
+   row (actor, attempted action such as `organisation.suspend`, entity = the platform organisation,
+   severity `HIGH`, reason `lifecycle.platform_organisation_protected`) through
+   `AuditService.recordIndependently`, a new transaction, so the row survives the rollback the
+   `409` causes. A caller refused earlier, on the permission check, leaves none.
+2. The organisation transition graph (`FoundationLifecycleDefinitions.organisationGraph`) carries a
+   guard on every edge, so a future caller of `FoundationLifecycleService` is refused too (the same
+   `409`, with the generic `conflict` code and the same message). Platform branches and memberships
+   are not covered and keep their own lifecycles.
+3. `V20`'s `chk_organisation_platform_always_active` CHECK refuses any `UPDATE` that would leave the
+   row in a status but `ACTIVE`, for a statement that bypasses the application altogether. A raw
+   violation would surface as `DataIntegrityViolationException`, which the web layer renders as a
+   generic `500`: the `409` above comes from layers 1 and 2, which fire first.
+
+None of the three prevents a `DELETE` of the row. No code deletes an organisation, and the foreign
+keys refuse it while any dependant exists, which the platform roles seeded by `V2` always are. A
+delete-guard trigger on `organisation` is therefore not added: it fails condition one of
+[ADR 0024](../adr/0024-journal-line-append-guard-and-trigger-policy.md), because the property is a
+single-row one that the non-cascading foreign keys already refuse.
 
 ## Caching and invalidation
 

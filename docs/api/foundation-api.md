@@ -595,6 +595,16 @@ Base path: `/api/v1/platform/tenants`. List filters: `q`, `status`, `country`,
 | POST   | `/{tenant_id}/deprovision`     | Deprovision tenant  | `tenant.deprovision`         | mutation      |
 | POST   | `/{tenant_id}/bootstrap/retry` | Retry bootstrap     | `tenant.bootstrap_retry`     | mutation      |
 
+Every `{tenant_id}` mutation above (`PATCH`, `submit`, `approve`, `reject`, `return`, `suspend`,
+`reactivate`, `deprovision`, `bootstrap/retry`) answers
+**`409` `lifecycle.platform_organisation_protected`** when `{tenant_id}` is the reserved platform
+organisation (`00000000-0000-0000-0000-000000000000`), with the detail "The platform organisation
+cannot be suspended, deprovisioned or otherwise changed through the tenant lifecycle.", and changes
+nothing; the refused attempt is recorded as a `DENIED` audit event. It follows the permission
+check (`403`) and precedes any existence or state check; the platform branch and user routes
+under a tenant still answer `404` for it. See
+[the platform organisation is never a tenant](../security/authorization-model.md#the-platform-organisation-is-never-a-tenant).
+
 `POST /{tenant_id}/approve` takes an optional decision remark, see
 [Decision remarks](#decision-remarks). `POST /{tenant_id}/return` takes a required reason, see
 [Return tenant for changes](#return-tenant-for-changes).
@@ -701,8 +711,9 @@ is no `422`. Validation runs when the body is bound, before any permission or ex
   cannot withdraw a tenant through this route: a tenant has no maker-side withdraw, a maker amends
   a `DRAFT` only. A maker holding `tenant.reject` can still terminally reject their own submission,
   as before.
-- **Check order.** The permission (`403`, before any existence signal); the tenant (`404` for an
-  unknown id and for the platform organisation); the maker-checker rule (`403`); the state (`409`).
+- **Check order.** The permission (`403`, before any existence signal); the platform organisation
+  (`409` `lifecycle.platform_organisation_protected`, before any lock or read); the tenant (`404`
+  for an unknown id); the maker-checker rule (`403`); the state (`409`).
 - **State.** Only `PENDING_APPROVAL` can be returned; any other state, including `REJECTED`, answers
   `409 conflict` and changes nothing. `reject` is unchanged and stays terminal (recovering a
   rejected tenant is a separate piece of work).

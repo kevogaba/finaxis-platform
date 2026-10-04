@@ -1,5 +1,7 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.lifecycle.domain.FoundationLifecycleDefinitions
+
 /**
  * Stable public error codes the lifecycle module supplies to the shared
  * [com.finaxis.platform.common.application.ApplicationException] family, so lifecycle failures
@@ -41,4 +43,17 @@ object LifecycleErrorCodes {
     /** The safe detail that accompanies [APPROVER_IS_INITIAL_ADMINISTRATOR]. */
     const val APPROVER_IS_INITIAL_ADMINISTRATOR_DETAIL =
         "The approver cannot be the tenant's initial administrator."
+
+    /**
+     * The reserved `PLATFORM` organisation was named as the target of a tenant lifecycle action
+     * (amend, submit, approve, reject, return, suspend, reactivate, deprovision, bootstrap retry).
+     * It is the identity every platform principal authenticates against, so it is never a tenant
+     * to be moved through the tenant lifecycle: a refusal, not a 404, because the organisation
+     * does exist and the caller is entitled to know why the action is not available.
+     */
+    const val PLATFORM_ORGANISATION_PROTECTED = "lifecycle.platform_organisation_protected"
+
+    /** The safe detail that accompanies [PLATFORM_ORGANISATION_PROTECTED]. */
+    const val PLATFORM_ORGANISATION_PROTECTED_DETAIL =
+        FoundationLifecycleDefinitions.PLATFORM_ORGANISATION_PROTECTED_DETAIL
 }

@@ -6,8 +6,8 @@ import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
-import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState

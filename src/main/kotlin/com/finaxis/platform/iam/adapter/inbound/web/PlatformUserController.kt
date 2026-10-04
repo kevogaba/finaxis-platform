@@ -1,7 +1,7 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
-import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
