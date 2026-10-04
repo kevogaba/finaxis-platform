@@ -2,6 +2,7 @@ package com.finaxis.platform.common.audit
 
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
+import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import org.junit.jupiter.api.Test
 import java.time.Instant
@@ -108,6 +109,67 @@ class AuditQueryServiceTests {
                 actorId = UUID.randomUUID(),
                 size = 101,
             )
+        }
+    }
+
+    @Test
+    fun `searchForPlatform scopes to the tenant and authorises in the platform org`() {
+        val tenantId = UUID.randomUUID()
+        val actorId = UUID.randomUUID()
+
+        service.searchForPlatform(AuditEventFilter(organisationId = tenantId, size = 10), actorId)
+
+        assertEquals(tenantId, queries.lastFilter?.organisationId)
+        assertEquals(actorId, permissionGuard.lastActorId)
+        assertEquals(PlatformOrganisation.ID, permissionGuard.lastOrganisationId)
+        assertEquals("audit.view", permissionGuard.lastPermissionCode)
+    }
+
+    @Test
+    fun `searchForPlatform denies without platform audit permission and reads nothing`() {
+        permissionGuard.shouldDeny = true
+
+        assertFailsWith<ForbiddenOperationException> {
+            service.searchForPlatform(
+                AuditEventFilter(organisationId = UUID.randomUUID()),
+                UUID.randomUUID(),
+            )
+        }
+        assertEquals(null, queries.lastFilter)
+    }
+
+    @Test
+    fun `searchForPlatform rejects out of range pages`() {
+        val filter = AuditEventFilter(organisationId = UUID.randomUUID())
+
+        assertFailsWith<InvalidPageRequestException> {
+            service.searchForPlatform(filter.copy(page = -1), UUID.randomUUID())
+        }
+        assertFailsWith<InvalidPageRequestException> {
+            service.searchForPlatform(filter.copy(size = 101), UUID.randomUUID())
+        }
+    }
+
+    @Test
+    fun `getForPlatform authorises in the platform organisation and reads the target scope`() {
+        val tenantId = UUID.randomUUID()
+        val actorId = UUID.randomUUID()
+        val eventId = UUID.randomUUID()
+        queries.stubDetail = null
+
+        assertFailsWith<ResourceNotFoundException> {
+            service.getForPlatform(eventId, tenantId, actorId)
+        }
+        assertEquals(PlatformOrganisation.ID, permissionGuard.lastOrganisationId)
+        assertEquals("audit.view", permissionGuard.lastPermissionCode)
+    }
+
+    @Test
+    fun `getForPlatform denies an actor without platform audit permission`() {
+        permissionGuard.shouldDeny = true
+
+        assertFailsWith<ForbiddenOperationException> {
+            service.getForPlatform(UUID.randomUUID(), PlatformOrganisation.ID, UUID.randomUUID())
         }
     }
 

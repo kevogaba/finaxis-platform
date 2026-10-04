@@ -242,3 +242,17 @@ curl -fsS \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "X-Active-Organisation-Context: $PLATFORM_CONTEXT_TOKEN"
 echo
+
+echo "== Reading the platform organisation audit log =="
+curl -fsS \
+  "$APP_URL/api/v1/platform/audit-events?page=0&size=5" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "X-Active-Organisation-Context: $PLATFORM_CONTEXT_TOKEN"
+echo
+
+echo "== Reading the new tenant's audit log as a platform operator =="
+curl -fsS \
+  "$APP_URL/api/v1/platform/tenants/$TENANT_ID/audit-events?page=0&size=5" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "X-Active-Organisation-Context: $PLATFORM_CONTEXT_TOKEN"
+echo

@@ -60,6 +60,10 @@ it did when permissions were added across several migrations. `PLATFORM_SUPPORT`
 `audit.view` and `business_date.view`. These are still modelled as roles in the reserved
 organisation, not as special runtime role-name checks.
 
+`audit.view` held in the PLATFORM organisation is also the permission for the platform audit
+endpoints (the platform log and any tenant's log); see
+[audit logging](audit-logging.md#rest-read-endpoints-and-the-platform-permission-model).
+
 ## Role administration
 
 `RoleManagementService` exposes application commands to:

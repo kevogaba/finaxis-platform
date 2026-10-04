@@ -16,6 +16,9 @@ object ApiPaths {
     /** Platform tenant administration endpoint namespace. */
     const val PLATFORM_TENANTS = "$PLATFORM/tenants"
 
+    /** Platform-organisation audit log endpoint namespace (read-only). */
+    const val PLATFORM_AUDIT_EVENTS = "$PLATFORM/audit-events"
+
     /** Active tenant endpoint namespace. */
     const val TENANT = "$API_V1/tenant"
 

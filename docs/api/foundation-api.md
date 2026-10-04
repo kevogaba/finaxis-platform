@@ -803,6 +803,27 @@ Base path: `/api/v1/tenant/audit-events`. List filters: `entity_type`, `entity_i
 | GET    | `/`           | Search tenant audit events | `audit.view` | page  |
 | GET    | `/{event_id}` | Get tenant audit event     | `audit.view` | item  |
 
+#### Platform audit events
+
+Platform operators read audit logs through `/api/v1/platform/**`; the tenant routes above stay
+tenant-only and answer a platform context with 403. Both platform search routes accept the same
+filters and `page`/`size` bounds (`size` 1-100) as the tenant search and return the same page and
+summary shapes; the detail route returns the audit detail response below.
+
+| Method | Path                                                | Permission   | Shape |
+|--------|-----------------------------------------------------|--------------|-------|
+| GET    | `/api/v1/platform/audit-events`                     | `audit.view` | page  |
+| GET    | `/api/v1/platform/audit-events/{event_id}`          | `audit.view` | item  |
+| GET    | `/api/v1/platform/tenants/{tenant_id}/audit-events` | `audit.view` | page  |
+
+`audit.view` is checked in the reserved **platform** organisation (held by `PLATFORM_SUPER_ADMIN`
+and `PLATFORM_SUPPORT`), not in the tenant. The platform log holds the rows written for platform
+actions (for example platform user lifecycle changes); a tenant's log also holds the rows platform
+operators wrote against it. A tenant user (or a platform user without the permission) gets 403.
+`/platform/audit-events/{event_id}` answers 404 for any event outside the platform log, and an
+unknown `tenant_id` yields an empty page. Platform reads fall under the `platform-read` rate-limit
+policy.
+
 Audit detail response:
 
 ```json

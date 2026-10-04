@@ -1,8 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
-import com.finaxis.platform.common.audit.AuditEventDetail
 import com.finaxis.platform.common.audit.AuditEventFilter
-import com.finaxis.platform.common.audit.AuditEventSummary
 import com.finaxis.platform.common.audit.AuditQueryService
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
@@ -168,46 +166,6 @@ class AuditEventController(
             .get(eventId, caller.activeOrganisationId, caller.actorId)
             .toResponse()
     }
-
-    private fun AuditEventSummary.toResponse() =
-        AuditEventSummaryResponse(
-            id = id,
-            occurredAt = occurredAt,
-            actorType = actorType,
-            actorId = actorId,
-            branchId = branchId,
-            action = action,
-            resourceType = resourceType,
-            resourceId = resourceId,
-            outcome = outcome.name,
-            severity = severity.name,
-            reason = reason,
-        )
-
-    private fun AuditEventDetail.toResponse() =
-        AuditEventDetailResponse(
-            id = id,
-            organisationId = organisationId,
-            occurredAt = occurredAt,
-            actorUserId = actorUserId,
-            actorExternalSubject = actorExternalSubject,
-            actorType = actorType,
-            branchId = branchId,
-            eventType = eventType,
-            entityType = entityType,
-            entityId = entityId,
-            action = action,
-            outcome = outcome.name,
-            severity = severity.name,
-            ipAddress = ipAddress,
-            userAgent = userAgent,
-            correlationId = correlationId,
-            requestId = requestId,
-            beforeJson = beforeJson,
-            afterJson = afterJson,
-            metadataJson = metadataJson,
-            reason = reason,
-        )
 
     private companion object {
         const val MAXIMUM_PAGE_SIZE = 100L
