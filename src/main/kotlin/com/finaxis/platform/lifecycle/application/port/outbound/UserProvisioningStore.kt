@@ -26,6 +26,9 @@ interface UserProvisioningAccountStore {
     /** Finds an application user by case-insensitive email address. */
     fun findUserIdByEmail(email: String): UUID?
 
+    /** Returns whether any user already holds the username, ignoring case (globally unique). */
+    fun usernameInUse(username: String): Boolean
+
     /** Creates a global draft user account and returns its identifier. */
     fun createUserAccount(
         email: String,

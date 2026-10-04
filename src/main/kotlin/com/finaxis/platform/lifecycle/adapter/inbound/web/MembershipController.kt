@@ -269,7 +269,10 @@ class MembershipController(
         ),
         ApiResponse(
             responseCode = "409",
-            description = "Membership state conflicts with the operation",
+            description =
+                "Membership state conflicts with the operation: it is not pending approval, the " +
+                    "user has no active branch or role assignment yet, or the user account is " +
+                    "not in a state that allows provisioning or activation",
             content = [
                 Content(
                     mediaType = "application/problem+json",

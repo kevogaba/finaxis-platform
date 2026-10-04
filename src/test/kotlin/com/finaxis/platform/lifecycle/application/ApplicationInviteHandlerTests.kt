@@ -252,6 +252,8 @@ private class ApplicationInviteStoreFake : UserProvisioningStore {
 
     override fun findUserIdByEmail(email: String): UUID? = null
 
+    override fun usernameInUse(username: String): Boolean = false
+
     override fun createUserAccount(
         email: String,
         username: String,

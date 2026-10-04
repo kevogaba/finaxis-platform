@@ -32,6 +32,7 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.whenever
+import org.springframework.dao.DuplicateKeyException
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
@@ -699,6 +700,103 @@ class OrganisationBranchProvisioningServiceTests {
         organisations.amendDraft(amendDraftCommand(organisationId, baseCurrencyCode = "USD"))
     }
 
+    @Test
+    fun `creating a draft with a tenant code already in use is a 409 and writes nothing`() {
+        organisations.createDraft(
+            createDraftCommand(tenantCode = "taken", baseCurrencyCode = "KES"),
+        )
+        val audited = audits.events.size
+
+        val failure =
+            assertFailsWith<ConflictException> {
+                organisations.createDraft(
+                    createDraftCommand(tenantCode = "taken", baseCurrencyCode = "KES"),
+                )
+            }
+
+        assertEquals("conflict", failure.code)
+        assertEquals("A tenant with that tenant code already exists.", failure.safeDetail)
+        assertEquals(1, store.tenantCodes.size)
+        assertEquals(audited, audits.events.size)
+    }
+
+    @Test
+    fun `a draft created in a lost race at the unique index is the same 409`() {
+        // The pre-check is a courtesy; two concurrent creates both pass it and one hits
+        // uq_organisation_tenant_code.
+        store.duplicateOnWrite = true
+
+        val failure =
+            assertFailsWith<ConflictException> {
+                organisations.createDraft(
+                    createDraftCommand(tenantCode = "raced", baseCurrencyCode = "KES"),
+                )
+            }
+
+        assertEquals("A tenant with that tenant code already exists.", failure.safeDetail)
+        assertIs<DuplicateKeyException>(failure.cause)
+        assertTrue(store.tenantCodes.isEmpty())
+    }
+
+    @Test
+    fun `amending a draft to a tenant code held by another tenant is a 409`() {
+        val other =
+            organisations.createDraft(
+                createDraftCommand(tenantCode = "other", baseCurrencyCode = "KES"),
+            )
+        val own =
+            organisations.createDraft(
+                createDraftCommand(tenantCode = "mine", baseCurrencyCode = "KES"),
+            )
+        store.organisationStates[own.organisationId] = OrganisationLifecycleState.DRAFT
+        adminBootstrapStore.createDraft(own.organisationId, amendAdmin(), uuidV7())
+
+        val failure =
+            assertFailsWith<ConflictException> {
+                organisations.amendDraft(
+                    amendDraftCommand(own.organisationId, "KES").copy(tenantCode = "other"),
+                )
+            }
+
+        assertEquals("A tenant with that tenant code already exists.", failure.safeDetail)
+        assertEquals("mine", store.tenantCodes.getValue(own.organisationId))
+        assertEquals("other", store.tenantCodes.getValue(other.organisationId))
+        // Keeping its own code is not a clash.
+        organisations.amendDraft(
+            amendDraftCommand(own.organisationId, "KES").copy(tenantCode = "mine"),
+        )
+    }
+
+    @Test
+    fun `an amend lost in a race at the unique index is the same 409`() {
+        val own =
+            organisations.createDraft(
+                createDraftCommand(tenantCode = "mine", baseCurrencyCode = "KES"),
+            )
+        store.organisationStates[own.organisationId] = OrganisationLifecycleState.DRAFT
+        adminBootstrapStore.createDraft(own.organisationId, amendAdmin(), uuidV7())
+        store.duplicateOnWrite = true
+
+        val failure =
+            assertFailsWith<ConflictException> {
+                organisations.amendDraft(
+                    amendDraftCommand(own.organisationId, "KES").copy(tenantCode = "raced"),
+                )
+            }
+
+        assertEquals("A tenant with that tenant code already exists.", failure.safeDetail)
+        assertIs<DuplicateKeyException>(failure.cause)
+    }
+
+    private fun amendAdmin() =
+        InitialAdministratorDraft(
+            email = "admin@test.com",
+            username = "admin",
+            displayName = "Admin",
+            phoneE164 = null,
+            sendApplicationInvite = false,
+        )
+
     private fun createDraftCommand(
         tenantCode: String = "acme-currency",
         baseCurrencyCode: String,
@@ -911,8 +1009,18 @@ private class ProvisioningFake(
     val assignments = mutableSetOf<AssignmentKey>()
     var listResult = OrganisationPage(emptyList(), 0)
     var lastListFilter: OrganisationListFilter? = null
+    val tenantCodes = mutableMapOf<UUID, String>()
+    var duplicateOnWrite = false
 
-    override fun createDraft(command: CreateOrganisationDraftCommand): UUID = uuidV7()
+    override fun createDraft(command: CreateOrganisationDraftCommand): UUID {
+        if (duplicateOnWrite) throw DuplicateKeyException("uq_organisation_tenant_code")
+        return uuidV7().also { tenantCodes[it] = command.tenantCode }
+    }
+
+    override fun amendDraft(command: AmendOrganisationDraftCommand) {
+        if (duplicateOnWrite) throw DuplicateKeyException("uq_organisation_tenant_code")
+        tenantCodes[command.organisationId] = command.tenantCode
+    }
 
     override fun lifecycleState(organisationId: UUID) = organisationStates[organisationId]
 
@@ -992,7 +1100,17 @@ private class ProvisioningFake(
 
     override fun revokeActiveAssignments(organisationId: UUID) = revokedAssignments
 
-    override fun findByCode(tenantCode: String): OrganisationSummary? = null
+    override fun findByCode(tenantCode: String): OrganisationSummary? =
+        tenantCodes.entries.firstOrNull { it.value == tenantCode }?.let { (id, code) ->
+            OrganisationSummary(
+                organisationId = id,
+                tenantCode = code,
+                displayName = "Acme SACCO",
+                countryCode = "KE",
+                status = OrganisationLifecycleState.DRAFT,
+                createdAt = Instant.EPOCH,
+            )
+        }
 
     override fun list(filter: OrganisationListFilter): OrganisationPage {
         lastListFilter = filter

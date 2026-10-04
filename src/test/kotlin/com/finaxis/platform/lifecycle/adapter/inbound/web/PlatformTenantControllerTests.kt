@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
@@ -36,6 +37,7 @@ import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argThat
 import org.mockito.kotlin.doAnswer
+import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
@@ -310,6 +312,67 @@ class PlatformTenantControllerTests
             }
 
             verify(organisationProvisioningService).amendDraft(any())
+        }
+
+        @Test
+        fun `a tenant code already in use is a 409 problem on create and on amend`() {
+            val detail = "A tenant with that tenant code already exists."
+            whenever(organisationProvisioningService.createDraft(any()))
+                .thenThrow(ConflictException(safeDetail = detail))
+            doThrow(ConflictException(safeDetail = detail))
+                .whenever(organisationProvisioningService)
+                .amendDraft(any())
+            val admin =
+                InitialAdminDto(
+                    email = "admin@acme.test",
+                    username = "admin",
+                    displayName = "Initial Admin",
+                    phoneE164 = "+254700000000",
+                )
+            val create =
+                CreateTenantDraftRequest(
+                    tenantCode = "acme-test",
+                    displayName = "Acme Test",
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    admin = admin,
+                )
+            val amend =
+                AmendTenantDraftRequest(
+                    tenantCode = "acme-test",
+                    displayName = "Acme Test",
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    admin = admin,
+                )
+
+            withPlatformContext {
+                mockMvc
+                    .post(ApiPaths.PLATFORM_TENANTS) {
+                        contentType = MediaType.APPLICATION_JSON
+                        content = apiJsonCodec.mapper.writeValueAsString(create)
+                        with(authentication(platformToken(setOf("tenant.create"))))
+                    }.andExpect {
+                        status { isConflict() }
+                        content { contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON) }
+                        jsonPath("$.code") { value("conflict") }
+                        jsonPath("$.detail") { value(detail) }
+                        jsonPath("$.request_id") { isNotEmpty() }
+                    }
+                mockMvc
+                    .patch("${ApiPaths.PLATFORM_TENANTS}/${uuidV7()}") {
+                        contentType = MediaType.APPLICATION_JSON
+                        content = apiJsonCodec.mapper.writeValueAsString(amend)
+                        with(authentication(platformToken(setOf("tenant.update_draft"))))
+                    }.andExpect {
+                        status { isConflict() }
+                        jsonPath("$.code") { value("conflict") }
+                        jsonPath("$.detail") { value(detail) }
+                        jsonPath("$.request_id") { isNotEmpty() }
+                    }
+            }
         }
 
         @Test

@@ -319,6 +319,28 @@ class MembershipControllerTests
         }
 
         @Test
+        fun `activate prerequisites not met is a 409 problem with code detail and request id`() {
+            val tenantId = uuidV7()
+            val membershipId = uuidV7()
+            val detail =
+                "The membership cannot be approved until the user has an active branch " +
+                    "assignment."
+            whenever(userProvisioningService.approveUser(any()))
+                .thenThrow(ConflictException(safeDetail = detail))
+
+            mockMvc
+                .post("${ApiPaths.MEMBERSHIPS}/$membershipId/activate") {
+                    with(authentication(tenantToken(setOf("user.approve"), tenantId)))
+                }.andExpect {
+                    status { isConflict() }
+                    content { contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON) }
+                    jsonPath("$.code") { value("conflict") }
+                    jsonPath("$.detail") { value(detail) }
+                    jsonPath("$.request_id") { isNotEmpty() }
+                }
+        }
+
+        @Test
         fun `membership state conflicts map to safe problem responses`() {
             val tenantId = uuidV7()
             val membershipId = uuidV7()

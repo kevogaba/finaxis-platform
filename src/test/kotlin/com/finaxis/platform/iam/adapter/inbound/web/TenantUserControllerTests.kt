@@ -1,5 +1,8 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
+import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.InvalidRequestException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiExceptionHandler
@@ -247,6 +250,67 @@ class TenantUserControllerTests
                 }
 
             verify(userProvisioningService, never()).inviteUser(any())
+        }
+
+        @Test
+        fun `inviteUser state conflicts are 409 problems with code detail and request id`() {
+            val tenantId = uuidV7()
+            val detail = "This user already has a membership in the selected organisation."
+            whenever(userProvisioningService.inviteUser(any()))
+                .thenThrow(ConflictException(safeDetail = detail))
+
+            mockMvc
+                .post(ApiPaths.TENANT_USERS) {
+                    contentType = MediaType.APPLICATION_JSON
+                    content = apiJsonCodec.mapper.writeValueAsString(inviteRequest())
+                    with(authentication(tenantToken(setOf("user.invite"), tenantId)))
+                }.andExpect {
+                    status { isConflict() }
+                    content { contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON) }
+                    jsonPath("$.code") { value("conflict") }
+                    jsonPath("$.detail") { value(detail) }
+                    jsonPath("$.status") { value(409) }
+                    jsonPath("$.request_id") { isNotEmpty() }
+                }
+        }
+
+        @Test
+        fun `inviteUser bad references are 422 problems and a bad shape is a 400 problem`() {
+            val tenantId = uuidV7()
+            val reference =
+                "A role in the request was not found or is not active in the organisation."
+            whenever(userProvisioningService.inviteUser(any()))
+                .thenThrow(InvalidOperationException(safeDetail = reference))
+                .thenThrow(
+                    InvalidRequestException(
+                        "validation_failed",
+                        "At least one role assignment is required.",
+                    ),
+                )
+
+            mockMvc
+                .post(ApiPaths.TENANT_USERS) {
+                    contentType = MediaType.APPLICATION_JSON
+                    content = apiJsonCodec.mapper.writeValueAsString(inviteRequest())
+                    with(authentication(tenantToken(setOf("user.invite"), tenantId)))
+                }.andExpect {
+                    status { isUnprocessableContent() }
+                    content { contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON) }
+                    jsonPath("$.code") { value("invalid_operation") }
+                    jsonPath("$.detail") { value(reference) }
+                    jsonPath("$.request_id") { isNotEmpty() }
+                }
+            mockMvc
+                .post(ApiPaths.TENANT_USERS) {
+                    contentType = MediaType.APPLICATION_JSON
+                    content = apiJsonCodec.mapper.writeValueAsString(inviteRequest())
+                    with(authentication(tenantToken(setOf("user.invite"), tenantId)))
+                }.andExpect {
+                    status { isBadRequest() }
+                    jsonPath("$.code") { value("validation_failed") }
+                    jsonPath("$.detail") { value("At least one role assignment is required.") }
+                    jsonPath("$.request_id") { isNotEmpty() }
+                }
         }
 
         @Test

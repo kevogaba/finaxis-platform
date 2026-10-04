@@ -47,18 +47,7 @@ class UserProvisioningService(
     @Transactional
     fun inviteUser(command: InviteUserCommand): UserInvitationResult {
         validateInvitation(command)
-        val userId =
-            store.findUserIdByEmail(command.email)
-                ?: store.createUserAccount(
-                    command.email,
-                    command.username,
-                    command.displayName,
-                    command.phoneE164,
-                    command.invitedBy,
-                )
-        require(!store.membershipExists(command.organisationId, userId)) {
-            "User already has a membership in the selected organisation."
-        }
+        val userId = store.findOrCreateInvitee(command)
         val membershipId =
             store.createMembership(
                 command.organisationId,
@@ -333,17 +322,17 @@ class UserProvisioningService(
     }
 
     private fun validateInvitation(command: InviteUserCommand) {
-        require(
-            store.organisationState(command.organisationId) ==
-                OrganisationLifecycleState.ACTIVE,
-        ) {
-            "User invitations require an active organisation."
+        if (store.organisationState(command.organisationId) != OrganisationLifecycleState.ACTIVE) {
+            throw ConflictException(safeDetail = "User invitations require an active organisation.")
         }
-        require(command.email.isNotBlank() && EMAIL_REGEX.matches(command.email)) {
-            "A valid email address is required."
-        }
-        require(command.username.isNotBlank()) { "Username is required." }
-        require(command.displayName.isNotBlank()) { "Display name is required." }
+        // The DTO's @Email is laxer than this (it accepts "user@localhost"), so a shape the
+        // service refuses is still the caller's mistake: 400, never a 500.
+        malformedUnless(
+            command.email.isNotBlank() && EMAIL_REGEX.matches(command.email),
+            "A valid email address is required.",
+        )
+        malformedUnless(command.username.isNotBlank(), "Username is required.")
+        malformedUnless(command.displayName.isNotBlank(), "Display name is required.")
         command.primaryBranchId?.let { branchId ->
             requireActiveBranch(command.organisationId, branchId)
         }
@@ -351,28 +340,30 @@ class UserProvisioningService(
             requireActiveBranch(command.organisationId, assignment.branchId)
         }
         command.roleAssignments.forEach { assignment ->
-            require(store.roleExists(command.organisationId, assignment.roleId)) {
-                "Role was not found in the selected organisation."
+            // One message for unknown, foreign-organisation and inactive alike: the request body
+            // referenced a role this tenant cannot grant, and nothing else is disclosed.
+            if (!store.roleExists(command.organisationId, assignment.roleId)) {
+                throw InvalidOperationException(safeDetail = ROLE_REFERENCE_DETAIL)
             }
             validateRoleScope(command.organisationId, assignment)
         }
-        require(
+        malformedUnless(
             command.membershipType in BRANCH_EXEMPT_TYPES ||
                 command.branchAssignments.isNotEmpty(),
-        ) {
-            "At least one branch assignment is required."
-        }
-        require(command.roleAssignments.isNotEmpty()) {
-            "At least one role assignment is required."
-        }
+            "At least one branch assignment is required.",
+        )
+        malformedUnless(
+            command.roleAssignments.isNotEmpty(),
+            "At least one role assignment is required.",
+        )
     }
 
     private fun requireActiveBranch(
         organisationId: UUID,
         branchId: UUID,
     ) {
-        require(store.branchState(organisationId, branchId) == BranchLifecycleState.ACTIVE) {
-            "Branch must be active in the selected organisation."
+        if (store.branchState(organisationId, branchId) != BranchLifecycleState.ACTIVE) {
+            throw InvalidOperationException(safeDetail = BRANCH_REFERENCE_DETAIL)
         }
     }
 
@@ -402,11 +393,13 @@ class UserProvisioningService(
         snapshot: MembershipProvisioningSnapshot,
     ): Boolean {
         if (store.hasKeycloakIdentity(snapshot.userId)) return false
-        require(
-            snapshot.userStatus in
-                setOf(UserLifecycleState.DRAFT, UserLifecycleState.PENDING_APPROVAL),
+        if (snapshot.userStatus !in
+            setOf(UserLifecycleState.DRAFT, UserLifecycleState.PENDING_APPROVAL)
         ) {
-            "Only draft or pending users can start local identity provisioning."
+            throw ConflictException(
+                safeDetail =
+                    "The user account is not in a state that allows identity provisioning.",
+            )
         }
         if (snapshot.userStatus == UserLifecycleState.DRAFT) {
             lifecycleService.transition(
@@ -434,11 +427,12 @@ class UserProvisioningService(
         command: ApproveUserCommand,
         snapshot: MembershipProvisioningSnapshot,
     ): Boolean {
-        require(
-            snapshot.userStatus in
-                setOf(UserLifecycleState.ACTIVE, UserLifecycleState.INVITED),
-        ) {
-            "Only active or invited users can activate a membership during approval."
+        if (snapshot.userStatus !in setOf(UserLifecycleState.ACTIVE, UserLifecycleState.INVITED)) {
+            throw ConflictException(
+                safeDetail =
+                    "The user account is not in a state that allows the membership to be " +
+                        "activated.",
+            )
         }
         lifecycleService.transition(
             MembershipTransitionCommand(
@@ -456,11 +450,19 @@ class UserProvisioningService(
         snapshot: MembershipProvisioningSnapshot,
     ) {
         val branchExempt = snapshot.type in BRANCH_EXEMPT_TYPES
-        require(branchExempt || store.hasActiveBranchAssignment(organisationId, snapshot.userId)) {
-            "Membership requires an active branch assignment."
+        if (!branchExempt && !store.hasActiveBranchAssignment(organisationId, snapshot.userId)) {
+            throw ConflictException(
+                safeDetail =
+                    "The membership cannot be approved until the user has an active branch " +
+                        "assignment.",
+            )
         }
-        require(store.hasActiveRoleAssignment(organisationId, snapshot.userId)) {
-            "Membership requires an active role assignment."
+        if (!store.hasActiveRoleAssignment(organisationId, snapshot.userId)) {
+            throw ConflictException(
+                safeDetail =
+                    "The membership cannot be approved until the user has an active role " +
+                        "assignment.",
+            )
         }
     }
 
@@ -531,6 +533,7 @@ class UserProvisioningService(
                 aggregateId = snapshot.userId.toString(),
                 transition = transition,
                 fromState = snapshot.userStatus.name,
+                // Internal invariant: the user was just read through this same transaction.
                 toState = requireNotNull(store.userStatus(snapshot.userId)).name,
                 actor = TransitionActor(USER, command.approvedBy.toString()),
                 occurredAt = clock.instant(),
@@ -579,6 +582,10 @@ class UserProvisioningService(
     private companion object {
         val EMAIL_REGEX = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
         val BRANCH_EXEMPT_TYPES = setOf(MembershipType.SYSTEM, MembershipType.AUDITOR)
+        const val ROLE_REFERENCE_DETAIL =
+            "A role in the request was not found or is not active in the organisation."
+        const val BRANCH_REFERENCE_DETAIL =
+            "A branch in the request was not found or is not active in the organisation."
         const val KEYCLOAK_USER_PROVISIONING_REQUESTED_TARGET =
             "finaxis.lifecycle.user.keycloak-provisioning-requested"
         const val APPLICATION_INVITE_REQUESTED_TARGET =
@@ -594,6 +601,13 @@ class UserProvisioningService(
         const val DISPLAY_NAME = "displayName"
         const val DISPATCH_KEY = "dispatchKey"
     }
+}
+
+private fun malformedUnless(
+    condition: Boolean,
+    detail: String,
+) {
+    if (!condition) throw InvalidRequestException("validation_failed", detail)
 }
 
 private fun membershipRevocationTransition(

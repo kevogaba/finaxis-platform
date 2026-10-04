@@ -131,9 +131,10 @@ class PlatformTenantMembershipController(
         ApiResponse(
             responseCode = "409",
             description =
-                "Tenant is not active, the membership is not pending approval, or the tenant " +
-                    "already " +
-                    "has an active member beyond its bootstrap administrator " +
+                "Tenant is not active, the membership is not pending approval, the user has no " +
+                    "active branch or role assignment yet, the user account is not in a state " +
+                    "that allows provisioning or activation, or the tenant already has an " +
+                    "active member beyond its bootstrap administrator " +
                     "(code `lifecycle.platform_checker_closed`)",
             content = [
                 Content(

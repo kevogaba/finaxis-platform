@@ -387,7 +387,8 @@ class PlatformTenantController(
         ApiResponse(
             responseCode = "409",
             description =
-                "Tenant is no longer amendable" + PLATFORM_PROTECTED,
+                "Tenant is no longer amendable, or the tenant code is held by another tenant" +
+                    PLATFORM_PROTECTED,
             content = [
                 Content(
                     mediaType = "application/problem+json",
