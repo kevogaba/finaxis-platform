@@ -2,6 +2,8 @@ package com.finaxis.platform.iam.application.query
 
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.web.api.ApiPage
+import com.finaxis.platform.common.web.api.requireValidPage
+import com.finaxis.platform.common.web.api.requireValidSort
 import com.finaxis.platform.lifecycle.FoundationCaller
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.PlatformCaller
@@ -28,7 +30,7 @@ class IamQueryService(
         caller: FoundationCaller,
     ): ApiPage<UserInTenantSummary> {
         verifyTenantScope(organisationId, caller)
-        validatePage(filter.page, filter.size)
+        requireValidPage(filter.page, filter.size)
         when (caller) {
             is TenantCaller -> {
                 permissionGuard.requireTenantPermission(
@@ -130,7 +132,7 @@ class IamQueryService(
         caller: FoundationCaller,
     ): ApiPage<MembershipSummary> {
         verifyTenantScope(organisationId, caller)
-        validatePage(filter.page, filter.size)
+        requireValidPage(filter.page, filter.size)
         when (caller) {
             is TenantCaller -> {
                 permissionGuard.requireTenantPermission(
@@ -157,7 +159,7 @@ class IamQueryService(
         caller: FoundationCaller,
     ): ApiPage<BranchAssignmentSummary> {
         verifyTenantScope(organisationId, caller)
-        validatePage(filter.page, filter.size)
+        requireValidPage(filter.page, filter.size)
         when (caller) {
             is TenantCaller -> {
                 permissionGuard.requireTenantPermission(
@@ -213,8 +215,8 @@ class IamQueryService(
         caller: FoundationCaller,
     ): ApiPage<RoleSummary> {
         verifyTenantScope(organisationId, caller)
-        validatePage(filter.page, filter.size)
-        validateSort(filter.sortBy, filter.sortDir, allowedRoleSorts)
+        requireValidPage(filter.page, filter.size)
+        requireValidSort(filter.sortBy, filter.sortDir, allowedRoleSorts)
         when (caller) {
             is TenantCaller -> {
                 permissionGuard.requireTenantPermission(
@@ -270,7 +272,7 @@ class IamQueryService(
         caller: FoundationCaller,
     ): ApiPage<RoleAssignmentSummary> {
         verifyTenantScope(organisationId, caller)
-        validatePage(filter.page, filter.size)
+        requireValidPage(filter.page, filter.size)
         when (caller) {
             is TenantCaller -> {
                 permissionGuard.requireTenantPermission(
@@ -326,8 +328,8 @@ class IamQueryService(
         caller: FoundationCaller,
     ): ApiPage<PermissionSummary> {
         verifyTenantScope(organisationId, caller)
-        validatePage(filter.page, filter.size)
-        validateSort(filter.sortBy, filter.sortDir, allowedPermissionSorts)
+        requireValidPage(filter.page, filter.size)
+        requireValidSort(filter.sortBy, filter.sortDir, allowedPermissionSorts)
         when (caller) {
             is TenantCaller -> {
                 permissionGuard.requireTenantPermission(
@@ -384,7 +386,7 @@ class IamQueryService(
         caller: FoundationCaller,
     ): ApiPage<RolePermissionSummary> {
         verifyTenantScope(organisationId, caller)
-        validatePage(filter.page, filter.size)
+        requireValidPage(filter.page, filter.size)
         when (caller) {
             is TenantCaller -> {
                 permissionGuard.requireTenantPermission(
@@ -444,33 +446,7 @@ class IamQueryService(
         }
     }
 
-    private fun validatePage(
-        page: Int,
-        size: Int,
-    ) {
-        require(page >= 0) { "Page number must not be negative" }
-        require(size in MINIMUM_PAGE_SIZE..MAXIMUM_PAGE_SIZE) {
-            "Page size must be between $MINIMUM_PAGE_SIZE and $MAXIMUM_PAGE_SIZE"
-        }
-    }
-
-    private fun validateSort(
-        sortBy: String?,
-        sortDir: String?,
-        allowedFields: Set<String>,
-    ) {
-        if (sortBy != null) {
-            require(sortBy in allowedFields) { "Sorting by field '$sortBy' is not allowed" }
-        }
-        if (sortDir != null) {
-            val dir = sortDir.uppercase()
-            require(dir == "ASC" || dir == "DESC") { "Sort direction must be ASC or DESC" }
-        }
-    }
-
     private companion object {
-        const val MINIMUM_PAGE_SIZE = 1
-        const val MAXIMUM_PAGE_SIZE = 100
         val allowedRoleSorts = setOf("roleCode", "roleName", "status", "createdAt")
         val allowedPermissionSorts =
             setOf(

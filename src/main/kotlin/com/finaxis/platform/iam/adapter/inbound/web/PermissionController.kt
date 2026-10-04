@@ -54,7 +54,7 @@ class PermissionController(
         ),
         ApiResponse(
             responseCode = "400",
-            description = "Invalid page or filter",
+            description = "Invalid page, sort or filter",
             content = [Content(schema = Schema(implementation = ApiProblem::class))],
         ),
         ApiResponse(

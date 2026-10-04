@@ -8,7 +8,7 @@ import com.finaxis.platform.common.persistence.TransactionLockBound
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
-import com.finaxis.platform.common.web.api.InvalidPageRequestException
+import com.finaxis.platform.common.web.api.requireValidPage
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import org.springframework.dao.CannotAcquireLockException
@@ -260,12 +260,7 @@ class BusinessDateService(
     /** Lists bounded business-date history after verifying tenant-scoped view permission. */
     @Transactional(readOnly = true)
     fun listHistory(query: ListBusinessDateHistoryQuery): BusinessDateHistoryPage {
-        if (query.page < 0) {
-            throw InvalidPageRequestException()
-        }
-        if (query.size !in 1..MAXIMUM_PAGE_SIZE) {
-            throw InvalidPageRequestException()
-        }
+        requireValidPage(query.page, query.size)
         requirePermission(query.actorId, query.organisationId, BUSINESS_DATE_VIEW_PERMISSION)
         return historyStore.list(query.organisationId, query.page, query.size)
     }
@@ -408,7 +403,6 @@ class BusinessDateService(
         const val BUSINESS_DATE_VIEW_PERMISSION = "business_date.view"
         const val COB_START_PERMISSION = "cob.start"
         const val COB_COMPLETE_PERMISSION = "cob.complete"
-        const val MAXIMUM_PAGE_SIZE = 100
         const val BUSINESS_DATE_INITIALIZED_TARGET =
             "finaxis.lifecycle.organisation.business-date-initialized"
         const val BUSINESS_DATE_ADVANCED_TARGET =
