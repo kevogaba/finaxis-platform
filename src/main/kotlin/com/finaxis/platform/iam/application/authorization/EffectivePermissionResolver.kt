@@ -105,9 +105,13 @@ class PermissionCacheInvalidator(
     }
 
     /**
-     * Clears the effective-permission cache.
+     * Clears the effective-permission cache. Uses `invalidate()`, not `clear()`: the Redis cache
+     * may run `clear()` on its asynchronous writer, so an entry can stay readable after it
+     * returns, while `invalidate()` deletes synchronously and makes every entry invisible at
+     * once, which a clear before serving traffic needs. On Redis this reaches the running
+     * instance's schema version namespace only; the start-up clear also sweeps the others.
      */
     fun clearAll() {
-        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.clear()
+        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.invalidate()
     }
 }

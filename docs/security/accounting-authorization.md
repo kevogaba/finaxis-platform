@@ -380,7 +380,7 @@ deliberately left out of #34, which changes no enforcement code at all.
 | `AccountingPermissionCatalogueTests` | The 26 codes exist, are `ACTIVE`, agree with `AccountingPermissions` in both directions, occupy a contiguous `41000000-…01`–`…26` block, collide with no foundation code, are fully held by `PLATFORM_SUPER_ADMIN`, are entirely absent from `PLATFORM_SUPPORT`, and appear on `local-admin` as exactly the ten configuration codes |
 | `AccountingSeparationOfDutiesPolicyTests` | The dedicated maker and checker roles hold opposite sides of every approval pair, no default bundle carries a break-glass code, both accounting roles are provisioned at organisation approval, and every code named by a default bundle exists and is `ACTIVE` |
 | `HighRiskOperationAuditCoverageTests` | Every HIGH/CRITICAL catalogue code maps to an audited action, every mapped action is reachable from production, and the `pendingEnforcement` ratchet still names only actions with no real call site |
-| `FoundationSeedDataTests` | The exact 80-code catalogue, no duplicates, and the exact permission set on the bootstrap `local-admin` role |
+| `FoundationSeedDataTests` | The exact 81-code catalogue, no duplicates, and the exact permission set on the bootstrap `local-admin` role |
 
 The migration also enforces its own invariants in `DO $$` blocks — pre-conditions (the two platform
 roles are `ACTIVE`, the `V3` bootstrap role is `ACTIVE`, `PLATFORM_SUPER_ADMIN` is not already

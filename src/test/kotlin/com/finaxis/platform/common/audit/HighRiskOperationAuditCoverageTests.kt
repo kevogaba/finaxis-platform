@@ -348,6 +348,7 @@ class HighRiskOperationAuditCoverageTests(
                 "branch.create" to "branch.create_draft",
                 "branch.reactivate" to "branch.reactivate",
                 "branch.suspend" to "branch.suspend",
+                "branch.update" to "branch.update",
                 "business_date.advance" to "business_date.advance",
                 "business_date.reopen" to "business_date.reopen",
                 "cob.complete" to "cob.complete",

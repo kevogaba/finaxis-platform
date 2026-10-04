@@ -245,7 +245,7 @@ class FoundationSeedDataTests(
         const val BOOTSTRAP_ADMINISTRATOR_ID = "11111111-1111-1111-1111-111111111111"
         const val LOCAL_ADMIN_ROLE_ID = "77777777-7777-7777-7777-777777777777"
         const val CHECKER_USER_ID = "dddddddd-dddd-dddd-dddd-dddddddddd01"
-        const val EXPECTED_CATALOGUE_SIZE = 80
+        const val EXPECTED_CATALOGUE_SIZE = 81
 
         val expectedLocalAdminPermissionCodes =
             listOf(
@@ -297,6 +297,7 @@ class FoundationSeedDataTests(
                 "branch.create",
                 "branch.reactivate",
                 "branch.suspend",
+                "branch.update",
                 "branch.view",
                 "branch_assignment.view",
                 "business_date.advance",

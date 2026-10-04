@@ -317,13 +317,14 @@ class BranchController(
      */
     @PatchMapping("/{branch_id}")
     @IdempotentMutation(scope = IdempotencyScopeKind.TENANT)
-    @PreAuthorize("hasAuthority('branch.create')")
+    @PreAuthorize("hasAuthority('branch.update')")
     @Operation(
         summary = "Update branch",
         description =
             "Updates the name, parent, timezone or address of a draft or active branch. " +
                 "Absent fields are unchanged; an explicit null parent_branch_id detaches the " +
-                "branch. The code and type cannot be changed.",
+                "branch. The code and type cannot be changed. Requires `branch.update`; " +
+                "`branch.create` alone is not enough.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -426,7 +427,7 @@ class BranchController(
                 address = request.address,
             ),
         )
-        // The service has authorised branch.create on this very branch; a branch-scoped maker holds
+        // The service has authorised branch.update on this very branch; a branch-scoped maker holds
         // no tenant-wide branch.view, and a gated read here would roll the update back with a 403.
         return foundationQueryService
             .getBranchAfterAuthorizedMutation(caller.activeOrganisationId, branchId)

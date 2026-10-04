@@ -706,11 +706,24 @@ class BranchControllerTests
         }
 
         @Test
-        fun `update is forbidden without branch create`() {
+        fun `update is forbidden without branch update`() {
             val tenantId = uuidV7()
             val branchId = uuidV7()
 
             patch(branchId, tenantId, "{\"branch_name\":\"Riverside\"}", setOf("branch.view"))
+                .andExpect { status { isForbidden() } }
+
+            verify(branchProvisioningService, org.mockito.kotlin.never()).update(any())
+        }
+
+        @Test
+        fun `update is forbidden to a maker who holds only branch create`() {
+            // branch.create no longer reaches PATCH (#203): a maker-only role must not be able to
+            // edit a live branch with no checker.
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+
+            patch(branchId, tenantId, "{\"branch_name\":\"Riverside\"}", setOf("branch.create"))
                 .andExpect { status { isForbidden() } }
 
             verify(branchProvisioningService, org.mockito.kotlin.never()).update(any())
@@ -882,7 +895,7 @@ class BranchControllerTests
             branchId: UUID,
             tenantId: UUID,
             body: String?,
-            permissions: Set<String> = setOf("branch.create"),
+            permissions: Set<String> = setOf("branch.update"),
             selectedBranchId: UUID? = branchId,
         ) = mockMvc.patch("${ApiPaths.BRANCHES}/$branchId") {
             header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())

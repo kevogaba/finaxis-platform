@@ -64,8 +64,8 @@ Reasons:
   rows the FSM already writes and the ADR 0004 event pattern all apply unchanged. Option A would
   sit beside them and duplicate their guarantees.
 - **No new tables.** Every change below fits existing columns (`status_reason`, the transition
-  logs, `organisation_initial_administrator_bootstrap`). There is no migration, and no `V18+` is
-  claimed by this ADR.
+  logs, `organisation_initial_administrator_bootstrap`). There is no migration, and this ADR claims
+  no migration number.
 - **No demand for a cross-resource inbox.** Nothing in the frontend gap needs one list of "things
   waiting for me" across resources; each resource already lists its own `PENDING_APPROVAL` rows.
 
@@ -164,6 +164,19 @@ order is the mitigation, so there is no accepted dead-end consequence.
 designed here. This ADR constrains it by one requirement only: **branch amend must be allowed in
 `DRAFT`**, so that a returned or withdrawn draft is amendable by the maker.
 
+**Amendment (#203): the update permission.** #165 authorised `PATCH /api/v1/branches/{id}` with
+`branch.create`, on the reasoning that editing a branch's descriptive fields is the maker's act.
+That holds for a `DRAFT` but not for an `ACTIVE` branch, which the same route also edits: a custom
+maker-only role holding `branch.create` could change a live, already-approved branch with no
+checker in the path. The owner therefore decided on a dedicated **`branch.update`** code, seeded
+by `V19__branch_update_permission.sql`, which now gates the route and
+`BranchProvisioningService.update` and which `branch.create` no longer implies. The migration
+copies the grant to every role and direct membership override that held `branch.create`, so
+existing callers keep access and an owner narrows it deliberately by revoking `branch.update`.
+This supersedes the "reuses `branch.create`" wording of #165 and the "no new code" remark below as
+far as `PATCH` is concerned; the withdraw and return codes (`branch.create`, `branch.activate`) in
+3b are unchanged.
+
 - **Transition.** One new branch transition, `BranchLifecycleTransition.RETURN_FOR_CHANGES`,
   `PENDING_APPROVAL -> DRAFT`. Nothing else leaves `PENDING_APPROVAL` for `DRAFT`. The transition
   is a state change only: the branch keeps its code, its parent and its `created_by`.
@@ -193,8 +206,9 @@ designed here. This ADR constrains it by one requirement only: **branch amend mu
   withdrawing and needs `branch.create`. Permissions can be revoked after the fact, so the outcome
   is stated explicitly: a creator or submitter who has since **lost `branch.create` cannot
   withdraw**, but a non-maker checker holding `branch.activate` can still return the branch. A new
-  code would need a forward-only `V18+` migration, a grant to every role that submits or activates,
-  and a `docs/security` update, for a distinction the two existing codes already draw.
+  code would need a forward-only migration, a grant to every role that submits or activates, and a
+  `docs/security` update, for a distinction the two existing codes already draw. (The separate
+  `PATCH` permission is a different case: see the amendment above.)
 - **Order of checks.** The permission to demand depends on who the actor is, so classifying the
   actor comes first, but it reveals nothing: it only chooses which permission is asked. The order,
   consistent with `activate` (permission, then platform-organisation 404, then branch 404, then
@@ -361,7 +375,7 @@ catalogue** (`TenantSettingCatalog.kt`), not wired to behaviour.
   `deactivate` (like `createOrUpdate`) calls `TenantSettingCatalog.require`, so once the
   definition is gone the mutation API rejects the key as unknown and cannot close the row. The
   misleading settings would stay visible indefinitely. #164 must therefore do one of: a
-  forward-only `V18+` migration that closes the existing effective rows for those two keys, or an
+  forward-only `V20+` migration that closes the existing effective rows for those two keys, or an
   explicit filter of the retired keys in the `list` and `get` paths. Which one is #164's
   decision; that one of them ships with the catalogue change is an **acceptance condition of
   #164**. This ADR itself still adds no migration.

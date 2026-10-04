@@ -64,8 +64,9 @@ its own pending branch without one (`branch.return_for_changes_as_platform_check
 [foundation API](../api/foundation-api.md#return-or-withdraw-a-pending-branch)). See
 [ADR 0028](../adr/0028-platform-checker-for-first-tenant-approvals.md).
 
-A `DRAFT` or `ACTIVE` branch can be edited in place (`PATCH /branches/{branch_id}`): name, parent,
-timezone and address, never the code or type. It writes `branch.update` audit with the changed field
+A `DRAFT` or `ACTIVE` branch can be edited in place (`PATCH /branches/{branch_id}`, permission
+`branch.update`, which `branch.create` alone does not give): name, parent, timezone and address,
+never the code or type. It writes `branch.update` audit with the changed field
 names only, and refuses a parent that would make the branch its own ancestor or that is `CLOSED`
 or `ARCHIVED`. The last rule is not enforced by create, submit or activate (a known limitation, see
 [lifecycle FSMs](../architecture/lifecycle-fsm.md)).
