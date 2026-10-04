@@ -17,6 +17,13 @@ is reused, not changed. Builds on
 [ADR 0012](0012-keycloak-authentication-application-authorization.md) for the rule that the
 application, never Keycloak, decides who may approve.
 
+**Superseded in part by [ADR 0030](0030-mutation-permission-implies-view-permission.md).** The
+sentence "Each route works with its one permission alone" and the permission-free read-back it
+justifies (under "Routes and permissions") no longer hold: each route needs its permission **and
+that permission's view** in the platform organisation, and reads its result back through the gated
+query. The platform checker roles must hold the view codes too. Everything else in this ADR
+stands. The change takes effect as the ADR 0030 pull requests land.
+
 ## Context
 
 A tenant approved through the platform has exactly one user: the bootstrap `TENANT_ADMIN`, invited
@@ -154,6 +161,9 @@ checker step:
 | `POST /platform/tenants/{tenant_id}/branches/{branch_id}/activate` | `branch.approve` | PLATFORM |
 | `POST /platform/tenants/{tenant_id}/branches/{branch_id}/submit` | `branch.create` | PLATFORM |
 | `POST /platform/tenants/{tenant_id}/branches` (existing) | `branch.create` | PLATFORM |
+
+> **Superseded in part by [ADR 0030](0030-mutation-permission-implies-view-permission.md):**
+> each route also needs the view code of its permission, and reads back through the gated query.
 
 Each route works with its one permission alone. The membership or branch it returns is read back
 without a second permission gate (`membership.view`, `branch.view`) inside the same transaction,

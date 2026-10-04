@@ -21,6 +21,13 @@ planned is implemented by this ADR**, and the code is unchanged by it. The branc
 design (3b) is accepted and is implemented **after #165** in the same effort (see
 "Sequencing").
 
+**Amended in part by [ADR 0030](0030-mutation-permission-implies-view-permission.md).** Wherever
+this ADR names the permission a route needs (3b "Permission", "Order of checks" and "Errors", the
+#203 amendment, 3c "Route and permission", and the assignment permissions in point 2), that
+permission is required **plus its view code at the same scope** (`branch.view`, `tenant.view`,
+`branch_assignment.view`, `role_assignment.view`), and a missing view is a `403` that names it.
+No new permission code is introduced by this. Nothing else in this ADR changes.
+
 ## Context
 
 Maker-checker exists today as hard-coded rules around per-resource transitions, not as a model:
@@ -199,6 +206,9 @@ since #208) in 3b are unchanged.
   1. *Withdraw*: the actor is the branch's **creator or its current submitter** (the latest
      `SUBMIT` row, as `submittedBy` already resolves it). The maker takes their own request back.
   2. *Return for changes*: the actor is **neither**. The checker sends it back.
+> **Amended by [ADR 0030](0030-mutation-permission-implies-view-permission.md):** each of the
+> permissions below also needs `branch.view` at the same scope.
+
 - **Permission: no new code.** The permission required depends on the same distinction, and both
   codes already exist:
   - the maker (withdraw) needs `branch.create`, the permission that submitted it, so anyone who
@@ -284,6 +294,9 @@ since #208) in 3b are unchanged.
 - **Transition.** One new organisation transition,
   `OrganisationLifecycleTransition.RETURN_FOR_CHANGES`, `PENDING_APPROVAL -> DRAFT`. `REJECT` is
   unchanged and **stays terminal**.
+> **Amended by [ADR 0030](0030-mutation-permission-implies-view-permission.md):** the route also
+> needs `tenant.view` in the platform organisation.
+
 - **Route and permission.** `POST /api/v1/platform/tenants/{tenant_id}/return` with a required
   `reason` (3 to 500, as `RejectTenantRequest`), calling
   `OrganisationProvisioningService.returnForChanges`. It requires **`tenant.reject`**, the existing
