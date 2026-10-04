@@ -204,7 +204,7 @@ class UserProvisioningServiceTests {
                 context.org,
                 invitation.membershipId,
                 context.checker,
-                reason = "Verified against the signed request form.",
+                reason = DecisionRemark.optional("Verified against the signed request form."),
             ),
         )
 
@@ -231,7 +231,7 @@ class UserProvisioningServiceTests {
                     context.org,
                     invitation.membershipId,
                     context.checker,
-                    reason = "Approved pending identity creation.",
+                    reason = DecisionRemark.optional("Approved pending identity creation."),
                 ),
             )
 
@@ -565,13 +565,17 @@ class UserProvisioningServiceTests {
         fake.organisationStates[org] = OrganisationLifecycleState.ACTIVE
         fake.identityLinks += userId
 
-        service.suspendUser(SuspendUserCommand(org, userId, actor, "risk"))
+        service.suspendUser(SuspendUserCommand(org, userId, actor, Reason.required("risk")))
         assertEquals(UserLifecycleState.SUSPENDED, fake.users.getValue(userId).state)
 
-        service.reactivateUser(ReactivateUserCommand(org, userId, actor, "cleared"))
+        service.reactivateUser(
+            ReactivateUserCommand(org, userId, actor, DecisionRemark.optional("cleared")),
+        )
         assertEquals(UserLifecycleState.ACTIVE, fake.users.getValue(userId).state)
 
-        service.deactivateUser(DeactivateUserCommand(org, userId, actor, "left"))
+        service.deactivateUser(
+            DeactivateUserCommand(org, userId, actor, Reason.required("left")),
+        )
         assertEquals(UserLifecycleState.DEACTIVATED, fake.users.getValue(userId).state)
         assertTrue(
             logs.logs.map { it.transition }.contains(UserLifecycleTransition.REACTIVATE.name),
@@ -589,7 +593,9 @@ class UserProvisioningServiceTests {
         val roleId = uuidV7()
         fake.roleAssignments += RoleAssignmentKey(org, userId, roleId, null)
 
-        service.deactivateUser(DeactivateUserCommand(org, userId, actor, "left"))
+        service.deactivateUser(
+            DeactivateUserCommand(org, userId, actor, Reason.required("left")),
+        )
 
         assertTrue(fake.branchAssignments.isEmpty())
         assertTrue(fake.roleAssignments.isEmpty())
@@ -621,7 +627,12 @@ class UserProvisioningServiceTests {
         fake.roleAssignments += RoleAssignmentKey(secondTenantId, userId, uuidV7(), null)
 
         service.deactivateUser(
-            DeactivateUserCommand(PlatformOrganisation.ID, userId, actor, "left"),
+            DeactivateUserCommand(
+                PlatformOrganisation.ID,
+                userId,
+                actor,
+                Reason.required("left"),
+            ),
         )
 
         assertTrue(fake.branchAssignments.isEmpty())
@@ -647,7 +658,12 @@ class UserProvisioningServiceTests {
         fake.roleAssignments += RoleAssignmentKey(context.org, userId, context.role, null)
 
         service.revokeTenantMembership(
-            RevokeTenantMembershipCommand(context.org, membershipId, context.actor, "offboard"),
+            RevokeTenantMembershipCommand(
+                context.org,
+                membershipId,
+                context.actor,
+                Reason.required("offboard"),
+            ),
         )
 
         assertEquals(
@@ -666,7 +682,12 @@ class UserProvisioningServiceTests {
         val membershipId = fake.addMembership(context.org, userId, MembershipLifecycleState.ACTIVE)
 
         service.suspendMembership(
-            SuspendMembershipCommand(context.org, membershipId, context.actor, "risk"),
+            SuspendMembershipCommand(
+                context.org,
+                membershipId,
+                context.actor,
+                Reason.required("risk"),
+            ),
         )
 
         assertEquals(
@@ -688,7 +709,12 @@ class UserProvisioningServiceTests {
             )
 
         service.reactivateMembership(
-            ReactivateMembershipCommand(context.org, membershipId, context.actor, "cleared"),
+            ReactivateMembershipCommand(
+                context.org,
+                membershipId,
+                context.actor,
+                DecisionRemark.optional("cleared"),
+            ),
         )
 
         assertEquals(

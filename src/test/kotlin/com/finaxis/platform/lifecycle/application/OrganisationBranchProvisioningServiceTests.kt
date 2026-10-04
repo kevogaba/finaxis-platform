@@ -239,7 +239,10 @@ class OrganisationBranchProvisioningServiceTests {
         events.events.clear()
 
         organisations.rejectProvisioning(
-            RejectOrganisationProvisioningCommand(organisationId, "Registration validation failed"),
+            RejectOrganisationProvisioningCommand(
+                organisationId,
+                req("Registration validation failed"),
+            ),
         )
 
         assertEquals(
@@ -258,7 +261,7 @@ class OrganisationBranchProvisioningServiceTests {
         store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
         store.completeSetup(organisationId)
 
-        organisations.suspend(SuspendOrganisationCommand(organisationId, "Regulatory review"))
+        organisations.suspend(SuspendOrganisationCommand(organisationId, req("Regulatory review")))
 
         assertEquals(
             OrganisationLifecycleState.SUSPENDED,
@@ -268,7 +271,9 @@ class OrganisationBranchProvisioningServiceTests {
         assertExternalizedTarget("finaxis.lifecycle.organisation.suspended")
 
         events.events.clear()
-        organisations.reactivate(ReactivateOrganisationCommand(organisationId, "Review complete"))
+        organisations.reactivate(
+            ReactivateOrganisationCommand(organisationId, opt("Review complete")),
+        )
 
         assertEquals(
             OrganisationLifecycleState.ACTIVE,
@@ -392,7 +397,9 @@ class OrganisationBranchProvisioningServiceTests {
             aggregate(organisationId, OrganisationLifecycleState.ACTIVE, "ORGANISATION")
         store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
 
-        organisations.deprovision(DeprovisionOrganisationCommand(organisationId, "contract ended"))
+        organisations.deprovision(
+            DeprovisionOrganisationCommand(organisationId, req("contract ended")),
+        )
 
         assertEquals(
             OrganisationLifecycleState.DEPROVISIONED,
@@ -589,18 +596,25 @@ class OrganisationBranchProvisioningServiceTests {
         assertExternalizedTarget("finaxis.lifecycle.branch.activated")
 
         events.events.clear()
-        branches.suspend(SuspendBranchCommand(organisationId, branchId, "Maintenance", uuidV7()))
+        branches.suspend(
+            SuspendBranchCommand(organisationId, branchId, req("Maintenance"), uuidV7()),
+        )
         assertExternalizedTarget("finaxis.lifecycle.branch.suspended")
 
         events.events.clear()
         branches.reactivate(
-            ReactivateBranchCommand(organisationId, branchId, "Maintenance done", uuidV7()),
+            ReactivateBranchCommand(
+                organisationId,
+                branchId,
+                opt("Maintenance done"),
+                uuidV7(),
+            ),
         )
         assertExternalizedTarget("finaxis.lifecycle.branch.reactivated")
 
         events.events.clear()
         branches.close(
-            CloseBranchCommand(organisationId, branchId, "Branch consolidation", uuidV7()),
+            CloseBranchCommand(organisationId, branchId, req("Branch consolidation"), uuidV7()),
         )
         assertExternalizedTarget("finaxis.lifecycle.branch.closed")
         assertEquals("Branch consolidation", transitionLogs.logs.last().reason)
@@ -618,7 +632,9 @@ class OrganisationBranchProvisioningServiceTests {
         lifecyclePersistence.branchesWithActiveChildren += organisationId to branchId
 
         assertFailsWith<ConflictException> {
-            branches.close(CloseBranchCommand(organisationId, branchId, "Consolidation", uuidV7()))
+            branches.close(
+                CloseBranchCommand(organisationId, branchId, req("Consolidation"), uuidV7()),
+            )
         }
     }
 
@@ -1409,19 +1425,29 @@ class BranchTargetResolutionTests {
 
         assertFailsWith<ResourceNotFoundException> {
             branches.activate(
-                ActivateBranchCommand(organisationId, foreignBranchId, "r", actorId, uuidV7()),
+                ActivateBranchCommand(
+                    organisationId,
+                    foreignBranchId,
+                    opt("reason"),
+                    actorId,
+                    uuidV7(),
+                ),
             )
         }
         assertFailsWith<ResourceNotFoundException> {
-            branches.suspend(SuspendBranchCommand(organisationId, foreignBranchId, "r", actorId))
+            branches.suspend(
+                SuspendBranchCommand(organisationId, foreignBranchId, req("reason"), actorId),
+            )
         }
         assertFailsWith<ResourceNotFoundException> {
             branches.reactivate(
-                ReactivateBranchCommand(organisationId, foreignBranchId, "r", actorId),
+                ReactivateBranchCommand(organisationId, foreignBranchId, opt("reason"), actorId),
             )
         }
         assertFailsWith<ResourceNotFoundException> {
-            branches.close(CloseBranchCommand(organisationId, foreignBranchId, "r", actorId))
+            branches.close(
+                CloseBranchCommand(organisationId, foreignBranchId, req("reason"), actorId),
+            )
         }
         assertFailsWith<ResourceNotFoundException> {
             branches.assignUser(
@@ -1449,7 +1475,7 @@ class BranchTargetResolutionTests {
         lifecyclePersistence.branches[organisationId to branchId] =
             aggregate(branchId, BranchLifecycleState.ACTIVE, "BRANCH")
 
-        branches.suspend(SuspendBranchCommand(organisationId, branchId, "r", actorId))
+        branches.suspend(SuspendBranchCommand(organisationId, branchId, req("reason"), actorId))
         branches.assignUser(
             AssignUserToBranchCommand(
                 organisationId,
@@ -1835,3 +1861,7 @@ class PlatformCheckerBranchTests {
         return branchId
     }
 }
+
+private fun req(text: String) = Reason.required(text)
+
+private fun opt(text: String) = DecisionRemark.optional(text)

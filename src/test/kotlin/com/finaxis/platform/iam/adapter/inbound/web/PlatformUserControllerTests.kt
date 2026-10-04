@@ -257,6 +257,47 @@ class PlatformUserControllerTests
                 }
         }
 
+        @Test
+        fun `reactivateUser keeps its reason optional`() {
+            val userId = uuidV7()
+
+            listOf("{}", "{\"reason\":null}", "{\"reason\":\"ok\"}", "{\"reason\":\"  \"}")
+                .forEach { body ->
+                    reactivateUser(userId, body).andExpect {
+                        status { isOk() }
+                        jsonPath("$.status") { value("ACTIVE") }
+                    }
+                }
+
+            val captor = argumentCaptor<ReactivateUserCommand>()
+            verify(userProvisioningService, org.mockito.kotlin.times(4))
+                .reactivateUser(captor.capture())
+            kotlin.test.assertEquals(
+                listOf(null, null, "ok", null),
+                captor.allValues.map { it.reason?.value },
+            )
+        }
+
+        @Test
+        fun `reactivateUser rejects a reason over 500 characters`() {
+            reactivateUser(uuidV7(), "{\"reason\":\"${"x".repeat(501)}\"}").andExpect {
+                status { isBadRequest() }
+                jsonPath("$.code") { value("validation_failed") }
+            }
+
+            verify(userProvisioningService, org.mockito.kotlin.never())
+                .reactivateUser(any<ReactivateUserCommand>())
+        }
+
+        private fun reactivateUser(
+            userId: UUID,
+            body: String,
+        ) = mockMvc.post("${ApiPaths.PLATFORM_USERS}/$userId/reactivate") {
+            contentType = MediaType.APPLICATION_JSON
+            content = body
+            with(authentication(platformToken(setOf("user.activate"))))
+        }
+
         private fun platformLifecycleMutationRoutes(userId: UUID) =
             listOf(
                 Triple(

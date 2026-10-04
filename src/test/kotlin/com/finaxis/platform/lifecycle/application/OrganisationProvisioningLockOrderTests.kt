@@ -72,7 +72,7 @@ class OrganisationProvisioningLockOrderTests {
         val organisationId = pendingTenant()
 
         organisations.returnForChanges(
-            ReturnOrganisationForChangesCommand(organisationId, "Typo.", uuidV7()),
+            ReturnOrganisationForChangesCommand(organisationId, Reason.required("Typo."), uuidV7()),
         )
 
         inOrder(store, adminBootstrapStore).apply {
@@ -86,7 +86,11 @@ class OrganisationProvisioningLockOrderTests {
         val organisationId = pendingTenant()
 
         organisations.rejectProvisioning(
-            RejectOrganisationProvisioningCommand(organisationId, "No.", actorId = uuidV7()),
+            RejectOrganisationProvisioningCommand(
+                organisationId,
+                Reason.required("No."),
+                actorId = uuidV7(),
+            ),
         )
 
         inOrder(store, adminBootstrapStore).apply {

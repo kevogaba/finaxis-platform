@@ -24,7 +24,9 @@ import com.finaxis.platform.lifecycle.application.ActivateBranchCommand
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.CloseBranchCommand
 import com.finaxis.platform.lifecycle.application.CreateBranchCommand
+import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.ReactivateBranchCommand
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.ReturnBranchCommand
 import com.finaxis.platform.lifecycle.application.SubmitBranchForApprovalCommand
 import com.finaxis.platform.lifecycle.application.SuspendBranchCommand
@@ -511,7 +513,7 @@ class BranchController(
     )
     fun submit(
         @PathVariable("branch_id") branchId: UUID,
-        @RequestBody(required = false) request: SubmitBranchRequest?,
+        @RequestBody(required = false) @Valid request: SubmitBranchRequest?,
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
         permissionGuard.requireBranchPermission(
@@ -525,7 +527,7 @@ class BranchController(
             SubmitBranchForApprovalCommand(
                 organisationId = caller.activeOrganisationId,
                 branchId = branchId,
-                reason = request?.reason,
+                reason = DecisionRemark.optional(request?.reason),
                 actorId = caller.actorId,
                 requestId = uuidV7(),
             )
@@ -616,7 +618,7 @@ class BranchController(
     )
     fun activate(
         @PathVariable("branch_id") branchId: UUID,
-        @RequestBody(required = false) request: ActivateBranchRequest?,
+        @RequestBody(required = false) @Valid request: ActivateBranchRequest?,
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
         permissionGuard.requireBranchPermission(
@@ -630,7 +632,7 @@ class BranchController(
             ActivateBranchCommand(
                 organisationId = caller.activeOrganisationId,
                 branchId = branchId,
-                reason = request?.reason,
+                reason = DecisionRemark.optional(request?.reason),
                 actorId = caller.actorId,
                 requestId = uuidV7(),
             )
@@ -736,7 +738,7 @@ class BranchController(
             ReturnBranchCommand(
                 organisationId = caller.activeOrganisationId,
                 branchId = branchId,
-                reason = request.reason,
+                reason = Reason.required(request.reason),
                 actorId = caller.actorId,
             ),
         )
@@ -839,7 +841,7 @@ class BranchController(
             SuspendBranchCommand(
                 organisationId = caller.activeOrganisationId,
                 branchId = branchId,
-                reason = request.reason,
+                reason = Reason.required(request.reason),
                 actorId = caller.actorId,
             )
         branchProvisioningService.suspend(command)
@@ -929,7 +931,7 @@ class BranchController(
     )
     fun reactivate(
         @PathVariable("branch_id") branchId: UUID,
-        @RequestBody(required = false) request: ReactivateBranchRequest?,
+        @RequestBody(required = false) @Valid request: ReactivateBranchRequest?,
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
         permissionGuard.requireBranchPermission(
@@ -943,7 +945,7 @@ class BranchController(
             ReactivateBranchCommand(
                 organisationId = caller.activeOrganisationId,
                 branchId = branchId,
-                reason = request?.reason,
+                reason = DecisionRemark.optional(request?.reason),
                 actorId = caller.actorId,
             )
         branchProvisioningService.reactivate(command)
@@ -1047,7 +1049,7 @@ class BranchController(
             CloseBranchCommand(
                 organisationId = caller.activeOrganisationId,
                 branchId = branchId,
-                reason = request.reason,
+                reason = Reason.required(request.reason),
                 actorId = caller.actorId,
             )
         branchProvisioningService.close(command)

@@ -14,7 +14,9 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReactivateMembersh
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.RevokeMembershipRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SuspendMembershipRequest
 import com.finaxis.platform.lifecycle.application.ApproveUserCommand
+import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.ReactivateMembershipCommand
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.RevokeTenantMembershipCommand
 import com.finaxis.platform.lifecycle.application.SuspendMembershipCommand
 import com.finaxis.platform.lifecycle.application.UserProvisioningService
@@ -293,7 +295,7 @@ class MembershipController(
                     membershipId = membershipId,
                     approvedBy = caller.actorId,
                     requestId = uuidV7().toString(),
-                    reason = request?.reason,
+                    reason = DecisionRemark.optional(request?.reason),
                 ),
             )
         val response =
@@ -398,7 +400,7 @@ class MembershipController(
                 organisationId = caller.activeOrganisationId,
                 membershipId = membershipId,
                 actorId = caller.actorId,
-                reason = request.reason,
+                reason = Reason.required(request.reason),
                 requestId = uuidV7().toString(),
             ),
         )
@@ -498,7 +500,7 @@ class MembershipController(
                 organisationId = caller.activeOrganisationId,
                 membershipId = membershipId,
                 actorId = caller.actorId,
-                reason = request?.reason,
+                reason = DecisionRemark.optional(request?.reason),
                 requestId = uuidV7().toString(),
             ),
         )
@@ -598,7 +600,7 @@ class MembershipController(
                 organisationId = caller.activeOrganisationId,
                 membershipId = membershipId,
                 actorId = caller.actorId,
-                reason = request.reason,
+                reason = Reason.required(request.reason),
                 requestId = uuidV7().toString(),
             ),
         )

@@ -123,7 +123,11 @@ class OrganisationProvisioningPlatformGuardTests {
         val actor = uuidV7()
         assertRefused("organisation.reject", actor) {
             organisations.rejectProvisioning(
-                RejectOrganisationProvisioningCommand(platformId, "No.", actor),
+                RejectOrganisationProvisioningCommand(
+                    platformId,
+                    Reason.required("No."),
+                    actor,
+                ),
             )
         }
     }
@@ -134,7 +138,7 @@ class OrganisationProvisioningPlatformGuardTests {
 
         assertRefused("organisation.return_for_changes", actor) {
             organisations.returnForChanges(
-                ReturnOrganisationForChangesCommand(platformId, "Typo.", actor),
+                ReturnOrganisationForChangesCommand(platformId, Reason.required("Typo."), actor),
             )
         }
 
@@ -150,7 +154,7 @@ class OrganisationProvisioningPlatformGuardTests {
 
         assertFailsWith<ForbiddenOperationException> {
             organisations.returnForChanges(
-                ReturnOrganisationForChangesCommand(platformId, "Typo.", actor),
+                ReturnOrganisationForChangesCommand(platformId, Reason.required("Typo."), actor),
             )
         }
 
@@ -161,7 +165,9 @@ class OrganisationProvisioningPlatformGuardTests {
     @Test
     fun `suspend refuses the platform organisation`() {
         assertRefused("organisation.suspend") {
-            organisations.suspend(SuspendOrganisationCommand(platformId, "Maintenance."))
+            organisations.suspend(
+                SuspendOrganisationCommand(platformId, Reason.required("Maintenance.")),
+            )
         }
     }
 
@@ -175,7 +181,9 @@ class OrganisationProvisioningPlatformGuardTests {
     @Test
     fun `deprovision refuses the platform organisation before it revokes anything`() {
         assertRefused("organisation.deprovision") {
-            organisations.deprovision(DeprovisionOrganisationCommand(platformId, "Wind down."))
+            organisations.deprovision(
+                DeprovisionOrganisationCommand(platformId, Reason.required("Wind down.")),
+            )
         }
     }
 
@@ -234,7 +242,7 @@ class OrganisationProvisioningPlatformGuardTests {
 
     @Test
     fun `an ordinary tenant is not refused by the guard`() {
-        organisations.suspend(SuspendOrganisationCommand(uuidV7(), "Pause."))
+        organisations.suspend(SuspendOrganisationCommand(uuidV7(), Reason.required("Pause.")))
 
         verify(lifecycleService).transition(any<OrganisationTransitionCommand>())
         verifyNoInteractions(auditService)

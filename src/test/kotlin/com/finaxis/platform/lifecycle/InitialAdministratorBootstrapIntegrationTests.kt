@@ -6,6 +6,7 @@ import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
 import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
+import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapJobRequest
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapJobRequestHandler
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStatus
@@ -14,6 +15,7 @@ import com.finaxis.platform.lifecycle.application.InitialAdministratorDraft
 import com.finaxis.platform.lifecycle.application.KeycloakUserProvisioningJobRequest
 import com.finaxis.platform.lifecycle.application.KeycloakUserProvisioningJobRequestHandler
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.SubmitOrganisationForApprovalCommand
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningGateway
 import com.finaxis.platform.lifecycle.application.port.outbound.KeycloakUserRef
@@ -122,7 +124,7 @@ class InitialAdministratorBootstrapIntegrationTests(
             ApproveOrganisationProvisioningCommand(
                 organisationId = organisationId,
                 actorId = checkerId,
-                reason = "Approve initial setup",
+                reason = DecisionRemark.optional("Approve initial setup"),
             ),
         )
 

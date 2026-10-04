@@ -73,7 +73,7 @@ class BranchReturnServiceTests {
         actor: UUID,
         scope: ActingScope = ActingScope.TENANT,
         organisation: UUID = organisationId,
-    ) = ReturnBranchCommand(organisation, branchId, REASON, actor, scope)
+    ) = ReturnBranchCommand(organisation, branchId, Reason.required(REASON), actor, scope)
 
     private fun auditRows(): List<AuditCommand> {
         val captor = argumentCaptor<AuditCommand>()

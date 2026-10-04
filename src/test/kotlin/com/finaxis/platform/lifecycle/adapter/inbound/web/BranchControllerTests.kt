@@ -30,7 +30,9 @@ import com.finaxis.platform.lifecycle.application.ActingScope
 import com.finaxis.platform.lifecycle.application.ActivateBranchCommand
 import com.finaxis.platform.lifecycle.application.BranchDraftResult
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
+import com.finaxis.platform.lifecycle.application.ReactivateBranchCommand
 import com.finaxis.platform.lifecycle.application.ReturnBranchCommand
+import com.finaxis.platform.lifecycle.application.SubmitBranchForApprovalCommand
 import com.finaxis.platform.lifecycle.application.UpdateBranchCommand
 import com.finaxis.platform.lifecycle.application.query.BranchDetail
 import com.finaxis.platform.lifecycle.application.query.BranchSummary
@@ -62,6 +64,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 private const val REASON_BODY = "{\"reason\":\"Valid reason\"}"
 
@@ -791,7 +794,7 @@ class BranchControllerTests
             verify(branchProvisioningService).returnForChanges(captor.capture())
             assertEquals(tenantId, captor.firstValue.organisationId)
             assertEquals(targetBranchId, captor.firstValue.branchId)
-            assertEquals("Valid reason", captor.firstValue.reason)
+            assertEquals("Valid reason", captor.firstValue.reason.value)
             assertEquals(ActingScope.TENANT, captor.firstValue.scope)
             // The permission depends on who the actor is, so the service decides it; the
             // controller must not pin a single one, and the response must not need branch.view.
@@ -874,6 +877,129 @@ class BranchControllerTests
                 }
                 returnBranch(branchId, tenantId).andExpect { status { isEqualTo(expected) } }
             }
+        }
+
+        @Test
+        fun `optional reason routes reject a reason over 500 characters before the service`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+
+            optionalReasonRoutes.forEach { route ->
+                postOptionalReason(route, tenantId, branchId, reasonBody("x".repeat(501)))
+                    .andExpect {
+                        status { isBadRequest() }
+                        jsonPath("$.code") { value("validation_failed") }
+                    }
+            }
+
+            verify(branchProvisioningService, org.mockito.kotlin.never()).submitForApproval(any())
+            verify(branchProvisioningService, org.mockito.kotlin.never()).activate(any())
+            verify(branchProvisioningService, org.mockito.kotlin.never()).reactivate(any())
+        }
+
+        @Test
+        fun `optional reason routes validate the body before the permission is evaluated`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+
+            // Like every other @Valid body, a malformed one is a 400 even for a caller who would
+            // have been refused with 403: validation precedes the method-security check.
+            optionalReasonRoutes.forEach { route ->
+                postOptionalReason(
+                    route,
+                    tenantId,
+                    branchId,
+                    reasonBody("x".repeat(501)),
+                    permissions = setOf("branch.view"),
+                ).andExpect { status { isBadRequest() } }
+            }
+        }
+
+        @Test
+        fun `optional reason routes accept a reason of exactly 500 characters`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            stubBranchDetail(tenantId, branchId, "ACTIVE")
+
+            optionalReasonRoutes.forEach { route ->
+                postOptionalReason(route, tenantId, branchId, reasonBody("x".repeat(500)))
+                    .andExpect { status { isOk() } }
+            }
+
+            verify(branchProvisioningService).submitForApproval(any())
+            verify(branchProvisioningService).activate(any())
+            verify(branchProvisioningService).reactivate(any())
+        }
+
+        @Test
+        fun `optional reason routes accept an absent body and an empty object`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            stubBranchDetail(tenantId, branchId, "ACTIVE")
+
+            optionalReasonRoutes.forEach { route ->
+                listOf(null, "{}", "{\"reason\":null}", reasonBody("   ")).forEach { body ->
+                    postOptionalReason(route, tenantId, branchId, body)
+                        .andExpect { status { isOk() } }
+                }
+            }
+
+            verify(branchProvisioningService, org.mockito.kotlin.times(4)).submitForApproval(any())
+            verify(branchProvisioningService, org.mockito.kotlin.times(4)).activate(any())
+            verify(branchProvisioningService, org.mockito.kotlin.times(4)).reactivate(any())
+        }
+
+        @Test
+        fun `optional reason routes hand the service a trimmed reason or none for a blank one`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            stubBranchDetail(tenantId, branchId, "ACTIVE")
+
+            postOptionalReason(
+                optionalReasonRoutes[0],
+                tenantId,
+                branchId,
+                reasonBody("  Ready \n"),
+            ).andExpect { status { isOk() } }
+            postOptionalReason(optionalReasonRoutes[1], tenantId, branchId, reasonBody("   "))
+                .andExpect { status { isOk() } }
+            postOptionalReason(optionalReasonRoutes[2], tenantId, branchId, null)
+                .andExpect { status { isOk() } }
+
+            val submit = org.mockito.kotlin.argumentCaptor<SubmitBranchForApprovalCommand>()
+            verify(branchProvisioningService).submitForApproval(submit.capture())
+            assertEquals("Ready", submit.firstValue.reason?.value)
+            val activate = org.mockito.kotlin.argumentCaptor<ActivateBranchCommand>()
+            verify(branchProvisioningService).activate(activate.capture())
+            assertNull(activate.firstValue.reason)
+            val reactivate = org.mockito.kotlin.argumentCaptor<ReactivateBranchCommand>()
+            verify(branchProvisioningService).reactivate(reactivate.capture())
+            assertNull(reactivate.firstValue.reason)
+        }
+
+        private val optionalReasonRoutes =
+            listOf(
+                "submit" to "branch.create",
+                "activate" to "branch.activate",
+                "reactivate" to "branch.reactivate",
+            )
+
+        private fun reasonBody(reason: String) =
+            apiJsonCodec.mapper.writeValueAsString(mapOf("reason" to reason))
+
+        private fun postOptionalReason(
+            route: Pair<String, String>,
+            tenantId: UUID,
+            branchId: UUID,
+            body: String?,
+            permissions: Set<String> = setOf(route.second),
+        ) = mockMvc.post("${ApiPaths.BRANCHES}/$branchId/${route.first}") {
+            header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())
+            if (body != null) {
+                contentType = MediaType.APPLICATION_JSON
+                content = body
+            }
+            with(authentication(tenantToken(permissions, tenantId, branchId)))
         }
 
         private fun returnBranch(

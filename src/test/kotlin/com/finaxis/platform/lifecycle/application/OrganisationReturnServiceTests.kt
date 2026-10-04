@@ -74,7 +74,11 @@ class OrganisationReturnServiceTests {
         val before = adminBootstrapStore.records.getValue(organisationId)
 
         organisations.returnForChanges(
-            ReturnOrganisationForChangesCommand(organisationId, RETURN_REASON, checker),
+            ReturnOrganisationForChangesCommand(
+                organisationId,
+                Reason.required(RETURN_REASON),
+                checker,
+            ),
         )
 
         verify(permissionGuard).requirePlatformPermission(checker, "tenant.reject")
@@ -115,7 +119,11 @@ class OrganisationReturnServiceTests {
 
         assertFailsWith<ForbiddenOperationException> {
             organisations.returnForChanges(
-                ReturnOrganisationForChangesCommand(organisationId, RETURN_REASON, maker),
+                ReturnOrganisationForChangesCommand(
+                    organisationId,
+                    Reason.required(RETURN_REASON),
+                    maker,
+                ),
             )
         }
 
@@ -129,7 +137,11 @@ class OrganisationReturnServiceTests {
 
         assertFailsWith<ForbiddenOperationException> {
             organisations.returnForChanges(
-                ReturnOrganisationForChangesCommand(organisationId, RETURN_REASON, submitter),
+                ReturnOrganisationForChangesCommand(
+                    organisationId,
+                    Reason.required(RETURN_REASON),
+                    submitter,
+                ),
             )
         }
 
@@ -145,7 +157,11 @@ class OrganisationReturnServiceTests {
         listOf(SystemActor.ID, UUID(0L, 0L)).forEach { system ->
             assertFailsWith<InvalidOperationException> {
                 organisations.returnForChanges(
-                    ReturnOrganisationForChangesCommand(organisationId, RETURN_REASON, system),
+                    ReturnOrganisationForChangesCommand(
+                        organisationId,
+                        Reason.required(RETURN_REASON),
+                        system,
+                    ),
                 )
             }
         }
@@ -165,7 +181,11 @@ class OrganisationReturnServiceTests {
         listOf(organisationId, uuidV7()).forEach { target ->
             assertFailsWith<ForbiddenOperationException> {
                 organisations.returnForChanges(
-                    ReturnOrganisationForChangesCommand(target, RETURN_REASON, caller),
+                    ReturnOrganisationForChangesCommand(
+                        target,
+                        Reason.required(RETURN_REASON),
+                        caller,
+                    ),
                 )
             }
         }
@@ -179,7 +199,11 @@ class OrganisationReturnServiceTests {
     fun `an unknown tenant is not found`() {
         assertFailsWith<ResourceNotFoundException> {
             organisations.returnForChanges(
-                ReturnOrganisationForChangesCommand(uuidV7(), RETURN_REASON, uuidV7()),
+                ReturnOrganisationForChangesCommand(
+                    uuidV7(),
+                    Reason.required(RETURN_REASON),
+                    uuidV7(),
+                ),
             )
         }
     }
@@ -193,7 +217,7 @@ class OrganisationReturnServiceTests {
                 organisations.returnForChanges(
                     ReturnOrganisationForChangesCommand(
                         PlatformOrganisation.ID,
-                        RETURN_REASON,
+                        Reason.required(RETURN_REASON),
                         uuidV7(),
                     ),
                 )
@@ -215,7 +239,7 @@ class OrganisationReturnServiceTests {
                     organisations.returnForChanges(
                         ReturnOrganisationForChangesCommand(
                             organisationId,
-                            RETURN_REASON,
+                            Reason.required(RETURN_REASON),
                             uuidV7(),
                         ),
                     )
@@ -246,7 +270,11 @@ class OrganisationReturnServiceTests {
     fun `a returned tenant cannot be approved until it is resubmitted`() {
         val organisationId = pendingTenant(uuidV7(), uuidV7())
         organisations.returnForChanges(
-            ReturnOrganisationForChangesCommand(organisationId, RETURN_REASON, uuidV7()),
+            ReturnOrganisationForChangesCommand(
+                organisationId,
+                Reason.required(RETURN_REASON),
+                uuidV7(),
+            ),
         )
 
         assertFailsWith<ConflictException> {
@@ -269,7 +297,11 @@ class OrganisationReturnServiceTests {
         val resubmitter = uuidV7()
         val organisationId = pendingTenant(maker, firstSubmitter)
         organisations.returnForChanges(
-            ReturnOrganisationForChangesCommand(organisationId, RETURN_REASON, returner),
+            ReturnOrganisationForChangesCommand(
+                organisationId,
+                Reason.required(RETURN_REASON),
+                returner,
+            ),
         )
         // The maker's amendment replaces the administrator block of the returned draft.
         store.organisationStates[organisationId] = OrganisationLifecycleState.DRAFT
@@ -319,7 +351,11 @@ class OrganisationReturnServiceTests {
         val returner = uuidV7()
         val organisationId = pendingTenant(uuidV7(), uuidV7())
         organisations.returnForChanges(
-            ReturnOrganisationForChangesCommand(organisationId, RETURN_REASON, returner),
+            ReturnOrganisationForChangesCommand(
+                organisationId,
+                Reason.required(RETURN_REASON),
+                returner,
+            ),
         )
         store.organisationStates[organisationId] = OrganisationLifecycleState.DRAFT
         organisations.submitForApproval(
@@ -344,7 +380,11 @@ class OrganisationReturnServiceTests {
         val returner = uuidV7()
         val organisationId = pendingTenant(maker, uuidV7())
         organisations.returnForChanges(
-            ReturnOrganisationForChangesCommand(organisationId, RETURN_REASON, returner),
+            ReturnOrganisationForChangesCommand(
+                organisationId,
+                Reason.required(RETURN_REASON),
+                returner,
+            ),
         )
         store.organisationStates[organisationId] = OrganisationLifecycleState.DRAFT
         organisations.amendDraft(amendCommand(organisationId, maker, "returner@test.com"))

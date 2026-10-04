@@ -9,6 +9,8 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ActivateMembership
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.MembershipDetailResponse
 import com.finaxis.platform.lifecycle.application.ActingScope
 import com.finaxis.platform.lifecycle.application.ApproveUserCommand
+import com.finaxis.platform.lifecycle.application.DecisionRemark
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.UserProvisioningService
 import com.finaxis.platform.lifecycle.application.query.LifecycleIamReadService
 import io.swagger.v3.oas.annotations.Operation
@@ -155,7 +157,7 @@ class PlatformTenantMembershipController(
                     approvedBy = caller.actorId,
                     requestId = uuidV7().toString(),
                     scope = ActingScope.PLATFORM,
-                    reason = request?.reason,
+                    reason = DecisionRemark.optional(request?.reason),
                 ),
             )
         // The approval above authorised the caller on this membership; the response echoes it

@@ -51,7 +51,7 @@ data class ApproveUserCommand(
     val bootstrapRequestId: String? = null,
     val bootstrapAttempt: Int? = null,
     val scope: ActingScope = ActingScope.TENANT,
-    val reason: String? = null,
+    val reason: DecisionRemark? = null,
 )
 
 /** Suspends a global user account from an organisation workflow context. */
@@ -59,7 +59,7 @@ data class SuspendUserCommand(
     val organisationId: UUID,
     val userId: UUID,
     val actorId: UUID,
-    val reason: String? = null,
+    val reason: Reason,
     val requestId: String? = null,
 )
 
@@ -68,7 +68,7 @@ data class ReactivateUserCommand(
     val organisationId: UUID,
     val userId: UUID,
     val actorId: UUID,
-    val reason: String? = null,
+    val reason: DecisionRemark? = null,
     val requestId: String? = null,
 )
 
@@ -77,7 +77,7 @@ data class DeactivateUserCommand(
     val organisationId: UUID,
     val userId: UUID,
     val actorId: UUID,
-    val reason: String? = null,
+    val reason: Reason,
     val requestId: String? = null,
 )
 
@@ -86,7 +86,7 @@ data class RevokeTenantMembershipCommand(
     val organisationId: UUID,
     val membershipId: UUID,
     val actorId: UUID,
-    val reason: String? = null,
+    val reason: Reason,
     val requestId: String? = null,
 )
 
@@ -95,7 +95,7 @@ data class SuspendMembershipCommand(
     val organisationId: UUID,
     val membershipId: UUID,
     val actorId: UUID,
-    val reason: String? = null,
+    val reason: Reason,
     val requestId: String? = null,
 )
 
@@ -104,7 +104,7 @@ data class ReactivateMembershipCommand(
     val organisationId: UUID,
     val membershipId: UUID,
     val actorId: UUID,
-    val reason: String? = null,
+    val reason: DecisionRemark? = null,
     val requestId: String? = null,
 )
 

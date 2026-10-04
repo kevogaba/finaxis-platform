@@ -1,6 +1,8 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web.dto
 
 import com.fasterxml.jackson.annotation.JsonFormat
+import com.finaxis.platform.lifecycle.application.DecisionRemark
+import com.finaxis.platform.lifecycle.application.Reason
 import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.Pattern
@@ -68,14 +70,14 @@ data class UpdateBranchRequest(
 
 /** Request payload for submitting a branch draft for approval. */
 data class SubmitBranchRequest(
-    @field:Size(max = 500)
+    @field:Size(max = DecisionRemark.MAX_LENGTH)
     @field:Schema(example = "Ready for operational approval.")
     val reason: String? = null,
 )
 
 /** Request payload for activating an approved branch. */
 data class ActivateBranchRequest(
-    @field:Size(max = 500)
+    @field:Size(max = DecisionRemark.MAX_LENGTH)
     @field:Schema(example = "Operational setup complete.")
     val reason: String? = null,
 )
@@ -83,7 +85,7 @@ data class ActivateBranchRequest(
 /** Request payload for returning a pending branch to draft or withdrawing it. */
 data class ReturnBranchRequest(
     @field:NotBlank
-    @field:Size(min = 3, max = 500)
+    @field:Size(min = Reason.MIN_LENGTH, max = Reason.MAX_LENGTH)
     @field:Schema(example = "Branch code has a typo.")
     val reason: String,
 )
@@ -91,14 +93,14 @@ data class ReturnBranchRequest(
 /** Request payload for suspending an active branch. */
 data class SuspendBranchRequest(
     @field:NotBlank
-    @field:Size(min = 3, max = 500)
+    @field:Size(min = Reason.MIN_LENGTH, max = Reason.MAX_LENGTH)
     @field:Schema(example = "Temporary closure for audit.")
     val reason: String,
 )
 
 /** Request payload for reactivating a suspended branch. */
 data class ReactivateBranchRequest(
-    @field:Size(max = 500)
+    @field:Size(max = DecisionRemark.MAX_LENGTH)
     @field:Schema(example = "Audit completed.")
     val reason: String? = null,
 )
@@ -106,7 +108,7 @@ data class ReactivateBranchRequest(
 /** Request payload for closing a branch. */
 data class CloseBranchRequest(
     @field:NotBlank
-    @field:Size(min = 3, max = 500)
+    @field:Size(min = Reason.MIN_LENGTH, max = Reason.MAX_LENGTH)
     @field:Schema(example = "Branch operations consolidated.")
     val reason: String,
 )
