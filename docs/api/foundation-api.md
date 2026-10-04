@@ -605,6 +605,11 @@ check (`403`) and precedes any existence or state check; the platform branch and
 under a tenant still answer `404` for it. See
 [the platform organisation is never a tenant](../security/authorization-model.md#the-platform-organisation-is-never-a-tenant).
 
+`suspend`, `reactivate` and `deprovision` on a tenant id that does not exist are
+`404 resource_not_found` (#207); `suspend` used to be a `500`, the other two a `409`. The permission
+check runs first, so a caller without the route's permission gets `403` for any id, known or not,
+and the reserved platform organisation id still answers `409` as above.
+
 `POST /{tenant_id}/approve` takes an optional decision remark, see
 [Decision remarks](#decision-remarks). `POST /{tenant_id}/return` takes a required reason, see
 [Return tenant for changes](#return-tenant-for-changes).
@@ -850,6 +855,15 @@ Lifecycle request and response:
 }
 ```
 
+`suspend` and `deactivate` require the `reason` (3 to 500 characters). The `reactivate` body is
+**optional**, like the other reactivate routes: an absent body, `{}` and a valid `reason` all
+succeed, and a `reason` over 500 characters is `400 validation_failed` (#207; a body-less call
+used to be `400 invalid_json`).
+
+An unknown `user_id` is `404 resource_not_found` on all three routes (#207; it used to be a
+`500`). The permission check runs first: a caller without the route's permission gets `403` for
+any id, known or not.
+
 ### Current Tenant
 
 Base path: `/api/v1/tenant`.
@@ -910,6 +924,12 @@ Invite request and response:
 }
 ```
 
+A `role_assignments[]` entry with `scope_type` `BRANCH` must carry a `branch_id`; without one the
+invite is `400 validation_failed` with the violation attributed to
+`role_assignments[n].branch_id`, and nothing is created (#207; it used to be a `500`). A `TENANT`
+entry that names a `branch_id` is `422 invalid_operation` (also formerly a `500`). See
+[Role Assignments](#role-assignments).
+
 ### Memberships
 
 Base path: `/api/v1/tenant/memberships`. List filters: `q`, `membership_status`,
@@ -948,6 +968,12 @@ Membership response and revoke request:
   "reason": "User left the organisation."
 }
 ```
+
+Revoking a membership that is already `REVOKED` is `409 conflict` with the detail
+`This membership has already been revoked.`, and changes nothing: no state change, no transition
+row, no audit row (#207; it used to be a `500`). Revoke is terminal, so a retry under a new
+`Idempotency-Key` is refused rather than repeated; replaying the original key still returns the
+original response.
 
 #### Decision remarks
 
@@ -1149,6 +1175,37 @@ Assign role request and response:
   "status": "ACTIVE"
 }
 ```
+
+`branch_id` is required when `scope_type` is `BRANCH` and is checked together with the other body
+fields (#207). A `BRANCH` assignment without one is `400 validation_failed`, with the violation
+attributed to `branch_id`, and nothing is written (it used to be a `500`):
+
+```json
+{
+  "type": "urn:finaxis:problem:validation_failed",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "One or more request fields are invalid.",
+  "instance": "/api/v1/tenant/role-assignments",
+  "code": "validation_failed",
+  "request_id": "019f7d47-2c3e-7a1b-9d64-5e0f8b7a31c2",
+  "violations": [
+    {
+      "field": "branch_id",
+      "code": "BranchScopeRequiresBranch",
+      "message": "A branch is required when the scope type is BRANCH."
+    }
+  ]
+}
+```
+
+The application layer enforces the same rule for a caller that skipped body validation, with the
+same `400 validation_failed` code. A `TENANT` assignment that names a `branch_id` is not a body
+violation: the application layer refuses it as `422 invalid_operation`, as before. The invite
+request's `role_assignments[]` entries (see [Tenant Users](#tenant-users)) follow the same two
+rules: a `BRANCH` entry without a `branch_id` is `400 validation_failed`, attributed to
+`role_assignments[n].branch_id`, and a `TENANT` entry that names a `branch_id` is
+`422 invalid_operation`, nothing being created in either case.
 
 ### Permissions
 

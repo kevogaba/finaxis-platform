@@ -2,6 +2,8 @@ package com.finaxis.platform.lifecycle.application
 
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.InvalidRequestException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
@@ -380,16 +382,17 @@ class UserProvisioningService(
     ) {
         when (assignment.scopeType) {
             RoleAssignmentScopeType.TENANT -> {
-                require(assignment.branchId == null) {
-                    "Tenant-scoped role assignments must not include a branch."
-                }
+                if (assignment.branchId != null) throw InvalidOperationException()
             }
 
             RoleAssignmentScopeType.BRANCH -> {
-                requireNotNull(assignment.branchId) {
-                    "Branch-scoped role assignments require a branch."
-                }
-                requireActiveBranch(organisationId, assignment.branchId)
+                val branchId =
+                    assignment.branchId
+                        ?: throw InvalidRequestException(
+                            "validation_failed",
+                            "A branch-scoped role assignment requires a branch.",
+                        )
+                requireActiveBranch(organisationId, branchId)
             }
         }
     }
@@ -610,7 +613,7 @@ private fun membershipRevocationTransition(
         }
 
         MembershipLifecycleState.REVOKED -> {
-            error("Membership is already revoked.")
+            throw ConflictException(safeDetail = "This membership has already been revoked.")
         }
     }
 

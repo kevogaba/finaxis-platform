@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.application
 
 import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
@@ -272,6 +273,23 @@ class KeycloakUserProvisioningHandlerTests {
         val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
         assertEquals("ConflictException", dispatchAudit.reason)
+    }
+
+    @Test
+    fun `a missing aggregate marks dispatch failed and rethrows the not found error`() {
+        val context = store.activePendingProvisioningContext()
+        gateway.failure = ResourceNotFoundException()
+
+        assertFailsWith<ResourceNotFoundException> {
+            handler.run(keycloakRequest(context, "member@example.test", "member"))
+        }
+
+        val dispatch = store.dispatches.getValue(context.dispatchKey)
+        assertEquals("FAILED", dispatch.status)
+        assertEquals(1, dispatch.attempts)
+        val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
+        assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
+        assertEquals("ResourceNotFoundException", dispatchAudit.reason)
     }
 
     private fun keycloakRequest(

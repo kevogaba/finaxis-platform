@@ -57,6 +57,16 @@ class RequestBodyValidationArchitectureTest {
     }
 
     @Test
+    fun `guard rejects a body constrained only by a class level rule that is not valid`() {
+        assertEquals(
+            listOf(
+                "${ClassLevelController::class.java.name}#create: parameter 0 is not @Valid",
+            ),
+            validationViolations(listOf(ClassLevelController::class.java)),
+        )
+    }
+
+    @Test
     fun `guard accepts valid and validated bodies and unconstrained bodies`() {
         assertTrue(validationViolations(listOf(ValidController::class.java)).isEmpty())
         assertTrue(validationViolations(listOf(ValidatedController::class.java)).isEmpty())
@@ -85,6 +95,20 @@ class RequestBodyValidationArchitectureTest {
                 "${CollectionBodyController::class.java.name}#create: parameter 0 is not @Valid",
             ),
             validationViolations(listOf(CollectionBodyController::class.java)),
+        )
+    }
+
+    @Test
+    fun `guard requires a cascade into a nested type constrained only at class level`() {
+        val where = "${NestedClassLevelMissingCascadeController::class.java.name}#create"
+        val outer = OuterWithUncascadedClassLevelChild::class.java.name
+
+        assertEquals(
+            listOf("$where: $outer.child is not @Valid"),
+            validationViolations(listOf(NestedClassLevelMissingCascadeController::class.java)),
+        )
+        assertTrue(
+            validationViolations(listOf(NestedClassLevelCascadeController::class.java)).isEmpty(),
         )
     }
 
@@ -145,7 +169,8 @@ class RequestBodyValidationArchitectureTest {
     ): Boolean {
         if (!visited.add(type)) return false
         val own =
-            type.declaredFields.any { declaresConstraint(it) } ||
+            declaresConstraint(type) ||
+                type.declaredFields.any { declaresConstraint(it) } ||
                 type.declaredMethods.any { it.parameterCount == 0 && declaresConstraint(it) }
         return own ||
             type.declaredFields.any { field ->
@@ -194,6 +219,24 @@ private data class ConstrainedBody(
     @field:Size(min = 3, max = 500)
     val reason: String,
 )
+
+@Target(AnnotationTarget.CLASS)
+@Retention(AnnotationRetention.RUNTIME)
+@Constraint(validatedBy = [])
+private annotation class ClassLevelRule
+
+@ClassLevelRule
+private data class ClassLevelBody(
+    val reason: String?,
+)
+
+@Suppress("UnusedParameter") // Fixture: only the handler signature matters.
+private class ClassLevelController {
+    @PostMapping
+    fun create(
+        @RequestBody body: ClassLevelBody,
+    ) = Unit
+}
 
 private data class UnconstrainedBody(
     val reason: String?,
@@ -264,5 +307,30 @@ private class CollectionBodyController {
     @PostMapping
     fun create(
         @RequestBody body: List<ConstrainedBody>,
+    ) = Unit
+}
+
+private data class OuterWithUncascadedClassLevelChild(
+    val child: ClassLevelBody,
+)
+
+private data class OuterWithCascadedClassLevelChild(
+    @field:Valid
+    val child: ClassLevelBody,
+)
+
+@Suppress("UnusedParameter") // Fixture: only the handler signature matters.
+private class NestedClassLevelMissingCascadeController {
+    @PostMapping
+    fun create(
+        @RequestBody @Valid body: OuterWithUncascadedClassLevelChild,
+    ) = Unit
+}
+
+@Suppress("UnusedParameter") // Fixture: only the handler signature matters.
+private class NestedClassLevelCascadeController {
+    @PostMapping
+    fun create(
+        @RequestBody @Valid body: OuterWithCascadedClassLevelChild,
     ) = Unit
 }

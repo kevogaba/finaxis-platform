@@ -22,8 +22,17 @@ class HibernateValidatorHintsTests {
         ).forEach { assertValidatorRegistered(it) }
     }
 
-    private fun assertValidatorRegistered(relativeName: String) {
-        val name = "${HibernateValidatorHints.BUILT_IN_VALIDATOR_PACKAGE}.$relativeName"
+    @Test
+    fun `registers the platform's own cross-field validators`() {
+        assertTypeRegistered(
+            "com.finaxis.platform.iam.adapter.inbound.web.dto.BranchScopeRequiresBranchValidator",
+        )
+    }
+
+    private fun assertValidatorRegistered(relativeName: String) =
+        assertTypeRegistered("${HibernateValidatorHints.BUILT_IN_VALIDATOR_PACKAGE}.$relativeName")
+
+    private fun assertTypeRegistered(name: String) {
         assertTrue(
             RuntimeHintsPredicates
                 .reflection()

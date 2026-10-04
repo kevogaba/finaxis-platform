@@ -18,6 +18,9 @@ import org.springframework.util.ClassUtils
  * image and the first validated request fails with
  * `BeanInstantiationException: No default constructor found`.
  *
+ * The platform's own validators (for example the cross-field role-assignment rule) are found by
+ * scanning [PLATFORM_PACKAGE] for the same reason.
+ *
  * The set is discovered by scanning rather than listed, because the constraints a request DTO uses
  * change with the API surface and a missing one is not a build failure: it is a 500 on whichever
  * endpoint first uses it.
@@ -32,8 +35,8 @@ class HibernateValidatorHints : RuntimeHintsRegistrar {
         }
         val scanner = ClassPathScanningCandidateComponentProvider(false)
         scanner.addIncludeFilter(AssignableTypeFilter(ConstraintValidator::class.java))
-        scanner
-            .findCandidateComponents(BUILT_IN_VALIDATOR_PACKAGE)
+        listOf(BUILT_IN_VALIDATOR_PACKAGE, PLATFORM_PACKAGE)
+            .flatMap { scanner.findCandidateComponents(it) }
             .mapNotNull { it.beanClassName }
             .forEach {
                 hints.reflection().registerTypeIfPresent(
@@ -48,6 +51,9 @@ class HibernateValidatorHints : RuntimeHintsRegistrar {
         /** Package holding every constraint validator Hibernate Validator ships. */
         const val BUILT_IN_VALIDATOR_PACKAGE =
             "org.hibernate.validator.internal.constraintvalidators"
+
+        /** The platform's own constraint validators (cross-field request rules) need hints too. */
+        const val PLATFORM_PACKAGE = "com.finaxis.platform"
 
         /** Present exactly when the scanned package is on the classpath. */
         const val BUILT_IN_VALIDATOR_MARKER = "$BUILT_IN_VALIDATOR_PACKAGE.bv.NotNullValidator"

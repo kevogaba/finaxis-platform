@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.application
 
 import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditOutcome
@@ -253,6 +254,54 @@ class FoundationLifecycleServiceTests {
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, audit.outcome)
         assertEquals("N/A", audit.metadata["to"])
         assertEquals("ACTIVE", audit.metadata["from"])
+    }
+
+    @Test
+    fun `a transition on an unknown organisation is a not found, not a server fault`() {
+        assertThrows<ResourceNotFoundException> {
+            service.transition(
+                OrganisationTransitionCommand(uuidV7(), OrganisationLifecycleTransition.SUSPEND),
+            )
+        }
+        assertTrue(logs.items.isEmpty())
+    }
+
+    @Test
+    fun `a transition on an unknown branch is a not found, not a server fault`() {
+        assertThrows<ResourceNotFoundException> {
+            service.transition(
+                BranchTransitionCommand(uuidV7(), uuidV7(), BranchLifecycleTransition.SUSPEND),
+            )
+        }
+        assertTrue(logs.items.isEmpty())
+    }
+
+    @Test
+    fun `a transition on an unknown user is a not found, not a server fault`() {
+        assertThrows<ResourceNotFoundException> {
+            service.transition(
+                UserTransitionCommand(
+                    uuidV7(),
+                    uuidV7(),
+                    transition = UserLifecycleTransition.SUSPEND,
+                ),
+            )
+        }
+        assertTrue(logs.items.isEmpty())
+    }
+
+    @Test
+    fun `a transition on an unknown membership is a not found, not a server fault`() {
+        assertThrows<ResourceNotFoundException> {
+            service.transition(
+                MembershipTransitionCommand(
+                    uuidV7(),
+                    uuidV7(),
+                    transition = MembershipLifecycleTransition.SUSPEND,
+                ),
+            )
+        }
+        assertTrue(logs.items.isEmpty())
     }
 
     @Test

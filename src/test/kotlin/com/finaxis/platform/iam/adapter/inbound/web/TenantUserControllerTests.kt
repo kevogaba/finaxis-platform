@@ -26,6 +26,7 @@ import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.beans.factory.annotation.Autowired
@@ -225,6 +226,27 @@ class TenantUserControllerTests
                     status { isBadRequest() }
                     jsonPath("$.code") { value("validation_failed") }
                 }
+        }
+
+        @Test
+        fun `inviteUser rejects a branch scope role without a branch before the service`() {
+            val tenantId = uuidV7()
+
+            mockMvc
+                .post(ApiPaths.TENANT_USERS) {
+                    contentType = MediaType.APPLICATION_JSON
+                    content =
+                        """{"email":"a@tenant.test","username":"admin","display_name":"Admin",""" +
+                        """"membership_type":"ADMIN","role_assignments":""" +
+                        """[{"role_id":"${uuidV7()}","scope_type":"BRANCH"}]}"""
+                    with(authentication(tenantToken(setOf("user.invite"), tenantId)))
+                }.andExpect {
+                    status { isBadRequest() }
+                    jsonPath("$.code") { value("validation_failed") }
+                    jsonPath("$.violations[0].field") { value("role_assignments[0].branch_id") }
+                }
+
+            verify(userProvisioningService, never()).inviteUser(any())
         }
 
         @Test
