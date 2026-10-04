@@ -398,7 +398,7 @@ Base path: `/api/v1/branches`. List filters: `q`, `status`, `type`, `sort_by`, `
 | GET    | `/`                       | Search branches in the active tenant | `branch.view`       | page     |
 | POST   | `/`                       | Create branch draft                  | `branch.create`     | mutation |
 | GET    | `/{branch_id}`            | Get branch                           | `branch.view`       | item     |
-| PATCH  | `/{branch_id}`            | Update branch                        | `branch.create`     | mutation |
+| PATCH  | `/{branch_id}`            | Update branch                        | `branch.update`     | mutation |
 | POST   | `/{branch_id}/submit`     | Submit branch draft                  | `branch.create`     | mutation |
 | POST   | `/{branch_id}/activate`   | Activate branch                      | `branch.activate`   | mutation |
 | POST   | `/{branch_id}/return`     | Return or withdraw a pending branch  | `branch.activate` (checker) or `branch.create` (maker) | mutation |
@@ -486,10 +486,13 @@ and answers `200` with the branch detail above, so the response carries the stor
   `DRAFT` branch too; create itself only requires that the parent exists. Moving a branch
   serialises with other parent changes in the tenant, so two concurrent moves cannot together
   form a cycle.
-- **Permission.** `branch.create`, the permission the branch's maker already holds for
-  create and submit (ADR 0029); no new permission code. It is checked in the application service
-  against the **target branch** whatever branch the caller has selected, then a missing or foreign
-  branch is `404`, then the state is checked (`409`).
+- **Permission.** `branch.update` (#203), a dedicated code: `branch.create` alone is `403`, so a
+  maker-only role cannot edit a live branch with no checker. Migration `V19` seeds it and copies it
+  to every role that held `branch.create` at the time, so existing callers keep access; revoke
+  `branch.update` to take it away. It is checked in the application service against the **target
+  branch** whatever branch the caller has selected, then a missing or foreign branch is `404`
+  (after the permission, so a caller without it learns nothing about which ids exist), then the
+  state is checked (`409`).
 - **Audit and idempotency.** Writes a `branch.update` audit row whose metadata lists the changed
   field **names** (`changedFields`, for example `branch_name,address`) and never their values.
   Accepts an optional `Idempotency-Key`; a replay returns the stored response and applies the
@@ -558,8 +561,9 @@ a flag in the request:
   `DEPROVISIONING` tenant is frozen. Permission resolution already refuses a tenant caller whose
   organisation is not `ACTIVE` (`403`), so the `409` is the platform route's in practice.
 - **Amend and resubmit.** A returned branch is a `DRAFT`: `PATCH /api/v1/branches/{branch_id}`
-  (see [Update branch](#update-branch)) amends it and `POST .../submit` resubmits it. `submit` is
-  unchanged, so the submitter of the new request is whoever resubmits.
+  (see [Update branch](#update-branch)) amends it, for a caller holding `branch.update`, and
+  `POST .../submit` resubmits it. `submit` is unchanged, so the submitter of the new request is
+  whoever resubmits.
 - **Events.** None. The transition publishes an internal event only; consumers of
   `finaxis.lifecycle.branch.approval-requested` see a repeat per resubmission with no event for the
   return in between (see [transactional outbox](../architecture/transactional-outbox-amqp.md)).

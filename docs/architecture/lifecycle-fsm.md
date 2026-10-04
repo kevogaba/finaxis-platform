@@ -41,7 +41,8 @@ A branch's name, parent, timezone and address change through `PATCH /branches/{i
 (`BranchProvisioningService.update`), which is deliberately **not** a transition: it moves no
 state, so it has no transition-log row and publishes no event. It writes a `branch.update` audit
 row and increments `row_version`, and is allowed only in `DRAFT` and `ACTIVE`, so a draft returned
-for changes (below) is amendable. See [foundation API](../api/foundation-api.md#update-branch).
+for changes (below) is amendable. It needs its own permission, `branch.update`, not `branch.create`
+(#203). See [foundation API](../api/foundation-api.md#update-branch).
 
 The closure guard refuses to close a branch with an `ACTIVE` child, and the update is the way to
 re-parent one, so it refuses a `CLOSED`/`ARCHIVED` parent (409) and claims the new parent by

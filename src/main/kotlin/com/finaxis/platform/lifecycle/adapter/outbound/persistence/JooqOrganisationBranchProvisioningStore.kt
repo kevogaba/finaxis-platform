@@ -621,6 +621,7 @@ private object OrganisationBootstrapDefaults {
             "tenant.bootstrap_retry",
             // Branch lifecycle
             "branch.create",
+            "branch.update",
             "branch.approve",
             "branch.activate",
             "branch.suspend",
@@ -805,6 +806,7 @@ private object OrganisationBootstrapDefaults {
             "BRANCH_MANAGER" to
                 setOf(
                     "branch.create",
+                    "branch.update",
                     "branch.approve",
                     "branch.activate",
                     "branch.suspend",

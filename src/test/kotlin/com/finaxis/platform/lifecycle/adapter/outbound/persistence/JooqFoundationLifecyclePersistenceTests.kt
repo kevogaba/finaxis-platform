@@ -51,6 +51,7 @@ import java.time.OffsetDateTime
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -424,6 +425,13 @@ class JooqFoundationLifecyclePersistenceTests(
         assertEquals(REQUIRED_PERMISSION_CODES, baselinePermissionCodes())
         assertEquals(REQUIRED_PERMISSION_CODES.size, tenantAdminPermissionCount(organisationId))
         assertEquals(IAM_ADMIN_PERMISSION_CODES, rolePermissionCodes(organisationId, "IAM_ADMIN"))
+        // The roles that can draft a branch can also amend one (#203); nobody else can.
+        listOf("TENANT_ADMIN", "BRANCH_MANAGER").forEach { roleCode ->
+            assertTrue("branch.update" in rolePermissionCodes(organisationId, roleCode), roleCode)
+        }
+        listOf("TENANT_AUDITOR", "IAM_ADMIN", "BRANCH_OPERATOR").forEach { roleCode ->
+            assertTrue("branch.update" !in rolePermissionCodes(organisationId, roleCode), roleCode)
+        }
     }
 
     private fun roleCodes(organisationId: UUID): Set<String> =
@@ -715,6 +723,7 @@ class JooqFoundationLifecyclePersistenceTests(
                 "tenant.reactivate",
                 "tenant.bootstrap_retry",
                 "branch.create",
+                "branch.update",
                 "branch.approve",
                 "branch.activate",
                 "branch.suspend",

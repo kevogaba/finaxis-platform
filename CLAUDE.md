@@ -127,6 +127,29 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   clamped up to it (and a derived `opened_on` later than a stored `closed_on` down to it) so
   `chk_branch_dates` can never fail the upgrade. Idempotent; writes no other column, not even
   `updated_at` or `row_version`
+- `V19__branch_update_permission.sql` — **reference data only, no schema** (#203): seeds the
+  `branch.update` permission (module `branch`, risk `HIGH`, id `40000000-…-000000000064`, the next
+  free id after the highest the frozen `V2` foundation block uses) that now gates
+  `PATCH /api/v1/branches/{id}` and `BranchProvisioningService.update` in place of `branch.create`,
+  so a custom maker-only role can no longer edit a live branch with no checker. The grant-copy
+  rule: `PLATFORM_SUPER_ADMIN` is granted it, and **every role (and every direct
+  `membership_permission` override, with the same `ALLOW`/`DENY` effect) that holds `branch.create`
+  at migration time is given it too**, so nobody who could `PATCH` before silently loses the
+  ability; a role without `branch.create` receives nothing, and the bootstrap `local-admin` (which
+  never held `branch.create`) and `PLATFORM_SUPPORT` are unchanged. After it runs the two codes are
+  independent: to take `PATCH` away from a role, revoke `branch.update`; revoking `branch.create`
+  no longer does. New organisations get it through `OrganisationBootstrapDefaults` on
+  `TENANT_ADMIN` and `BRANCH_MANAGER` only. The new code takes `branch.create`'s status, not a
+  literal `ACTIVE`, so a non-active `branch.create` cannot be widened by the copy. Idempotent
+  (`ON CONFLICT DO NOTHING`), asserts its preconditions and post-conditions in-file, and
+  supersedes the #165 docs' "reuses `branch.create`" — see `docs/security/authorization-model.md`
+  ("Branch update"). A permission migration bypasses the Redis `iam.effective-permissions` cache
+  (no TTL), so from `V19` that cache is **namespaced by the applied schema version**
+  (`iam.effective-permissions:v<N>::…`, so an old rolling-deploy instance never feeds a stale set
+  to a new one) **and cleared on every start** (`EffectivePermissionCacheStartupClearer`, after
+  Flyway, before traffic; a Redis outage then is a logged warning, not a failed boot): the new
+  permission is effective on a new instance's first request with no operator action. SQL run
+  outside Flyway needs the cache flushed (restart, or delete `iam.effective-permissions:*`)
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -154,8 +177,9 @@ calendar and the chart of accounts from it, `V7` the journal tables, `V8` the po
 one-control-account-per-class uniqueness, `V12` the manual-journal external reference, `V13`
 the journal-line append guard, `V14` the daily-balance projection, `V15` the branch
 trial-balance index, `V16` the corrected fingerprint comment, and `V17` the cancelled draft
-state. `V18` is a data backfill of the branch lifecycle dates, not accounting. Do not invent
-accounting tables or columns outside those documents.
+state. `V18` is a data backfill of the branch lifecycle dates and `V19` a foundation permission
+seed (`branch.update`); neither is accounting. Do not invent accounting tables or columns outside
+those documents.
 
 ## Authorization
 
@@ -165,6 +189,9 @@ accounting tables or columns outside those documents.
   credentials.
 - The application owns users, organisations, memberships, roles, permissions, scopes, and
   authorization rules. Runtime authorization evaluates **permission codes, never role names**.
+  The effective-permission cache is namespaced by schema version and cleared at start, so a
+  permission migration needs no operator step; a manual SQL grant outside Flyway needs a flush —
+  see `docs/security/authorization-model.md` ("Caching and invalidation").
 - Maker-checker: a platform-context actor holding the permission in the platform organisation may
   be the audited checker of a pending membership only while the tenant has no ACTIVE member beyond
   its bootstrap administrator, and of a pending branch only while it has no ACTIVE branch beyond
