@@ -76,7 +76,6 @@ class MembershipController(
         ApiResponse(
             responseCode = "200",
             description = "Membership page",
-            content = [Content(schema = Schema(implementation = ApiPage::class))],
         ),
         ApiResponse(
             responseCode = "400",
@@ -115,7 +114,9 @@ class MembershipController(
         @RequestParam(required = false, name = "membership_type") membershipType: String?,
         @RequestParam(defaultValue = "0") @Min(0) page: Int,
         @RequestParam(defaultValue = "25") @Min(1) @Max(MAXIMUM_PAGE_SIZE) size: Int,
+        @Parameter(hidden = true)
         @RequestParam(required = false, name = "sort_by") sortBy: String?,
+        @Parameter(hidden = true)
         @RequestParam(required = false, name = "sort_dir") sortDir: String?,
     ): ApiPage<MembershipSummaryResponse> {
         val caller = CallerContextResolver.getTenantCaller()

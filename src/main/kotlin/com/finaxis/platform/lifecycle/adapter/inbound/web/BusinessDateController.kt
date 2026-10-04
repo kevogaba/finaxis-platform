@@ -101,7 +101,6 @@ class BusinessDateController(
         ApiResponse(
             responseCode = "200",
             description = "Business date history page",
-            content = [Content(schema = Schema(implementation = ApiPage::class))],
         ),
         ApiResponse(
             responseCode = "400",

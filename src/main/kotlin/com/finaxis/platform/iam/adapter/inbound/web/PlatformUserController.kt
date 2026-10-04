@@ -67,7 +67,6 @@ class PlatformUserController(
         ApiResponse(
             responseCode = "200",
             description = "User page",
-            content = [Content(schema = Schema(implementation = ApiPage::class))],
         ),
     )
     fun searchUsers(

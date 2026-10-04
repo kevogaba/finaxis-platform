@@ -67,7 +67,6 @@ class RoleAssignmentController(
         ApiResponse(
             responseCode = "200",
             description = "Role-assignment page",
-            content = [Content(schema = Schema(implementation = ApiPage::class))],
         ),
         ApiResponse(
             responseCode = "400",
