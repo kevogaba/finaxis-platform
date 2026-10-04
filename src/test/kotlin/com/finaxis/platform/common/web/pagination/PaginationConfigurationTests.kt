@@ -72,6 +72,46 @@ class PaginationConfigurationTests {
     }
 
     @Test
+    fun `rejects a repeated parameter when any one of its values is invalid`() {
+        listOf(listOf("-1", "1"), listOf("1", "-1"), listOf("1", "x")).forEach { values ->
+            assertFailsWith<InvalidPageRequestException> {
+                interceptor.preHandle(
+                    MockHttpServletRequest("GET", "/api/v1/widgets").apply {
+                        addParameter("page", *values.toTypedArray())
+                    },
+                    MockHttpServletResponse(),
+                    Any(),
+                )
+            }
+        }
+        listOf(listOf("0", "101"), listOf("101", "1")).forEach { values ->
+            assertFailsWith<InvalidPageRequestException> {
+                interceptor.preHandle(
+                    MockHttpServletRequest("GET", "/api/v1/widgets").apply {
+                        addParameter("size", *values.toTypedArray())
+                    },
+                    MockHttpServletResponse(),
+                    Any(),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `accepts a repeated parameter whose values are all valid`() {
+        assertTrue(
+            interceptor.preHandle(
+                MockHttpServletRequest("GET", "/api/v1/widgets").apply {
+                    addParameter("page", "0", "2")
+                    addParameter("size", "10", "100")
+                },
+                MockHttpServletResponse(),
+                Any(),
+            ),
+        )
+    }
+
+    @Test
     fun `accepts valid pagination parameters`() {
         assertTrue(
             interceptor.preHandle(

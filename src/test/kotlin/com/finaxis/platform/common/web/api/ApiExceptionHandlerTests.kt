@@ -122,6 +122,41 @@ class ApiExceptionHandlerTests {
     }
 
     @Test
+    fun `maps an invalid page request without a parameter to a bare invalid_parameter problem`() {
+        val response = handler.invalidPageRequest(InvalidPageRequestException(), request())
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.statusCode)
+        assertProblem(
+            response.body!!,
+            400,
+            "invalid_parameter",
+            "One or more request parameters are invalid.",
+        )
+    }
+
+    @Test
+    fun `maps an invalid sort parameter to a violation naming it without echoing the value`() {
+        val response =
+            handler.invalidPageRequest(
+                InvalidPageRequestException("sort_by", "Sort field must be one of: a, b."),
+                request(),
+            )
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.statusCode)
+        assertProblem(
+            response.body!!,
+            400,
+            "invalid_parameter",
+            "One or more request parameters are invalid.",
+            violationCount = 1,
+        )
+        val violation = response.body!!.violations!!.single()
+        assertEquals("sort_by", violation.field)
+        assertEquals("invalid_parameter", violation.code)
+        assertEquals("Sort field must be one of: a, b.", violation.message)
+    }
+
+    @Test
     fun `maps missing request parameters and missing routes to safe problem responses`() {
         val missingParameter =
             handler.missingParameter(

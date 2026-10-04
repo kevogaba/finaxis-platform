@@ -2,7 +2,7 @@ package com.finaxis.platform.common.audit
 
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.context.PlatformOrganisation
-import com.finaxis.platform.common.web.api.InvalidPageRequestException
+import com.finaxis.platform.common.web.api.requireValidPage
 import org.springframework.stereotype.Service
 import java.time.Instant
 import java.util.UUID
@@ -152,17 +152,11 @@ class AuditQueryService(
             )
 
     private fun boundedSearch(filter: AuditEventFilter): AuditEventPage {
-        if (filter.page < 0) {
-            throw InvalidPageRequestException()
-        }
-        if (filter.size !in 1..MAXIMUM_PAGE_SIZE) {
-            throw InvalidPageRequestException()
-        }
+        requireValidPage(filter.page, filter.size)
         return queries.search(filter)
     }
 
     private companion object {
         const val DEFAULT_PAGE_SIZE = 25
-        const val MAXIMUM_PAGE_SIZE = 100
     }
 }

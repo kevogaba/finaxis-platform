@@ -8,8 +8,8 @@ import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
-import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import com.finaxis.platform.common.web.api.boundedPageOffset
+import com.finaxis.platform.common.web.api.requireValidPage
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.TenantSettingCatalog
@@ -132,12 +132,7 @@ class TenantSettingsService(
             query.organisationId,
             SETTING_READ_PERMISSION,
         )
-        if (query.page < 0) {
-            throw InvalidPageRequestException()
-        }
-        if (query.size !in MINIMUM_PAGE_SIZE..MAXIMUM_PAGE_SIZE) {
-            throw InvalidPageRequestException()
-        }
+        requireValidPage(query.page, query.size)
 
         val canManagePlatformSettings = canManagePlatformSettings(query.actorId)
         val stored =
@@ -342,7 +337,5 @@ class TenantSettingsService(
         const val PLATFORM_SETTING_PERMISSION = "tenant_setting.manage_platform"
         const val MASK = "***REDACTED***"
         const val UNKNOWN_VALUE_TYPE = "STRING"
-        const val MINIMUM_PAGE_SIZE = 1
-        const val MAXIMUM_PAGE_SIZE = 100
     }
 }

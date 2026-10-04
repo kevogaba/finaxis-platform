@@ -187,6 +187,15 @@ class ApiExceptionHandler(
                 "invalid_parameter",
                 "One or more request parameters are invalid.",
                 request,
+                exception.parameter?.let { parameter ->
+                    listOf(
+                        ApiViolation(
+                            parameter,
+                            "invalid_parameter",
+                            exception.message ?: "Invalid parameter value.",
+                        ),
+                    )
+                },
             ),
             exception,
         )

@@ -93,7 +93,7 @@ class BranchController(
         ),
         ApiResponse(
             responseCode = "400",
-            description = "Invalid page or filter",
+            description = "Invalid page, sort or filter",
             content = [
                 Content(
                     mediaType = "application/problem+json",

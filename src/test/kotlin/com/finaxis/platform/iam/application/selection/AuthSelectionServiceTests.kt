@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.application.selection
 
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import com.finaxis.platform.iam.application.authorization.AccessDeniedException
 import com.finaxis.platform.iam.application.authorization.AuthorizationService
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
@@ -47,6 +48,34 @@ class AuthSelectionServiceTests {
 
         assertEquals(listOf(organisationId), response.items.map { it.organisationId })
         assertEquals(1, response.totalItems)
+    }
+
+    @Test
+    fun `available organisations rejects out of range paging as a client error`() {
+        val service = serviceWith(FakeMembershipLookup(userId = uuidV7()))
+
+        listOf(-1 to 25, 0 to 0, 0 to 101).forEach {
+            val (page, size) = it
+            val failure =
+                assertThrows<InvalidPageRequestException> {
+                    service.availableOrganisations("keycloak-subject", page, size)
+                }
+            assertNull(failure.parameter)
+        }
+    }
+
+    @Test
+    fun `available branches rejects out of range paging before any lookup`() {
+        val service = serviceWith(FakeMembershipLookup(userId = uuidV7()))
+
+        listOf(-1 to 25, 0 to 0, 0 to 101).forEach {
+            val (page, size) = it
+            val failure =
+                assertThrows<InvalidPageRequestException> {
+                    service.availableBranches("keycloak-subject", null, page, size)
+                }
+            assertNull(failure.parameter)
+        }
     }
 
     @Test
