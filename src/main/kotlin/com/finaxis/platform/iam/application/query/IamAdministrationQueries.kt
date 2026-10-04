@@ -28,6 +28,11 @@ data class BranchAssignmentFilter(
     val status: String? = null,
     val page: Int = 0,
     val size: Int = 25,
+    /**
+     * The caller's selected branch: the default for an unfiltered list when the caller may view
+     * it (every tenant caller alike); never a gate, it neither narrows nor widens what is visible.
+     */
+    val pinnedBranchId: UUID? = null,
 )
 
 /** Filter parameters for role queries. */
@@ -126,10 +131,14 @@ interface IamRoleQueries {
 
 /** Outbound port for query operations against IAM branch and role assignments. */
 interface IamAssignmentQueries {
-    /** Searches branch assignments in an organisation. */
+    /**
+     * Searches branch assignments in an organisation. A non-null [restrictToBranchIds] limits the
+     * rows, their total and their paging to those branches, in the query itself.
+     */
     fun searchBranchAssignments(
         organisationId: UUID,
         filter: BranchAssignmentFilter,
+        restrictToBranchIds: Set<UUID>? = null,
     ): ApiPage<BranchAssignmentSummary>
 
     /** Finds detailed branch assignment by id. */
@@ -138,10 +147,15 @@ interface IamAssignmentQueries {
         id: UUID,
     ): BranchAssignmentDetail?
 
-    /** Searches role assignments in an organisation. */
+    /**
+     * Searches role assignments in an organisation. A non-null [restrictToBranchIds] limits the
+     * result to BRANCH-scope assignments on those branches (TENANT-scope rows are excluded), in
+     * the query itself, so totals and paging stay exact.
+     */
     fun searchRoleAssignments(
         organisationId: UUID,
         filter: RoleAssignmentFilter,
+        restrictToBranchIds: Set<UUID>? = null,
     ): ApiPage<RoleAssignmentSummary>
 
     /** Finds detailed role assignment by id. */

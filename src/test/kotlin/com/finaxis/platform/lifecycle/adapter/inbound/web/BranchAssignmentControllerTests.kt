@@ -162,7 +162,10 @@ class BranchAssignmentControllerTests
                 filterCaptor.capture(),
                 any(),
             )
-            kotlin.test.assertEquals(branchId, filterCaptor.firstValue.branchId)
+            // The selected branch travels as a soft default; whether it applies depends on the
+            // caller's grant, which only the application layer knows.
+            kotlin.test.assertEquals(null, filterCaptor.firstValue.branchId)
+            kotlin.test.assertEquals(branchId, filterCaptor.firstValue.pinnedBranchId)
         }
 
         @Test

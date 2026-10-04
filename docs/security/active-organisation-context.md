@@ -91,16 +91,31 @@ The selected branch **narrows operational authority; it does not scope tenant ad
   suspend/reactivate/close any branch of the tenant, and use `/tenant/branch-assignments` and
   BRANCH-scope `/tenant/role-assignments` against any branch, provided the permission check
   passes. Previously these returned a safe `404` for any branch other than the selected one (issue #154).
-- *Authorization is still evaluated at the right scope.* The controller's `@PreAuthorize` is only
-  a coarse gate on the selected-branch authority set. The application layer then decides, per
-  target: branch lifecycle transitions and BRANCH-scope role assignment check the permission
-  against the **target** branch (`PermissionGuard.requireBranchPermission`: tenant-scope grants
-  plus branch-scope grants on that branch); branch assignment and revocation first require the
-  tenant-scope `user.assign_branch`/`user.revoke_branch`, then the permission on the target
-  branch; reads such as `GET /branches/{id}` and `GET /tenant/branch-assignments/{id}` check the
-  tenant-scope view permission. A caller whose only grant is a BRANCH-scope role on branch A
-  therefore passes the coarse gate while pinned to A, but is denied with `403` when targeting
-  branch B (covered by `BranchPinningIntegrationTests`).
+- *Authorization is still evaluated at the right scope.* For a mutation the controller's
+  `@PreAuthorize` is only a coarse gate on the selected-branch authority set. The application
+  layer then decides, per target: branch lifecycle transitions and BRANCH-scope role assignment
+  check the permission against the **target** branch (`PermissionGuard.requireBranchPermission`:
+  tenant-scope grants plus branch-scope grants on that branch); branch assignment and revocation
+  first require the tenant-scope `user.assign_branch`/`user.revoke_branch`, then the permission on
+  the target branch. A caller whose only grant is a BRANCH-scope role on branch A therefore passes
+  the coarse gate while pinned to A, but is denied with `403` when targeting branch B (covered by
+  `BranchPinningIntegrationTests`).
+- *Branch-resource reads are target-aware and ungated at the endpoint (ADR 0030, decision 5).*
+  `GET /branches`, `GET /branches/{id}`, the `/tenant/branch-assignments` reads and the
+  `/tenant/role-assignments` reads (rows with `scope_type = BRANCH`; `TENANT`-scope rows need the
+  tenant-wide view) check `branch.view`, `branch_assignment.view` and `role_assignment.view` as **a
+  tenant-wide grant OR a grant on that branch**, through `PermissionGuard.branchVisibility`
+  (either every branch, or the set of branches carrying a branch-scope grant). They carry no
+  `@PreAuthorize` gate, because that gate evaluates the *selected* branch's authority set and
+  would answer `403` before the target-aware check ran for a caller pinned to A who holds the view
+  only through a role scoped to B. The application-layer check is the only authorisation and
+  still answers `403` to a caller with no grant, so a route is never open. **The pin keeps its
+  meaning for what the caller does; it no longer narrows what these reads see** (the one exception
+  is a default, below, which only narrows an unfiltered branch-assignment list to the pin when the
+  caller may view it). Lists return every branch the caller holds the view on, restricted in the
+  store query so pages and totals are exact;
+  an unknown id is `404` to a tenant-wide holder and `403` to a branch-scoped one, the same as the
+  mutation routes, so there is no existence oracle.
 - *Unknown targets.* Once the permission check passes, a branch that does not exist in the active
   tenant (or belongs to another tenant) answers `404` for submit, activate, suspend, reactivate,
   close and assign/revoke; callers without the permission get `403` first, so the response never
@@ -110,9 +125,11 @@ The selected branch **narrows operational authority; it does not scope tenant ad
   the target branch and answers `409` when they do not (including an unknown or foreign
   `branch_id`), not `404`.
 - *Branch-assignment search* `GET /tenant/branch-assignments`: an explicit `branch_id` filters by
-  that branch whatever is selected; without `branch_id` the list defaults to the selected branch
-  (when one is selected) and to all branches otherwise. To list across every branch, clear the
-  selection.
+  that branch whatever is selected, and is `403` when the caller may not view that branch. Without
+  `branch_id`, **one rule for every tenant caller** (tenant-wide or branch-scoped) applies: the list
+  defaults to the selected branch when the caller may view it, and is every branch the caller holds
+  `branch_assignment.view` on otherwise (so a caller pinned to A whose only grant is on B lists B).
+  To list across every viewable branch, clear the selection.
 
 Subsequent browser requests can rely on the `SESSION` cookie. They do not need to send `X-Active-Organisation-Context`.
 

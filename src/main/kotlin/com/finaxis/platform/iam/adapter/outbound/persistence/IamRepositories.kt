@@ -349,6 +349,38 @@ class JooqPermissionResolutionQueries(
             .toSet()
     }
 
+    override fun branchIdsGranting(
+        membershipId: UUID,
+        permissionCode: String,
+    ): Set<UUID> =
+        dsl
+            .selectDistinct(USER_ROLE_ASSIGNMENT.BRANCH_ID)
+            .from(USER_ROLE_ASSIGNMENT)
+            .join(USER_ORGANISATION_MEMBERSHIP)
+            .on(
+                USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(
+                    USER_ROLE_ASSIGNMENT.ORGANISATION_ID,
+                ),
+            ).and(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ROLE_ASSIGNMENT.USER_ID))
+            .join(ROLE)
+            .on(ROLE.ID.eq(USER_ROLE_ASSIGNMENT.ROLE_ID))
+            .and(ROLE.ORGANISATION_ID.eq(USER_ROLE_ASSIGNMENT.ORGANISATION_ID))
+            .join(ROLE_PERMISSION)
+            .on(ROLE_PERMISSION.ROLE_ID.eq(ROLE.ID))
+            .and(ROLE_PERMISSION.ORGANISATION_ID.eq(ROLE.ORGANISATION_ID))
+            .join(PERMISSION)
+            .on(PERMISSION.ID.eq(ROLE_PERMISSION.PERMISSION_ID))
+            .where(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
+            .and(PERMISSION.PERMISSION_CODE.eq(permissionCode))
+            .and(USER_ROLE_ASSIGNMENT.SCOPE_TYPE.eq(BRANCH_SCOPE))
+            .and(USER_ROLE_ASSIGNMENT.BRANCH_ID.isNotNull)
+            .and(USER_ROLE_ASSIGNMENT.STATUS.eq(ACTIVE))
+            .and(ROLE.STATUS.eq(ACTIVE))
+            .and(PERMISSION.STATUS.eq(ACTIVE))
+            .fetchSet(USER_ROLE_ASSIGNMENT.BRANCH_ID)
+            .filterNotNull()
+            .toSet()
+
     override fun directPermissionEffects(membershipId: UUID): List<PermissionEffectAssignment> =
         dsl
             .select(PERMISSION.PERMISSION_CODE, MEMBERSHIP_PERMISSION.EFFECT)

@@ -108,6 +108,11 @@ class EffectivePermissionCacheStartupClearerTests {
         override fun directPermissionEffects(membershipId: UUID): List<PermissionEffectAssignment> =
             emptyList()
 
+        override fun branchIdsGranting(
+            membershipId: UUID,
+            permissionCode: String,
+        ): Set<UUID> = emptySet()
+
         override fun lockedBreakGlassGrant(
             membershipId: UUID,
             permissionCode: String,

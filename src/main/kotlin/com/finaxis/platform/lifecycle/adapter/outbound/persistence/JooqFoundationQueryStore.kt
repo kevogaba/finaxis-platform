@@ -124,8 +124,10 @@ class JooqFoundationQueryStore(
     override fun searchBranches(
         organisationId: UUID,
         filter: BranchFilter,
+        restrictToBranchIds: Set<UUID>?,
     ): ApiPage<BranchSummary> {
         var condition: Condition = BRANCH.ORGANISATION_ID.eq(organisationId)
+        restrictToBranchIds?.let { condition = condition.and(BRANCH.ID.`in`(it)) }
         filter.status?.let { condition = condition.and(BRANCH.STATUS.eq(it)) }
         filter.type?.let { condition = condition.and(BRANCH.BRANCH_TYPE.eq(it)) }
         filter.q?.let { q ->

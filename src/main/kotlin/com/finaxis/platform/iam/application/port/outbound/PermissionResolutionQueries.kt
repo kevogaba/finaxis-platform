@@ -37,6 +37,18 @@ interface PermissionResolutionQueries {
     fun directPermissionEffects(membershipId: UUID): List<PermissionEffectAssignment>
 
     /**
+     * Reads the ids of the branches on which [membershipId] holds [permissionCode] through an
+     * ACTIVE branch-scoped role assignment, an ACTIVE role and an ACTIVE catalogue entry. The
+     * same joins as [rolePermissionCodes] for a selected branch, projecting the branch instead of
+     * the code, and ignoring tenant-scope assignments (a tenant-wide grant is answered by the
+     * tenant permission set, not by this).
+     */
+    fun branchIdsGranting(
+        membershipId: UUID,
+        permissionCode: String,
+    ): Set<UUID>
+
+    /**
      * Decides whether [membershipId] holds [permissionCode] **under a shared lock on every row the
      * answer depends on**, for break-glass checks reachable from a `SERIALIZABLE` transaction.
      *

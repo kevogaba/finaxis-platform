@@ -72,6 +72,7 @@ class IamLifecycleReadAdapter(
                     filter.status,
                     filter.page,
                     filter.size,
+                    filter.pinnedBranchId,
                 ),
                 caller,
             ).let { page -> ApiPage(page.items.map { it.toLifecycle() }, page.page) }

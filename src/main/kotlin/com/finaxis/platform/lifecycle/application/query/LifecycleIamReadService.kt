@@ -31,14 +31,20 @@ interface LifecycleIamReadService {
         membershipId: UUID,
     ): LifecycleMembershipDetail
 
-    /** Searches branch-assignment summaries in an organisation. */
+    /**
+     * Searches branch-assignment summaries in an organisation, limited to the branches the caller
+     * holds `branch_assignment.view` on (ADR 0030, decision 5).
+     */
     fun searchBranchAssignments(
         organisationId: UUID,
         filter: LifecycleBranchAssignmentFilter,
         caller: FoundationCaller,
     ): ApiPage<LifecycleBranchAssignmentSummary>
 
-    /** Retrieves a branch-assignment detail in an organisation. */
+    /**
+     * Retrieves a branch-assignment detail in an organisation, authorised at the assignment's
+     * branch: 404 for an unknown id to a tenant-wide holder, 403 to a branch-scoped one.
+     */
     fun getBranchAssignment(
         organisationId: UUID,
         assignmentId: UUID,
@@ -62,6 +68,11 @@ data class LifecycleBranchAssignmentFilter(
     val status: String? = null,
     val page: Int = 0,
     val size: Int = 25,
+    /**
+     * The caller's selected branch: the default for an unfiltered list when the caller may view it
+     * (every tenant caller alike); never a gate.
+     */
+    val pinnedBranchId: UUID? = null,
 )
 
 /** Membership summary projection exposed to lifecycle adapters. */

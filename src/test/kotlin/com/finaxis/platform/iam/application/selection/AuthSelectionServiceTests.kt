@@ -660,6 +660,11 @@ internal fun serviceWith(
                 override fun directPermissionEffects(membershipId: UUID) =
                     emptyList<PermissionEffectAssignment>()
 
+                override fun branchIdsGranting(
+                    membershipId: UUID,
+                    permissionCode: String,
+                ): Set<UUID> = emptySet()
+
                 override fun lockedBreakGlassGrant(
                     membershipId: UUID,
                     permissionCode: String,
@@ -676,6 +681,11 @@ internal fun serviceWith(
 
                 override fun directPermissionEffects(membershipId: UUID) =
                     emptyList<PermissionEffectAssignment>()
+
+                override fun branchIdsGranting(
+                    membershipId: UUID,
+                    permissionCode: String,
+                ): Set<UUID> = emptySet()
 
                 override fun lockedBreakGlassGrant(
                     membershipId: UUID,

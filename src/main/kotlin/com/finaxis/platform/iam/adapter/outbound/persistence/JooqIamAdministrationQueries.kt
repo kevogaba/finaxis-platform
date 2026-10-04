@@ -286,8 +286,12 @@ class JooqIamAdministrationQueries(
     override fun searchBranchAssignments(
         organisationId: UUID,
         filter: BranchAssignmentFilter,
+        restrictToBranchIds: Set<UUID>?,
     ): ApiPage<BranchAssignmentSummary> {
         var condition: Condition = USER_BRANCH_ASSIGNMENT.ORGANISATION_ID.eq(organisationId)
+        restrictToBranchIds?.let {
+            condition = condition.and(USER_BRANCH_ASSIGNMENT.BRANCH_ID.`in`(it))
+        }
         filter.branchId?.let { condition = condition.and(USER_BRANCH_ASSIGNMENT.BRANCH_ID.eq(it)) }
         filter.assignmentType?.let {
             condition =
@@ -485,8 +489,15 @@ class JooqIamAdministrationQueries(
     override fun searchRoleAssignments(
         organisationId: UUID,
         filter: RoleAssignmentFilter,
+        restrictToBranchIds: Set<UUID>?,
     ): ApiPage<RoleAssignmentSummary> {
         var condition: Condition = USER_ROLE_ASSIGNMENT.ORGANISATION_ID.eq(organisationId)
+        restrictToBranchIds?.let {
+            condition =
+                condition
+                    .and(USER_ROLE_ASSIGNMENT.SCOPE_TYPE.eq(BRANCH_SCOPE))
+                    .and(USER_ROLE_ASSIGNMENT.BRANCH_ID.`in`(it))
+        }
         filter.userId?.let { condition = condition.and(USER_ROLE_ASSIGNMENT.USER_ID.eq(it)) }
         filter.roleId?.let { condition = condition.and(USER_ROLE_ASSIGNMENT.ROLE_ID.eq(it)) }
         filter.branchId?.let { condition = condition.and(USER_ROLE_ASSIGNMENT.BRANCH_ID.eq(it)) }
@@ -647,3 +658,5 @@ class JooqIamAdministrationQueries(
         const val ACTIVE = "ACTIVE"
     }
 }
+
+private const val BRANCH_SCOPE = "BRANCH"

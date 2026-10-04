@@ -1,9 +1,11 @@
 package com.finaxis.platform.lifecycle.application.query
 
+import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import com.finaxis.platform.common.web.api.apiPageOf
+import com.finaxis.platform.lifecycle.BranchVisibility
 import com.finaxis.platform.lifecycle.FoundationCaller
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.PlatformCaller
@@ -139,6 +141,76 @@ class FoundationQueryServiceTests {
     }
 
     @Test
+    fun `searchBranches lists every branch for a tenant wide holder`() {
+        service.searchBranches(tenantId, BranchFilter(), TenantCaller(actorId, tenantId))
+
+        assertEquals(null, store.lastBranchRestriction)
+    }
+
+    @Test
+    fun `searchBranches restricts the store query to the branches the view is held on`() {
+        val branchA = UUID.randomUUID()
+        val branchB = UUID.randomUUID()
+        permissionGuard.visibleOnly(tenantId, "branch.view", branchA, branchB)
+
+        service.searchBranches(tenantId, BranchFilter(), TenantCaller(actorId, tenantId, branchA))
+
+        assertEquals(setOf(branchA, branchB), store.lastBranchRestriction)
+    }
+
+    @Test
+    fun `searchBranches refuses a caller that holds the view nowhere`() {
+        permissionGuard.deny(tenantId, "branch.view")
+
+        assertFailsWith<ForbiddenOperationException> {
+            service.searchBranches(tenantId, BranchFilter(), TenantCaller(actorId, tenantId))
+        }
+        assertEquals(null, store.lastBranchRestriction)
+    }
+
+    @Test
+    fun `searchBranches still validates paging before it authorises`() {
+        permissionGuard.deny(tenantId, "branch.view")
+
+        assertFailsWith<InvalidPageRequestException> {
+            service.searchBranches(
+                tenantId,
+                BranchFilter(page = -1),
+                TenantCaller(actorId, tenantId),
+            )
+        }
+    }
+
+    @Test
+    fun `getBranch answers not found to a tenant wide holder and forbidden to a branch holder`() {
+        val branchA = UUID.randomUUID()
+        val unknown = UUID.randomUUID()
+
+        assertFailsWith<ResourceNotFoundException> {
+            service.getBranch(tenantId, unknown, TenantCaller(actorId, tenantId))
+        }
+
+        permissionGuard.visibleOnly(tenantId, "branch.view", branchA)
+        // The unknown id and another branch are indistinguishable: both are refused up front.
+        assertFailsWith<SecurityException> {
+            service.getBranch(tenantId, unknown, TenantCaller(actorId, tenantId))
+        }
+        assertFailsWith<ResourceNotFoundException> {
+            service.getBranch(tenantId, branchA, TenantCaller(actorId, tenantId))
+        }
+    }
+
+    @Test
+    fun `getBranch keeps checking the platform view for a platform caller`() {
+        val platformOrgId = UUID.fromString("00000000-0000-0000-0000-000000000000")
+        permissionGuard.deny(platformOrgId, "branch.view")
+
+        assertFailsWith<SecurityException> {
+            service.getBranch(tenantId, UUID.randomUUID(), PlatformCaller(actorId, platformOrgId))
+        }
+    }
+
+    @Test
     fun `getBranch enforces tenant scope for TenantCaller`() {
         val caller = TenantCaller(actorId, tenantId)
         assertFailsWith<ResourceNotFoundException> {
@@ -157,10 +229,16 @@ private class FakeFoundationQueryStore : FoundationQueryStore {
 
     override fun findTenantById(id: UUID): TenantDetail? = tenants[id]
 
+    var lastBranchRestriction: Set<UUID>? = null
+
     override fun searchBranches(
         organisationId: UUID,
         filter: BranchFilter,
-    ): ApiPage<BranchSummary> = apiPageOf(emptyList(), 0, 25, 0)
+        restrictToBranchIds: Set<UUID>?,
+    ): ApiPage<BranchSummary> {
+        lastBranchRestriction = restrictToBranchIds
+        return apiPageOf(emptyList(), 0, 25, 0)
+    }
 
     override fun findBranchById(
         organisationId: UUID,
@@ -226,7 +304,13 @@ private class FakePermissionGuard : PermissionGuard {
         branchId: UUID,
         permissionCode: String,
     ) {
-        requirePermission(actorId, organisationId, permissionCode)
+        val visibility = visibilities[organisationId to permissionCode]
+        if (visibility != null && !visibility.canSee(branchId)) {
+            throw SecurityException("Missing permission: $permissionCode")
+        }
+        if (visibility == null) {
+            requirePermission(actorId, organisationId, permissionCode)
+        }
     }
 
     override fun requirePlatformPermission(
@@ -236,4 +320,27 @@ private class FakePermissionGuard : PermissionGuard {
         val platformOrgId = UUID.fromString("00000000-0000-0000-0000-000000000000")
         requirePermission(actorId, platformOrgId, permissionCode)
     }
+
+    private val visibilities = mutableMapOf<Pair<UUID, String>, BranchVisibility>()
+
+    fun visibleOnly(
+        organisationId: UUID,
+        permissionCode: String,
+        vararg branchIds: UUID,
+    ) {
+        visibilities[organisationId to permissionCode] =
+            BranchVisibility.Branches(branchIds.toSet())
+    }
+
+    override fun branchVisibility(
+        actorId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ): BranchVisibility =
+        visibilities[organisationId to permissionCode]
+            ?: if (denied.contains(organisationId to permissionCode)) {
+                BranchVisibility.Branches(emptySet())
+            } else {
+                BranchVisibility.AllBranches
+            }
 }

@@ -11,6 +11,7 @@ import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.common.web.api.InvalidPageRequestException
+import com.finaxis.platform.lifecycle.BranchVisibility
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import org.springframework.dao.CannotAcquireLockException
@@ -614,6 +615,17 @@ private class FakePermissionGuardForBusinessDate : PermissionGuard {
         val platformOrgId = UUID.fromString("00000000-0000-0000-0000-000000000000")
         requirePermission(actorId, platformOrgId, permissionCode)
     }
+
+    override fun branchVisibility(
+        actorId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ): BranchVisibility =
+        if (denied.contains(organisationId to permissionCode)) {
+            BranchVisibility.Branches(emptySet())
+        } else {
+            BranchVisibility.AllBranches
+        }
 }
 
 private class CapturingTransitionPublisherForBusinessDate : TransitionEventPublisher {

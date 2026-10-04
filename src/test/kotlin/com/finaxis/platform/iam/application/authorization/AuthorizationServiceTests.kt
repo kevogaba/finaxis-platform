@@ -357,6 +357,11 @@ private class FakePermissionResolutionQueries(
     ): List<com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment> =
         emptyList()
 
+    override fun branchIdsGranting(
+        membershipId: UUID,
+        permissionCode: String,
+    ): Set<UUID> = emptySet()
+
     /**
      * The locking break-glass read, answered from the same map the cached resolver reads.
      *

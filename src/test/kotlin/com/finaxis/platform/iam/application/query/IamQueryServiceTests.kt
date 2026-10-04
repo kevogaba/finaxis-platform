@@ -4,6 +4,7 @@ import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import com.finaxis.platform.common.web.api.apiPageOf
+import com.finaxis.platform.lifecycle.BranchVisibility
 import com.finaxis.platform.lifecycle.FoundationCaller
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.PlatformCaller
@@ -557,12 +558,19 @@ class IamQueryServiceTests {
     }
 }
 
-private class FakeIamAdministrationQueries :
+internal class FakeIamAdministrationQueries :
     IamUserQueries,
     IamRoleQueries,
     IamAssignmentQueries,
     IamPermissionQueries {
     var shouldReturnNull = false
+    var branchAssignmentBranchId: UUID = UUID.randomUUID()
+    var roleAssignmentScopeType = "TENANT"
+    var roleAssignmentBranchId: UUID? = null
+    var lastBranchAssignmentFilter: BranchAssignmentFilter? = null
+    var lastBranchAssignmentRestriction: Set<UUID>? = null
+    var lastRoleAssignmentFilter: RoleAssignmentFilter? = null
+    var lastRoleAssignmentRestriction: Set<UUID>? = null
 
     override fun searchUsers(
         organisationId: UUID,
@@ -642,8 +650,11 @@ private class FakeIamAdministrationQueries :
     override fun searchBranchAssignments(
         organisationId: UUID,
         filter: BranchAssignmentFilter,
-    ): ApiPage<BranchAssignmentSummary> =
-        apiPageOf(
+        restrictToBranchIds: Set<UUID>?,
+    ): ApiPage<BranchAssignmentSummary> {
+        lastBranchAssignmentFilter = filter
+        lastBranchAssignmentRestriction = restrictToBranchIds
+        return apiPageOf(
             listOf(
                 BranchAssignmentSummary(
                     UUID.randomUUID(),
@@ -657,6 +668,7 @@ private class FakeIamAdministrationQueries :
             filter.size,
             1L,
         )
+    }
 
     override fun findBranchAssignmentById(
         organisationId: UUID,
@@ -667,7 +679,7 @@ private class FakeIamAdministrationQueries :
             id = id,
             organisationId = organisationId,
             userId = UUID.randomUUID(),
-            branchId = UUID.randomUUID(),
+            branchId = branchAssignmentBranchId,
             assignmentType = "VIEW",
             status = "ACTIVE",
             assignedAt = Instant.now(),
@@ -721,8 +733,11 @@ private class FakeIamAdministrationQueries :
     override fun searchRoleAssignments(
         organisationId: UUID,
         filter: RoleAssignmentFilter,
-    ): ApiPage<RoleAssignmentSummary> =
-        apiPageOf(
+        restrictToBranchIds: Set<UUID>?,
+    ): ApiPage<RoleAssignmentSummary> {
+        lastRoleAssignmentFilter = filter
+        lastRoleAssignmentRestriction = restrictToBranchIds
+        return apiPageOf(
             listOf(
                 RoleAssignmentSummary(
                     UUID.randomUUID(),
@@ -737,6 +752,7 @@ private class FakeIamAdministrationQueries :
             filter.size,
             1L,
         )
+    }
 
     override fun findRoleAssignmentById(
         organisationId: UUID,
@@ -748,8 +764,8 @@ private class FakeIamAdministrationQueries :
             organisationId = organisationId,
             userId = UUID.randomUUID(),
             roleId = UUID.randomUUID(),
-            branchId = null,
-            scopeType = "TENANT",
+            branchId = roleAssignmentBranchId,
+            scopeType = roleAssignmentScopeType,
             status = "ACTIVE",
             assignedAt = Instant.now(),
             assignedBy = null,
@@ -837,7 +853,7 @@ private class FakeIamAdministrationQueries :
     }
 }
 
-private class FakePermissionGuard : PermissionGuard {
+internal class FakePermissionGuard : PermissionGuard {
     private val denied = mutableSetOf<Pair<UUID, String>>()
 
     fun deny(
@@ -871,7 +887,13 @@ private class FakePermissionGuard : PermissionGuard {
         branchId: UUID,
         permissionCode: String,
     ) {
-        requirePermission(actorId, organisationId, permissionCode)
+        val visibility = visibilities[organisationId to permissionCode]
+        if (visibility != null && !visibility.canSee(branchId)) {
+            throw SecurityException("Missing permission: $permissionCode")
+        }
+        if (visibility == null) {
+            requirePermission(actorId, organisationId, permissionCode)
+        }
     }
 
     override fun requirePlatformPermission(
@@ -881,4 +903,27 @@ private class FakePermissionGuard : PermissionGuard {
         val platformOrgId = UUID.fromString("00000000-0000-0000-0000-000000000000")
         requirePermission(actorId, platformOrgId, permissionCode)
     }
+
+    private val visibilities = mutableMapOf<Pair<UUID, String>, BranchVisibility>()
+
+    fun visibleOnly(
+        organisationId: UUID,
+        permissionCode: String,
+        vararg branchIds: UUID,
+    ) {
+        visibilities[organisationId to permissionCode] =
+            BranchVisibility.Branches(branchIds.toSet())
+    }
+
+    override fun branchVisibility(
+        actorId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ): BranchVisibility =
+        visibilities[organisationId to permissionCode]
+            ?: if (denied.contains(organisationId to permissionCode)) {
+                BranchVisibility.Branches(emptySet())
+            } else {
+                BranchVisibility.AllBranches
+            }
 }

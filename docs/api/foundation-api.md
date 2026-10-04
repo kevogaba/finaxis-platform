@@ -416,6 +416,27 @@ Base path: `/api/v1/branches`. List filters: `q`, `status`, `type`, `sort_by`, `
 | POST   | `/{branch_id}/reactivate` | Reactivate branch                    | `branch.reactivate` | mutation |
 | POST   | `/{branch_id}/close`      | Close branch                         | `branch.close`      | mutation |
 
+#### Reading branches (target-aware, ADR 0030)
+
+`GET /branches` and `GET /branches/{branch_id}` are authorised **at the branch they concern**, not
+against the branch the caller is pinned to. The check is a **tenant-wide `branch.view` grant or a
+`branch.view` grant on that branch** (a role assigned at `BRANCH` scope on it); the endpoint
+carries no coarse `@PreAuthorize` gate, so the application-layer check is the only authorisation
+and a caller with no grant at all still gets `403`.
+
+- `GET /branches/{branch_id}`: a tenant-wide holder gets `404` for an unknown id. A branch-scoped
+  holder gets `403` for a branch it holds nothing on and for an unknown id alike, so the response
+  never reveals whether a branch exists (identical to the mutation routes). No grant: `403`.
+- `GET /branches`: returns every branch the caller holds `branch.view` on (all of them for a
+  tenant-wide grant). The restriction is part of the query, so `page.total_items`, `total_pages`
+  and every page are exact for what the caller may see. No grant: `403`. Sort, filter and the
+  `400` paging validation are unchanged.
+- The selected branch keeps its meaning for what the caller *does*; it does not narrow what these
+  reads see. A caller pinned to branch A whose only `branch.view` is scoped to branch B lists and
+  gets B, and sees nothing of A unless granted.
+- Platform routes (`/platform/tenants/{tenant_id}/branches`) are unchanged: the platform
+  `branch.view` is checked in the platform organisation.
+
 Create branch request and detail response:
 
 ```json
@@ -1140,6 +1161,19 @@ Base path: `/api/v1/tenant/branch-assignments`. List filters: `branch_id`,
 | POST   | `/`                | Assign user to branch     | `user.assign_branch`     | mutation |
 | DELETE | `/{assignment_id}` | Revoke branch assignment  | `user.revoke_branch`     | mutation |
 
+Reads are target-aware (ADR 0030, decision 5) and carry no coarse `@PreAuthorize` gate: the
+check is a tenant-wide `branch_assignment.view` **or** that permission on the assignment's branch,
+and the application layer is the only authorisation.
+
+- `GET /{assignment_id}`: a tenant-wide holder gets `404` for an unknown id; a branch-scoped holder
+  gets `403` for an assignment on another branch and for an unknown id alike (no existence
+  oracle); no grant: `403`.
+- `GET /`: lists the assignments of every branch the caller holds the view on, restricted in the
+  query so pages and totals are exact. An explicit `branch_id` outside that set is `403`; no grant
+  is `403`. Without `branch_id`, one rule applies to every tenant caller: the list defaults to the
+  selected branch when the caller may view it, and is every viewable branch otherwise (clear the
+  selection to list across all).
+
 Assign request and response:
 
 ```json
@@ -1269,6 +1303,28 @@ Base path: `/api/v1/tenant/role-assignments`. List filters: `user_id`, `role_id`
 | GET    | `/{assignment_id}` | Get role assignment     | `role_assignment.view` | item     |
 | POST   | `/`                | Assign role to user     | `user.assign_role`     | mutation |
 | DELETE | `/{assignment_id}` | Revoke role assignment  | `user.revoke_role`     | mutation |
+
+Reads are target-aware (ADR 0030, decision 5) and carry no coarse `@PreAuthorize` gate. Rows with
+`scope_type = BRANCH` need a tenant-wide `role_assignment.view` **or** that permission on the
+row's branch; `TENANT`-scope rows need the tenant-wide view.
+
+- `GET /{assignment_id}`: a tenant-wide holder gets `404` for an unknown id; a branch-scoped holder
+  gets `403` for a row on another branch, for a `TENANT`-scope row and for an unknown id alike; no
+  grant: `403`.
+- `GET /`: a tenant-wide holder lists every row. A branch-scoped holder lists only `BRANCH`-scope
+  rows on the branches it holds the view on, restricted in the query so totals are exact; an
+  explicit `branch_id` outside that set is `403`. `scope_type` is matched exactly like every
+  enum-like filter, so for such a holder any value other than `BRANCH` (`TENANT`, `tenant`, an
+  unknown value) is an empty page. No grant: `403`.
+
+**Behaviour change on the revoke route.** `DELETE /{assignment_id}` reads the row first, and that
+read is now target-aware, so a revoker no longer needs `role_assignment.view` tenant-wide: for a
+`BRANCH`-scope row the view **at that branch** is enough (in addition to `user.revoke_role`,
+checked at that branch as before). A branch-scoped revoker that was refused before now succeeds on
+a row at its own branch, and still gets `403` on a row at another branch and on a `TENANT`-scope
+row, which change nothing. The branch-assignment revoke pre-read and the assign read-back are
+target-aware in the same way (the tenant-scope `user.revoke_branch`/`user.assign_branch` check is
+unchanged).
 
 Assign role request and response:
 
