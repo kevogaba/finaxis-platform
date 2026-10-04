@@ -29,12 +29,13 @@ data class SelectOrganisationResult(
 )
 
 /**
- * Result returned after selecting an active branch.
+ * Result returned after selecting an active branch, or after clearing the selection
+ * (`branchId == null`).
  */
 data class SelectBranchResult(
     val organisationId: UUID,
     val membershipId: UUID,
-    val branchId: UUID,
+    val branchId: UUID?,
     val context: ActiveOrganisationContext,
 )
 
@@ -156,13 +157,16 @@ class AuthSelectionService(
     }
 
     /**
-     * Selects an assigned branch inside the active organisation context.
+     * Selects an assigned branch inside the active organisation context, or clears the branch
+     * selection when [branchId] is `null`.
      *
-     * Requires the actor to hold [PERM_SELECT_BRANCH] in the target organisation.
+     * Clearing re-issues the same organisation context without a branch, for any user, so a
+     * single-branch user auto-pinned on organisation selection can still reach tenant-wide
+     * administration. Requires the actor to hold [PERM_SELECT_BRANCH] in the target organisation.
      */
     fun selectBranch(
         keycloakSubject: String,
-        branchId: UUID,
+        branchId: UUID?,
         currentContext: ActiveOrganisationContext?,
     ): SelectBranchResult {
         val existingContext =
@@ -188,7 +192,7 @@ class AuthSelectionService(
         ) {
             denied("User is not an active member of the organisation")
         }
-        if (!lookup.hasAssignedBranch(existingContext.membershipId, branchId)) {
+        if (branchId != null && !lookup.hasAssignedBranch(existingContext.membershipId, branchId)) {
             denied("User is not assigned to the selected branch")
         }
 
@@ -251,9 +255,10 @@ class AuthSelectionService(
         ) {
             denied("Missing permission: $PERM_SELECT_BRANCH")
         }
-        val branchId = context.branchId ?: denied("Durable branch selection is incomplete")
-        if (!lookup.hasAssignedBranch(membership.membershipId, branchId)) {
-            denied("Selected branch is no longer assigned")
+        context.branchId?.let { branchId ->
+            if (!lookup.hasAssignedBranch(membership.membershipId, branchId)) {
+                denied("Selected branch is no longer assigned")
+            }
         }
     }
 

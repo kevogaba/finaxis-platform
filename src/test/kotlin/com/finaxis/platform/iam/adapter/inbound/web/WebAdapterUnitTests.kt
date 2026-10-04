@@ -93,6 +93,45 @@ class WebAdapterUnitTests {
     }
 
     @Test
+    fun `auth controller clears the branch when select branch omits branch id`() {
+        val selectedOrganisationId = uuidV7()
+        val selectedMembershipId = uuidV7()
+        val branchId = uuidV7()
+        val lookup =
+            StaticMembershipLookup(selectedOrganisationId, selectedMembershipId, listOf(branchId))
+        val session =
+            MockHttpSession().apply {
+                setAttribute(
+                    SessionActiveOrganisationContextResolver.ATTRIBUTE,
+                    ActiveOrganisationContext(
+                        lookup.userId,
+                        selectedOrganisationId,
+                        selectedMembershipId,
+                        branchId,
+                    ),
+                )
+            }
+
+        val response =
+            AuthController(selectionService(lookup)).selectBranch(
+                jwtAuthentication(),
+                SelectBranchRequest(null),
+                session,
+            )
+
+        assertEquals(null, response.branchId)
+        assertEquals(
+            ActiveOrganisationContext(
+                lookup.userId,
+                selectedOrganisationId,
+                selectedMembershipId,
+                null,
+            ),
+            requireNotNull(response.durableBody).context,
+        )
+    }
+
+    @Test
     fun `user profile controller returns active tenant profile`() {
         val principal =
             principal(setOf("iam.profile.read", "iam.user.invite"), HEAD_OFFICE_BRANCH_ID)

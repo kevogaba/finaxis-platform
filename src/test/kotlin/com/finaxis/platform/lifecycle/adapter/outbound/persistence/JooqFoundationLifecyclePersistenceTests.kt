@@ -1,7 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
-import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.context.ActorContext
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.id.uuidV7
@@ -364,7 +364,7 @@ class JooqFoundationLifecyclePersistenceTests(
             ),
         )
         withRequestContext {
-            assertThrows<ConflictException> {
+            assertThrows<ResourceNotFoundException> {
                 branchProvisioningService.assignUser(command.copy(branchId = otherBranchId))
             }
         }

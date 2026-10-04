@@ -109,10 +109,29 @@ class RoleAssignmentControllerTests
         }
 
         @Test
-        fun `role assignment rejects a branch outside the active branch context`() {
+        fun `role assignment assigns a branch scope role outside the selected branch`() {
             val tenantId = uuidV7()
-            val activeBranchId = uuidV7()
-            val requestedBranchId = uuidV7()
+            val selectedBranchId = uuidV7()
+            val targetBranchId = uuidV7()
+            val assignmentId = uuidV7()
+            val userId = uuidV7()
+            val roleId = uuidV7()
+            whenever(roleManagementService.assignRoleToUser(any())).thenReturn(
+                RoleAssignmentResult(assignmentId, "ACTIVE"),
+            )
+            whenever(
+                iamQueryService.getRoleAssignment(eq(tenantId), eq(assignmentId), any()),
+            ).thenReturn(
+                roleAssignmentDetail(
+                    tenantId,
+                    assignmentId,
+                    userId,
+                    roleId,
+                    targetBranchId,
+                    "BRANCH",
+                    "ACTIVE",
+                ),
+            )
 
             mockMvc
                 .post(ApiPaths.ROLE_ASSIGNMENTS) {
@@ -120,26 +139,70 @@ class RoleAssignmentControllerTests
                     content =
                         apiJsonCodec.mapper.writeValueAsString(
                             AssignRoleRequest(
-                                uuidV7(),
-                                uuidV7(),
+                                userId,
+                                roleId,
                                 RoleAssignmentScopeType.BRANCH,
-                                requestedBranchId,
+                                targetBranchId,
                             ),
                         )
                     with(
                         authentication(
-                            tenantToken(
-                                setOf("user.assign_role"),
-                                tenantId,
-                                activeBranchId,
-                            ),
+                            tenantToken(setOf("user.assign_role"), tenantId, selectedBranchId),
                         ),
                     )
                 }.andExpect {
-                    status { isNotFound() }
-                    jsonPath("$.code") { value("resource_not_found") }
+                    status { isCreated() }
                 }
 
-            verify(roleManagementService, org.mockito.kotlin.never()).assignRoleToUser(any())
+            // Authorization is evaluated in the target branch's scope, not the selected one.
+            verify(permissionGuard).requireBranchPermission(
+                any(),
+                eq(tenantId),
+                eq(targetBranchId),
+                eq("user.assign_role"),
+            )
+            verify(roleManagementService).assignRoleToUser(any())
+        }
+
+        @Test
+        fun `role assignment revokes a branch scope role outside the selected branch`() {
+            val tenantId = uuidV7()
+            val selectedBranchId = uuidV7()
+            val targetBranchId = uuidV7()
+            val assignmentId = uuidV7()
+            whenever(
+                iamQueryService.getRoleAssignment(eq(tenantId), eq(assignmentId), any()),
+            ).thenReturn(
+                roleAssignmentDetail(
+                    tenantId,
+                    assignmentId,
+                    uuidV7(),
+                    uuidV7(),
+                    targetBranchId,
+                    "BRANCH",
+                    "REVOKED",
+                ),
+            )
+
+            mockMvc
+                .delete("${ApiPaths.ROLE_ASSIGNMENTS}/$assignmentId") {
+                    with(
+                        authentication(
+                            tenantToken(setOf("user.revoke_role"), tenantId, selectedBranchId),
+                        ),
+                    )
+                }.andExpect {
+                    status { isOk() }
+                }
+
+            val commandCaptor = argumentCaptor<RevokeRoleFromUser>()
+            verify(roleManagementService).revokeRoleFromUser(commandCaptor.capture())
+            kotlin.test.assertEquals(targetBranchId, commandCaptor.firstValue.branchId)
+            verify(permissionGuard).requireBranchPermission(
+                any(),
+                eq(tenantId),
+                eq(targetBranchId),
+                eq("user.revoke_role"),
+            )
         }
     }
