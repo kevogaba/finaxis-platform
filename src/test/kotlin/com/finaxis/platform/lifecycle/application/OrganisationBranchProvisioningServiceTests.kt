@@ -897,6 +897,8 @@ private class ProvisioningFake(
 
     override fun lifecycleState(organisationId: UUID) = organisationStates[organisationId]
 
+    override fun lockOrganisation(organisationId: UUID) = Unit
+
     override fun saveSettings(
         organisationId: UUID,
         settings: List<StoredSetting>,

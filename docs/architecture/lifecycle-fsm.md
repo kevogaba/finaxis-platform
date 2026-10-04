@@ -152,10 +152,23 @@ resubmission with no exit event in between
 actor may be neither the requester nor the submitter (`requested_by` and `submitted_by` on the
 bootstrap record, the rule `approveProvisioning` applies) and may not be the system actor, so a
 maker cannot pull their own submission back through it. The order is permission (so a caller
-without it learns nothing), the bootstrap record (404 for an unknown tenant and for the platform
-organisation, which has none), the maker-checker rule, then the FSM's own state conflict (409). The
-transition runs first and the record is reset after, so a tenant that is not pending is refused
-without touching the record.
+without it learns nothing), the organisation lock, the bootstrap record (404 for an unknown
+tenant and for the platform organisation, which has none), the maker-checker rule, then the FSM's
+own state conflict (409). The transition runs first and the record is reset after, so a tenant
+that is not pending is refused without touching the record.
+
+Every provisioning decision (approve, return, reject, submit and amend) locks the organisation row
+(`FOR NO KEY UPDATE`) **before** it reads the bootstrap record or the state and holds the lock
+through the transition in the same transaction. Without it a request could commit return, amend
+and resubmit between an approval's reads and the transition's re-read of the organisation, and
+the approval would apply the old submitter and administrator to the new submission. The lock order
+is organisation, then record, in all five. See ADR 0029, "Locking rule".
+
+The lock is taken before the state is known, so a decision against a tenant that is not pending
+(for example an `ACTIVE` one) now briefly holds the `NO KEY UPDATE` lock before it answers 409.
+For the duration of that request it conflicts with the posting path's base-currency `FOR SHARE`
+and with the branch-hierarchy lock. Every one of these routes needs platform permissions, and
+the lock is always taken first and held to the end of the transaction, so it cannot deadlock.
 
 `organisation_initial_administrator_bootstrap` is reset exactly as `REJECT` already resets it:
 status back to `DRAFT`, `submitted_by`/`submitted_at` and `approved_by`/`approved_at` cleared,

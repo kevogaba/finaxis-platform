@@ -438,6 +438,8 @@ private class FakeOrganisationLifecycleStoreForBusinessDate :
     override fun lifecycleState(organisationId: UUID): OrganisationLifecycleState? =
         states[organisationId]
 
+    override fun lockOrganisation(organisationId: UUID) = Unit
+
     override fun createDraft(command: CreateOrganisationDraftCommand): UUID = uuidV7()
 
     override fun saveSettings(

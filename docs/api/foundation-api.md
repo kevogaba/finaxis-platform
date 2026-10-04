@@ -718,7 +718,9 @@ is no `422`. Validation runs when the body is bound, before any permission or ex
   who returned a tenant, like any amender, is not a maker and may approve a later resubmission; so
   may the earlier submitter, who is not the submitter of the current request (an accepted
   consequence of reading the rule from the record at approval). A returned tenant cannot be
-  approved until it is resubmitted (`409`).
+  approved until it is resubmitted (`409`). Approve, return, reject, submit and amend each lock the
+  tenant row before they read the record or the state, so a decision racing another is judged
+  against whatever the other committed (ADR 0029, "Locking rule").
 - **System actor.** The system actor is refused with `422 invalid_operation`; this is effectively
   unreachable, because the permission check runs first and a sentinel actor holds no platform grant.
 - **Events.** None. The transition publishes an internal event only; consumers of

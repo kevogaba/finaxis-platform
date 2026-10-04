@@ -308,6 +308,22 @@ far as `PATCH` is concerned; the withdraw and return codes (`branch.create`, `br
   is refused with 403 `lifecycle.approver_is_initial_administrator`, as for any tenant; the check
   does not look at who returned or amended. The return and the record update commit in the same
   transaction as the transition, as `rejectProvisioning` already does.
+- **Locking rule (#204).** Every provisioning decision that judges the bootstrap record or the
+  organisation's state and then writes (`approveProvisioning`, `returnForChanges`,
+  `rejectProvisioning`, `submitForApproval` and `amendDraft`) takes the organisation row's
+  `FOR NO KEY UPDATE` lock **first**, before it reads the record or the state, and holds it to the
+  end of its transaction through the transition. The return edge makes the record replaceable: a
+  request can commit return, amend and resubmit and so change both the submitter and the named
+  administrator. A decision that read them first and locked second would judge the previous
+  submission and then move the new one, letting the new submitter, or the newly named
+  administrator, approve. Locked first, it waits for that request and reads what it left. The
+  lock is the one the transition's `UPDATE` takes anyway, taken early, so the FSM and its
+  optimistic `row_version` check are unchanged; it does not block the foreign-key checks of rows
+  inserted for the organisation. The lock order is always organisation, then bootstrap record
+  (`reject` and `submit` used to take them the other way round, which could deadlock against
+  approve). Approve, return and amend are proved against Postgres by
+  `TenantApprovalReturnRaceIntegrationTests`; the order in reject and submit, and in all five, is
+  pinned by `OrganisationProvisioningLockOrderTests`.
 - **Amenders are not makers.** Only `requested_by` and the submitter are excluded from approving.
   A checker can return a tenant, amend it, and later approve it after a third party resubmits.
   That is pre-existing behaviour for any draft amended by someone other than its requester, and it
