@@ -99,8 +99,15 @@ internal class JournalReversalFixture(
     fun provisionTenant(label: String): Tenant {
         val organisationId = tenants.createActiveOrganisation(label, MAKER)
         val checker = newChecker("$label-${UUID.randomUUID()}")
-        tenants.grantTenantAdmin(organisationId, checker)
-        grantDirectly(organisationId, checker, AccountingPermissions.JOURNAL_REVERSE)
+        // A narrow member, not the tenant administrator: the administrator holds every code,
+        // break-glass included, and the suite proves the checker is refused a backdated
+        // reversal for want of journal.post_prior_period.
+        tenants.grantTenantPermissionsOnly(
+            organisationId,
+            checker,
+            AccountingPermissions.JOURNAL_REVERSE,
+            AccountingPermissions.JOURNAL_VIEW,
+        )
         val businessDate =
             requireNotNull(
                 dsl

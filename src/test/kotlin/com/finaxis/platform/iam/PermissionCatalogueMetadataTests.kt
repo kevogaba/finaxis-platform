@@ -17,10 +17,8 @@ import kotlin.test.assertTrue
  *
  * A kind constraint cannot be a `CHECK` across two tables and the repository admits no trigger
  * (ADR 0024), so this test is where the kinds are enforced. A new permission migration that adds a
- * code and forgets to classify or pair it fails here. It is also STRICT about the seeded role
- * bundles: any platform role or code-built default bundle that holds a mutation without the views
- * it requires fails it, as does any such violation by the bootstrap `local-admin` role outside its
- * explicit allow-list. (The runtime does not yet refuse such a role; a later change does.)
+ * code and forgets to classify or pair it fails here. It also asserts, ahead of the runtime
+ * enforcement, that no seeded role bundle holds a mutation without the views it requires.
  */
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -168,41 +166,54 @@ class PermissionCatalogueMetadataTests(
     }
 
     @Test
-    fun `every default role bundle built in code holds a mutation only with its views`() {
-        OrganisationBootstrapDefaults.ROLE_PERMISSIONS.forEach { (role, codes) ->
-            assertEquals(
-                emptyList(),
-                codes.filter { it !in catalogue },
-                "$role names a code that is not in the catalogue",
-            )
-        }
+    fun `every explicit default bundle holds a mutation only with its views`() {
+        // TENANT_ADMIN is derived from grant_scope (SeededRolesDriftTests checks it on a
+        // provisioned tenant); the other bundles are explicit lists, checked here against the
+        // catalogue itself.
         val byRole =
-            OrganisationBootstrapDefaults.ROLE_PERMISSIONS.mapValues { (_, codes) ->
+            OrganisationBootstrapDefaults.EXPLICIT_ROLE_PERMISSIONS.mapValues { (_, codes) ->
                 violations(codes.filter { catalogue[it]?.status == "ACTIVE" }.toSet())
             }
 
         assertEquals(
-            OrganisationBootstrapDefaults.ROLE_PERMISSIONS.keys
+            OrganisationBootstrapDefaults.EXPLICIT_ROLE_PERMISSIONS.keys
                 .associateWith { emptyMap<String, Set<String>>() },
             byRole,
         )
     }
 
     @Test
-    fun `the bootstrap tenant administrator role is checked against an explicit allow-list`() {
-        // STRICT, with an allow-list. The runtime does not yet refuse a mutation without its view
-        // (ADR 0030, a later pull request), so a known violation by this one seeded role may be
-        // recorded here instead of failing the build. Today local-admin (V3, V4, V5) pairs every
-        // mutation it holds with its views, so the allow-list is empty and any violation fails.
-        // Its other known gap is the codes it lacks (the audit report, section 3.1), which is a
-        // different defect and which a later change corrects. If that change or a new grant
-        // leaves a violation, add it here with a comment, so the list shrinks again instead of
-        // the test being switched off.
+    fun `every explicit default bundle names only active tenant-scope codes and no break-glass`() {
+        // grantPermissions silently skips a code that is missing or not ACTIVE, so a typo in a
+        // bundle would grant nothing and nobody would notice: the bundle side is checked against
+        // the catalogue, not against what was granted.
+        val problems =
+            OrganisationBootstrapDefaults.EXPLICIT_ROLE_PERMISSIONS.flatMap { (role, codes) ->
+                codes.mapNotNull { code ->
+                    val row = catalogue[code]
+                    when {
+                        row == null -> "$role: $code is not in the catalogue"
+                        row.status != "ACTIVE" -> "$role: $code is ${row.status}"
+                        row.grantScope != "TENANT" -> "$role: $code is ${row.grantScope} scope"
+                        code in BREAK_GLASS -> "$role: $code is a break-glass code"
+                        else -> null
+                    }
+                }
+            }
+
+        assertEquals(emptyList(), problems)
+    }
+
+    @Test
+    fun `the bootstrap tenant administrator role holds a mutation only with its views`() {
+        // Strict now. V22 reported this against an allow-list because local-admin held 33 of 67
+        // codes in a shape the rule had not been checked against; V23 gives it every
+        // tenant-scope code, views included, so the allow-list is gone. A future grant that breaks
+        // the rule fails here instead of being listed.
         assertEquals(
-            LOCAL_ADMIN_ALLOWED_VIOLATIONS,
+            emptyMap(),
             violations(heldBySeededRole(LOCAL_ADMIN_ROLE_ID)),
-            "bootstrap tenant local-admin: a violation outside the allow-list, or one fixed " +
-                "but still listed",
+            "bootstrap tenant local-admin",
         )
     }
 
@@ -344,8 +355,7 @@ class PermissionCatalogueMetadataTests(
         const val PLATFORM_SUPPORT_ID = "50000000-0000-0000-0000-000000000002"
         const val LOCAL_ADMIN_ROLE_ID = "77777777-7777-7777-7777-777777777777"
 
-        /** The bootstrap `local-admin` role's violations, view to the mutations lacking it. */
-        val LOCAL_ADMIN_ALLOWED_VIOLATIONS: Map<String, Set<String>> = emptyMap()
+        val BREAK_GLASS = setOf("fiscal_period.reopen", "journal.post_prior_period")
 
         val PLATFORM_CODES =
             setOf(

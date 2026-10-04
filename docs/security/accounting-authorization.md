@@ -179,7 +179,8 @@ What the default bundles still guarantee is narrower, and still worth guaranteei
 
 1. The two *dedicated* roles, `ACCOUNTING_OPERATOR` and `ACCOUNTING_APPROVER`, genuinely model the
    split — neither holds any code from the other side of an approval.
-2. No default bundle carries a break-glass code.
+2. No *non-admin* default bundle carries a break-glass code (the administrator roles hold every
+   code of their scope, see "Break-Glass Permissions").
 
 Because runtime authorization never evaluates a role name, these bundles are conveniences rather
 than a security boundary. The boundary is the permission check plus the actor-identity guard.
@@ -227,24 +228,27 @@ that the first actor just closed, which is bookkeeping, not control.
 ## Default Role Bundles
 
 Organisation approval creates the organisation-local system roles in **Kotlin**, not in any
-migration: `JooqOrganisationBranchProvisioningStore.createDefaultRoles` iterates
-`OrganisationBootstrapDefaults.ROLE_PERMISSIONS` and grants each bundle's codes. The role codes
-below therefore appear in no migration, and — as everywhere else in the platform — runtime
-authorization never evaluates one of them.
+migration: `JooqOrganisationBranchProvisioningStore.createDefaultRoles` grants each bundle's
+codes. The non-administrator bundles are the explicit lists in `OrganisationBootstrapDefaults`, and
+`TENANT_ADMIN` is derived from the catalogue (every `ACTIVE` code with
+`grant_scope = 'TENANT'`). The role codes below therefore appear in no migration, and — as
+everywhere else in the platform — runtime authorization never evaluates one of them.
 
 The accounting codes each default role receives:
 
-- **`TENANT_ADMIN`** — all baseline foundation permissions plus 19 accounting configuration and
-  oversight codes: `gl_account.view`, `gl_account.create`, `gl_account.update`,
-  `gl_account.submit`, `gl_account.approve`, `gl_account.deactivate`, `fiscal_period.view`,
-  `fiscal_period.open`, `fiscal_period.close`, `journal.view`, `posting_rule.view`,
-  `posting_rule.create`, `posting_rule.update`, `posting_rule.submit`, `posting_rule.approve`,
-  `reconciliation.view`, `reconciliation.run`, `accounting_report.view`,
-  `accounting_report.export`. It deliberately excludes the operational and break-glass codes —
-  manual journal preparation, journal submission, journal approval, reversal, prior-period posting,
-  reconciliation resolution and period reopening — so the default administrator is not also the
-  default poster. `TENANT_ADMIN` holds `role.assign_permission` and can grant itself more, so this
-  is safe-by-default posture rather than a security boundary.
+- **`TENANT_ADMIN`** — **every accounting code**, all 26, because an administrator role holds
+  every permission of its scope and every accounting code is tenant scope: the 19
+  configuration and oversight codes (`gl_account.*`, `fiscal_period.view`/`open`/`close`,
+  `journal.view`, `posting_rule.*`, `reconciliation.view`/`run`, `accounting_report.view`/`export`)
+  **and** the maker and checker codes `journal.create_manual`, `journal.submit`, `journal.approve`,
+  `journal.reverse` and `reconciliation.resolve`, **and** the two break-glass codes
+  `fiscal_period.reopen` and `journal.post_prior_period`. Holding both sides of an approval is safe
+  because separation of duties is enforced by actor identity at the transition, not by splitting
+  permissions (see the class comment of `AccountingSeparationOfDutiesPolicyTests`): the
+  administrator cannot approve what it prepared, and the break-glass codes keep their audited,
+  lock-checked enforcement. This replaces the earlier "safe-by-default" posture, which withheld
+  seven codes from an administrator who could grant them to itself anyway through
+  `role.assign_permission`.
 - **`TENANT_AUDITOR`** — read-only across the platform, including the six accounting reads:
   `gl_account.view`, `fiscal_period.view`, `journal.view`, `posting_rule.view`,
   `reconciliation.view`, `accounting_report.view`. It does **not** receive
@@ -265,9 +269,9 @@ The accounting codes each default role receives:
   `accounting_report.view` — plus the same three session codes. It does not receive
   `accounting_report.export`, which stays with the maker and the administrator.
 
-`IAM_ADMIN` receives no accounting codes: identity administration and financial operations are
-separate concerns, and an IAM administrator who needs ledger access should be granted an accounting
-role rather than have one silently folded into theirs.
+`IAM_ADMIN` receives no accounting codes (it gained `branch.view` in `V23`): identity administration
+and financial operations are separate concerns, and an IAM administrator who needs ledger access
+should be granted an accounting role rather than have one silently folded into theirs.
 
 ## Break-Glass Permissions
 
@@ -288,35 +292,49 @@ snapshot. Ordinary `requireTenantPermission` checks are unchanged and keep the c
 is argued in
 [ADR 0026](../adr/0026-real-time-gates-on-the-serializable-posting-path.md).
 
-Two codes are classified break-glass and appear in **no default tenant role bundle** (`PLATFORM_SUPER_ADMIN` holds the whole catalogue, as described below):
+Two codes are classified break-glass and appear in **no non-admin default tenant role bundle**
+(`TENANT_ADMIN`, the bootstrap `local-admin` and `PLATFORM_SUPER_ADMIN` are administrator roles and
+hold every code of their scope, break-glass included):
 
 - `fiscal_period.reopen` — reopening a closed accounting period.
 - `journal.post_prior_period` — posting into a period earlier than the business date.
 
 They are named by `AccountingPermissions.BREAK_GLASS`, and
-`AccountingSeparationOfDutiesPolicyTests` asserts that no default bundle intersects that set. They
-are granted deliberately, per tenant, by an administrator making an explicit and audited decision —
-never inherited by anyone who happens to hold an accounting role. Both are also CRITICAL and both
-have an `AccountingAuditActions` entry, so every use will land in the audit trail once the
-behaviour exists.
+`AccountingSeparationOfDutiesPolicyTests` asserts that **no non-admin default bundle**
+(`TENANT_AUDITOR`, `IAM_ADMIN`, `BRANCH_MANAGER`, `BRANCH_OPERATOR`, `ACCOUNTING_OPERATOR`,
+`ACCOUNTING_APPROVER`) intersects that set. The invariant used to read "no default bundle", and was
+rewritten by the owner's rule that an administrator holds everything in its scope (`V23`):
+withholding the codes from an administrator who can grant them to itself through
+`role.assign_permission` was posture, not a boundary. They are granted to every other role
+deliberately, per tenant, by an administrator making an explicit and audited decision — never
+inherited by anyone who happens to hold an accounting role. Use is unchanged where it is enforced:
+both are CRITICAL, are checked through `requireBreakGlassPermission` (no cache, a lock, no
+system-actor short-circuit), and have an `AccountingAuditActions` entry, so every use lands in the
+audit trail. An administrator who must not hold them narrows access with a direct `DENY` override
+or by not assigning the role.
 
 ## Bootstrap And Existing-Tenant Posture
 
 **`PLATFORM_SUPER_ADMIN`** keeps the entire catalogue. V2's superset grant was a set-based
 `INSERT … SELECT … FROM permission` that ran once, at V2, so it cannot pick up codes added later;
 `V5` repeats the same set-based grant for its own 26 codes, and asserts in a post-condition block
-that no catalogue row is left ungranted.
+that no catalogue row is left ungranted. `V23` re-asserts every `ACTIVE` code, and
+`SeededRolesDriftTests` fails the build if a later migration leaves one ungranted to
+`PLATFORM_SUPER_ADMIN` or `local-admin`; a later migration must copy `V23`'s step 1a and step 2 so
+every tenant's `TENANT_ADMIN` receives it too (a tenant that misses one fails closed).
 
-**`PLATFORM_SUPPORT` deliberately receives nothing.** Platform staff must not be able to read
+**`PLATFORM_SUPPORT` receives no accounting code.** Platform staff must not be able to read
 tenant financial data by default. A support-escalation path into a tenant's ledger is a separate,
-audited decision, not a side effect of holding the support role.
+audited decision, not a side effect of holding the support role. (`V23` gave it the non-financial
+platform reads and the permission to enter the PLATFORM organisation; none of them is accounting.)
 
-**The bootstrap `local-admin` role receives exactly ten tenant-configuration codes:**
-`gl_account.view`, `gl_account.create`, `gl_account.update`, `gl_account.submit`,
-`gl_account.approve`, `gl_account.deactivate`, `fiscal_period.view`, `fiscal_period.open`,
-`posting_rule.view`, `accounting_report.view`. A fresh deployment can therefore set up a chart of
-accounts and open a fiscal period without any user holding operational or break-glass accounting
-rights.
+**The bootstrap `local-admin` role** received exactly ten tenant-configuration codes from `V5`
+(`gl_account.*`, `fiscal_period.view`/`open`, `posting_rule.view`, `accounting_report.view`) so a
+fresh deployment could set up a chart of accounts and open a fiscal period. **`V23` completes it:**
+it now holds every accounting code, break-glass included, like every tenant administrator. This
+makes `local.admin` and `local.checker` full administrators of `FINAXIS-LOCAL`; a production
+deployment must rotate or deactivate them (see
+[production hardening](production-hardening.md)).
 
 `gl_account.approve` is included on purpose.
 `V4__grant_local_admin_invite_approve_and_seed_checker.sql` already seeded a second bootstrap
@@ -328,13 +346,17 @@ close. Withholding it would have reintroduced that gap for accounting.
 ### Existing Tenants
 
 Being honest about the limit: `grantPermissions` runs only inside `createDefaultRoles`, which is
-called only from `OrganisationProvisioningService.approveProvisioning`. **No already-`ACTIVE`
-organisation receives the new accounting codes.** Newly approved organisations get them; existing
-ones do not.
+called only from `OrganisationProvisioningService.approveProvisioning`, so a tenant approved before
+a change does not receive it. **`V23` is the backfill for the administrator roles**: it
+grants every existing tenant's seeded `TENANT_ADMIN` (and `local-admin`) every `ACTIVE` tenant-scope
+code it lacks, so the accounting maker, checker and break-glass codes reach existing administrators.
+The other seeded bundles receive only the additions listed in `V23`'s header. A tenant-customised
+role is never touched.
 
-Today that is not a live problem. The only `ACTIVE` organisations in any deployment are `PLATFORM`
-(seeded by `V2`) and `FINAXIS-LOCAL` (seeded by `V3`), and `V5` handles both explicitly — the
-platform superset grant for the first, the ten configuration codes on `local-admin` for the second.
+Before `V23` that was not a live problem. The only `ACTIVE` organisations in any deployment were
+`PLATFORM` (seeded by `V2`) and `FINAXIS-LOCAL` (seeded by `V3`), and `V5` handled both
+explicitly — the platform superset grant for the first, the ten configuration codes on
+`local-admin` for the second.
 
 The general mechanism for a genuinely multi-tenant future is an idempotent,
 platform-permission-gated `reseedOrganisationDefaults(organisationId)` command that re-invokes the
@@ -377,15 +399,16 @@ deliberately left out of #34, which changes no enforcement code at all.
 
 | Test | What it guards |
 | --- | --- |
-| `AccountingPermissionCatalogueTests` | The 26 codes exist, are `ACTIVE`, agree with `AccountingPermissions` in both directions, occupy a contiguous `41000000-…01`–`…26` block, collide with no foundation code, are fully held by `PLATFORM_SUPER_ADMIN`, are entirely absent from `PLATFORM_SUPPORT`, and appear on `local-admin` as exactly the ten configuration codes |
-| `AccountingSeparationOfDutiesPolicyTests` | The dedicated maker and checker roles hold opposite sides of every approval pair, no default bundle carries a break-glass code, both accounting roles are provisioned at organisation approval, and every code named by a default bundle exists and is `ACTIVE` |
+| `AccountingPermissionCatalogueTests` | The 26 codes exist, are `ACTIVE`, agree with `AccountingPermissions` in both directions, occupy a contiguous `41000000-…01`–`…26` block, collide with no foundation code, are fully held by `PLATFORM_SUPER_ADMIN`, are entirely absent from `PLATFORM_SUPPORT`, and all appear on `local-admin` (`V23`) |
+| `AccountingSeparationOfDutiesPolicyTests` | The dedicated maker and checker roles hold opposite sides of every approval pair, no non-admin default bundle carries a break-glass code (the administrator holds them), both accounting roles are provisioned at organisation approval, and every code named by a default bundle exists and is `ACTIVE` |
 | `HighRiskOperationAuditCoverageTests` | Every HIGH/CRITICAL catalogue code maps to an audited action, every mapped action is reachable from production, and the `pendingEnforcement` ratchet still names only actions with no real call site |
-| `FoundationSeedDataTests` | The exact 81-code catalogue, no duplicates, and the exact permission set on the bootstrap `local-admin` role |
+| `FoundationSeedDataTests` | The exact 81-code catalogue, no duplicates, `local-admin` holding every `ACTIVE` tenant-scope code, and the exact `PLATFORM_SUPPORT` set |
 
 The migration also enforces its own invariants in `DO $$` blocks — pre-conditions (the two platform
 roles are `ACTIVE`, the `V3` bootstrap role is `ACTIVE`, `PLATFORM_SUPER_ADMIN` is not already
 missing a permission, no accounting row pre-exists) and post-conditions (26 seeded, nothing
-ungranted on `PLATFORM_SUPER_ADMIN`, exactly ten grants on `local-admin`). A mistake therefore
+ungranted on `PLATFORM_SUPER_ADMIN`, exactly ten grants on `local-admin`; `V5` is frozen, `V23`
+asserts its own, completer, set). A mistake therefore
 surfaces on deployment in every environment, not only in CI.
 
 ## Related Documents

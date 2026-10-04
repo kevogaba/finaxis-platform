@@ -6,6 +6,7 @@ import com.finaxis.platform.accounting.application.ledger.ResolvedLegs
 import com.finaxis.platform.accounting.application.posting.FinancialFact
 import com.finaxis.platform.accounting.application.posting.PostingReceipt
 import com.finaxis.platform.accounting.domain.AccountingContext
+import com.finaxis.platform.accounting.domain.AccountingPermissions
 import com.finaxis.platform.accounting.domain.AccountingSourceReference
 import com.finaxis.platform.accounting.domain.JournalEntryType
 import com.finaxis.platform.accounting.domain.MonetaryAmount
@@ -56,6 +57,13 @@ internal class PostingTenantFixture(
     organisationProvisioningService: OrganisationProvisioningService,
     private val engine: PostingEngine,
     private val actorId: UUID,
+    /**
+     * Whether [actorId] is the tenant administrator. The administrator holds every tenant-scope
+     * code, break-glass included; a suite that proves the absence or the revocation of a
+     * break-glass grant passes `false`, which leaves the actor a plain member holding only
+     * `journal.view`.
+     */
+    private val administrator: Boolean = true,
 ) {
     private val organisations = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
     private val schema = JournalSchemaFixture(dsl)
@@ -77,7 +85,16 @@ internal class PostingTenantFixture(
      * date and resolves the period from it.
      */
     fun provisionTenant(label: String): Tenant {
-        val organisationId = organisations.createActiveOrganisation(label, actorId)
+        val organisationId =
+            if (administrator) {
+                organisations.createActiveOrganisation(label, actorId)
+            } else {
+                organisations.createActiveOrganisationWithMember(
+                    label,
+                    actorId,
+                    AccountingPermissions.JOURNAL_VIEW,
+                )
+            }
         val businessDate =
             requireNotNull(
                 dsl

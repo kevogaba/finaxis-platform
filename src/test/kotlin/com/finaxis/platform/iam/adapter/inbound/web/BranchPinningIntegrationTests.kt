@@ -61,6 +61,7 @@ class BranchPinningIntegrationTests {
     private lateinit var cacheManager: CacheManager
 
     private val createdRoleIds = mutableListOf<UUID>()
+    private val withheldPermissionIds = mutableListOf<UUID>()
     private val createdBranchIds = mutableListOf<UUID>()
 
     @BeforeEach
@@ -111,6 +112,7 @@ class BranchPinningIntegrationTests {
             dsl.deleteFrom(ROLE).where(ROLE.ID.eq(roleId)).execute()
         }
         createdRoleIds.clear()
+        restoreLocalAdminGrants()
         createdBranchIds.forEach { branchId ->
             dsl
                 .deleteFrom(BRANCH_TRANSITION_LOG)
@@ -278,6 +280,7 @@ class BranchPinningIntegrationTests {
 
     @Test
     fun `operational authority stays narrowed to the selected branch`() {
+        withholdFromLocalAdmin("branch.suspend")
         grantRole("ops-only-suspender", setOf("branch.suspend"), branchId = OPERATIONS_BRANCH_ID)
 
         // The branch-scoped grant is effective only while that branch is the selected one.
@@ -299,6 +302,7 @@ class BranchPinningIntegrationTests {
 
     @Test
     fun `a branch scoped grant on the selected branch does not reach another branch`() {
+        withholdFromLocalAdmin("branch.suspend")
         grantRole("ops-suspender", setOf("branch.suspend"), branchId = OPERATIONS_BRANCH_ID)
         val pinnedToOps = contextToken(OPERATIONS_BRANCH_ID)
 
@@ -321,6 +325,7 @@ class BranchPinningIntegrationTests {
 
     @Test
     fun `a branch scoped role grant cannot assign roles on another branch`() {
+        withholdFromLocalAdmin("user.assign_role")
         grantRole("ops-role-assigner", setOf("user.assign_role"), branchId = OPERATIONS_BRANCH_ID)
         val roleId = createdRoleIds.first()
         val before = dsl.fetchCount(USER_ROLE_ASSIGNMENT)
@@ -396,6 +401,46 @@ class BranchPinningIntegrationTests {
                     status { isBadRequest() }
                 }
         }
+    }
+
+    /**
+     * Takes [codes] off the bootstrap `local-admin` role for the rest of the test. Since V23
+     * that role is a full tenant administrator, so a test that proves a grant held ONLY at branch
+     * scope must first remove the tenant-wide grant the user would otherwise also hold. It is put
+     * back by [restoreLocalAdminGrants], so the seed is left as it was found.
+     */
+    private fun withholdFromLocalAdmin(vararg codes: String) {
+        val permissionIds =
+            dsl
+                .select(PERMISSION.ID)
+                .from(PERMISSION)
+                .where(PERMISSION.PERMISSION_CODE.`in`(codes.toList()))
+                .fetch(PERMISSION.ID)
+                .filterNotNull()
+        withheldPermissionIds += permissionIds
+        dsl
+            .deleteFrom(ROLE_PERMISSION)
+            .where(ROLE_PERMISSION.ROLE_ID.eq(LOCAL_ADMIN_ROLE_ID))
+            .and(ROLE_PERMISSION.PERMISSION_ID.`in`(permissionIds))
+            .execute()
+        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.clear()
+    }
+
+    private fun restoreLocalAdminGrants() {
+        val now = OffsetDateTime.now()
+        withheldPermissionIds.forEach { permissionId ->
+            dsl
+                .insertInto(ROLE_PERMISSION)
+                .set(ROLE_PERMISSION.ORGANISATION_ID, ORGANISATION_ID)
+                .set(ROLE_PERMISSION.ROLE_ID, LOCAL_ADMIN_ROLE_ID)
+                .set(ROLE_PERMISSION.PERMISSION_ID, permissionId)
+                .set(ROLE_PERMISSION.GRANTED_AT, now)
+                .set(ROLE_PERMISSION.CREATED_AT, now)
+                .set(ROLE_PERMISSION.UPDATED_AT, now)
+                .onConflictDoNothing()
+                .execute()
+        }
+        withheldPermissionIds.clear()
     }
 
     private fun permissionsFor(branchId: UUID?) =

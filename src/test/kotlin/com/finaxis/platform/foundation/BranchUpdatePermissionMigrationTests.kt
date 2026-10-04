@@ -124,21 +124,28 @@ class BranchUpdatePermissionMigrationTests(
 
     @Test
     fun `platform support, which holds no branch create, gets nothing`() {
+        // V23 later gave it the platform reads, so the assertion is what V19 owns: it holds
+        // no branch.update and the run adds nothing to it.
+        val before = platformSupportCodes()
+
         runMigration()
 
-        assertEquals(
-            setOf("audit.view", "business_date.view"),
-            jdbcTemplate
-                .queryForList(
-                    """
-                    SELECT p.permission_code FROM role_permission rp
-                    JOIN permission p ON p.id = rp.permission_id
-                    WHERE rp.role_id = '$PLATFORM_SUPPORT'
-                    """.trimIndent(),
-                    String::class.java,
-                ).toSet(),
-        )
+        assertEquals(before, platformSupportCodes())
+        assertTrue("branch.update" !in before, "platform support must not hold branch.update")
+        assertTrue("branch.create" !in before, "platform support must not hold branch.create")
     }
+
+    private fun platformSupportCodes(): Set<String> =
+        jdbcTemplate
+            .queryForList(
+                """
+                SELECT p.permission_code FROM role_permission rp
+                JOIN permission p ON p.id = rp.permission_id
+                WHERE rp.role_id = '$PLATFORM_SUPPORT'
+                """.trimIndent(),
+                String::class.java,
+            ).filterNotNull()
+            .toSet()
 
     @Test
     fun `a direct membership override on branch create is copied with its effect`() {

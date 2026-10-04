@@ -527,10 +527,10 @@ Nothing in ADR 0029 about maker-checker, remarks, return-to-draft, events or the
 ## Open items
 
 - **The seeded-roles rule.** "An admin holds every permission of its scope", deriving the seeded
-  admin role bundles from `permission.grant_scope`, is **its own ADR and pull request**. This ADR
-  only shares the catalogue metadata migration with it and references it. A bundle derived that way
-  trivially satisfies this ADR's rule as long as it contains the views, which it does by
-  definition.
+  admin role bundles from `permission.grant_scope`, is its own change and **is implemented by
+  `V23`**. This ADR only shares the catalogue metadata migration with it and references it.
+  A bundle derived that way trivially satisfies this ADR's rule as long as it contains the views,
+  which it does by definition; `SeededRolesDriftTests` asserts it for every seeded bundle.
 - **Classifying views and context codes in the database.** Settled and **implemented** by
   `V22__permission_catalogue_metadata.sql`: it adds a `permission.kind` column (`VIEW`, `MUTATION`
   or `CONTEXT`), `NOT NULL` once every existing code is classified, and `permission.grant_scope`

@@ -585,7 +585,7 @@ class JooqOrganisationBootstrapStore(
     }
 
     override fun createDefaultRoles(organisationId: UUID) {
-        OrganisationBootstrapDefaults.ROLE_PERMISSIONS.forEach { (roleCode, permissions) ->
+        dsl.defaultRoleBundles().forEach { (roleCode, permissions) ->
             dsl
                 .insertInto(ROLE)
                 .set(ROLE.ORGANISATION_ID, organisationId)
@@ -638,109 +638,22 @@ private fun String.toDisplayName(): String =
 
 /**
  * The default role bundles every newly approved tenant is seeded with. `internal`, not `private`,
- * so the permission-catalogue test can check each bundle against the catalogue's view
- * requirements (ADR 0030) without approving a fixture tenant.
+ * so the permission-catalogue tests can check each bundle against the catalogue (ADR 0030) without
+ * approving a fixture tenant.
+ *
+ * `TENANT_ADMIN` is **not listed here**: an administrator role holds every permission of its
+ * scope, so its bundle is every `ACTIVE` permission whose `grant_scope` is `TENANT`, read from the
+ * catalogue when the role is seeded and when readiness is checked ([roleBundles],
+ * `DSLContext.defaultRoleBundles`). A new `ACTIVE` tenant-scope code therefore reaches the next
+ * tenant's administrator with no edit here. The bundles below are purpose-built role design, not
+ * mirrors of the catalogue, and stay explicit.
  */
 internal object OrganisationBootstrapDefaults {
     const val HEAD_OFFICE_CODE = "HEAD_OFFICE"
-    val SEQUENCE_CODES = listOf("MEMBER", "TRANSACTION", "JOURNAL")
-    private val BASELINE_PERMISSION_CODES =
-        setOf(
-            // Tenant lifecycle
-            "tenant.create",
-            "tenant.submit_for_approval",
-            "tenant.approve",
-            "tenant.activate",
-            "tenant.suspend",
-            "tenant.deprovision",
-            // Foundation API – tenant reads/writes
-            "tenant.view",
-            "tenant.update_draft",
-            "tenant.reject",
-            "tenant.reactivate",
-            "tenant.bootstrap_retry",
-            // Branch lifecycle
-            "branch.create",
-            "branch.update",
-            "branch.approve",
-            "branch.suspend",
-            "branch.close",
-            // Foundation API – branch
-            "branch.view",
-            "branch.reactivate",
-            // User / membership administration (no global user lifecycle – platform-only)
-            "user.view",
-            "user.invite",
-            "user.approve",
-            "user.assign_branch",
-            "user.assign_role",
-            "user.revoke_branch",
-            "user.revoke_role",
-            // Membership
-            "membership.view",
-            "membership.suspend",
-            "membership.reactivate",
-            "membership.revoke",
-            // Branch assignments
-            "branch_assignment.view",
-            // Roles
-            "role.create",
-            "role.update",
-            "role.assign_permission",
-            "role.view",
-            "role.activate",
-            "role.deactivate",
-            "role.remove_permission",
-            // Role assignments
-            "role_assignment.view",
-            // Permissions catalog
-            "permission.view",
-            // Audit & settings
-            "audit.view",
-            "settings.view",
-            "settings.update",
-            // Business date & COB
-            "business_date.view",
-            "business_date.advance",
-            "business_date.reopen",
-            "cob.start",
-            "cob.complete",
-            // Auth selection
-            "auth.select_organisation",
-            "auth.select_branch",
-            // Profile
-            "iam.profile.read",
-        )
 
-    /**
-     * Accounting configuration and oversight, granted to TENANT_ADMIN. Deliberately excludes the
-     * operational and break-glass codes - manual journal preparation, approval, reversal,
-     * prior-period posting, reconciliation resolution and period reopening - so the default
-     * administrator is not also the default poster. TENANT_ADMIN holds role.assign_permission and
-     * can grant itself more, so this is safe-by-default posture rather than a security boundary.
-     */
-    private val ACCOUNTING_ADMINISTRATION_CODES =
-        setOf(
-            AccountingPermissions.GL_ACCOUNT_VIEW,
-            AccountingPermissions.GL_ACCOUNT_CREATE,
-            AccountingPermissions.GL_ACCOUNT_UPDATE,
-            AccountingPermissions.GL_ACCOUNT_SUBMIT,
-            AccountingPermissions.GL_ACCOUNT_APPROVE,
-            AccountingPermissions.GL_ACCOUNT_DEACTIVATE,
-            AccountingPermissions.FISCAL_PERIOD_VIEW,
-            AccountingPermissions.FISCAL_PERIOD_OPEN,
-            AccountingPermissions.FISCAL_PERIOD_CLOSE,
-            AccountingPermissions.JOURNAL_VIEW,
-            AccountingPermissions.POSTING_RULE_VIEW,
-            AccountingPermissions.POSTING_RULE_CREATE,
-            AccountingPermissions.POSTING_RULE_UPDATE,
-            AccountingPermissions.POSTING_RULE_SUBMIT,
-            AccountingPermissions.POSTING_RULE_APPROVE,
-            AccountingPermissions.RECONCILIATION_VIEW,
-            AccountingPermissions.RECONCILIATION_RUN,
-            AccountingPermissions.ACCOUNTING_REPORT_VIEW,
-            AccountingPermissions.ACCOUNTING_REPORT_EXPORT,
-        )
+    /** The administrator role, whose bundle is derived from the catalogue rather than listed. */
+    const val TENANT_ADMIN_ROLE_CODE = "TENANT_ADMIN"
+    val SEQUENCE_CODES = listOf("MEMBER", "TRANSACTION", "JOURNAL")
 
     /** Accounting maker: prepares and submits, never approves. */
     private val ACCOUNTING_OPERATOR_CODES =
@@ -788,9 +701,12 @@ internal object OrganisationBootstrapDefaults {
             "iam.profile.read",
         )
 
-    val ROLE_PERMISSIONS =
+    /**
+     * The purpose-built bundles. None holds a break-glass code: only the administrator roles do.
+     * Every one holds a mutation only with the views the catalogue pairs with it (ADR 0030).
+     */
+    val EXPLICIT_ROLE_PERMISSIONS =
         mapOf(
-            "TENANT_ADMIN" to BASELINE_PERMISSION_CODES + ACCOUNTING_ADMINISTRATION_CODES,
             "TENANT_AUDITOR" to
                 setOf(
                     "audit.view",
@@ -838,6 +754,8 @@ internal object OrganisationBootstrapDefaults {
                     "role_assignment.view",
                     "permission.view",
                     "audit.view",
+                    // To list the branches it assigns users to.
+                    "branch.view",
                     "auth.select_organisation",
                     "auth.select_branch",
                     "iam.profile.read",
@@ -852,6 +770,9 @@ internal object OrganisationBootstrapDefaults {
                     "branch.view",
                     "branch.reactivate",
                     "user.assign_branch",
+                    // It can assign a user to a branch, so it can undo that and list the users.
+                    "user.revoke_branch",
+                    "user.view",
                     "branch_assignment.view",
                     "business_date.view",
                     "accounting_report.view",
@@ -862,6 +783,7 @@ internal object OrganisationBootstrapDefaults {
             "BRANCH_OPERATOR" to
                 setOf(
                     "business_date.view",
+                    "branch.view",
                     "auth.select_organisation",
                     "auth.select_branch",
                     "iam.profile.read",
@@ -869,6 +791,32 @@ internal object OrganisationBootstrapDefaults {
             "ACCOUNTING_OPERATOR" to ACCOUNTING_OPERATOR_CODES,
             "ACCOUNTING_APPROVER" to ACCOUNTING_APPROVER_CODES,
         )
+
+    /**
+     * Every default role's bundle for one tenant: [tenantAdminCodes], the catalogue's `ACTIVE`
+     * tenant-scope codes, for `TENANT_ADMIN` and the explicit lists for the rest.
+     */
+    fun roleBundles(tenantAdminCodes: Set<String>): Map<String, Set<String>> =
+        mapOf(TENANT_ADMIN_ROLE_CODE to tenantAdminCodes) + EXPLICIT_ROLE_PERMISSIONS
+}
+
+/**
+ * The default role bundles as the catalogue defines them now. The seed (`createDefaultRoles`) and
+ * the readiness check behind tenant reactivation both call this, so the grant and the check
+ * cannot disagree.
+ */
+internal fun DSLContext.defaultRoleBundles(): Map<String, Set<String>> {
+    val tenantScope =
+        select(PERMISSION.PERMISSION_CODE)
+            .from(PERMISSION)
+            .where(PERMISSION.GRANT_SCOPE.eq("TENANT"))
+            .and(PERMISSION.STATUS.eq("ACTIVE"))
+            .fetch(PERMISSION.PERMISSION_CODE)
+            .filterNotNull()
+            .toSet()
+    // An empty bundle would seed an administrator that holds nothing and pass readiness vacuously.
+    check(tenantScope.isNotEmpty()) { "The catalogue holds no ACTIVE tenant-scope permission." }
+    return OrganisationBootstrapDefaults.roleBundles(tenantScope)
 }
 
 private fun organisationSummary(record: org.jooq.Record): OrganisationSummary {
@@ -1207,7 +1155,7 @@ class JooqOrganisationAccessStore(
             ).fetchOne(0, Int::class.java) == OrganisationBootstrapDefaults.SEQUENCE_CODES.size
 
     private fun hasDefaultRolesAndPermissions(organisationId: UUID): Boolean =
-        OrganisationBootstrapDefaults.ROLE_PERMISSIONS.all { (roleCode, permissionCodes) ->
+        dsl.defaultRoleBundles().all { (roleCode, permissionCodes) ->
             val roleId =
                 dsl
                     .select(ROLE.ID)

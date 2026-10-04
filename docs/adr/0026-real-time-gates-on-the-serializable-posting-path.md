@@ -92,8 +92,8 @@ and the answer is stale for a different reason, so both cache outcomes are wrong
 mechanism differs.
 
 What bounds it, stated so the priority is judged honestly: the actor must already hold
-`journal.post_prior_period`, which ADR 0022 keeps out of every default bundle and grants to a named
-actor, so the population is small and privileged by construction; and the revocation must commit
+`journal.post_prior_period`, which ADR 0022 keeps out of every non-administrator default
+bundle and grants to a named actor, so the population is small and privileged by construction; and the revocation must commit
 inside the posting's window. The blast radius is one backdated posting committing under an
 authority revoked moments earlier — narrow, and precisely the kind of thing an audit asks about
 afterwards, which is the reason break-glass is audited at all.

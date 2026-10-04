@@ -34,6 +34,32 @@ class TenantAdminOrganisationFixture(
         labelPrefix: String,
         actorId: UUID,
     ): UUID {
+        val organisationId = provisionActiveOrganisation(labelPrefix, actorId)
+        grantTenantAdmin(organisationId, actorId)
+        return organisationId
+    }
+
+    /**
+     * Creates an ACTIVE organisation in which [actorId] is a plain member holding exactly
+     * [permissionCodes] and NOT the TENANT_ADMIN role. Since V23 that role holds every
+     * tenant-scope code, break-glass included, so a test that must prove the absence of a code
+     * (a backdated posting refused for want of `journal.post_prior_period`, a revocation that
+     * leaves the actor without it) cannot use [createActiveOrganisation].
+     */
+    fun createActiveOrganisationWithMember(
+        labelPrefix: String,
+        actorId: UUID,
+        vararg permissionCodes: String,
+    ): UUID {
+        val organisationId = provisionActiveOrganisation(labelPrefix, actorId)
+        grantTenantPermissionsOnly(organisationId, actorId, *permissionCodes)
+        return organisationId
+    }
+
+    private fun provisionActiveOrganisation(
+        labelPrefix: String,
+        actorId: UUID,
+    ): UUID {
         val organisationId =
             organisationProvisioningService
                 .createDraft(
@@ -54,7 +80,6 @@ class TenantAdminOrganisationFixture(
         organisationProvisioningService.approveProvisioning(
             ApproveOrganisationProvisioningCommand(organisationId),
         )
-        grantTenantAdmin(organisationId, actorId)
         return organisationId
     }
 

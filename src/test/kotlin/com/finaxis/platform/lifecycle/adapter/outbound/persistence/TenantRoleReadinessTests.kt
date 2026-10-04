@@ -1,7 +1,9 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.jooq.tables.references.ORGANISATION
 import com.finaxis.platform.jooq.tables.references.PERMISSION
 import com.finaxis.platform.jooq.tables.references.ROLE
 import com.finaxis.platform.jooq.tables.references.ROLE_PERMISSION
@@ -12,16 +14,23 @@ import com.finaxis.platform.lifecycle.application.FoundationLifecycleService
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.application.OrganisationSetupRequirement
 import com.finaxis.platform.lifecycle.application.OrganisationTransitionCommand
+import com.finaxis.platform.lifecycle.application.ReactivateOrganisationCommand
+import com.finaxis.platform.lifecycle.application.Reason
+import com.finaxis.platform.lifecycle.application.SuspendOrganisationCommand
+import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleTransition
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
+import org.springframework.core.io.ClassPathResource
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestConstructor
 import org.springframework.transaction.annotation.Transactional
 import java.time.OffsetDateTime
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -43,6 +52,7 @@ class TenantRoleReadinessTests(
     private val lifecycleService: FoundationLifecycleService,
     private val organisationProvisioningService: OrganisationProvisioningService,
     private val accessStore: JooqOrganisationAccessStore,
+    private val jdbcTemplate: JdbcTemplate,
 ) {
     @Test
     fun `an existing tenant whose roles still hold the deprecated branch activate stays ready`() {
@@ -96,6 +106,76 @@ class TenantRoleReadinessTests(
             OrganisationSetupRequirement.DEFAULT_ROLES_AND_PERMISSIONS in
                 accessStore.missingRequiredSetup(organisationId),
         )
+    }
+
+    @Test
+    fun `a legacy tenant is refused reactivation until V23 backfills it, then reactivates`() {
+        // A tenant approved before holds the old 70-code TENANT_ADMIN: the ten inert tenant.*
+        // codes and none of the accounting maker and checker codes. The bundle is now derived from
+        // the catalogue, so that role no longer satisfies readiness, and a suspended legacy tenant
+        // would stay suspended (409) until its roles are backfilled. V23 is that backfill.
+        val organisationId = approvedOrganisation("legacy-backfill")
+        legacyTenantAdmin(organisationId)
+        organisationProvisioningService.suspend(
+            SuspendOrganisationCommand(organisationId, Reason.required("Review")),
+        )
+        assertTrue(!isReady(organisationId), "a legacy TENANT_ADMIN lacks the derived bundle")
+        assertFailsWith<ConflictException> {
+            organisationProvisioningService.reactivate(
+                ReactivateOrganisationCommand(organisationId),
+            )
+        }
+
+        jdbcTemplate.execute(
+            ClassPathResource(MIGRATION).inputStream.use { it.readAllBytes().decodeToString() },
+        )
+
+        assertTrue(isReady(organisationId), "the backfill completes the legacy role")
+        organisationProvisioningService.reactivate(ReactivateOrganisationCommand(organisationId))
+        assertEquals(
+            OrganisationLifecycleState.ACTIVE.name,
+            dsl
+                .select(ORGANISATION.STATUS)
+                .from(ORGANISATION)
+                .where(ORGANISATION.ID.eq(organisationId))
+                .fetchSingle(ORGANISATION.STATUS),
+        )
+    }
+
+    @Test
+    fun `the backfill keeps a deprecated row and removes only the inert platform codes`() {
+        val organisationId = approvedOrganisation("legacy-extra")
+        legacyTenantAdmin(organisationId)
+        // A deprecated leftover and an extra row (V21 and any hand grant) neither break readiness
+        // nor are removed: only the inert platform-only codes are deleted.
+        grantToRole(organisationId, "TENANT_ADMIN", "branch.activate")
+
+        jdbcTemplate.execute(
+            ClassPathResource(MIGRATION).inputStream.use { it.readAllBytes().decodeToString() },
+        )
+
+        val held = rolePermissionCodes(organisationId, "TENANT_ADMIN")
+        assertTrue("branch.activate" in held)
+        assertTrue("tenant.create" !in held && "tenant.bootstrap_retry" !in held, "$held")
+        assertTrue(isReady(organisationId))
+    }
+
+    /** Rebuilds the pre-V23 TENANT_ADMIN: inert tenant.* codes in, seven accounting codes out. */
+    private fun legacyTenantAdmin(organisationId: UUID) {
+        jdbcTemplate.update(
+            """
+            DELETE FROM role_permission
+            WHERE organisation_id = ?
+              AND role_id = (SELECT id FROM role WHERE organisation_id = ?
+                             AND role_code = 'TENANT_ADMIN')
+              AND permission_id IN (SELECT id FROM permission WHERE permission_code IN (
+                  'journal.create_manual', 'journal.submit', 'journal.approve', 'journal.reverse',
+                  'reconciliation.resolve', 'fiscal_period.reopen', 'journal.post_prior_period'))
+            """.trimIndent(),
+            organisationId,
+            organisationId,
+        )
+        LEGACY_PLATFORM_CODES.forEach { grantToRole(organisationId, "TENANT_ADMIN", it) }
     }
 
     private fun isReady(organisationId: UUID): Boolean =
@@ -197,4 +277,22 @@ class TenantRoleReadinessTests(
             .fetch(PERMISSION.PERMISSION_CODE)
             .filterNotNull()
             .toSet()
+
+    private companion object {
+        const val MIGRATION =
+            "db/migration/V23__seeded_admin_roles_hold_every_permission_of_their_scope.sql"
+        val LEGACY_PLATFORM_CODES =
+            listOf(
+                "tenant.create",
+                "tenant.submit_for_approval",
+                "tenant.approve",
+                "tenant.activate",
+                "tenant.suspend",
+                "tenant.deprovision",
+                "tenant.update_draft",
+                "tenant.reject",
+                "tenant.reactivate",
+                "tenant.bootstrap_retry",
+            )
+    }
 }
