@@ -120,12 +120,11 @@ class BranchAssignmentController(
         @RequestParam(required = false, name = "sort_dir") sortDir: String?,
     ): ApiPage<BranchAssignmentSummaryResponse> {
         val caller = CallerContextResolver.getTenantCaller()
-        branchId?.let { verifyBranchContext(caller, it) }
         val pageResult =
             lifecycleIamReadService.searchBranchAssignments(
                 caller.activeOrganisationId,
                 LifecycleBranchAssignmentFilter(
-                    branchId = caller.activeBranchId ?: branchId,
+                    branchId = branchId ?: caller.activeBranchId,
                     assignmentType = assignmentType,
                     status = status,
                     page = page,
@@ -194,7 +193,6 @@ class BranchAssignmentController(
                 assignmentId,
                 caller,
             )
-        verifyAssignmentContext(caller, detail)
         return detail.toResponse()
     }
 
@@ -252,7 +250,6 @@ class BranchAssignmentController(
         @RequestBody @Valid request: AssignBranchRequest,
     ): ResponseEntity<BranchAssignmentSummaryResponse> {
         val caller = CallerContextResolver.getTenantCaller()
-        verifyBranchContext(caller, request.branchId)
         permissionGuard.requireTenantPermission(
             caller.actorId,
             caller.activeOrganisationId,
@@ -333,7 +330,6 @@ class BranchAssignmentController(
                 assignmentId,
                 caller,
             )
-        verifyAssignmentContext(caller, assignment)
         permissionGuard.requireTenantPermission(
             caller.actorId,
             caller.activeOrganisationId,
@@ -372,20 +368,6 @@ class BranchAssignmentController(
             ?: throw ResourceNotFoundException(
                 safeDetail = "Branch assignment not found after assignment",
             )
-    }
-
-    private fun verifyAssignmentContext(
-        caller: TenantCaller,
-        assignment: LifecycleBranchAssignmentDetail,
-    ) = verifyBranchContext(caller, assignment.branchId)
-
-    private fun verifyBranchContext(
-        caller: TenantCaller,
-        targetBranchId: UUID,
-    ) {
-        if (caller.activeBranchId != null && caller.activeBranchId != targetBranchId) {
-            throw ResourceNotFoundException(safeDetail = "Branch assignment not found")
-        }
     }
 
     private fun LifecycleBranchAssignmentSummary.toResponse() =

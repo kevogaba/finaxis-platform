@@ -46,9 +46,16 @@ clients present the opaque signed context token in `X-Active-Organisation-Contex
 transport model is documented in
 [active organisation context](../security/active-organisation-context.md).
 
-Branch-scoped tenant resources also validate the caller's active branch against the target
-resource's branch context. Cross-branch lookups return a safe 403 or 404 instead of confirming
-that a resource exists outside the caller's branch context.
+The selected branch narrows operational authority (effective permissions are resolved for it),
+but it does not hide tenant administration: branch lifecycle, branch-assignment and BRANCH-scope
+role-assignment endpoints accept any branch of the active tenant, and the application layer
+evaluates the permission against the target branch (or tenant scope for reads). A caller without
+the permission for that branch gets a `403`; once permitted, a branch lifecycle or branch-assignment
+target that does not exist in the active tenant (or belongs to another tenant) is a `404`, never a
+`500`. A BRANCH-scope role assignment is the exception: `RoleManagementService.validateScope`
+requires the user to hold an active assignment to the target branch and answers `409` when they do
+not, including for an unknown or foreign `branch_id`. See
+[active organisation context](../security/active-organisation-context.md).
 
 ### Selection Exceptions
 
@@ -248,7 +255,7 @@ Base path: `/api/v1/auth`.
 | GET    | `/organisations`       | List available organisations                      | `auth.select_organisation`    | page     |
 | GET    | `/branches`            | List available branches for selected organisation | `auth.select_branch`          | page     |
 | POST   | `/select-organisation` | Select organisation                               | `auth.select_organisation`    | mutation |
-| POST   | `/select-branch`       | Select active branch                              | service: `auth.select_branch` | mutation |
+| POST   | `/select-branch`       | Select or clear the active branch                 | service: `auth.select_branch` | mutation |
 
 Available organisation discovery is context-free and requires only the bearer JWT:
 
@@ -316,6 +323,42 @@ Selection request and response:
   ]
 }
 ```
+
+`POST /select-branch` takes an optional `branch_id`. A UUID selects that assigned branch. Omitting
+it (`{}`) or sending `null` clears the selection (a blank or malformed `branch_id` is a `400`, it
+never clears) and returns an institution-level context for any
+user, including a single-branch user auto-selected by `select-organisation`:
+
+```json
+{
+  "branch_id": "33333333-3333-7333-8333-333333333333"
+}
+```
+
+```json
+{
+  "organisation_id": "11111111-1111-7111-8111-111111111111",
+  "membership_id": "22222222-2222-7222-8222-222222222222",
+  "branch_id": "33333333-3333-7333-8333-333333333333",
+  "context_token": "opaque-signed-context-token",
+  "context_header": "X-Active-Organisation-Context"
+}
+```
+
+Clearing response (`{}` or `{"branch_id": null}`):
+
+```json
+{
+  "organisation_id": "11111111-1111-7111-8111-111111111111",
+  "membership_id": "22222222-2222-7222-8222-222222222222",
+  "branch_id": null,
+  "context_token": "opaque-signed-context-token",
+  "context_header": "X-Active-Organisation-Context"
+}
+```
+
+The response echoes the selected `branch_id`; after a clear the property is present with an
+explicit `"branch_id": null` (like the `select-organisation` response above), never omitted.
 
 Profile response example:
 

@@ -166,29 +166,37 @@ class BranchAssignmentControllerTests
         }
 
         @Test
-        fun `searchBranchAssignments rejects a branch outside the active context`() {
+        fun `searchBranchAssignments honours an explicit branch other than the selected one`() {
             val tenantId = uuidV7()
-            val activeBranchId = uuidV7()
+            val selectedBranchId = uuidV7()
+            val requestedBranchId = uuidV7()
+            whenever(
+                lifecycleIamReadService.searchBranchAssignments(eq(tenantId), any(), any()),
+            ).thenReturn(apiPageOf(emptyList(), number = 0, size = 25, totalItems = 0))
 
             mockMvc
                 .get(ApiPaths.BRANCH_ASSIGNMENTS) {
-                    param("branch_id", uuidV7().toString())
+                    param("branch_id", requestedBranchId.toString())
                     with(
                         authentication(
                             tenantToken(
                                 setOf("branch_assignment.view"),
                                 tenantId,
-                                activeBranchId,
+                                selectedBranchId,
                             ),
                         ),
                     )
                 }.andExpect {
-                    status { isNotFound() }
-                    jsonPath("$.code") { value("resource_not_found") }
+                    status { isOk() }
                 }
 
-            verify(lifecycleIamReadService, org.mockito.kotlin.never())
-                .searchBranchAssignments(any(), any(), any())
+            val filterCaptor = argumentCaptor<LifecycleBranchAssignmentFilter>()
+            verify(lifecycleIamReadService).searchBranchAssignments(
+                eq(tenantId),
+                filterCaptor.capture(),
+                any(),
+            )
+            kotlin.test.assertEquals(requestedBranchId, filterCaptor.firstValue.branchId)
         }
 
         @Test
@@ -204,6 +212,25 @@ class BranchAssignmentControllerTests
                     status { isOk() }
                     jsonPath("$.id") { value(assignmentId.toString()) }
                     jsonPath("$.status") { value("ACTIVE") }
+                }
+        }
+
+        @Test
+        fun `getBranchAssignment reads an assignment on a branch other than the selected one`() {
+            val tenantId = uuidV7()
+            val assignmentId = uuidV7()
+            stubAssignmentDetail(tenantId, assignmentId)
+
+            mockMvc
+                .get("${ApiPaths.BRANCH_ASSIGNMENTS}/$assignmentId") {
+                    with(
+                        authentication(
+                            tenantToken(setOf("branch_assignment.view"), tenantId, uuidV7()),
+                        ),
+                    )
+                }.andExpect {
+                    status { isOk() }
+                    jsonPath("$.id") { value(assignmentId.toString()) }
                 }
         }
 
@@ -265,6 +292,57 @@ class BranchAssignmentControllerTests
         }
 
         @Test
+        fun `assign targets a branch other than the selected one`() {
+            val tenantId = uuidV7()
+            val userId = uuidV7()
+            val targetBranchId = uuidV7()
+            val assignmentId = uuidV7()
+            whenever(
+                lifecycleIamReadService.searchBranchAssignments(eq(tenantId), any(), any()),
+            ).thenReturn(
+                apiPageOf(
+                    listOf(
+                        LifecycleBranchAssignmentSummary(
+                            assignmentId,
+                            userId,
+                            targetBranchId,
+                            "OPERATE",
+                            "ACTIVE",
+                        ),
+                    ),
+                    number = 0,
+                    size = 1,
+                    totalItems = 1,
+                ),
+            )
+
+            mockMvc
+                .post(ApiPaths.BRANCH_ASSIGNMENTS) {
+                    contentType = MediaType.APPLICATION_JSON
+                    content =
+                        apiJsonCodec.mapper.writeValueAsString(
+                            AssignBranchRequest(
+                                userId,
+                                targetBranchId,
+                                BranchAssignmentType.OPERATE,
+                            ),
+                        )
+                    with(
+                        authentication(
+                            tenantToken(setOf("user.assign_branch"), tenantId, uuidV7()),
+                        ),
+                    )
+                }.andExpect {
+                    status { isCreated() }
+                    jsonPath("$.id") { value(assignmentId.toString()) }
+                }
+
+            val commandCaptor = argumentCaptor<AssignUserToBranchCommand>()
+            verify(branchProvisioningService).assignUser(commandCaptor.capture())
+            kotlin.test.assertEquals(targetBranchId, commandCaptor.firstValue.branchId)
+        }
+
+        @Test
         fun `assign rejects a missing user identifier`() {
             val tenantId = uuidV7()
 
@@ -321,7 +399,7 @@ class BranchAssignmentControllerTests
         }
 
         @Test
-        fun `revoke hides assignments outside the caller branch context`() {
+        fun `revoke administers an assignment on a branch other than the selected one`() {
             val tenantId = uuidV7()
             val assignmentId = uuidV7()
             val assignmentBranchId = uuidV7()
@@ -348,12 +426,12 @@ class BranchAssignmentControllerTests
                         ),
                     )
                 }.andExpect {
-                    status { isNotFound() }
-                    content {
-                        contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
-                    }
-                    jsonPath("$.code") { value("resource_not_found") }
+                    status { isOk() }
                 }
+
+            val commandCaptor = argumentCaptor<RevokeUserBranchAssignmentCommand>()
+            verify(branchProvisioningService).revokeUserAssignment(commandCaptor.capture())
+            kotlin.test.assertEquals(assignmentBranchId, commandCaptor.firstValue.branchId)
         }
 
         @Test

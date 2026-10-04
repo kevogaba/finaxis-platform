@@ -15,6 +15,7 @@ import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
 import com.finaxis.platform.lifecycle.PermissionGuard
+import com.finaxis.platform.lifecycle.TenantCaller
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ActivateBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CloseBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateBranchRequest
@@ -30,6 +31,7 @@ import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.argThat
 import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.verify
@@ -51,6 +53,9 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.header
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import java.time.Instant
 import java.util.UUID
+import kotlin.test.assertEquals
+
+private const val REASON_BODY = "{\"reason\":\"Valid reason\"}"
 
 @WebMvcTest(controllers = [BranchController::class], useDefaultFilters = false)
 @AutoConfigureMockMvc
@@ -414,18 +419,76 @@ class BranchControllerTests
         }
 
         @Test
-        fun `getBranch rejects mismatched branch context`() {
+        fun `getBranch administers a branch other than the selected one`() {
             val tenantId = uuidV7()
-            val branchId = uuidV7()
-            val otherBranchId = uuidV7()
+            val targetBranchId = uuidV7()
+            val selectedBranchId = uuidV7()
+            stubBranchDetail(tenantId, targetBranchId, "ACTIVE")
 
             mockMvc
-                .get("${ApiPaths.BRANCHES}/$branchId") {
-                    with(authentication(tenantToken(setOf("branch.view"), tenantId, otherBranchId)))
+                .get("${ApiPaths.BRANCHES}/$targetBranchId") {
+                    with(
+                        authentication(
+                            tenantToken(setOf("branch.view"), tenantId, selectedBranchId),
+                        ),
+                    )
                 }.andExpect {
-                    status { isNotFound() }
-                    jsonPath("$.code") { value("resource_not_found") }
+                    status { isOk() }
+                    jsonPath("$.id") { value(targetBranchId.toString()) }
                 }
+
+            val callerCaptor = org.mockito.kotlin.argumentCaptor<TenantCaller>()
+            verify(foundationQueryService)
+                .getBranch(eq(tenantId), eq(targetBranchId), callerCaptor.capture())
+            assertEquals(selectedBranchId, callerCaptor.firstValue.activeBranchId)
+        }
+
+        @Test
+        fun `submit administers a branch other than the selected one`() {
+            assertAdministersOtherBranch("submit", "branch.create", "{}") { targetBranchId ->
+                verify(branchProvisioningService).submitForApproval(
+                    argThat {
+                        branchId ==
+                            targetBranchId
+                    },
+                )
+            }
+        }
+
+        @Test
+        fun `activate administers a branch other than the selected one`() {
+            assertAdministersOtherBranch("activate", "branch.activate", "{}") { targetBranchId ->
+                verify(branchProvisioningService).activate(argThat { branchId == targetBranchId })
+            }
+        }
+
+        @Test
+        fun `suspend administers a branch other than the selected one`() {
+            assertAdministersOtherBranch(
+                "suspend",
+                "branch.suspend",
+                REASON_BODY,
+            ) { targetBranchId ->
+                verify(branchProvisioningService).suspend(argThat { branchId == targetBranchId })
+            }
+        }
+
+        @Test
+        fun `reactivate administers a branch other than the selected one`() {
+            assertAdministersOtherBranch(
+                "reactivate",
+                "branch.reactivate",
+                "{}",
+            ) { targetBranchId ->
+                verify(branchProvisioningService).reactivate(argThat { branchId == targetBranchId })
+            }
+        }
+
+        @Test
+        fun `close administers a branch other than the selected one`() {
+            assertAdministersOtherBranch("close", "branch.close", REASON_BODY) { targetBranchId ->
+                verify(branchProvisioningService).close(argThat { branchId == targetBranchId })
+            }
         }
 
         @Test
@@ -493,6 +556,33 @@ class BranchControllerTests
                     ).andExpect(status().isForbidden)
                     .andExpect(header().exists(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER))
             }
+        }
+
+        private fun assertAdministersOtherBranch(
+            action: String,
+            permission: String,
+            body: String,
+            verifyCommand: (UUID) -> Unit,
+        ) {
+            val tenantId = uuidV7()
+            val targetBranchId = uuidV7()
+            val selectedBranchId = uuidV7()
+            stubBranchDetail(tenantId, targetBranchId, "ACTIVE")
+
+            mockMvc
+                .post("${ApiPaths.BRANCHES}/$targetBranchId/$action") {
+                    contentType = MediaType.APPLICATION_JSON
+                    content = body
+                    with(authentication(tenantToken(setOf(permission), tenantId, selectedBranchId)))
+                }.andExpect {
+                    status { isOk() }
+                    jsonPath("$.id") { value(targetBranchId.toString()) }
+                }
+
+            verifyCommand(targetBranchId)
+            // The permission must be evaluated against the target branch, not the selected one.
+            verify(permissionGuard)
+                .requireBranchPermission(any(), eq(tenantId), eq(targetBranchId), eq(permission))
         }
 
         private fun stubBranchDetail(
