@@ -116,8 +116,33 @@ Pagination follows the existing `OrganisationListFilter`/`OrganisationPage` idio
 consistency with `OrganisationProvisioningService.list`. `size` must be `1..100`; out-of-bounds
 values are rejected with `IllegalArgumentException` before any query runs.
 
-No REST controller is exposed by this change — `iam` has no administration controllers yet for
-any resource, and this task does not add a UI.
+### REST read endpoints and the platform permission model
+
+Two controllers expose the query service, both read-only, paginated and bounded:
+
+- `GET /api/v1/tenant/audit-events` (+ `/{event_id}`): the caller's active tenant only.
+  `AuditQueryService.search/get` force the filter to the caller's organisation and require
+  `audit.view` in it. Platform context is refused on this route.
+- `GET /api/v1/platform/audit-events` (+ `/{event_id}`) and
+  `GET /api/v1/platform/tenants/{tenant_id}/audit-events`: platform operators only.
+  `AuditQueryService.searchForPlatform/getForPlatform` read the named organisation's log but
+  authorise the actor in the reserved PLATFORM organisation. The controller resolves the caller
+  with `getPlatformCaller()`, so a tenant context is refused with 403 before any query.
+
+Permission decision: **`audit.view` is reused, held in the PLATFORM organisation; no new code and
+no migration.** `PLATFORM_SUPER_ADMIN` already holds every catalogue row and `PLATFORM_SUPPORT`
+holds `audit.view` (`V2`), so both platform roles can read the platform and per-tenant logs
+without a catalogue change. A single code is enough because the scope is carried by *where* the
+permission is held, not by its name: `audit.view` in a tenant reads that tenant; `audit.view` in
+PLATFORM reads the platform log and any tenant's. Tenant users cannot gain it by holding
+`audit.view` in their own organisation, because the platform check resolves permissions against
+the PLATFORM organisation's memberships. Splitting read access between "platform log" and "tenant
+logs" would need a second code and a forward-only migration; no requirement asks for it yet.
+
+Platform actions on a tenant are written to that tenant's log, and platform user lifecycle
+actions to the PLATFORM log, so between them the platform endpoints make every row readable by
+someone. A single tenant event has no platform detail route: platform operators read it through
+the list filters (`entity_id`, `action`, ...) or add a route if a client needs one.
 
 ## What must be audited
 

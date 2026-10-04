@@ -57,3 +57,12 @@ mechanism; there is no annotation-driven alternative.
 clients and stores `requestId` in MDC for request logs. `ActiveOrganisationContextFilter`
 separately installs `RequestContexts`, which carries tenant/branch/actor/correlation/user-agent
 for the audit adapter to fall back on when a caller does not supply them explicitly.
+
+## Reading the log
+
+Audit events are read through `GET /api/v1/tenant/audit-events` (tenant users, active tenant
+only) and `GET /api/v1/platform/audit-events` plus
+`GET /api/v1/platform/tenants/{tenant_id}/audit-events` (platform operators: the PLATFORM
+organisation's log and any tenant's). Both reuse `audit.view`; the platform routes require it in
+the PLATFORM organisation. See
+[audit logging](../security/audit-logging.md#rest-read-endpoints-and-the-platform-permission-model).
