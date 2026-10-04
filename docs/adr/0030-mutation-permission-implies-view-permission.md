@@ -531,6 +531,14 @@ Nothing in ADR 0029 about maker-checker, remarks, return-to-draft, events or the
   only shares the catalogue metadata migration with it and references it. A bundle derived that way
   trivially satisfies this ADR's rule as long as it contains the views, which it does by
   definition.
+- **Classifying views and context codes in the database.** Settled and **implemented** by
+  `V22__permission_catalogue_metadata.sql`: it adds a `permission.kind` column (`VIEW`, `MUTATION`
+  or `CONTEXT`), `NOT NULL` once every existing code is classified, and `permission.grant_scope`
+  (`TENANT` or `PLATFORM`) the same way. `PermissionCatalogueMetadataTests` requires every
+  `MUTATION` code to have at least one row in `permission_view_requirement` and every `VIEW` or
+  `CONTEXT` code to have none, so a new code cannot ship without a classification and "needs
+  nothing" is explicit, not implied. The counts at the time of `V22` are the 18 views, 3 context
+  codes and 60 mutations of point 7, and the catalogue API publishes all of it.
 - **Dead codes.** Whether `tenant.activate` is retired, and when the deprecated `branch.activate`
   is deleted from the catalogue, are separate decisions. V21 copied every `branch.activate` grant
   to `branch.approve`, so a legacy role that held approval without `branch.view` now violates the

@@ -144,7 +144,17 @@ class PermissionController(
     }
 
     private fun PermissionSummary.toResponse() =
-        PermissionSummaryResponse(id, permissionCode, permissionName, moduleCode, riskLevel, status)
+        PermissionSummaryResponse(
+            id,
+            permissionCode,
+            permissionName,
+            moduleCode,
+            riskLevel,
+            status,
+            kind,
+            grantScope,
+            requiredViewPermissions,
+        )
 
     private fun PermissionDetail.toResponse() =
         PermissionDetailResponse(
@@ -155,6 +165,9 @@ class PermissionController(
             description,
             riskLevel,
             status,
+            kind,
+            grantScope,
+            requiredViewPermissions,
             createdAt,
             updatedAt,
         )

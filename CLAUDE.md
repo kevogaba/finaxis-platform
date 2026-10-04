@@ -198,6 +198,25 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   preconditions and post-conditions in-file; supersedes the docs that named `branch.activate`
   as the checker's permission — see `docs/security/authorization-model.md` ("Branch approval")
   and ADRs 0028 and 0029
+- `V22__permission_catalogue_metadata.sql` — **catalogue metadata, no grant changes** (ADR 0030
+  decisions 7 and 8): adds `permission.kind` (`VIEW`, `MUTATION` or `CONTEXT`: 18 views, 3 context
+  codes, 60 mutations), `permission.grant_scope` (`TENANT`, or `PLATFORM` for the 14 codes only ever
+  evaluated in the PLATFORM organisation) and the join table `permission_view_requirement`
+  (`permission_id` → `required_view_permission_id`, both `permission (id)`, unique pair, never
+  equal; a join table because `user.invite` needs `membership.view` **and** `user.view`), and
+  seeds all of them for the 81 live codes. **Both columns are `NOT NULL`, so a future permission
+  migration must insert `kind`, `grant_scope` and, for a `MUTATION`, its
+  `permission_view_requirement` rows in the same file, or it fails to apply**;
+  `PermissionCatalogueMetadataTests` also fails until every mutation is paired with a view, every
+  required code is a `VIEW`, and an `ACTIVE` mutation requires only `ACTIVE` views. A kind cannot
+  be a cross-table `CHECK` and no trigger is allowed (ADR 0024), so the migration and that test
+  are the enforcement. **No data backfill**: no `role_permission` or `membership_permission` row
+  is touched, nothing about who can do what changes, and the rule itself (role-composition
+  check, named 403, `missing_view_permissions`) lands in later changes that read these rows. The
+  catalogue API (`GET /api/v1/tenant/permissions`) publishes `kind`, `grant_scope` and
+  `required_view_permissions`. Re-runnable, with pre- and post-condition asserts in-file; it
+  raises, naming the codes, if the catalogue holds a permission it cannot classify — see
+  `docs/security/authorization-model.md` ("Catalogue metadata") and ADR 0030
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -226,9 +245,10 @@ one-control-account-per-class uniqueness, `V12` the manual-journal external refe
 the journal-line append guard, `V14` the daily-balance projection, `V15` the branch
 trial-balance index, `V16` the corrected fingerprint comment, and `V17` the cancelled draft
 state. `V18` is a data backfill of the branch lifecycle dates, `V19` a foundation permission
-seed (`branch.update`), `V20` a foundation CHECK pinning the platform organisation to `ACTIVE`
-and `V21` the move of branch approval to `branch.approve` (deprecating `branch.activate`);
-none is accounting. Do not invent accounting tables or columns outside those documents.
+seed (`branch.update`), `V20` a foundation CHECK pinning the platform organisation to `ACTIVE`,
+`V21` the move of branch approval to `branch.approve` (deprecating `branch.activate`) and `V22`
+the permission catalogue's kind, grant scope and view requirements; none is accounting. Do not
+invent accounting tables or columns outside those documents.
 
 ## Authorization
 
@@ -241,6 +261,9 @@ none is accounting. Do not invent accounting tables or columns outside those doc
   The effective-permission cache is namespaced by schema version and cleared at start, so a
   permission migration needs no operator step; a manual SQL grant outside Flyway needs a flush —
   see `docs/security/authorization-model.md` ("Caching and invalidation").
+- A migration that adds a permission code must also insert its `kind`, its `grant_scope` and, for
+  a `MUTATION`, the `permission_view_requirement` rows naming the view(s) it implies (ADR 0030;
+  `V22` made the columns `NOT NULL`). `PermissionCatalogueMetadataTests` fails otherwise.
 - Maker-checker: a platform-context actor holding the permission in the platform organisation may
   be the audited checker of a pending membership only while the tenant has no ACTIVE member beyond
   its bootstrap administrator, and of a pending branch only while it has no ACTIVE branch beyond

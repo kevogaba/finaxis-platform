@@ -521,12 +521,26 @@ class IamQueryServiceTests {
         assertEquals(ra2, ra2.copy())
         assertEquals(ra2.hashCode(), ra2.copy().hashCode())
 
-        val p1 = PermissionSummary(id, "c", "n", "m", "r", "a")
+        val p1 = PermissionSummary(id, "c", "n", "m", "r", "a", "VIEW", "TENANT", emptyList())
         assertNotNull(p1.toString())
         assertEquals(p1, p1.copy())
         assertEquals(p1.hashCode(), p1.copy().hashCode())
 
-        val p2 = PermissionDetail(id, "c", "n", "m", "d", "r", "a", now, now)
+        val p2 =
+            PermissionDetail(
+                id,
+                "c",
+                "n",
+                "m",
+                "d",
+                "r",
+                "a",
+                "VIEW",
+                "TENANT",
+                emptyList(),
+                now,
+                now,
+            )
         assertNotNull(p2.toString())
         assertEquals(p2, p2.copy())
         assertEquals(p2.hashCode(), p2.copy().hashCode())
@@ -754,6 +768,9 @@ private class FakeIamAdministrationQueries :
                     "iam",
                     "LOW",
                     "ACTIVE",
+                    "VIEW",
+                    "TENANT",
+                    emptyList(),
                 ),
             ),
             filter.page,
@@ -771,6 +788,9 @@ private class FakeIamAdministrationQueries :
             description = "View users permissions",
             riskLevel = "LOW",
             status = "ACTIVE",
+            kind = "VIEW",
+            grantScope = "TENANT",
+            requiredViewPermissions = emptyList(),
             createdAt = Instant.now(),
             updatedAt = Instant.now(),
         )

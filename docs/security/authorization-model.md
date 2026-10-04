@@ -16,7 +16,8 @@ The global catalogue in `permission` holds **81 permission codes**: 54 foundatio
 `V5__accounting_permission_catalogue.sql`, and `branch.update`, added to the `branch` module by
 `V19__branch_update_permission.sql` (#203). One of the 81, `branch.activate`, is **DEPRECATED**
 (see "Branch approval"), so 80 are `ACTIVE`. Each has a stable `permission_code`, `module_code`,
-`risk_level`, `system_permission`, and status. Module codes are `tenant`, `branch`, `iam`,
+`risk_level`, `system_permission`, status, and a `kind` and `grant_scope` (see "Catalogue
+metadata"). Module codes are `tenant`, `branch`, `iam`,
 `audit`, `settings`, and `accounting`; risk levels are `LOW`, `MEDIUM`, `HIGH`, and `CRITICAL`.
 
 The accounting codes, why they are grouped the way they are, and what the two accounting role
@@ -65,6 +66,90 @@ organisation, not as special runtime role-name checks.
 `audit.view` held in the PLATFORM organisation is also the permission for the platform audit
 endpoints (the platform log and any tenant's log); see
 [audit logging](audit-logging.md#rest-read-endpoints-and-the-platform-permission-model).
+
+## Catalogue metadata
+
+`V22__permission_catalogue_metadata.sql` ([ADR
+0030](../adr/0030-mutation-permission-implies-view-permission.md), decisions 7 and 8) gives every
+catalogue code three pieces of metadata. They are reference data, changed only by a forward
+migration, and are published by `GET /api/v1/tenant/permissions` (and `/{permission_id}`) as `kind`,
+`grant_scope` and `required_view_permissions`.
+
+**`kind`** says what a code is:
+
+- `VIEW` (18): a read, which requires nothing. The twelve foundation reads (`tenant.view`,
+  `branch.view`, `user.view`, `membership.view`, `branch_assignment.view`, `role.view`,
+  `role_assignment.view`, `permission.view`, `settings.view`, `business_date.view`, `audit.view`
+  and `iam.profile.read`) and the six accounting views.
+- `CONTEXT` (3): `auth.select_organisation`, `auth.select_branch` and
+  `tenant_setting.manage_platform`. They gate the caller's own session context, or a platform-only
+  setting that is read and written with the same code in the PLATFORM organisation (so no role
+  could also hold the tenant `settings.view`). They require nothing and are not views.
+- `MUTATION` (60): everything else. Each requires the view of the resource it writes and returns.
+
+**`grant_scope`** says where a code is evaluated:
+
+- `PLATFORM` (14): only ever evaluated in the PLATFORM organisation, so a tenant role holding it
+  gains nothing. They are the ten `tenant.*` lifecycle codes other than `tenant.view` (`create`,
+  `update_draft`, `submit_for_approval`, `approve`, `reject`, `activate`, `suspend`, `reactivate`,
+  `deprovision`, `bootstrap_retry`), `user.activate`, `user.suspend`, `user.deactivate` and
+  `tenant_setting.manage_platform`.
+- `TENANT` (67): evaluated in a tenant organisation. Some of them are **also** evaluated in the
+  PLATFORM organisation (at least `tenant.view`, `branch.view`, `user.view`, `membership.view`,
+  `branch_assignment.view`, `role.view`, `role_assignment.view`, `permission.view`, `audit.view`,
+  `business_date.view`, `branch.create`, `branch.approve`, `branch.activate` and `user.approve`),
+  so `TENANT` means "may be granted in a tenant", not "only there".
+
+Two values cannot say which `TENANT` codes are also evaluated in PLATFORM. A future non-super
+platform administrator therefore cannot be derived as "the `PLATFORM` codes" alone: it would hold
+the `tenant.*` and `user.*` mutations without `tenant.view` and `user.view`, which ADR 0030
+forbids. Deriving it needs its own decision, and probably its own metadata.
+
+The platform administrator holds every code. Deriving the seeded tenant administrator from this
+column ("an admin holds every code of its scope") is intended, but is a separate decision and
+change; no role is touched by `V22`.
+
+**`permission_view_requirement`** pairs a `MUTATION` with each view it requires: 61 rows for the 60
+mutations, because `user.invite` needs two. A role or a caller that holds the mutation must also
+hold these views (ADR 0030, enforced by later changes; the catalogue test already enforces it for
+the seeded roles; custom roles are checked by later changes).
+
+| Mutation | Required views |
+| --- | --- |
+| `tenant.create`, `update_draft`, `submit_for_approval`, `approve`, `reject`, `activate`, `suspend`, `reactivate`, `deprovision`, `bootstrap_retry` | `tenant.view` |
+| `branch.create`, `update`, `approve`, `activate` (deprecated), `suspend`, `reactivate`, `close` | `branch.view` |
+| `user.invite` | `membership.view` **and** `user.view` |
+| `user.approve`, `membership.suspend`, `membership.reactivate`, `membership.revoke` | `membership.view` |
+| `user.activate`, `user.suspend`, `user.deactivate` | `user.view` |
+| `user.assign_branch`, `user.revoke_branch` | `branch_assignment.view` |
+| `user.assign_role`, `user.revoke_role` | `role_assignment.view` |
+| `role.create`, `update`, `activate`, `deactivate`, `assign_permission`, `remove_permission` | `role.view` |
+| `settings.update` | `settings.view` |
+| `business_date.advance`, `reopen`, `cob.start`, `cob.complete` | `business_date.view` |
+| `gl_account.create`, `update`, `submit`, `approve`, `deactivate` | `gl_account.view` |
+| `fiscal_period.open`, `close`, `reopen` | `fiscal_period.view` |
+| `journal.create_manual`, `submit`, `approve`, `reverse`, `post_prior_period` | `journal.view` |
+| `posting_rule.create`, `update`, `submit`, `approve` | `posting_rule.view` |
+| `reconciliation.run`, `resolve` | `reconciliation.view` |
+| `accounting_report.export` | `accounting_report.view` |
+
+Two choices keep the seeded bundles compliant: `user.assign_branch`, `user.revoke_branch` and the
+role-composition codes need only their own resource's view (not also `branch.view`,
+`membership.view` or `permission.view`), and `journal.create_manual`, `posting_rule.create` and
+`posting_rule.update` need only their own view (not also `gl_account.view`).
+
+**Rules a new permission migration must follow.** `kind` and `grant_scope` are `NOT NULL`, so a
+migration that inserts a permission without them fails to apply. It must also insert the
+`permission_view_requirement` rows of a `MUTATION` in the same file. A kind cannot be a `CHECK`
+across two tables and no trigger is allowed (ADR 0024), so `PermissionCatalogueMetadataTests` is the
+enforcement: it fails for a `MUTATION` with no requirement, a `VIEW` or `CONTEXT` code with one, a
+required code that is not a `VIEW`, and an `ACTIVE` mutation that requires a view that is not
+`ACTIVE` (runtime honours only `ACTIVE` codes). A `DEPRECATED` mutation such as `branch.activate`
+may still name an `ACTIVE` view. The same test is also **strict** about seeded roles: it fails if
+the platform roles or any default bundle built in code hold a mutation without its views (today none
+does), and for the bootstrap `local-admin` role it fails on any violation outside an explicit
+allow-list (today empty; a future known violation is added there with a comment rather than the
+test being switched off). The runtime does not yet refuse such a role; a later change does.
 
 ## Role administration
 

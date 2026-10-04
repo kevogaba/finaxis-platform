@@ -96,6 +96,35 @@ class OpenApiWireNamingContractTests
         }
 
         @Test
+        fun `permission catalogue schemas publish kind, grant scope and required views`() {
+            listOf("PermissionSummaryResponse", "PermissionDetailResponse").forEach { name ->
+                val properties = schemas.path(name).path("properties")
+
+                assertThat(
+                    properties
+                        .path("kind")
+                        .path("enum")
+                        .toList()
+                        .map { it.asString() },
+                ).describedAs("%s.kind", name)
+                    .containsExactly("VIEW", "MUTATION", "CONTEXT")
+                assertThat(
+                    properties
+                        .path("grant_scope")
+                        .path("enum")
+                        .toList()
+                        .map { it.asString() },
+                ).describedAs("%s.grant_scope", name)
+                    .containsExactly("TENANT", "PLATFORM")
+                val required = properties.path("required_view_permissions")
+                assertThat(required.path("type").asString())
+                    .describedAs("%s.required_view_permissions", name)
+                    .isEqualTo("array")
+                assertThat(required.path("items").path("type").asString()).isEqualTo("string")
+            }
+        }
+
+        @Test
         fun `sort_by documents the accepted camelCase values per list endpoint`() {
             SORT_BY_VALUES.forEach { (path, expected) ->
                 val sortBy = queryParameter(path, "sort_by")

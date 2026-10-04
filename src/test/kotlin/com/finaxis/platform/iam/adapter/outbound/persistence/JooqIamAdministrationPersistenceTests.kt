@@ -384,6 +384,8 @@ class JooqIamAdministrationPersistenceTests(
             .set(PERMISSION.RISK_LEVEL, "CRITICAL")
             .set(PERMISSION.SYSTEM_PERMISSION, true)
             .set(PERMISSION.STATUS, "ACTIVE")
+            .set(PERMISSION.KIND, "VIEW")
+            .set(PERMISSION.GRANT_SCOPE, "TENANT")
             .set(PERMISSION.CREATED_AT, now)
             .set(PERMISSION.UPDATED_AT, now)
             .execute()

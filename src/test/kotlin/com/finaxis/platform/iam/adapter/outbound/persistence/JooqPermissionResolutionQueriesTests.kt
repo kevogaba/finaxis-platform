@@ -386,6 +386,8 @@ class JooqPermissionResolutionQueriesTests(
             .set(PERMISSION.MODULE_CODE, "TEST")
             .set(PERMISSION.RISK_LEVEL, "LOW")
             .set(PERMISSION.STATUS, status)
+            .set(PERMISSION.KIND, "VIEW")
+            .set(PERMISSION.GRANT_SCOPE, "TENANT")
             .set(PERMISSION.CREATED_AT, now)
             .set(PERMISSION.UPDATED_AT, now)
             .execute()

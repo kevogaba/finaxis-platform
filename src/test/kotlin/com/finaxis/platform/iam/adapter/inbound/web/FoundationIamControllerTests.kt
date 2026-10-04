@@ -126,6 +126,65 @@ class FoundationIamControllerTests
         }
 
         @Test
+        fun `the permission catalogue publishes kind, grant scope and required views`() {
+            val tenantId = uuidV7()
+            val viewId = uuidV7()
+            val mutationId = uuidV7()
+            val views = listOf("membership.view", "user.view")
+            whenever(iamQueryService.searchPermissions(eq(tenantId), any(), any())).thenReturn(
+                apiPageOf(
+                    listOf(
+                        permissionSummary(viewId),
+                        permissionSummary(mutationId).copy(
+                            permissionCode = "user.invite",
+                            kind = "MUTATION",
+                            requiredViewPermissions = views,
+                        ),
+                    ),
+                    number = 0,
+                    size = 25,
+                    totalItems = 2,
+                ),
+            )
+            whenever(iamQueryService.getPermission(eq(tenantId), eq(mutationId), any()))
+                .thenReturn(
+                    permissionDetail(mutationId).copy(
+                        permissionCode = "user.invite",
+                        kind = "MUTATION",
+                        grantScope = "PLATFORM",
+                        requiredViewPermissions = views,
+                    ),
+                )
+
+            mockMvc
+                .get(ApiPaths.PERMISSIONS) {
+                    with(authentication(tenantToken(setOf("permission.view"), tenantId)))
+                }.andExpect {
+                    status { isOk() }
+                    jsonPath("$.items[0].kind") { value("VIEW") }
+                    jsonPath("$.items[0].grant_scope") { value("TENANT") }
+                    jsonPath("$.items[0].required_view_permissions") { isEmpty() }
+                    jsonPath("$.items[1].kind") { value("MUTATION") }
+                    jsonPath("$.items[1].required_view_permissions[0]") {
+                        value("membership.view")
+                    }
+                    jsonPath("$.items[1].required_view_permissions[1]") { value("user.view") }
+                    jsonPath("$.items[1].permission_code") { value("user.invite") }
+                }
+
+            mockMvc
+                .get("${ApiPaths.PERMISSIONS}/$mutationId") {
+                    with(authentication(tenantToken(setOf("permission.view"), tenantId)))
+                }.andExpect {
+                    status { isOk() }
+                    jsonPath("$.kind") { value("MUTATION") }
+                    jsonPath("$.grant_scope") { value("PLATFORM") }
+                    jsonPath("$.required_view_permissions[1]") { value("user.view") }
+                    jsonPath("$.risk_level") { value("LOW") }
+                }
+        }
+
+        @Test
         fun `detail endpoints return safe 404 for cross tenant resources`() {
             val tenantId = uuidV7()
             val roleId = uuidV7()
