@@ -409,6 +409,30 @@ class MembershipControllerTests
         }
 
         @Test
+        fun `revoking an already revoked membership is a 409 with an actionable message`() {
+            val tenantId = uuidV7()
+            val membershipId = uuidV7()
+            doThrow(ConflictException(safeDetail = "This membership has already been revoked."))
+                .whenever(userProvisioningService)
+                .revokeTenantMembership(any())
+
+            mockMvc
+                .post("${ApiPaths.MEMBERSHIPS}/$membershipId/revoke") {
+                    contentType = MediaType.APPLICATION_JSON
+                    content =
+                        apiJsonCodec.mapper.writeValueAsString(
+                            RevokeMembershipRequest("Access no longer required"),
+                        )
+                    with(authentication(tenantToken(setOf("membership.revoke"), tenantId)))
+                }.andExpect {
+                    status { isConflict() }
+                    content { contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON) }
+                    jsonPath("$.code") { value("conflict") }
+                    jsonPath("$.detail") { value("This membership has already been revoked.") }
+                }
+        }
+
+        @Test
         fun `membership mutations generate or validate idempotency keys before authentication`() {
             val membershipId = uuidV7()
             val membershipRoute = "${ApiPaths.MEMBERSHIPS}/$membershipId"

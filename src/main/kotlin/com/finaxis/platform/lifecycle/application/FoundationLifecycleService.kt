@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.application
 
 import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.audit.toAuditFailureReason
@@ -46,9 +47,8 @@ class FoundationLifecycleService(
     @Transactional
     fun transition(command: OrganisationTransitionCommand): OrganisationTransitionResult {
         val aggregate =
-            requireNotNull(reader.findOrganisation(command.organisationId)) {
-                "Organisation was not found."
-            }
+            reader.findOrganisation(command.organisationId)
+                ?: throw ResourceNotFoundException(safeDetail = "Organisation was not found.")
         aggregate.transitionReason = command.command.reason
         return executeTransition(
             aggregate = aggregate,
@@ -64,9 +64,10 @@ class FoundationLifecycleService(
     @Transactional
     fun transition(command: BranchTransitionCommand): BranchTransitionResult {
         val aggregate =
-            requireNotNull(reader.findBranch(command.organisationId, command.branchId)) {
-                "Branch was not found in the selected organisation."
-            }
+            reader.findBranch(command.organisationId, command.branchId)
+                ?: throw ResourceNotFoundException(
+                    safeDetail = "Branch was not found in the selected organisation.",
+                )
         aggregate.transitionReason = command.command.reason
         return executeTransition(
             aggregate = aggregate,
@@ -87,9 +88,8 @@ class FoundationLifecycleService(
     @Transactional
     fun transition(command: UserTransitionCommand): UserTransitionResult {
         val aggregate =
-            requireNotNull(reader.findUser(command.userId)) {
-                "User account was not found."
-            }
+            reader.findUser(command.userId)
+                ?: throw ResourceNotFoundException(safeDetail = "User account was not found.")
         aggregate.transitionReason = command.command.reason
         return executeTransition(
             aggregate = aggregate,
@@ -105,11 +105,10 @@ class FoundationLifecycleService(
     @Transactional
     fun transition(command: MembershipTransitionCommand): MembershipTransitionResult {
         val aggregate =
-            requireNotNull(
-                reader.findMembership(command.organisationId, command.membershipId),
-            ) {
-                "Membership was not found in the selected organisation."
-            }
+            reader.findMembership(command.organisationId, command.membershipId)
+                ?: throw ResourceNotFoundException(
+                    safeDetail = "Membership was not found in the selected organisation.",
+                )
         aggregate.transitionReason = command.command.reason
         val userId = aggregateUserId(command.organisationId, command.membershipId)
         return executeTransition(
@@ -133,8 +132,8 @@ class FoundationLifecycleService(
         membershipId: UUID,
     ): UUID =
         reader.membershipUserId(organisationId, membershipId)
-            ?: throw IllegalArgumentException(
-                "Membership was not found in the selected organisation.",
+            ?: throw ResourceNotFoundException(
+                safeDetail = "Membership was not found in the selected organisation.",
             )
 
     /**

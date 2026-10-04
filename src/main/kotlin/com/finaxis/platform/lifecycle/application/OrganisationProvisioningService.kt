@@ -366,6 +366,7 @@ class OrganisationProvisioningService(
             command.organisationId,
             "organisation.reactivate",
         )
+        lifecycleStore.lifecycleState(command.organisationId).orResourceNotFound()
         accessStore.requireCompleteSetup(command.organisationId)
         lifecycleService.transition(
             OrganisationTransitionCommand(
@@ -392,7 +393,7 @@ class OrganisationProvisioningService(
 
     private fun startDeprovisioning(command: DeprovisionOrganisationCommand) {
         val transition =
-            when (lifecycleStore.lifecycleState(command.organisationId)) {
+            when (lifecycleStore.lifecycleState(command.organisationId).orResourceNotFound()) {
                 OrganisationLifecycleState.ACTIVE -> {
                     OrganisationLifecycleTransition.START_DEPROVISIONING
                 }

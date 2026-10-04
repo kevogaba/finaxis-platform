@@ -28,8 +28,12 @@ import com.finaxis.platform.lifecycle.application.UserProvisioningService
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
+import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.never
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
+import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
@@ -242,6 +246,103 @@ class PlatformUserControllerTests
                     ).andExpect(status().isForbidden)
                 kotlin.test.assertTrue(permission.isNotBlank())
             }
+        }
+
+        @Test
+        fun `reactivateUser accepts no body an empty body or a reason`() {
+            val userId = uuidV7()
+            val bodies = listOf(null, "{}", """{"reason":"Investigation complete"}""")
+
+            bodies.forEach { body ->
+                mockMvc
+                    .post("${ApiPaths.PLATFORM_USERS}/$userId/reactivate") {
+                        if (body != null) {
+                            contentType = MediaType.APPLICATION_JSON
+                            content = body
+                        }
+                        with(authentication(platformToken(setOf("user.activate"))))
+                    }.andExpect {
+                        status { isOk() }
+                        jsonPath("$.status") { value("ACTIVE") }
+                    }
+            }
+
+            val captor = argumentCaptor<ReactivateUserCommand>()
+            verify(userProvisioningService, times(3)).reactivateUser(captor.capture())
+            kotlin.test.assertEquals(
+                listOf(null, null, "Investigation complete"),
+                captor.allValues.map { it.reason?.value },
+            )
+        }
+
+        @Test
+        fun `reactivateUser still rejects a reason over 500 characters`() {
+            mockMvc
+                .post("${ApiPaths.PLATFORM_USERS}/${uuidV7()}/reactivate") {
+                    contentType = MediaType.APPLICATION_JSON
+                    content = """{"reason":"${"x".repeat(501)}"}"""
+                    with(authentication(platformToken(setOf("user.activate"))))
+                }.andExpect {
+                    status { isBadRequest() }
+                    jsonPath("$.code") { value("validation_failed") }
+                }
+
+            verify(userProvisioningService, never()).reactivateUser(any())
+        }
+
+        @Test
+        fun `an unknown user is a 404 problem on every platform lifecycle route`() {
+            val userId = uuidV7()
+            val notFound = ResourceNotFoundException(safeDetail = "User account was not found.")
+            doThrow(notFound).whenever(userProvisioningService).suspendUser(any())
+            doThrow(notFound).whenever(userProvisioningService).reactivateUser(any())
+            doThrow(notFound).whenever(userProvisioningService).deactivateUser(any())
+
+            listOf(
+                Triple("suspend", "user.suspend", """{"reason":"Security investigation"}"""),
+                Triple("reactivate", "user.activate", null),
+                Triple("deactivate", "user.deactivate", """{"reason":"No longer eligible"}"""),
+            ).forEach { (action, permission, body) ->
+                mockMvc
+                    .post("${ApiPaths.PLATFORM_USERS}/$userId/$action") {
+                        if (body != null) {
+                            contentType = MediaType.APPLICATION_JSON
+                            content = body
+                        }
+                        with(authentication(platformToken(setOf(permission))))
+                    }.andExpect {
+                        status { isNotFound() }
+                        content { contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON) }
+                        jsonPath("$.code") { value("resource_not_found") }
+                        jsonPath("$.detail") { value("User account was not found.") }
+                        jsonPath(
+                            "$.instance",
+                        ) { value("${ApiPaths.PLATFORM_USERS}/$userId/$action") }
+                    }
+            }
+        }
+
+        @Test
+        fun `a caller without the permission gets 403 before any 404 for an unknown user`() {
+            val userId = uuidV7()
+            val notFound = ResourceNotFoundException(safeDetail = "User account was not found.")
+            doThrow(notFound).whenever(userProvisioningService).suspendUser(any())
+            doThrow(notFound).whenever(userProvisioningService).reactivateUser(any())
+            doThrow(notFound).whenever(userProvisioningService).deactivateUser(any())
+
+            listOf("suspend", "reactivate", "deactivate").forEach { action ->
+                mockMvc
+                    .post("${ApiPaths.PLATFORM_USERS}/$userId/$action") {
+                        contentType = MediaType.APPLICATION_JSON
+                        content = """{"reason":"Valid reason"}"""
+                        with(authentication(platformToken(emptySet())))
+                    }.andExpect {
+                        status { isForbidden() }
+                        jsonPath("$.code") { value("forbidden") }
+                    }
+            }
+
+            verifyNoInteractions(userProvisioningService)
         }
 
         @Test

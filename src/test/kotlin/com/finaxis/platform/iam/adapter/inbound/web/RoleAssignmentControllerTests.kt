@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
+import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiExceptionHandler
 import com.finaxis.platform.common.web.api.ApiJsonCodec
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.beans.factory.annotation.Autowired
@@ -204,5 +206,50 @@ class RoleAssignmentControllerTests
                 eq(targetBranchId),
                 eq("user.revoke_role"),
             )
+        }
+
+        @Test
+        fun `assigning a branch scope role without a branch is a 400 naming branch_id`() {
+            val tenantId = uuidV7()
+
+            mockMvc
+                .post(ApiPaths.ROLE_ASSIGNMENTS) {
+                    contentType = MediaType.APPLICATION_JSON
+                    content =
+                        """{"user_id":"${uuidV7()}","role_id":"${uuidV7()}",""" +
+                        """"scope_type":"BRANCH"}"""
+                    with(authentication(tenantToken(setOf("user.assign_role"), tenantId)))
+                }.andExpect {
+                    status { isBadRequest() }
+                    content { contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON) }
+                    jsonPath("$.code") { value("validation_failed") }
+                    jsonPath("$.violations.length()") { value(1) }
+                    jsonPath("$.violations[0].field") { value("branch_id") }
+                    jsonPath("$.violations[0].message") {
+                        value("A branch is required when the scope type is BRANCH.")
+                    }
+                }
+
+            verify(roleManagementService, never()).assignRoleToUser(any())
+        }
+
+        @Test
+        fun `a tenant scope role with a branch is left to the application layer`() {
+            val tenantId = uuidV7()
+            whenever(roleManagementService.assignRoleToUser(any())).thenThrow(
+                InvalidOperationException(),
+            )
+
+            mockMvc
+                .post(ApiPaths.ROLE_ASSIGNMENTS) {
+                    contentType = MediaType.APPLICATION_JSON
+                    content =
+                        """{"user_id":"${uuidV7()}","role_id":"${uuidV7()}",""" +
+                        """"scope_type":"TENANT","branch_id":"${uuidV7()}"}"""
+                    with(authentication(tenantToken(setOf("user.assign_role"), tenantId)))
+                }.andExpect {
+                    status { isUnprocessableContent() }
+                    jsonPath("$.code") { value("invalid_operation") }
+                }
         }
     }

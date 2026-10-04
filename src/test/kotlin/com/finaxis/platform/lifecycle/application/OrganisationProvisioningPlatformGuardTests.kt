@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.application
 
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
@@ -246,6 +247,30 @@ class OrganisationProvisioningPlatformGuardTests {
 
         verify(lifecycleService).transition(any<OrganisationTransitionCommand>())
         verifyNoInteractions(auditService)
+    }
+
+    @Test
+    fun `reactivate answers not found for an unknown organisation before checking its setup`() {
+        val unknown = uuidV7()
+
+        assertFailsWith<ResourceNotFoundException> {
+            organisations.reactivate(ReactivateOrganisationCommand(unknown))
+        }
+
+        verifyNoInteractions(accessStore, lifecycleService)
+    }
+
+    @Test
+    fun `deprovision answers not found for an unknown organisation and revokes nothing`() {
+        val unknown = uuidV7()
+
+        assertFailsWith<ResourceNotFoundException> {
+            organisations.deprovision(
+                DeprovisionOrganisationCommand(unknown, Reason.required("Offboarding.")),
+            )
+        }
+
+        verifyNoInteractions(accessStore, lifecycleService, auditService)
     }
 
     private fun assertRefused(
