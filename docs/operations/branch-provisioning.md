@@ -56,11 +56,11 @@ A platform administrator can create a tenant's branch draft
 submit and activate a tenant's branch as the audited checker, but only **while the tenant has no
 ACTIVE branch other than the one the bootstrap created** (409 `lifecycle.platform_checker_closed`
 otherwise); the creator, and a platform administrator that submitted the branch, still cannot
-activate it. Submission and activation by the platform also write a
-`branch.submit_as_platform_checker` and a `branch.activate_as_platform_checker` audit row
-respectively. It can also return a pending branch as the checker, under the same bound, and withdraw
-its own pending branch without one (`branch.return_for_changes_as_platform_checker` and
-`branch.withdraw` rows; see
+activate it (approval takes `branch.approve`; `branch.activate` is deprecated). Submission and
+activation by the platform also write a `branch.submit_as_platform_checker` and a
+`branch.activate_as_platform_checker` audit row respectively. It can also return a pending branch as
+the checker, under the same bound, and withdraw its own pending branch without one
+(`branch.return_for_changes_as_platform_checker` and `branch.withdraw` rows; see
 [foundation API](../api/foundation-api.md#return-or-withdraw-a-pending-branch)). See
 [ADR 0028](../adr/0028-platform-checker-for-first-tenant-approvals.md).
 

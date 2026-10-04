@@ -184,9 +184,10 @@ class BranchProvisioningService(
     }
 
     /**
-     * Activates an approved branch only in an active organisation. The creator can never activate
-     * it, whatever the scope: a platform actor is held to the same maker-checker rule as a tenant
-     * user (ADR 0028).
+     * Approves and activates a pending branch (`branch.approve`) only in an active organisation.
+     * The creator can never activate it, whatever the scope: a platform actor is held to the same
+     * maker-checker rule as a tenant user (ADR 0028). `branch.activate` is deprecated (V21) and no
+     * longer checked.
      */
     @Transactional
     fun activate(command: ActivateBranchCommand) {
@@ -194,7 +195,7 @@ class BranchProvisioningService(
             command.actorId,
             command.organisationId,
             command.branchId,
-            "branch.activate",
+            "branch.approve",
             command.scope,
         )
         if (command.scope ==
@@ -229,7 +230,7 @@ class BranchProvisioningService(
     /**
      * Returns a pending branch to draft with a reason (ADR 0029, 3b). One transition, two intents,
      * told apart by the actor: the branch's creator or latest submitter withdraws their own request
-     * and needs `branch.create`; anyone else returns it as a checker and needs `branch.activate`.
+     * and needs `branch.create`; anyone else returns it as a checker and needs `branch.approve`.
      * A returned branch can be amended and resubmitted, and keeps its code and its creator.
      *
      * The permission asked depends on the class of actor, so classifying comes first; it reveals
@@ -251,7 +252,7 @@ class BranchProvisioningService(
             command.actorId,
             command.organisationId,
             command.branchId,
-            if (withdrawing) "branch.create" else "branch.activate",
+            if (withdrawing) "branch.create" else "branch.approve",
             command.scope,
         )
         val platformChecker = command.scope == ActingScope.PLATFORM && !withdrawing

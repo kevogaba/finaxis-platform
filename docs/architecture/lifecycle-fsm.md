@@ -134,7 +134,7 @@ checks the organisation (`ACTIVE` or `PROVISIONING`) before the FSM answers the 
 
 One transition serves two intents, told apart by the actor, not by a second edge: the branch's
 creator or latest submitter **withdraws** (permission `branch.create`), anyone else **returns** it
-as a checker (`branch.activate`). The FSM writes `branch.return_for_changes` for both; a withdrawal
+as a checker (`branch.approve`). The FSM writes `branch.return_for_changes` for both; a withdrawal
 adds `branch.withdraw`, and a platform actor returning as a checker adds
 `branch.return_for_changes_as_platform_checker` with `checkerScope = PLATFORM` and is bounded like
 activation (ADR 0028); a platform withdrawal is not. The order of checks is classify, permission,

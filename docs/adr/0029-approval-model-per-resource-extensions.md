@@ -6,6 +6,10 @@ Accepted
 
 Date: 2026-10-03
 
+Amended by #208 (`V21__branch_approve_permission.sql`): the permission that approves a
+branch is `branch.approve`; `branch.activate` is deprecated and no longer checked. This ADR's
+branch rules (the window, the creator and submitter rules) are unchanged.
+
 Resolves GitHub issue #178, the design gate of the approval-model gap #155, and fixes the scope of
 its sub-issues #179, #180 and #181. Closes #182 as not planned. Builds on
 [ADR 0002](0002-fsm-transition-infrastructure.md) and
@@ -174,8 +178,8 @@ by `V19__branch_update_permission.sql`, which now gates the route and
 copies the grant to every role and direct membership override that held `branch.create`, so
 existing callers keep access and an owner narrows it deliberately by revoking `branch.update`.
 This supersedes the "reuses `branch.create`" wording of #165 and the "no new code" remark below as
-far as `PATCH` is concerned; the withdraw and return codes (`branch.create`, `branch.activate`) in
-3b are unchanged.
+far as `PATCH` is concerned; the withdraw and return codes (`branch.create`, and `branch.approve`
+since #208) in 3b are unchanged.
 
 - **Transition.** One new branch transition, `BranchLifecycleTransition.RETURN_FOR_CHANGES`,
   `PENDING_APPROVAL -> DRAFT`. Nothing else leaves `PENDING_APPROVAL` for `DRAFT`. The transition
@@ -199,13 +203,14 @@ far as `PATCH` is concerned; the withdraw and return codes (`branch.create`, `br
   codes already exist:
   - the maker (withdraw) needs `branch.create`, the permission that submitted it, so anyone who
     could put the branch up can take it down;
-  - anyone else (return) needs `branch.activate`, the permission that gates the decision they are
-    pre-empting, so exactly the people who could activate it can also return it, and no one else.
+  - anyone else (return) needs `branch.approve`, the permission that gates the decision they are
+    pre-empting, so exactly the people who could approve it can also return it, and no one else.
+    (Written as `branch.activate` until #208, which deprecated that code.)
 
-  A creator who also holds `branch.activate` is still a maker for this branch, so is classified as
+  A creator who also holds `branch.approve` is still a maker for this branch, so is classified as
   withdrawing and needs `branch.create`. Permissions can be revoked after the fact, so the outcome
   is stated explicitly: a creator or submitter who has since **lost `branch.create` cannot
-  withdraw**, but a non-maker checker holding `branch.activate` can still return the branch. A new
+  withdraw**, but a non-maker checker holding `branch.approve` can still return the branch. A new
   code would need a forward-only migration, a grant to every role that submits or activates, and a
   `docs/security` update, for a distinction the two existing codes already draw. (The separate
   `PATCH` permission is a different case: see the amendment above.)
@@ -216,7 +221,7 @@ far as `PATCH` is concerned; the withdraw and return codes (`branch.create`, `br
   1. **Classify** the actor as maker or checker, reading `created_by` and the current submitter
      **scoped to the path organisation**. A branch that is absent from that organisation
      classifies as a *return*, so a missing branch and a branch of another tenant look the same.
-  2. **Permission** for that class (`branch.create` or `branch.activate`) in the route's scope:
+  2. **Permission** for that class (`branch.create` or `branch.approve`) in the route's scope:
      tenant, against the target branch; platform, in the platform organisation. An unauthorised
      caller therefore gets **403 before any existence signal**.
   3. Platform only: the platform organisation is never a valid `{tenant_id}` (404, after the
@@ -243,7 +248,7 @@ far as `PATCH` is concerned; the withdraw and return codes (`branch.create`, `br
 - **Platform checker (ADR 0028).** A platform actor reaches the transition through the platform
   route with the same `ActingScope.PLATFORM` flag as `activate`, and there is one rule for the
   window: **returning as a checker is a checker step and is bounded exactly like activating**.
-  The caller needs `branch.activate` in the platform organisation, is not the creator or
+  The caller needs `branch.approve` in the platform organisation, is not the creator or
   submitter, the path tenant is a real tenant, and the tenant has no `ACTIVE` branch beyond the
   bootstrap head office (otherwise 409 `lifecycle.platform_checker_closed`, changing nothing).
   **Withdrawing is not a checker step**: a platform actor who is the creator or submitter needs
@@ -391,7 +396,8 @@ catalogue** (`TenantSettingCatalog.kt`), not wired to behaviour.
   `deactivate` (like `createOrUpdate`) calls `TenantSettingCatalog.require`, so once the
   definition is gone the mutation API rejects the key as unknown and cannot close the row. The
   misleading settings would stay visible indefinitely. #164 must therefore do one of: a
-  forward-only `V21+` migration that closes the existing effective rows for those two keys, or an
+  forward-only migration (the next free number) that closes the existing effective rows for those
+  two keys, or an
   explicit filter of the retired keys in the `list` and `get` paths. Which one is #164's
   decision; that one of them ships with the catalogue change is an **acceptance condition of
   #164**. This ADR itself still adds no migration.

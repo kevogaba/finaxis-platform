@@ -295,16 +295,16 @@ class PlatformFirstApprovalIntegrationTests
         }
 
         @Test
-        fun `a platform checker holding only branch activate can activate a branch`() {
+        fun `a platform checker holding only branch approve can activate a branch`() {
             val s = Scenario()
-            val onlyActivate = s.narrowChecker("branch.activate")
+            val onlyApprove = s.narrowChecker("branch.approve")
             val branchId = s.createBranchAsTenantAdmin()
             s.submitAsTenantAdmin(branchId)
 
             narrowPost(
                 "${ApiPaths.PLATFORM_TENANTS}/${s.tenantId}/branches/$branchId/activate",
-                onlyActivate,
-                "branch.activate",
+                onlyApprove,
+                "branch.approve",
             ).andExpect {
                 status { isOk() }
                 jsonPath("$.id") { value(branchId.toString()) }
@@ -317,7 +317,7 @@ class PlatformFirstApprovalIntegrationTests
                 outboxRecords("finaxis.lifecycle.branch.activated", branchId.toString()),
             )
             assertEquals(
-                listOf(onlyActivate.toString()),
+                listOf(onlyApprove.toString()),
                 platformAuditActors(
                     s.tenantId,
                     "branch.activate_as_platform_checker",
@@ -1199,7 +1199,7 @@ class PlatformFirstApprovalIntegrationTests
                     "tenant.approve",
                     "tenant.view",
                     "branch.create",
-                    "branch.activate",
+                    "branch.approve",
                     "branch.view",
                     "user.invite",
                     "user.approve",

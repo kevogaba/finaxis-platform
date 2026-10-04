@@ -309,7 +309,7 @@ class BranchControllerTests
                         apiJsonCodec.mapper.writeValueAsString(
                             ActivateBranchRequest(reason = "Operational setup complete"),
                         )
-                    with(authentication(tenantToken(setOf("branch.activate"), tenantId, branchId)))
+                    with(authentication(tenantToken(setOf("branch.approve"), tenantId, branchId)))
                 }.andExpect {
                     status { isOk() }
                     jsonPath("$.id") { value(branchId.toString()) }
@@ -321,7 +321,7 @@ class BranchControllerTests
                 org.mockito.kotlin.any(),
                 eq(tenantId),
                 eq(branchId),
-                eq("branch.activate"),
+                eq("branch.approve"),
             )
         }
 
@@ -397,7 +397,7 @@ class BranchControllerTests
                     with(
                         authentication(
                             tenantToken(
-                                setOf("branch.activate"),
+                                setOf("branch.approve"),
                                 tenantId,
                                 branchId,
                                 makerId,
@@ -416,7 +416,7 @@ class BranchControllerTests
                     with(
                         authentication(
                             tenantToken(
-                                setOf("branch.activate"),
+                                setOf("branch.approve"),
                                 tenantId,
                                 branchId,
                                 checkerId,
@@ -469,7 +469,7 @@ class BranchControllerTests
 
         @Test
         fun `activate administers a branch other than the selected one`() {
-            assertAdministersOtherBranch("activate", "branch.activate", "{}") { targetBranchId ->
+            assertAdministersOtherBranch("activate", "branch.approve", "{}") { targetBranchId ->
                 verify(branchProvisioningService).activate(argThat { branchId == targetBranchId })
             }
         }
@@ -810,7 +810,7 @@ class BranchControllerTests
             val branchId = uuidV7()
             stubUpdateResponse(tenantId, branchId, "DRAFT")
 
-            listOf("branch.create", "branch.activate").forEach { authority ->
+            listOf("branch.create", "branch.approve").forEach { authority ->
                 returnBranch(branchId, tenantId, permissions = setOf(authority))
                     .andExpect { status { isOk() } }
             }
@@ -818,6 +818,25 @@ class BranchControllerTests
                 .andExpect { status { isForbidden() } }
 
             verify(branchProvisioningService, org.mockito.kotlin.times(2)).returnForChanges(any())
+        }
+
+        @Test
+        fun `the deprecated branch activate authority no longer approves or returns a branch`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            stubBranchDetail(tenantId, branchId, "ACTIVE")
+
+            mockMvc
+                .post("${ApiPaths.BRANCHES}/$branchId/activate") {
+                    contentType = MediaType.APPLICATION_JSON
+                    content = "{}"
+                    with(authentication(tenantToken(setOf("branch.activate"), tenantId, branchId)))
+                }.andExpect { status { isForbidden() } }
+            returnBranch(branchId, tenantId, permissions = setOf("branch.activate"))
+                .andExpect { status { isForbidden() } }
+
+            verify(branchProvisioningService, org.mockito.kotlin.never()).activate(any())
+            verify(branchProvisioningService, org.mockito.kotlin.never()).returnForChanges(any())
         }
 
         @Test
@@ -980,7 +999,7 @@ class BranchControllerTests
         private val optionalReasonRoutes =
             listOf(
                 "submit" to "branch.create",
-                "activate" to "branch.activate",
+                "activate" to "branch.approve",
                 "reactivate" to "branch.reactivate",
             )
 
@@ -1005,7 +1024,7 @@ class BranchControllerTests
         private fun returnBranch(
             branchId: UUID,
             tenantId: UUID,
-            permissions: Set<String> = setOf("branch.activate"),
+            permissions: Set<String> = setOf("branch.approve"),
             selectedBranchId: UUID? = branchId,
             body: String? = REASON_BODY,
         ) = mockMvc.post("${ApiPaths.BRANCHES}/$branchId/return") {

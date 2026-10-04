@@ -76,7 +76,7 @@ class BranchUpdateIntegrationTests
             assertDetail(branchId, "DRAFT", "Lakeside Branch", "Africa/Kampala", "Kampala")
 
             post("submit", branchId, makerToken())
-            post("activate", branchId, checkerToken("branch.activate"))
+            post("activate", branchId, checkerToken("branch.approve"))
 
             // A partial update on an active branch: only the address changes.
             patch(branchId, """{"address":{"city":"Entebbe"}}""").andExpect {
@@ -99,7 +99,7 @@ class BranchUpdateIntegrationTests
             post("submit", branchId, makerToken())
             patch(branchId, body).andExpect { status { isConflict() } }
 
-            post("activate", branchId, checkerToken("branch.activate"))
+            post("activate", branchId, checkerToken("branch.approve"))
             post("suspend", branchId, checkerToken("branch.suspend"), """{"reason":"Audit hold"}""")
             patch(branchId, body).andExpect { status { isConflict() } }
 
@@ -387,7 +387,7 @@ class BranchUpdateIntegrationTests
         private fun createActiveBranch(): UUID =
             createBranch().also {
                 post("submit", it, makerToken())
-                post("activate", it, checkerToken("branch.activate"))
+                post("activate", it, checkerToken("branch.approve"))
             }
 
         private fun createBranchIn(

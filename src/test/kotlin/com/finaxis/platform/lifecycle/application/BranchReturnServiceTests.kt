@@ -96,14 +96,16 @@ class BranchReturnServiceTests {
     }
 
     @Test
-    fun `a checker who is neither maker returns the branch with branch activate`() {
+    fun `a checker who is neither maker returns the branch with branch approve`() {
         givenPendingBranch()
 
         service.returnForChanges(command(checker))
 
-        verify(guard).requireBranchPermission(checker, organisationId, branchId, "branch.activate")
+        verify(guard).requireBranchPermission(checker, organisationId, branchId, "branch.approve")
         verify(guard, never())
             .requireBranchPermission(checker, organisationId, branchId, "branch.create")
+        verify(guard, never())
+            .requireBranchPermission(checker, organisationId, branchId, "branch.activate")
         assertTransitioned()
         assertTrue(auditRows().isEmpty(), "the FSM row is the only audit of a tenant return")
     }
@@ -116,7 +118,7 @@ class BranchReturnServiceTests {
 
         verify(guard).requireBranchPermission(creator, organisationId, branchId, "branch.create")
         verify(guard, never())
-            .requireBranchPermission(creator, organisationId, branchId, "branch.activate")
+            .requireBranchPermission(creator, organisationId, branchId, "branch.approve")
         assertTransitioned()
         val row = auditRows().single()
         assertEquals("branch.withdraw", row.action)
@@ -149,7 +151,7 @@ class BranchReturnServiceTests {
         assertFailsWith<ForbiddenOperationException> { service.returnForChanges(command(creator)) }
 
         verify(guard, never())
-            .requireBranchPermission(creator, organisationId, branchId, "branch.activate")
+            .requireBranchPermission(creator, organisationId, branchId, "branch.approve")
         assertNotTransitioned()
     }
 
@@ -173,7 +175,7 @@ class BranchReturnServiceTests {
         whenever(store.branchState(organisationId, branchId)).thenReturn(null)
         doThrow(ForbiddenOperationException())
             .whenever(guard)
-            .requireBranchPermission(checker, organisationId, branchId, "branch.activate")
+            .requireBranchPermission(checker, organisationId, branchId, "branch.approve")
 
         assertFailsWith<ForbiddenOperationException> { service.returnForChanges(command(checker)) }
 
@@ -193,7 +195,7 @@ class BranchReturnServiceTests {
             service.returnForChanges(command(creator))
         }
 
-        verify(guard).requireBranchPermission(creator, organisationId, branchId, "branch.activate")
+        verify(guard).requireBranchPermission(creator, organisationId, branchId, "branch.approve")
         assertNotTransitioned()
     }
 
@@ -269,8 +271,9 @@ class BranchReturnServiceTests {
 
         service.returnForChanges(command(checker, ActingScope.PLATFORM))
 
-        verify(guard).requirePlatformPermission(checker, "branch.activate")
+        verify(guard).requirePlatformPermission(checker, "branch.approve")
         verify(guard, never()).requireBranchPermission(any(), any(), any(), any())
+        verify(guard, never()).requirePlatformPermission(checker, "branch.activate")
         verify(guard, never()).requireTenantPermission(any(), any(), any())
         assertTransitioned()
         val row = auditRows().single()
@@ -307,7 +310,7 @@ class BranchReturnServiceTests {
 
         verify(guard).requirePlatformPermission(creator, "branch.create")
         verify(guard).requirePlatformPermission(submitter, "branch.create")
-        verify(guard, never()).requirePlatformPermission(any(), eq("branch.activate"))
+        verify(guard, never()).requirePlatformPermission(any(), eq("branch.approve"))
         verify(store, never()).hasActiveBranchBeyondBootstrap(any())
         val rows = auditRows()
         assertEquals(listOf("branch.withdraw", "branch.withdraw"), rows.map { it.action })
@@ -325,7 +328,7 @@ class BranchReturnServiceTests {
             )
         }
 
-        verify(guard).requirePlatformPermission(checker, "branch.activate")
+        verify(guard).requirePlatformPermission(checker, "branch.approve")
         assertNotTransitioned()
     }
 
@@ -333,7 +336,7 @@ class BranchReturnServiceTests {
     fun `a platform caller without the permission is refused before the 404`() {
         doThrow(ForbiddenOperationException())
             .whenever(guard)
-            .requirePlatformPermission(checker, "branch.activate")
+            .requirePlatformPermission(checker, "branch.approve")
 
         assertFailsWith<ForbiddenOperationException> {
             service.returnForChanges(
