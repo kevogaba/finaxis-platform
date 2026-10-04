@@ -400,8 +400,8 @@ Base path: `/api/v1/branches`. List filters: `q`, `status`, `type`, `sort_by`, `
 | GET    | `/{branch_id}`            | Get branch                           | `branch.view`       | item     |
 | PATCH  | `/{branch_id}`            | Update branch                        | `branch.update`     | mutation |
 | POST   | `/{branch_id}/submit`     | Submit branch draft                  | `branch.create`     | mutation |
-| POST   | `/{branch_id}/activate`   | Activate branch                      | `branch.activate`   | mutation |
-| POST   | `/{branch_id}/return`     | Return or withdraw a pending branch  | `branch.activate` (checker) or `branch.create` (maker) | mutation |
+| POST   | `/{branch_id}/activate`   | Approve and activate branch          | `branch.approve`    | mutation |
+| POST   | `/{branch_id}/return`     | Return or withdraw a pending branch  | `branch.approve` (checker) or `branch.create` (maker) | mutation |
 | POST   | `/{branch_id}/suspend`    | Suspend branch                       | `branch.suspend`    | mutation |
 | POST   | `/{branch_id}/reactivate` | Reactivate branch                    | `branch.reactivate` | mutation |
 | POST   | `/{branch_id}/close`      | Close branch                         | `branch.close`      | mutation |
@@ -537,11 +537,11 @@ a flag in the request:
 | Intent | Caller | Permission | Audit rows |
 |--------|--------|------------|------------|
 | **Withdraw** | the branch's creator, or the actor of its latest `SUBMIT` | `branch.create` | `branch.return_for_changes` (FSM) and `branch.withdraw`, both with the reason |
-| **Return for changes** | anyone else | `branch.activate` | `branch.return_for_changes` (FSM) |
+| **Return for changes** | anyone else | `branch.approve` | `branch.return_for_changes` (FSM) |
 
-- **No new permission code.** A creator who also holds `branch.activate` is still a maker for this
+- **No new permission code.** A creator who also holds `branch.approve` is still a maker for this
   branch, so is classified as withdrawing and needs `branch.create`. A creator or submitter who has
-  since lost `branch.create` cannot withdraw, but a non-maker holding `branch.activate` can still
+  since lost `branch.create` cannot withdraw, but a non-maker holding `branch.approve` can still
   return the branch.
 - **Maker-checker.** Returning is the one decision a maker may take on their own branch: it hands
   the branch back to them and can never activate anything. The creator rule (and, on the platform
@@ -568,7 +568,7 @@ a flag in the request:
   `finaxis.lifecycle.branch.approval-requested` see a repeat per resubmission with no event for the
   return in between (see [transactional outbox](../architecture/transactional-outbox-amqp.md)).
 - **Response and idempotency.** The detail is read back without `branch.view`, so a role holding
-  only `branch.activate` or only `branch.create` gets the result of its own return. The route
+  only `branch.approve` or only `branch.create` gets the result of its own return. The route
   accepts an optional `Idempotency-Key`; a replay returns the stored response and returns the
   branch once.
 
@@ -759,8 +759,8 @@ Base path: `/api/v1/platform/tenants/{tenant_id}/branches`. List filters: `q`, `
 | POST   | `/`                     | Create branch draft for a platform-selected tenant | `branch.create`   | mutation |
 | GET    | `/{branch_id}`          | Get tenant branch                                  | `branch.view`     | item     |
 | POST   | `/{branch_id}/submit`   | Submit a tenant branch draft for approval          | `branch.create`   | mutation |
-| POST   | `/{branch_id}/activate` | Activate a tenant branch as platform checker       | `branch.activate` | mutation |
-| POST   | `/{branch_id}/return`   | Return a pending tenant branch to draft, or withdraw it | `branch.activate` (checker) or `branch.create` (maker) | mutation |
+| POST   | `/{branch_id}/activate` | Activate a tenant branch as platform checker       | `branch.approve`  | mutation |
+| POST   | `/{branch_id}/return`   | Return a pending tenant branch to draft, or withdraw it | `branch.approve` (checker) or `branch.create` (maker) | mutation |
 
 The create request and branch responses use the same fields as tenant-facing branches. Every
 permission above is checked in the **platform** organisation only: no tenant membership or tenant
@@ -779,7 +779,7 @@ count). See
 `return` takes the required `{"reason": "..."}` body and behaves as the tenant route
 ([Return or withdraw a pending branch](#return-or-withdraw-a-pending-branch)), with the permission
 checked **in the platform organisation**: a platform actor who is neither the creator nor the
-latest submitter **returns as the audited platform checker** (`branch.activate`) and is bounded
+latest submitter **returns as the audited platform checker** (`branch.approve`) and is bounded
 exactly like activation (**409 `lifecycle.platform_checker_closed`** once the tenant has its own
 `ACTIVE` branch); one who is the creator or latest submitter **withdraws** (`branch.create`), which
 is not bounded, because taking back one's own request grants nothing. A platform withdrawal writes

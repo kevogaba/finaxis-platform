@@ -71,7 +71,7 @@ class BranchReturnIntegrationTests
             val branchId = createBranch()
             submit(branchId, makerToken())
 
-            returnTenant(branchId, tenantToken(checker, "branch.activate")).andExpect {
+            returnTenant(branchId, tenantToken(checker, "branch.approve")).andExpect {
                 status { isOk() }
                 jsonPath("$.id") { value(branchId.toString()) }
                 jsonPath("$.status") { value("DRAFT") }
@@ -102,9 +102,9 @@ class BranchReturnIntegrationTests
             }
             submit(branchId, makerToken())
             assertEquals("PENDING_APPROVAL", branchColumn(branchId, "status"))
-            activate(branchId, tenantToken(maker, "branch.activate"))
+            activate(branchId, tenantToken(maker, "branch.approve"))
                 .andExpect { status { isForbidden() } }
-            activate(branchId, tenantToken(checker, "branch.activate"))
+            activate(branchId, tenantToken(checker, "branch.approve"))
                 .andExpect { status { isOk() } }
             assertEquals("ACTIVE", branchColumn(branchId, "status"))
         }
@@ -160,22 +160,22 @@ class BranchReturnIntegrationTests
         fun `a maker without branch create cannot withdraw but a checker can still return`() {
             val branchId = createBranch()
             submit(branchId, makerToken())
-            // The maker's account now holds branch.activate and nothing else.
+            // The maker's account now holds branch.approve and nothing else.
             val formerMaker = seedUser("former-maker")
-            fixture.grantTenantPermissionsOnly(organisationId, formerMaker, "branch.activate")
+            fixture.grantTenantPermissionsOnly(organisationId, formerMaker, "branch.approve")
             dsl
                 .update(BRANCH)
                 .set(BRANCH.CREATED_BY, formerMaker)
                 .where(BRANCH.ID.eq(branchId))
                 .execute()
 
-            // A creator is classified as a maker, so branch.activate cannot make this a return.
-            returnTenant(branchId, tenantToken(formerMaker, "branch.activate"))
+            // A creator is classified as a maker, so branch.approve cannot make this a return.
+            returnTenant(branchId, tenantToken(formerMaker, "branch.approve"))
                 .andExpect { status { isForbidden() } }
             assertEquals("PENDING_APPROVAL", branchColumn(branchId, "status"))
             assertTrue(auditRows(branchId, "branch.return_for_changes").isEmpty())
 
-            returnTenant(branchId, tenantToken(checker, "branch.activate"))
+            returnTenant(branchId, tenantToken(checker, "branch.approve"))
                 .andExpect { status { isOk() } }
             assertEquals("DRAFT", branchColumn(branchId, "status"))
         }
@@ -183,7 +183,7 @@ class BranchReturnIntegrationTests
         @Test
         fun `a role holding only the mutation permission returns or withdraws and reads it back`() {
             val checkerOnly = seedUser("checker-only")
-            fixture.grantTenantPermissionsOnly(organisationId, checkerOnly, "branch.activate")
+            fixture.grantTenantPermissionsOnly(organisationId, checkerOnly, "branch.approve")
             val makerOnly = seedUser("maker-only")
             fixture.grantTenantPermissionsOnly(organisationId, makerOnly, "branch.create")
             val branchScoped = seedUser("branch-scoped")
@@ -192,13 +192,13 @@ class BranchReturnIntegrationTests
                 organisationId,
                 first,
                 branchScoped,
-                "branch.activate",
+                "branch.approve",
             )
 
             // None of them holds branch.view anywhere: the response must not need it, or the
             // return would be rolled back with a 403 after the mutation.
             submit(first, makerToken())
-            returnTenant(first, tenantToken(branchScoped, "branch.activate", headOfficeId()))
+            returnTenant(first, tenantToken(branchScoped, "branch.approve", headOfficeId()))
                 .andExpect {
                     status { isOk() }
                     jsonPath("$.status") { value("DRAFT") }
@@ -207,7 +207,7 @@ class BranchReturnIntegrationTests
 
             val second = createBranch()
             submit(second, makerToken())
-            returnTenant(second, tenantToken(checkerOnly, "branch.activate")).andExpect {
+            returnTenant(second, tenantToken(checkerOnly, "branch.approve")).andExpect {
                 status { isOk() }
                 jsonPath("$.id") { value(second.toString()) }
                 jsonPath("$.status") { value("DRAFT") }
@@ -254,7 +254,7 @@ class BranchReturnIntegrationTests
                 suspended to "SUSPENDED",
                 closed to "CLOSED",
             ).forEach { (branchId, status) ->
-                listOf(makerToken(), tenantToken(checker, "branch.activate")).forEach { token ->
+                listOf(makerToken(), tenantToken(checker, "branch.approve")).forEach { token ->
                     returnTenant(branchId, token).andExpect { status { isConflict() } }
                 }
                 assertEquals(status, branchColumn(branchId, "status"), "unchanged")
@@ -276,17 +276,17 @@ class BranchReturnIntegrationTests
             // Holds the coarse authority on the token but not the grant: 403 for a real branch,
             // a branch of another tenant and a branch that does not exist alike.
             listOf(branchId, foreign, uuidV7()).forEach { target ->
-                returnTenant(target, tenantToken(reader, "branch.activate"))
+                returnTenant(target, tenantToken(reader, "branch.approve"))
                     .andExpect { status { isForbidden() } }
             }
             // Authorised in this tenant: another tenant's branch and an unknown id are 404.
             listOf(foreign, uuidV7()).forEach { target ->
-                returnTenant(target, tenantToken(checker, "branch.activate"))
+                returnTenant(target, tenantToken(checker, "branch.approve"))
                     .andExpect { status { isNotFound() } }
                 returnTenant(target, makerToken()).andExpect { status { isNotFound() } }
             }
             // And the other tenant's owner cannot reach this tenant's branch either.
-            val foreignOwner = tenantToken(otherOwner, "branch.activate", org = otherOrganisation)
+            val foreignOwner = tenantToken(otherOwner, "branch.approve", org = otherOrganisation)
             returnTenant(branchId, foreignOwner)
                 .andExpect { status { isNotFound() } }
 
@@ -385,7 +385,7 @@ class BranchReturnIntegrationTests
         fun `a platform checker return is closed once the tenant has its own active branch`() {
             val own = createBranch()
             submit(own, makerToken())
-            activate(own, tenantToken(checker, "branch.activate")).andExpect { status { isOk() } }
+            activate(own, tenantToken(checker, "branch.approve")).andExpect { status { isOk() } }
             val pending = createBranch()
             submit(pending, makerToken())
 
@@ -399,7 +399,7 @@ class BranchReturnIntegrationTests
             assertEquals("PENDING_APPROVAL", branchColumn(pending, "status"))
             assertTrue(transitionRows(pending, "RETURN_FOR_CHANGES").isEmpty())
             // The tenant's own checker is not bounded.
-            returnTenant(pending, tenantToken(checker, "branch.activate"))
+            returnTenant(pending, tenantToken(checker, "branch.approve"))
                 .andExpect { status { isOk() } }
         }
 
@@ -410,7 +410,7 @@ class BranchReturnIntegrationTests
             // The tenant now has an active branch of its own, closing the platform checker.
             val own = createBranch()
             submit(own, makerToken())
-            activate(own, tenantToken(checker, "branch.activate")).andExpect { status { isOk() } }
+            activate(own, tenantToken(checker, "branch.approve")).andExpect { status { isOk() } }
             returnPlatform(branchId, platformChecker).andExpect { status { isConflict() } }
 
             returnPlatform(branchId, platformMaker).andExpect {
@@ -447,16 +447,43 @@ class BranchReturnIntegrationTests
         }
 
         @Test
+        fun `a holder of only the deprecated branch activate can neither approve nor return`() {
+            // The coarse authority is forged to pass the controller gate, so the refusal below is
+            // the application layer's own database check, which honours ACTIVE permissions only.
+            val tenantLegacy = seedUser("legacy-checker")
+            fixture.grantTenantPermissionsOnly(organisationId, tenantLegacy, "branch.activate")
+            val platformLegacy = seedUser("p-legacy-checker")
+            fixture.grantPlatformPermissionsOnly(platformLegacy, "branch.activate")
+            val pending = createBranch()
+            submit(pending, makerToken())
+
+            activate(pending, tenantToken(tenantLegacy, "branch.approve"))
+                .andExpect { status { isForbidden() } }
+            returnTenant(pending, tenantToken(tenantLegacy, "branch.approve"))
+                .andExpect { status { isForbidden() } }
+            returnPlatformAs(pending, platformLegacy, setOf("branch.approve"))
+                .andExpect { status { isForbidden() } }
+            mockMvc
+                .post(platformPath(organisationId, pending, "activate")) {
+                    header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())
+                    with(authentication(platformToken(platformLegacy, setOf("branch.approve"))))
+                }.andExpect { status { isForbidden() } }
+
+            assertEquals("PENDING_APPROVAL", branchColumn(pending, "status"))
+            assertTrue(auditRows(pending, "branch.return_for_changes").isEmpty())
+        }
+
+        @Test
         fun `a platform role holding only the mutation permission returns and withdraws`() {
-            val onlyActivate = seedUser("p-activate")
-            fixture.grantPlatformPermissionsOnly(onlyActivate, "branch.activate")
+            val onlyApprove = seedUser("p-approve")
+            fixture.grantPlatformPermissionsOnly(onlyApprove, "branch.approve")
             val onlyCreate = seedUser("p-create")
             fixture.grantPlatformPermissionsOnly(onlyCreate, "branch.create")
             val pending = createBranch()
             submit(pending, makerToken())
 
             // Neither holds branch.view: the response must not need it.
-            returnPlatformAs(pending, onlyActivate, setOf("branch.activate")).andExpect {
+            returnPlatformAs(pending, onlyApprove, setOf("branch.approve")).andExpect {
                 status { isOk() }
                 jsonPath("$.status") { value("DRAFT") }
             }
@@ -508,7 +535,7 @@ class BranchReturnIntegrationTests
                     header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())
                     contentType = MediaType.APPLICATION_JSON
                     content = REASON_BODY
-                    with(authentication(tenantToken(checker, "branch.activate")))
+                    with(authentication(tenantToken(checker, "branch.approve")))
                 }.andExpect { status { isForbidden() } }
 
             assertEquals("PENDING_APPROVAL", branchColumn(branchId, "status"))
@@ -751,7 +778,7 @@ class BranchReturnIntegrationTests
 
         private fun makerToken() = tenantToken(maker, "branch.create")
 
-        private fun checkerToken() = tenantToken(checker, "branch.activate")
+        private fun checkerToken() = tenantToken(checker, "branch.approve")
 
         private fun platformPath(
             tenantId: UUID,
@@ -812,6 +839,6 @@ class BranchReturnIntegrationTests
             const val REASON = "Branch name has a typo."
             const val REASON_BODY = """{"reason":"$REASON"}"""
             val COARSE =
-                setOf("branch.create", "branch.activate", "branch.view", "audit.view")
+                setOf("branch.create", "branch.approve", "branch.view", "audit.view")
         }
     }

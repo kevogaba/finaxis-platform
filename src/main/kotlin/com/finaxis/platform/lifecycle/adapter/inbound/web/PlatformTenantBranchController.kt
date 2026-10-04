@@ -424,12 +424,12 @@ class PlatformTenantBranchController(
      */
     @PostMapping("/{branch_id}/activate")
     @IdempotentMutation(scope = IdempotencyScopeKind.PLATFORM)
-    @PreAuthorize("hasAuthority('branch.activate')")
+    @PreAuthorize("hasAuthority('branch.approve')")
     @Operation(
         summary = "Activate tenant branch as platform checker",
         description =
             "Activates a pending branch of the path tenant on the tenant's behalf. Requires " +
-                "`branch.activate` in the platform organisation. The branch's creator cannot " +
+                "`branch.approve` in the platform organisation. The branch's creator cannot " +
                 "activate it, whether a tenant user or a platform administrator; the action is " +
                 "audited with the platform actor.",
         parameters = [
@@ -531,14 +531,14 @@ class PlatformTenantBranchController(
      */
     @PostMapping("/{branch_id}/return")
     @IdempotentMutation(scope = IdempotencyScopeKind.PLATFORM)
-    @PreAuthorize("hasAnyAuthority('branch.create', 'branch.activate')")
+    @PreAuthorize("hasAnyAuthority('branch.create', 'branch.approve')")
     @Operation(
         summary = "Return or withdraw tenant branch as platform administrator",
         description =
             "Returns a pending branch of the path tenant to draft with a required reason. The " +
                 "branch's creator or latest submitter withdraws their own request and needs " +
                 "`branch.create` in the platform organisation, with no window; anyone else " +
-                "returns it as the audited platform checker, needs `branch.activate` in the " +
+                "returns it as the audited platform checker, needs `branch.approve` in the " +
                 "platform organisation, and only while the tenant has no active branch beyond " +
                 "its bootstrap head office.",
         parameters = [

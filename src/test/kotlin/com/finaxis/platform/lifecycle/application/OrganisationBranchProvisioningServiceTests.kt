@@ -30,6 +30,7 @@ import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
 import org.mockito.kotlin.any
 import org.mockito.kotlin.doThrow
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.whenever
 import java.time.Clock
 import java.time.Instant
@@ -338,8 +339,10 @@ class OrganisationBranchProvisioningServiceTests {
             checkerId,
             organisationId,
             branchId,
-            "branch.activate",
+            "branch.approve",
         )
+        verify(permissionGuard, never())
+            .requireBranchPermission(any(), any(), any(), eq("branch.activate"))
     }
 
     @Test
@@ -1571,8 +1574,9 @@ class PlatformCheckerBranchTests {
             BranchLifecycleState.ACTIVE,
             lifecyclePersistence.branches.getValue(organisationId to branchId).state,
         )
-        verify(permissionGuard).requirePlatformPermission(platformChecker, "branch.activate")
+        verify(permissionGuard).requirePlatformPermission(platformChecker, "branch.approve")
         verify(permissionGuard, never()).requireBranchPermission(any(), any(), any(), any())
+        verify(permissionGuard, never()).requirePlatformPermission(any(), eq("branch.activate"))
         val audit = audits.events.single { it.action == "branch.activate_as_platform_checker" }
         assertEquals(platformChecker.toString(), audit.actorId)
         assertEquals(organisationId.toString(), audit.tenantId)
@@ -1621,7 +1625,7 @@ class PlatformCheckerBranchTests {
             org.springframework.security.access
                 .AccessDeniedException("no"),
         ).whenever(permissionGuard)
-            .requirePlatformPermission(platformChecker, "branch.activate")
+            .requirePlatformPermission(platformChecker, "branch.approve")
 
         assertFailsWith<org.springframework.security.access.AccessDeniedException> {
             branches.activate(activateCommand(branchId, platformChecker))
@@ -1765,7 +1769,7 @@ class PlatformCheckerBranchTests {
                 ).copy(organisationId = platformOrganisationId),
             )
         }
-        verify(permissionGuard).requirePlatformPermission(platformChecker, "branch.activate")
+        verify(permissionGuard).requirePlatformPermission(platformChecker, "branch.approve")
     }
 
     @Test

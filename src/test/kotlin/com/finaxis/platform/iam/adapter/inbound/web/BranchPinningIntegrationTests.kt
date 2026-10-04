@@ -346,7 +346,7 @@ class BranchPinningIntegrationTests {
     fun `administering a branch that does not exist answers not found while pinned`() {
         grantRole(
             "pin-lifecycle",
-            setOf("branch.activate", "branch.suspend", "branch.reactivate", "branch.close"),
+            setOf("branch.approve", "branch.suspend", "branch.reactivate", "branch.close"),
             branchId = null,
         )
         val pinned = contextToken(HEAD_OFFICE_BRANCH_ID)

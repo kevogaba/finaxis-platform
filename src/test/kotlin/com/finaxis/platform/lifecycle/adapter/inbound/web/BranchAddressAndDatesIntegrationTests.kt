@@ -79,7 +79,7 @@ class BranchAddressAndDatesIntegrationTests
             )
             post(
                 "${ApiPaths.BRANCHES}/$branchId/activate",
-                tenantToken(checker, organisationId, "branch.activate"),
+                tenantToken(checker, organisationId, "branch.approve"),
             )
             assertTenantGet(organisationId, branchId, maker, "ACTIVE", "09-03-2031", null)
 
@@ -116,7 +116,7 @@ class BranchAddressAndDatesIntegrationTests
             val activated =
                 post(
                     "${ApiPaths.BRANCHES}/$branchId/activate",
-                    tenantToken(checker, organisationId, "branch.activate"),
+                    tenantToken(checker, organisationId, "branch.approve"),
                 )
 
             listOf(submitted, activated).forEach { body ->

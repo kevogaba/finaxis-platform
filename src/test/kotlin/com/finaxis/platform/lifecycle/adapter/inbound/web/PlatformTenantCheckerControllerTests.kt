@@ -173,7 +173,7 @@ class PlatformTenantCheckerControllerTests
                 }
             mockMvc
                 .post("${ApiPaths.PLATFORM_TENANTS}/$tenantId/branches/$branchId/activate") {
-                    with(authentication(platformToken(setOf("branch.activate"))))
+                    with(authentication(platformToken(setOf("branch.approve"))))
                 }.andExpect {
                     status { isOk() }
                     jsonPath("$.id") { value(branchId.toString()) }
@@ -351,7 +351,7 @@ class PlatformTenantCheckerControllerTests
 
         @Test
         fun `a tenant context cannot use the checker routes even holding the authority`() {
-            val authorities = setOf("user.approve", "branch.activate", "branch.create")
+            val authorities = setOf("user.approve", "branch.approve", "branch.create")
             checkerRoutes().forEach { path ->
                 mockMvc
                     .post(path) { with(authentication(tenantToken(authorities))) }
@@ -365,7 +365,7 @@ class PlatformTenantCheckerControllerTests
 
         @Test
         fun `application failures map to 403 404 and 409`() {
-            val authorities = setOf("user.approve", "branch.activate")
+            val authorities = setOf("user.approve", "branch.approve")
             whenever(userProvisioningService.approveUser(any()))
                 .thenThrow(ResourceNotFoundException())
             doThrow(ForbiddenOperationException())
@@ -411,7 +411,7 @@ class PlatformTenantCheckerControllerTests
         fun `platform return passes the path tenant the reason and the platform scope`() {
             stubBranchDetail("DRAFT")
 
-            returnBranch(setOf("branch.activate")).andExpect {
+            returnBranch(setOf("branch.approve")).andExpect {
                 status { isOk() }
                 jsonPath("$.id") { value(branchId.toString()) }
                 jsonPath("$.status") { value("DRAFT") }
@@ -437,7 +437,7 @@ class PlatformTenantCheckerControllerTests
         fun `platform return is open to the maker or the checker authority and nobody else`() {
             stubBranchDetail("DRAFT")
 
-            listOf("branch.create", "branch.activate").forEach { authority ->
+            listOf("branch.create", "branch.approve").forEach { authority ->
                 returnBranch(setOf(authority)).andExpect { status { isOk() } }
             }
             returnBranch(setOf("audit.view")).andExpect { status { isForbidden() } }
@@ -446,23 +446,35 @@ class PlatformTenantCheckerControllerTests
                 .post("${ApiPaths.PLATFORM_TENANTS}/$tenantId/branches/$branchId/return") {
                     contentType = MediaType.APPLICATION_JSON
                     content = RETURN_BODY
-                    with(authentication(tenantToken(setOf("branch.activate", "branch.create"))))
+                    with(authentication(tenantToken(setOf("branch.approve", "branch.create"))))
                 }.andExpect { status { isForbidden() } }
 
             verify(branchProvisioningService, times(2)).returnForChanges(any())
         }
 
         @Test
+        fun `the deprecated branch activate authority cannot approve or return on the platform`() {
+            mockMvc
+                .post("${ApiPaths.PLATFORM_TENANTS}/$tenantId/branches/$branchId/activate") {
+                    with(authentication(platformToken(setOf("branch.activate"))))
+                }.andExpect { status { isForbidden() } }
+            returnBranch(setOf("branch.activate")).andExpect { status { isForbidden() } }
+
+            verify(branchProvisioningService, never()).activate(any())
+            verify(branchProvisioningService, never()).returnForChanges(any())
+        }
+
+        @Test
         fun `platform return requires a body with a reason of three to 500 characters`() {
             listOf(null, "{}", "{\"reason\":null}").forEach { body ->
-                returnBranch(setOf("branch.activate"), body).andExpect {
+                returnBranch(setOf("branch.approve"), body).andExpect {
                     status { isBadRequest() }
                     jsonPath("$.code") { value("invalid_json") }
                 }
             }
             listOf("", "  ", "ab", "x".repeat(501)).forEach { reason ->
                 returnBranch(
-                    setOf("branch.activate"),
+                    setOf("branch.approve"),
                     apiJsonCodec.mapper.writeValueAsString(mapOf("reason" to reason)),
                 ).andExpect {
                     status { isBadRequest() }
@@ -481,7 +493,7 @@ class PlatformTenantCheckerControllerTests
                 ConflictException() to 409,
             ).forEach { (refusal, expected) ->
                 doThrow(refusal).whenever(branchProvisioningService).returnForChanges(any())
-                returnBranch(setOf("branch.activate")).andExpect {
+                returnBranch(setOf("branch.approve")).andExpect {
                     status { isEqualTo(expected) }
                 }
             }
@@ -506,7 +518,7 @@ class PlatformTenantCheckerControllerTests
         }
 
         private val branchActions =
-            mapOf("submit" to "branch.create", "activate" to "branch.activate")
+            mapOf("submit" to "branch.create", "activate" to "branch.approve")
 
         private fun checkerRoutes() =
             listOf(

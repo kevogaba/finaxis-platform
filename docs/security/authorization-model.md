@@ -14,7 +14,8 @@ Read this with [active organisation context](active-organisation-context.md),
 The global catalogue in `permission` holds **81 permission codes**: 54 foundation codes seeded by
 `V2__platform_reference_data.sql`, 26 accounting codes seeded by
 `V5__accounting_permission_catalogue.sql`, and `branch.update`, added to the `branch` module by
-`V19__branch_update_permission.sql` (#203). Each has a stable `permission_code`, `module_code`,
+`V19__branch_update_permission.sql` (#203). One of the 81, `branch.activate`, is **DEPRECATED**
+(see "Branch approval"), so 80 are `ACTIVE`. Each has a stable `permission_code`, `module_code`,
 `risk_level`, `system_permission`, and status. Module codes are `tenant`, `branch`, `iam`,
 `audit`, `settings`, and `accounting`; risk levels are `LOW`, `MEDIUM`, `HIGH`, and `CRITICAL`.
 
@@ -120,8 +121,8 @@ flowchart LR
 edits an `ACTIVE` branch, which has already been approved, and with `branch.create` a custom
 maker-only role could change a live branch with no checker anywhere in the path. A separate code
 lets an owner withhold live edits from makers and grant them on purpose. The one person who may
-create or submit a draft and the one who activates it are still different people (`branch.activate`
-is unchanged and still cannot be exercised by the creator); `branch.update` adds no approval, it
+create or submit a draft and the one who approves it are still different people (`branch.approve`
+still cannot be exercised by the creator); `branch.update` adds no approval, it
 only separates who may amend. As with the lifecycle routes it is evaluated at the **target
 branch**, not the selected one (#154), by `BranchProvisioningService.update` rather than only at
 the controller, and a missing or foreign branch is `404` only after that check passes, so a caller
@@ -136,6 +137,57 @@ approved from then on, `TENANT_ADMIN` and `BRANCH_MANAGER` (the roles that alrea
 `branch.create`) are seeded with `branch.update`; `TENANT_AUDITOR`, `IAM_ADMIN` and
 `BRANCH_OPERATOR` are not. The platform-operator routes never offered `PATCH`.
 
+## Branch approval
+
+Approving a `PENDING_APPROVAL` branch requires **`branch.approve`** (risk `HIGH`, module
+`branch`): `POST /branches/{branch_id}/activate`, the platform checker route
+`POST /platform/tenants/{tenant_id}/branches/{branch_id}/activate`, and the checker's half of
+`/return`. It is checked at the controller (coarse gate) and again in
+`BranchProvisioningService` against the target branch, or against the platform organisation on
+the platform route. Reactivating a `SUSPENDED` branch keeps `branch.reactivate`, suspending
+`branch.suspend`, closing `branch.close`, and a maker's withdrawal `branch.create`. The ADR 0028
+platform-checker window and the creator/submitter rules are unchanged, and so are the audit
+actions (`branch.activate`, `branch.activate_as_platform_checker`), which name what happened,
+not a permission.
+
+Until #208 the code seeded for this, `branch.approve`, was checked nowhere and `branch.activate`
+did the work. The rule is that approval needs an explicit permission and a replaced permission
+is deprecated, so `V21__branch_approve_permission.sql` marks **`branch.activate` `DEPRECATED`**.
+Runtime resolution honours only `ACTIVE` permissions, so a deprecated code that is still held
+confers nothing, and no route checks it (`BranchApprovePermissionMigrationTests` scans the
+source to keep it so). The migration **rebuilds approval authority from `branch.activate`**.
+Because nothing ever checked `branch.approve`, every `branch.approve` role grant and membership
+override that already existed (`ALLOW` or `DENY`) conferred nothing; while `branch.activate` is
+`ACTIVE`, those with no `branch.activate` counterpart are **discarded**, and then every role
+(system roles of existing tenants included) and every direct membership override, `ALLOW` or
+`DENY` alike, that held `branch.activate` is given the same on `branch.approve`. Afterwards a
+role holds `branch.approve` if and only if it held `branch.activate`, and a membership override
+on one matches the other, so every principal's effective approval ability is the same before and
+after: nobody who could approve loses it, and nobody who could not gains it (a custom role that
+an admin built around the dead `branch.approve`, or a lone `branch.approve` `DENY`, no longer
+matters; such an admin must re-grant approval knowingly with `role.assign_permission`). A
+`DISABLED` source disables `branch.approve` and discards nothing. A `DEPRECATED` source with
+`branch.approve` `ACTIVE` **raises whatever the rows say**: the previous runtime authorized
+nobody through a deprecated code, matching rows cannot prove V21 completed earlier, and accepting
+them would open approval to every `branch.approve` holder at once. The message tells the operator
+to disable `branch.approve` by hand if approval must stay shut, or to re-activate `branch.activate`
+and run again, and never to re-run V21 by hand where it already completed. While it rebuilds, V21
+takes `LOCK TABLE role_permission, membership_permission IN SHARE ROW EXCLUSIVE MODE`: other
+transactions' grant writes wait until it commits (reads continue), so a revoke or an override
+change made by an old instance cannot slip between the snapshot and the copy. To take approval
+away from a role, revoke `branch.approve`; revoking `branch.activate` no longer does anything. The
+`branch.activate` rows are not deleted. The V21 header carries an informational query listing the
+rows that are discarded. The effective-permission cache is namespaced by schema version and cleared
+at start by the mechanism introduced with V19. During a **rolling deploy** the instances of the
+previous release still check `branch.activate`, which V21 deprecates, so they refuse approvals
+(403) until they are replaced: it fails safe, and nothing is needed beyond completing the rollout.
+
+New organisations are seeded with `branch.approve` and **not** `branch.activate`
+(`TENANT_ADMIN` and `BRANCH_MANAGER`, `OrganisationBootstrapDefaults`). The readiness check
+that gates tenant reactivation counts the role's `ACTIVE` codes that are in the current
+bundle and ignores any other, so an existing tenant whose roles still hold the deprecated
+`branch.activate` beside `branch.approve` stays ready (`TenantRoleReadinessTests`).
+
 ## Branch return and withdrawal
 
 `POST /branches/{branch_id}/return` (and the platform route) is one transition, `PENDING_APPROVAL`
@@ -145,15 +197,15 @@ branch, with no new permission code (ADR 0029, 3b):
 | Caller | Intent | Permission | Scope |
 | --- | --- | --- | --- |
 | The branch's creator, or the actor of its latest `SUBMIT` | withdraw | `branch.create` | tenant: the target branch; platform: the platform organisation |
-| Anyone else | return as a checker | `branch.activate` | tenant: the target branch; platform: the platform organisation |
+| Anyone else | return as a checker | `branch.approve` | tenant: the target branch; platform: the platform organisation |
 
 The caller is classified first, from `created_by` and the latest submitter **read inside the path
 organisation**, so a branch of another tenant or an unknown id classifies as a return and reads the
 same. Classifying only chooses which permission is asked; the permission is then checked in the
 application service (`BranchProvisioningService.returnForChanges`), before any existence signal. A
-creator who also holds `branch.activate` is still a maker and needs `branch.create`; a maker who
-has lost `branch.create` cannot withdraw, but a non-maker holding `branch.activate` can still
-return. The controller's coarse gate is `branch.create` **or** `branch.activate` because it cannot
+creator who also holds `branch.approve` is still a maker and needs `branch.create`; a maker who
+has lost `branch.create` cannot withdraw, but a non-maker holding `branch.approve` can still
+return. The controller's coarse gate is `branch.create` **or** `branch.approve` because it cannot
 know the class. A platform actor who returns as a checker is held to the ADR 0028 window and is
 audited with `checkerScope = PLATFORM`; a platform withdrawal is not windowed and carries no
 marker.
@@ -207,9 +259,9 @@ approving platform user's own account as its initial administrator cannot be app
 | Route | Permission | Scope |
 | --- | --- | --- |
 | `POST /platform/tenants/{tenant_id}/memberships/{membership_id}/activate` | `user.approve` | PLATFORM |
-| `POST /platform/tenants/{tenant_id}/branches/{branch_id}/activate` | `branch.activate` | PLATFORM |
+| `POST /platform/tenants/{tenant_id}/branches/{branch_id}/activate` | `branch.approve` | PLATFORM |
 | `POST /platform/tenants/{tenant_id}/branches/{branch_id}/submit` | `branch.create` | PLATFORM |
-| `POST /platform/tenants/{tenant_id}/branches/{branch_id}/return` | `branch.activate` (checker) or `branch.create` (maker) | PLATFORM |
+| `POST /platform/tenants/{tenant_id}/branches/{branch_id}/return` | `branch.approve` (checker) or `branch.create` (maker) | PLATFORM |
 | `POST /platform/tenants/{tenant_id}/branches` | `branch.create` | PLATFORM |
 
 Order of checks on every one of them: platform context, then the platform permission, then the

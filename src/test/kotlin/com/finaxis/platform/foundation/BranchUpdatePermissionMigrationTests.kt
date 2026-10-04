@@ -96,12 +96,12 @@ class BranchUpdatePermissionMigrationTests(
     @Test
     fun `a role without branch create gets nothing`() {
         val organisationId = seedOrganisation()
-        val reader = seedRole(organisationId, "V19_READER", "branch.view", "branch.activate")
+        val reader = seedRole(organisationId, "V19_READER", "branch.view", "branch.approve")
         val empty = seedRole(organisationId, "V19_EMPTY")
 
         runMigration()
 
-        assertEquals(setOf("branch.view", "branch.activate"), codesOf(reader))
+        assertEquals(setOf("branch.view", "branch.approve"), codesOf(reader))
         assertEquals(emptySet(), codesOf(empty))
     }
 

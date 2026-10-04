@@ -6,6 +6,10 @@ Accepted
 
 Date: 2026-10-03
 
+Amended by #208 (`V21__branch_approve_permission.sql`): the permission that approves a
+branch is `branch.approve`; `branch.activate` is deprecated and no longer checked. This ADR's
+branch rules (the window, the creator and submitter rules) are unchanged.
+
 Resolves GitHub issue #153. Relaxes, in one named place, the maker-checker rule that
 `UserProvisioningService.approveUser` and `BranchProvisioningService.activate` enforce. Does not
 amend [ADR 0004](0004-membership-activation-notification-pipeline.md): the notification pipeline
@@ -64,7 +68,7 @@ checker step:
    whatever authorities it holds.
 2. The caller holds the step's permission **in the platform organisation**, checked in the
    application services (`UserProvisioningService.approveUser` and `BranchProvisioningService`,
-   not only the controller): `user.approve` for a membership, `branch.activate` to activate a
+   not only the controller): `user.approve` for a membership, `branch.approve` to activate a
    branch, `branch.create` to create or submit one. Nothing is checked in the tenant, so no tenant
    membership is needed.
 3. The permission check comes first. An id that does not belong to the **path tenant** reads as
@@ -121,7 +125,7 @@ checker step:
      approve all N before the first of them turns `ACTIVE`;
    - if drafts A and B are both submitted and the platform activates A, the bound closes for
      branches and B stays pending until the tenant has a non-creator member of its own holding
-     `branch.activate` (or the tenant suspends A and reopens the bound).
+     `branch.approve` (or the tenant suspends A and reopens the bound).
    These are accepted: each step is still individually authorised, maker-checked, beneficiary-
    checked and audited, and the bound limits standing exposure rather than being a rate limit.
 9. **A person who is both a platform administrator and an `ACTIVE` member of the tenant** may submit
@@ -147,7 +151,7 @@ checker step:
 | Route | Permission | Scope |
 | --- | --- | --- |
 | `POST /platform/tenants/{tenant_id}/memberships/{membership_id}/activate` | `user.approve` | PLATFORM |
-| `POST /platform/tenants/{tenant_id}/branches/{branch_id}/activate` | `branch.activate` | PLATFORM |
+| `POST /platform/tenants/{tenant_id}/branches/{branch_id}/activate` | `branch.approve` | PLATFORM |
 | `POST /platform/tenants/{tenant_id}/branches/{branch_id}/submit` | `branch.create` | PLATFORM |
 | `POST /platform/tenants/{tenant_id}/branches` (existing) | `branch.create` | PLATFORM |
 
@@ -226,7 +230,7 @@ nor `PROVISIONING` is 409. The tenant-context `POST /branches` is unchanged.
 
 ## Consequences
 
-- A platform administrator holding `user.approve` or `branch.activate` can check a tenant's
+- A platform administrator holding `user.approve` or `branch.approve` can check a tenant's
   pending item only while the tenant has no own `ACTIVE` member (memberships) or own `ACTIVE` branch
   (branches), and only if it did not make the item, was not its beneficiary and did not submit
   it. The checker neither chooses the
