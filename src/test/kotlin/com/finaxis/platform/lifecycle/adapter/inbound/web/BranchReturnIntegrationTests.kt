@@ -110,6 +110,150 @@ class BranchReturnIntegrationTests
         }
 
         @Test
+        fun `the actor who amended a returned draft cannot approve it but a checker can`() {
+            val amender = seedUser("amender")
+            fixture.grantTenantAdmin(organisationId, amender)
+            val branchId = createBranch()
+            submit(branchId, makerToken())
+            returnTenant(branchId, checkerToken()).andExpect { status { isOk() } }
+
+            patchAs(amender, branchId, """{"branch_name":"Amended By Someone Else"}""")
+                .andExpect { status { isOk() } }
+            submit(branchId, makerToken())
+            assertEquals("PENDING_APPROVAL", branchColumn(branchId, "status"))
+
+            activate(branchId, tenantToken(amender, "branch.approve")).andExpect {
+                status { isForbidden() }
+                jsonPath("$.code") { value("lifecycle.approver_is_branch_modifier") }
+            }
+            // The creator is still refused with the plain code, and the draft is untouched.
+            activate(branchId, tenantToken(maker, "branch.approve")).andExpect {
+                status { isForbidden() }
+                jsonPath("$.code") { value("forbidden") }
+            }
+            assertEquals("PENDING_APPROVAL", branchColumn(branchId, "status"))
+            assertTrue(transitionRows(branchId, "ACTIVATE").isEmpty())
+
+            // The checker who returned it neither created, submitted nor amended it.
+            activate(branchId, checkerToken()).andExpect { status { isOk() } }
+            assertEquals("ACTIVE", branchColumn(branchId, "status"))
+        }
+
+        @Test
+        fun `the returning checker approves after the maker amends and resubmits`() {
+            val branchId = createBranch()
+            submit(branchId, makerToken())
+            returnTenant(branchId, checkerToken()).andExpect { status { isOk() } }
+
+            // The return stamped the row's updated_by with the checker; the maker's amendment and
+            // resubmission replace it, and neither is the checker's.
+            patch(branchId, """{"branch_name":"Corrected Branch"}""")
+                .andExpect { status { isOk() } }
+            submit(branchId, makerToken())
+
+            activate(branchId, checkerToken()).andExpect { status { isOk() } }
+            assertEquals("ACTIVE", branchColumn(branchId, "status"))
+        }
+
+        @Test
+        fun `the checker who returned a draft approves a resubmission with no amendment`() {
+            val branchId = createBranch()
+            submit(branchId, makerToken())
+            returnTenant(branchId, checkerToken()).andExpect { status { isOk() } }
+
+            // No amendment at all: the maker simply resubmits the returned draft.
+            submit(branchId, makerToken())
+
+            activate(branchId, checkerToken()).andExpect { status { isOk() } }
+            assertEquals("ACTIVE", branchColumn(branchId, "status"))
+        }
+
+        @Test
+        fun `a checker who amended the draft themselves cannot approve it and another can`() {
+            val otherChecker = seedUser("other-checker")
+            fixture.grantTenantAdmin(organisationId, otherChecker)
+            val branchId = createBranch()
+            submit(branchId, makerToken())
+            returnTenant(branchId, checkerToken()).andExpect { status { isOk() } }
+
+            patchAs(checker, branchId, """{"branch_name":"Checker Edited"}""")
+                .andExpect { status { isOk() } }
+            submit(branchId, makerToken())
+
+            activate(branchId, checkerToken()).andExpect {
+                status { isForbidden() }
+                jsonPath("$.code") { value("lifecycle.approver_is_branch_modifier") }
+            }
+            activate(branchId, tenantToken(otherChecker, "branch.approve"))
+                .andExpect { status { isOk() } }
+        }
+
+        @Test
+        fun `an amender stays barred however many amendments follow theirs`() {
+            val first = seedUser("first-amender")
+            fixture.grantTenantAdmin(organisationId, first)
+            val branchId = createBranch()
+            patchAs(first, branchId, """{"branch_name":"First Edit"}""")
+                .andExpect { status { isOk() } }
+            // A later PATCH by someone else, even one that changes nothing, does not launder it.
+            patch(branchId, """{"branch_name":"First Edit"}""").andExpect { status { isOk() } }
+            submit(branchId, makerToken())
+
+            activate(branchId, tenantToken(first, "branch.approve")).andExpect {
+                status { isForbidden() }
+                jsonPath("$.code") { value("lifecycle.approver_is_branch_modifier") }
+            }
+            assertEquals("PENDING_APPROVAL", branchColumn(branchId, "status"))
+            activate(branchId, checkerToken()).andExpect { status { isOk() } }
+        }
+
+        @Test
+        fun `a creator who also amended the branch gets the plain forbidden code`() {
+            val branchId = createBranch()
+            patch(branchId, """{"branch_name":"Maker Edit"}""").andExpect { status { isOk() } }
+            submit(branchId, makerToken())
+
+            activate(branchId, tenantToken(maker, "branch.approve")).andExpect {
+                status { isForbidden() }
+                jsonPath("$.code") { value("forbidden") }
+            }
+        }
+
+        @Test
+        fun `a platform checker who amended the branch as a tenant user cannot approve it`() {
+            val branchId = createBranch()
+            // The same account holds branch.update in the tenant and the platform authority.
+            fixture.grantTenantAdmin(organisationId, platformChecker)
+            patchAs(platformChecker, branchId, """{"branch_name":"Edited By Platform User"}""")
+                .andExpect { status { isOk() } }
+            submit(branchId, makerToken())
+
+            platformPost("activate", branchId, platformChecker).andExpect {
+                status { isForbidden() }
+                jsonPath("$.code") { value("lifecycle.approver_is_branch_modifier") }
+            }
+            assertEquals("PENDING_APPROVAL", branchColumn(branchId, "status"))
+
+            // Another platform administrator is inside the same bounded window and may approve.
+            platformPost("activate", branchId, platformMaker).andExpect { status { isOk() } }
+            assertEquals("ACTIVE", branchColumn(branchId, "status"))
+        }
+
+        @Test
+        fun `a platform checker who only returned the draft approves the resubmission`() {
+            val branchId = createBranch()
+            submit(branchId, makerToken())
+            returnPlatform(branchId, platformChecker).andExpect { status { isOk() } }
+
+            patch(branchId, """{"branch_name":"Corrected Branch"}""")
+                .andExpect { status { isOk() } }
+            submit(branchId, makerToken())
+
+            platformPost("activate", branchId, platformChecker).andExpect { status { isOk() } }
+            assertEquals("ACTIVE", branchColumn(branchId, "status"))
+        }
+
+        @Test
         fun `the maker withdraws their own pending branch and the code stays taken`() {
             val branchId = createBranch()
             submit(branchId, makerToken())
@@ -664,13 +808,19 @@ class BranchReturnIntegrationTests
         private fun patch(
             branchId: UUID,
             body: String,
+        ): ResultActionsDsl = patchAs(maker, branchId, body)
+
+        private fun patchAs(
+            actor: UUID,
+            branchId: UUID,
+            body: String,
         ): ResultActionsDsl =
             mockMvc.patch("${ApiPaths.BRANCHES}/$branchId") {
                 header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())
                 contentType = MediaType.APPLICATION_JSON
                 content = body
                 // Amending takes branch.update, which branch.create alone no longer gives (#203).
-                with(authentication(tenantToken(maker, "branch.update")))
+                with(authentication(tenantToken(actor, "branch.update")))
             }
 
         private fun post(

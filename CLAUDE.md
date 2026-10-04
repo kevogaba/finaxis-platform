@@ -244,7 +244,9 @@ none is accounting. Do not invent accounting tables or columns outside those doc
 - Maker-checker: a platform-context actor holding the permission in the platform organisation may
   be the audited checker of a pending membership only while the tenant has no ACTIVE member beyond
   its bootstrap administrator, and of a pending branch only while it has no ACTIVE branch beyond
-  the bootstrap head office; the checker is never the maker or the beneficiary — ADR 0028.
+  the bootstrap head office; the checker is never the maker or the beneficiary — ADR 0028. On
+  either route a branch's approver is also never anyone who amended it (a successful
+  `branch.update` audit event on it, 403 `lifecycle.approver_is_branch_modifier`).
 - Active organisation is request/session context, not a permanent `app_user` field. The
   Redis-backed HTTP session carries active-organisation context only — never authentication
   (every request authenticates via the bearer JWT).

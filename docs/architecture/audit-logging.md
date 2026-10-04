@@ -51,6 +51,12 @@ adapter, backed by the append-only `audit_event` table; the logging-only reposit
 registered. Domain modules call the application-level audit service directly — that is the only
 mechanism; there is no annotation-driven alternative.
 
+Audit rows are also a **control input**, not only evidence: branch approval refuses anyone with a
+successful `branch.update` event on the branch (`lifecycle.approver_is_branch_modifier`, ADR 0028).
+Any future audit retention or purge job (the `audit_retention_days` setting) must therefore exclude
+the `branch.update` events of branches that are not `ACTIVE` or terminal, or the rule fails open. A
+durable column on `branch` is the long-term alternative.
+
 ## Request Correlation
 
 `HttpAccessLogFilter` preserves inbound `X-Request-Id` or generates one. It returns the header to

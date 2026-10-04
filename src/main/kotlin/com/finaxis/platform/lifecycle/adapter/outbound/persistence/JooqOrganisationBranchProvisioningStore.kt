@@ -2,8 +2,10 @@ package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.accounting.domain.AccountingPermissions
+import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.web.api.boundedPageOffset
+import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.BRANCH_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
@@ -20,6 +22,8 @@ import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
 import com.finaxis.platform.lifecycle.application.AmendOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.AssignUserToBranchCommand
+import com.finaxis.platform.lifecycle.application.BRANCH_AUDIT_ENTITY_TYPE
+import com.finaxis.platform.lifecycle.application.BRANCH_UPDATE_AUDIT_ACTION
 import com.finaxis.platform.lifecycle.application.BranchAssignmentStore
 import com.finaxis.platform.lifecycle.application.BranchLifecycleSnapshot
 import com.finaxis.platform.lifecycle.application.BranchLifecycleStore
@@ -438,6 +442,24 @@ class JooqOrganisationBranchProvisioningStore(
             .orderBy(BRANCH_TRANSITION_LOG.CREATED_AT.desc(), BRANCH_TRANSITION_LOG.ID.desc())
             .limit(1)
             .fetchOne(BRANCH_TRANSITION_LOG.CREATED_BY)
+
+    override fun hasAmended(
+        organisationId: UUID,
+        branchId: UUID,
+        actorId: UUID,
+    ): Boolean =
+        dsl.fetchExists(
+            AUDIT_EVENT,
+            // Leads idx_audit_event_organisation_entity (organisation_id, entity_type, entity_id,
+            // event_time DESC), so this is a bounded index range, not a scan of the audit trail.
+            AUDIT_EVENT.ORGANISATION_ID
+                .eq(organisationId)
+                .and(AUDIT_EVENT.ENTITY_TYPE.eq(BRANCH_AUDIT_ENTITY_TYPE))
+                .and(AUDIT_EVENT.ENTITY_ID.eq(branchId))
+                .and(AUDIT_EVENT.ACTION.eq(BRANCH_UPDATE_AUDIT_ACTION))
+                .and(AUDIT_EVENT.OUTCOME.eq(AuditOutcome.SUCCESS.name))
+                .and(AUDIT_EVENT.ACTOR_USER_ID.eq(actorId)),
+        )
 
     private fun now() = clock.instant().atOffset(ZoneOffset.UTC)
 }

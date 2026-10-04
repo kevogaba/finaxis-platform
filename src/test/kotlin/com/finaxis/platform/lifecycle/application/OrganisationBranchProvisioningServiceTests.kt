@@ -1005,6 +1005,7 @@ private class ProvisioningFake(
     val organisationStates = mutableMapOf<UUID, OrganisationLifecycleState>()
     val branchStates = mutableMapOf<Pair<UUID, UUID>, BranchLifecycleState>()
     val branchSubmitters = mutableMapOf<Pair<UUID, UUID>, UUID>()
+    val branchAmenders = mutableSetOf<Triple<UUID, UUID, UUID>>()
     val memberships = mutableMapOf<Pair<UUID, UUID>, MembershipSnapshot>()
     val assignments = mutableSetOf<AssignmentKey>()
     var listResult = OrganisationPage(emptyList(), 0)
@@ -1172,6 +1173,12 @@ private class ProvisioningFake(
         organisationId: UUID,
         branchId: UUID,
     ): UUID? = branchSubmitters[organisationId to branchId]
+
+    override fun hasAmended(
+        organisationId: UUID,
+        branchId: UUID,
+        actorId: UUID,
+    ): Boolean = Triple(organisationId, branchId, actorId) in branchAmenders
 
     override fun updateBranch(command: UpdateBranchCommand) = false
 
@@ -1834,6 +1841,146 @@ class PlatformCheckerBranchTests {
     }
 
     @Test
+    fun `anyone who amended a branch cannot approve it on either route`() {
+        val tenantAdmin = uuidV7()
+        val amender = uuidV7()
+        val branchId = pendingPlatformBranch()
+        store.branchCreators[organisationId to branchId] = tenantAdmin
+        store.branchSubmitters[organisationId to branchId] = tenantAdmin
+        amended(branchId, amender)
+
+        val platformRefusal =
+            assertFailsWith<ForbiddenOperationException> {
+                branches.activate(activateCommand(branchId, amender))
+            }
+        val tenantRefusal =
+            assertFailsWith<ForbiddenOperationException> {
+                branches.activate(
+                    activateCommand(branchId, amender).copy(scope = ActingScope.TENANT),
+                )
+            }
+
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_BRANCH_MODIFIER, platformRefusal.code)
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_BRANCH_MODIFIER, tenantRefusal.code)
+        assertEquals(
+            BranchLifecycleState.PENDING_APPROVAL,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+    }
+
+    @Test
+    fun `an earlier amender stays barred after someone else amends later`() {
+        val earlier = uuidV7()
+        val later = uuidV7()
+        val branchId = pendingPlatformBranch()
+        amended(branchId, earlier)
+        amended(branchId, later)
+
+        assertFailsWith<ForbiddenOperationException> {
+            branches.activate(activateCommand(branchId, earlier))
+        }
+        assertFailsWith<ForbiddenOperationException> {
+            branches.activate(activateCommand(branchId, later))
+        }
+        branches.activate(activateCommand(branchId, platformChecker))
+    }
+
+    @Test
+    fun `the creator and the platform submitter stay refused with the plain forbidden code`() {
+        val branchId = pendingPlatformBranch()
+        store.branchSubmitters[organisationId to branchId] = platformChecker
+        amended(branchId, uuidV7())
+
+        val creatorRefusal =
+            assertFailsWith<ForbiddenOperationException> {
+                branches.activate(activateCommand(branchId, platformMaker))
+            }
+        val submitterRefusal =
+            assertFailsWith<ForbiddenOperationException> {
+                branches.activate(activateCommand(branchId, platformChecker))
+            }
+
+        assertEquals("forbidden", creatorRefusal.code)
+        assertEquals("forbidden", submitterRefusal.code)
+    }
+
+    @Test
+    fun `a creator who also amended the branch gets the plain forbidden code`() {
+        val branchId = pendingPlatformBranch()
+        amended(branchId, platformMaker)
+
+        val refusal =
+            assertFailsWith<ForbiddenOperationException> {
+                branches.activate(activateCommand(branchId, platformMaker))
+            }
+
+        assertEquals("forbidden", refusal.code)
+    }
+
+    @Test
+    fun `an unrelated checker approves a branch someone else amended`() {
+        val branchId = pendingPlatformBranch()
+        store.branchSubmitters[organisationId to branchId] = platformMaker
+        amended(branchId, platformMaker)
+
+        branches.activate(activateCommand(branchId, platformChecker))
+
+        assertEquals(
+            BranchLifecycleState.ACTIVE,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+    }
+
+    @Test
+    fun `the checker who returned a draft approves it once the maker amends and resubmits`() {
+        val branchId = pendingPlatformBranch()
+        store.branchSubmitters[organisationId to branchId] = platformMaker
+        branches.returnForChanges(
+            ReturnBranchCommand(
+                organisationId,
+                branchId,
+                Reason.required("Branch name has a typo."),
+                platformChecker,
+                ActingScope.PLATFORM,
+            ),
+        )
+        assertEquals(
+            BranchLifecycleState.DRAFT,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+        // The return is a transition, not an amendment: the maker amends and resubmits.
+        amended(branchId, platformMaker)
+        branches.submitForApproval(
+            SubmitBranchForApprovalCommand(
+                organisationId = organisationId,
+                branchId = branchId,
+                actorId = platformMaker,
+                requestId = uuidV7(),
+                scope = ActingScope.PLATFORM,
+            ),
+        )
+
+        branches.activate(activateCommand(branchId, platformChecker))
+
+        assertEquals(
+            BranchLifecycleState.ACTIVE,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+    }
+
+    @Test
+    fun `a branch nobody amended can be approved by anyone but its maker`() {
+        val branchId = pendingPlatformBranch()
+
+        branches.activate(activateCommand(branchId, platformChecker))
+
+        assertEquals(
+            BranchLifecycleState.ACTIVE,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+    }
+
+    @Test
     fun `platform submission is refused while the tenant is not open for branches`() {
         val branchId = pendingPlatformBranch()
         lifecyclePersistence.branches[organisationId to branchId] =
@@ -1971,6 +2118,13 @@ class PlatformCheckerBranchTests {
         requestId = uuidV7(),
         scope = ActingScope.PLATFORM,
     )
+
+    private fun amended(
+        branchId: UUID,
+        actorId: UUID,
+    ) {
+        store.branchAmenders += Triple(organisationId, branchId, actorId)
+    }
 
     private fun pendingPlatformBranch(): UUID {
         store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
