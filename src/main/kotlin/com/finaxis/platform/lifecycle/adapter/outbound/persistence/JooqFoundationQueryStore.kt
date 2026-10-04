@@ -101,6 +101,7 @@ class JooqFoundationQueryStore(
                 ORGANISATION.BASE_CURRENCY_CODE,
                 ORGANISATION.TIMEZONE,
                 ORGANISATION.STATUS,
+                ORGANISATION.STATUS_REASON,
                 ORGANISATION.CREATED_AT,
                 ORGANISATION.UPDATED_AT,
             ).from(ORGANISATION)
@@ -114,6 +115,7 @@ class JooqFoundationQueryStore(
                     baseCurrencyCode = requireNotNull(record.get(ORGANISATION.BASE_CURRENCY_CODE)),
                     timezone = requireNotNull(record.get(ORGANISATION.TIMEZONE)),
                     status = requireNotNull(record.get(ORGANISATION.STATUS)),
+                    statusReason = record.get(ORGANISATION.STATUS_REASON),
                     createdAt = requireNotNull(record.get(ORGANISATION.CREATED_AT)).toInstant(),
                     updatedAt = requireNotNull(record.get(ORGANISATION.UPDATED_AT)).toInstant(),
                 )

@@ -39,6 +39,15 @@ class FoundationQueryService(
             ?: throw ResourceNotFoundException(safeDetail = "Tenant not found: $id")
     }
 
+    /**
+     * Retrieves tenant metadata without a permission check, for the response of a mutation the
+     * caller was already authorised to make on that tenant (a checker holding only `tenant.reject`
+     * echoing the draft it just returned, ADR 0029). Never expose it as a read endpoint.
+     */
+    fun getTenantAfterAuthorizedMutation(id: UUID): TenantDetail =
+        store.findTenantById(id)
+            ?: throw ResourceNotFoundException(safeDetail = "Tenant not found: $id")
+
     /** Searches tenant summaries, restricting results to caller's tenant scope if restricted. */
     fun searchTenants(
         filter: TenantFilter,

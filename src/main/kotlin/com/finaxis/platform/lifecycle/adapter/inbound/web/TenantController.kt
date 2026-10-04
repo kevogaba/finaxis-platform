@@ -96,6 +96,7 @@ class TenantController(
         baseCurrencyCode = baseCurrencyCode,
         timezone = timezone,
         status = status,
+        statusReason = statusReason,
         bootstrapStatus = bootstrapStatus,
         bootstrapFailureCode = bootstrapFailureCode,
         createdAt = createdAt,

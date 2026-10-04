@@ -8,7 +8,9 @@ import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.PlatformCaller
 import com.finaxis.platform.lifecycle.TenantCaller
 import org.junit.jupiter.api.Test
+import java.time.Instant
 import java.util.UUID
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 class FoundationQueryServiceTests {
@@ -45,6 +47,19 @@ class FoundationQueryServiceTests {
 
         assertFailsWith<SecurityException> {
             service.getTenant(tenantId, caller)
+        }
+    }
+
+    @Test
+    fun `the post-mutation tenant read needs no permission and still reports a missing tenant`() {
+        permissionGuard.deny(UUID.fromString("00000000-0000-0000-0000-000000000000"), "tenant.view")
+        permissionGuard.deny(tenantId, "tenant.view")
+        store.tenants[tenantId] = tenantDetail(tenantId)
+
+        // A checker holding only tenant.reject reads back its own committed return.
+        assertEquals(tenantId, service.getTenantAfterAuthorizedMutation(tenantId).id)
+        assertFailsWith<ResourceNotFoundException> {
+            service.getTenantAfterAuthorizedMutation(UUID.randomUUID())
         }
     }
 
@@ -88,7 +103,9 @@ private class FakeFoundationQueryStore : FoundationQueryStore {
         organisationId: UUID?,
     ): ApiPage<TenantSummary> = apiPageOf(emptyList(), 0, 25, 0)
 
-    override fun findTenantById(id: UUID): TenantDetail? = null
+    val tenants = mutableMapOf<UUID, TenantDetail>()
+
+    override fun findTenantById(id: UUID): TenantDetail? = tenants[id]
 
     override fun searchBranches(
         organisationId: UUID,
@@ -110,6 +127,20 @@ private class FakeFoundationQueryStore : FoundationQueryStore {
         id: UUID,
     ): BusinessDateHistoryDetail? = null
 }
+
+private fun tenantDetail(id: UUID) =
+    TenantDetail(
+        id = id,
+        tenantCode = "acme-test",
+        displayName = "Acme Test",
+        countryCode = "KE",
+        baseCurrencyCode = "KES",
+        timezone = "Africa/Nairobi",
+        status = "DRAFT",
+        statusReason = "Registration number has a typo.",
+        createdAt = Instant.parse("2026-07-18T10:00:00Z"),
+        updatedAt = Instant.parse("2026-07-18T10:00:00Z"),
+    )
 
 private class FakePermissionGuard : PermissionGuard {
     private val denied = mutableSetOf<Pair<UUID, String>>()

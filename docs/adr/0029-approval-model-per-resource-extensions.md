@@ -305,6 +305,9 @@ designed here. This ADR constrains it by one requirement only: **branch amend mu
   #166 (tenant legal name, `PATCH` semantics, a separate P1 piece of work kept out of this
   stack): whichever of #166 and #181 lands first adds it, and the other reuses it rather than
   adding a second one.
+  It is always present and nullable (`null` when the last transition recorded none, never
+  omitted), on the platform tenant routes and on the tenant's own `GET /tenant`: the reason a
+  checker gives is the tenant's own to read.
 - **Audit and event.** The FSM writes `organisation.return_for_changes` with the `reason`. No
   event: the transition uses `internalEventFactories()` (see "Events" below).
 - **Errors.** `403` when `tenant.reject` is missing or the actor is the requester or submitter

@@ -145,6 +145,29 @@ know the class. A platform actor who returns as a checker is held to the ADR 002
 audited with `checkerScope = PLATFORM`; a platform withdrawal is not windowed and carries no
 marker.
 
+## Tenant return for changes
+
+`POST /platform/tenants/{tenant_id}/return` sends a `PENDING_APPROVAL` tenant back to `DRAFT`
+(ADR 0029, 3c). It asks for the existing **`tenant.reject`**, the permission for the checker's
+non-approving decision, in the platform organisation, and no new code or migration. The permission
+is checked in the application service (`OrganisationProvisioningService.returnForChanges`) before
+any existence signal, so a caller without it gets `403` for a real tenant, the platform
+organisation and an unknown id alike; the controller's coarse gate is `tenant.reject`.
+
+It is **checker only**: the actor may be neither the requester nor the actor of the current
+submission (`requested_by` and `submitted_by` on the initial-administrator record, the rule
+`approveProvisioning` applies) and may not be the system actor, so there is no maker-side withdraw
+of a tenant. Rejecting is wider: `rejectProvisioning` has no maker check, so a maker holding
+`tenant.reject` can terminally reject their own submission but cannot return it. The rule is read
+from the record at approval, so it holds across the return, amend, resubmit loop, and so does the
+`lifecycle.approver_is_initial_administrator` refusal. The returner and amenders are not makers
+and may approve a later resubmission, as may the earlier submitter, who is not the submitter of
+the current request (an accepted consequence of reading the rule from the record at approval).
+
+The tenant returned is read back without `tenant.view`, so `tenant.reject` alone is enough. The
+`status_reason` it sets is exposed on the platform tenant routes (`tenant.view`) and on the
+tenant's own `GET /tenant`, as an always-present nullable field.
+
 ## Maker-checker and the platform checker
 
 Approvals are maker-checker: the actor that created a thing cannot approve it, whatever its

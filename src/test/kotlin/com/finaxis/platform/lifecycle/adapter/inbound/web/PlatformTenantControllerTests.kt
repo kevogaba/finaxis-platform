@@ -219,6 +219,7 @@ class PlatformTenantControllerTests
                     baseCurrencyCode = "KES",
                     timezone = "Africa/Nairobi",
                     status = "ACTIVE",
+                    statusReason = null,
                     createdAt = Instant.parse("2026-07-18T10:00:00Z"),
                     updatedAt = Instant.parse("2026-07-18T10:00:00Z"),
                 )
@@ -341,6 +342,7 @@ class PlatformTenantControllerTests
                     baseCurrencyCode = "KES",
                     timezone = "Africa/Nairobi",
                     status = "PROVISIONING",
+                    statusReason = null,
                     createdAt = Instant.parse("2026-07-18T10:00:00Z"),
                     updatedAt = Instant.parse("2026-07-18T10:00:00Z"),
                 )
@@ -602,6 +604,7 @@ class PlatformTenantControllerTests
                     HttpMethod.POST to "$tenantRoute/submit",
                     HttpMethod.POST to "$tenantRoute/approve",
                     HttpMethod.POST to "$tenantRoute/reject",
+                    HttpMethod.POST to "$tenantRoute/return",
                     HttpMethod.POST to "$tenantRoute/suspend",
                     HttpMethod.POST to "$tenantRoute/reactivate",
                     HttpMethod.POST to "$tenantRoute/deprovision",
@@ -647,6 +650,7 @@ class PlatformTenantControllerTests
                     baseCurrencyCode = "KES",
                     timezone = "Africa/Nairobi",
                     status = lifecycleStatus,
+                    statusReason = null,
                     createdAt = Instant.parse("2026-07-18T10:00:00Z"),
                     updatedAt = Instant.parse("2026-07-18T10:00:00Z"),
                 ),
@@ -688,6 +692,7 @@ class PlatformTenantControllerTests
                 }
 
                 path.endsWith("/reject") ||
+                    path.endsWith("/return") ||
                     path.endsWith("/suspend") ||
                     path.endsWith("/deprovision") -> {
                     "{\"reason\":\"Valid reason\"}"
