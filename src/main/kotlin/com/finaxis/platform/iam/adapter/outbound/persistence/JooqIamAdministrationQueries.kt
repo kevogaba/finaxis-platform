@@ -25,6 +25,7 @@ import com.finaxis.platform.iam.application.query.UserInTenantDetail
 import com.finaxis.platform.iam.application.query.UserInTenantFilter
 import com.finaxis.platform.iam.application.query.UserInTenantSummary
 import com.finaxis.platform.jooq.tables.references.PERMISSION
+import com.finaxis.platform.jooq.tables.references.PERMISSION_VIEW_REQUIREMENT
 import com.finaxis.platform.jooq.tables.references.ROLE
 import com.finaxis.platform.jooq.tables.references.ROLE_PERMISSION
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
@@ -375,7 +376,7 @@ class JooqIamAdministrationQueries(
         val offset =
             boundedPageOffset(filter.page, filter.size, total)
                 ?: return apiPageOf(emptyList(), filter.page, filter.size, total)
-        val items =
+        val page =
             dsl
                 .select(
                     ROLE.ID,
@@ -390,15 +391,21 @@ class JooqIamAdministrationQueries(
                     ROLE.ID.desc(),
                 ).limit(filter.size)
                 .offset(offset)
-                .fetch { record ->
-                    RoleSummary(
-                        id = requireNotNull(record.get(ROLE.ID)),
-                        roleCode = requireNotNull(record.get(ROLE.ROLE_CODE)),
-                        roleName = requireNotNull(record.get(ROLE.ROLE_NAME)),
-                        systemRole = requireNotNull(record.get(ROLE.SYSTEM_ROLE)),
-                        status = requireNotNull(record.get(ROLE.STATUS)),
-                    )
-                }
+                .fetch()
+        // One bounded query for the page's roles, so paging and totals stay on `role` alone.
+        val gaps = missingViewPermissions(organisationId, page.map { requireNotNull(it[ROLE.ID]) })
+        val items =
+            page.map { record ->
+                val id = requireNotNull(record.get(ROLE.ID))
+                RoleSummary(
+                    id = id,
+                    roleCode = requireNotNull(record.get(ROLE.ROLE_CODE)),
+                    roleName = requireNotNull(record.get(ROLE.ROLE_NAME)),
+                    systemRole = requireNotNull(record.get(ROLE.SYSTEM_ROLE)),
+                    status = requireNotNull(record.get(ROLE.STATUS)),
+                    missingViewPermissions = gaps[id].orEmpty(),
+                )
+            }
 
         return apiPageOf(items, filter.page, filter.size, total)
     }
@@ -420,10 +427,60 @@ class JooqIamAdministrationQueries(
                     description = record.description,
                     systemRole = requireNotNull(record.systemRole),
                     status = requireNotNull(record.status),
+                    missingViewPermissions =
+                        missingViewPermissions(organisationId, listOf(id))[id].orEmpty(),
                     createdAt = requireNotNull(record.createdAt).toInstant(),
                     updatedAt = requireNotNull(record.updatedAt).toInstant(),
                 )
             }
+
+    /**
+     * Sorted view codes each of [roleIds] needs and lacks, one query for the whole set.
+     *
+     * A role needs a view when it holds an `ACTIVE` mutation whose `permission_view_requirement`
+     * names it, and lacks it when it holds no `ACTIVE` grant of that view. Roles that comply are
+     * absent from the result. The operator report
+     * (`docs/operations/sql/permission-view-gap-roles.sql`) states the same rule.
+     */
+    private fun missingViewPermissions(
+        organisationId: UUID,
+        roleIds: Collection<UUID>,
+    ): Map<UUID, List<String>> {
+        if (roleIds.isEmpty()) return emptyMap()
+        val held = ROLE_PERMISSION.`as`("held")
+        val heldView = ROLE_PERMISSION.`as`("held_view")
+        val mutation = PERMISSION.`as`("held_mutation")
+        val heldViewPermission = PERMISSION.`as`("held_view_permission")
+        val view = PERMISSION.`as`("needed_view")
+        return dsl
+            .selectDistinct(held.ROLE_ID, view.PERMISSION_CODE)
+            .from(held)
+            .join(mutation)
+            .on(mutation.ID.eq(held.PERMISSION_ID))
+            .and(mutation.STATUS.eq(ACTIVE))
+            .join(PERMISSION_VIEW_REQUIREMENT)
+            .on(PERMISSION_VIEW_REQUIREMENT.PERMISSION_ID.eq(mutation.ID))
+            .join(view)
+            .on(view.ID.eq(PERMISSION_VIEW_REQUIREMENT.REQUIRED_VIEW_PERMISSION_ID))
+            .where(held.ORGANISATION_ID.eq(organisationId))
+            .and(held.ROLE_ID.`in`(roleIds))
+            .andNotExists(
+                dsl
+                    .selectOne()
+                    .from(heldView)
+                    .join(heldViewPermission)
+                    .on(heldViewPermission.ID.eq(heldView.PERMISSION_ID))
+                    .where(heldView.ORGANISATION_ID.eq(held.ORGANISATION_ID))
+                    .and(heldView.ROLE_ID.eq(held.ROLE_ID))
+                    .and(heldView.PERMISSION_ID.eq(view.ID))
+                    .and(heldViewPermission.STATUS.eq(ACTIVE)),
+            ).orderBy(view.PERMISSION_CODE)
+            .fetch()
+            .groupBy(
+                { requireNotNull(it.get(held.ROLE_ID)) },
+                { requireNotNull(it.get(view.PERMISSION_CODE)) },
+            )
+    }
 
     override fun searchRoleAssignments(
         organisationId: UUID,
@@ -585,4 +642,8 @@ class JooqIamAdministrationQueries(
         field: org.jooq.Field<*>,
         sortDir: String?,
     ): org.jooq.SortField<*> = if (sortDir?.uppercase() == "ASC") field.asc() else field.desc()
+
+    private companion object {
+        const val ACTIVE = "ACTIVE"
+    }
 }

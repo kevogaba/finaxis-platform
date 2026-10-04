@@ -305,6 +305,216 @@ class RoleManagementServiceTests {
         assertTrue(fixture.audits.events.isEmpty())
     }
 
+    /** Refuses a mutation whose view the role lacks, listing it with the code that needs it. */
+    @Test
+    fun `assigning a mutation without its view is refused before anything is written`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.permissions["branch.suspend"] = fixture.permissionId
+        fixture.persistence.requirements["branch.suspend"] = setOf("branch.view")
+
+        val exception =
+            assertFailsWith<InvalidRequestException> {
+                fixture.service.assignPermissionToRole(
+                    AssignPermissionToRole(
+                        fixture.organisationId,
+                        fixture.roleId,
+                        "branch.suspend",
+                        fixture.actorId,
+                    ),
+                )
+            }
+
+        assertEquals("validation_failed", exception.code)
+        assertEquals(
+            "Missing view permissions: branch.view (required by branch.suspend).",
+            exception.safeDetail,
+        )
+        assertTrue(fixture.persistence.grantedPermissions.isEmpty())
+        assertTrue(fixture.audits.events.isEmpty())
+    }
+
+    /** Lists every missing view, not just the first. */
+    @Test
+    fun `assigning a mutation lists every missing view`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.permissions["user.invite"] = fixture.permissionId
+        fixture.persistence.requirements["user.invite"] = setOf("membership.view", "user.view")
+        fixture.persistence.heldCodes += "role.view"
+
+        val exception =
+            assertFailsWith<InvalidRequestException> {
+                fixture.service.assignPermissionToRole(
+                    AssignPermissionToRole(
+                        fixture.organisationId,
+                        fixture.roleId,
+                        "user.invite",
+                        fixture.actorId,
+                    ),
+                )
+            }
+
+        assertEquals(
+            "Missing view permissions: membership.view (required by user.invite); " +
+                "user.view (required by user.invite).",
+            exception.safeDetail,
+        )
+    }
+
+    /** A mutation whose own views are held is granted, whatever else the role is missing. */
+    @Test
+    fun `assigning a mutation checks only its own views so a legacy role can be repaired`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.permissions["branch.suspend"] = fixture.permissionId
+        fixture.persistence.requirements["branch.suspend"] = setOf("branch.view")
+        fixture.persistence.requirements["user.approve"] = setOf("membership.view")
+        fixture.persistence.heldCodes += setOf("user.approve", "branch.view")
+
+        fixture.service.assignPermissionToRole(
+            AssignPermissionToRole(
+                fixture.organisationId,
+                fixture.roleId,
+                "branch.suspend",
+                fixture.actorId,
+            ),
+        )
+
+        assertEquals(listOf(fixture.permissionId), fixture.persistence.grantedPermissions)
+    }
+
+    /** Re-granting a held mutation is an idempotent no-op, even on a violating role. */
+    @Test
+    fun `re-granting a held mutation is not validated`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.permissions["branch.suspend"] = fixture.permissionId
+        fixture.persistence.requirements["branch.suspend"] = setOf("branch.view")
+        fixture.persistence.heldCodes += "branch.suspend"
+
+        fixture.service.assignPermissionToRole(
+            AssignPermissionToRole(
+                fixture.organisationId,
+                fixture.roleId,
+                "branch.suspend",
+                fixture.actorId,
+            ),
+        )
+
+        assertEquals(listOf(fixture.permissionId), fixture.persistence.grantedPermissions)
+    }
+
+    /** A mutation that is not ACTIVE grants nothing, so its views are not required. */
+    @Test
+    fun `granting a mutation that is not active is not validated`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.permissions["branch.activate"] = fixture.permissionId
+        fixture.persistence.requirements["branch.activate"] = setOf("branch.view")
+        fixture.persistence.inactiveCodes += "branch.activate"
+
+        fixture.service.assignPermissionToRole(
+            AssignPermissionToRole(
+                fixture.organisationId,
+                fixture.roleId,
+                "branch.activate",
+                fixture.actorId,
+            ),
+        )
+
+        assertEquals(listOf(fixture.permissionId), fixture.persistence.grantedPermissions)
+    }
+
+    /** Adding a view never fails, even for a role that is already missing others. */
+    @Test
+    fun `assigning a view always succeeds`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.permissions["branch.view"] = fixture.permissionId
+        fixture.persistence.requirements["branch.suspend"] = setOf("branch.view")
+        fixture.persistence.heldCodes += "branch.suspend"
+
+        fixture.service.assignPermissionToRole(
+            AssignPermissionToRole(
+                fixture.organisationId,
+                fixture.roleId,
+                "branch.view",
+                fixture.actorId,
+            ),
+        )
+
+        assertEquals(listOf(fixture.permissionId), fixture.persistence.grantedPermissions)
+    }
+
+    /** The role row is locked before the held set is read and before anything is written. */
+    @Test
+    fun `assign and remove lock the role row before reading or writing`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.permissions["tenant.approve"] = fixture.permissionId
+
+        fixture.service.assignPermissionToRole(fixture.assignPermission())
+        assertEquals(listOf("lock", "held", "grant"), fixture.persistence.calls)
+
+        fixture.persistence.calls.clear()
+        fixture.service.removePermissionFromRole(fixture.removePermission())
+        assertEquals(listOf("lock", "held", "remove"), fixture.persistence.calls)
+    }
+
+    /** Refuses removing a view that a held mutation needs, naming the dependants. */
+    @Test
+    fun `removing a view a held mutation needs is refused naming the dependants`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.permissions["branch.view"] = fixture.permissionId
+        fixture.persistence.requirements["branch.suspend"] = setOf("branch.view")
+        fixture.persistence.requirements["branch.close"] = setOf("branch.view")
+        fixture.persistence.heldCodes += setOf("branch.view", "branch.suspend", "branch.close")
+
+        val exception =
+            assertFailsWith<InvalidRequestException> {
+                fixture.service.removePermissionFromRole(
+                    RemovePermissionFromRole(
+                        fixture.organisationId,
+                        fixture.roleId,
+                        "branch.view",
+                        fixture.actorId,
+                    ),
+                )
+            }
+
+        assertEquals("validation_failed", exception.code)
+        assertEquals(
+            "Permission branch.view is required by held permissions: " +
+                "branch.close, branch.suspend.",
+            exception.safeDetail,
+        )
+        assertTrue(fixture.persistence.removedPermissions.isEmpty())
+        assertTrue(fixture.audits.events.isEmpty())
+    }
+
+    /** Removing a mutation, an unneeded view or a context code never fails. */
+    @Test
+    fun `removing a mutation or an unneeded view succeeds`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.permissions["branch.suspend"] = fixture.permissionId
+        fixture.persistence.permissions["user.view"] = fixture.permissionId
+        fixture.persistence.requirements["branch.suspend"] = setOf("branch.view")
+        fixture.persistence.heldCodes += setOf("branch.view", "branch.suspend", "user.view")
+
+        fixture.service.removePermissionFromRole(
+            RemovePermissionFromRole(
+                fixture.organisationId,
+                fixture.roleId,
+                "branch.suspend",
+                fixture.actorId,
+            ),
+        )
+        fixture.service.removePermissionFromRole(
+            RemovePermissionFromRole(
+                fixture.organisationId,
+                fixture.roleId,
+                "user.view",
+                fixture.actorId,
+            ),
+        )
+
+        assertEquals(2, fixture.persistence.removedPermissions.size)
+    }
+
     /** Requires an active organisation membership before a user can receive a role. */
     @Test
     fun `assigning role requires a non revoked membership`() {
@@ -528,6 +738,7 @@ class RoleManagementServiceTests {
                 events,
                 invalidator,
                 permissionGuard,
+                RoleCompositionGuard(persistence),
             )
 
         fun createRole(
@@ -634,6 +845,10 @@ class RoleManagementServiceTests {
         val statusRowVersions = mutableListOf<Long>()
         val grantedPermissions = mutableListOf<UUID>()
         val removedPermissions = mutableListOf<UUID>()
+        val heldCodes = mutableSetOf<String>()
+        val requirements = mutableMapOf<String, Set<String>>()
+        val calls = mutableListOf<String>()
+        val inactiveCodes = mutableSetOf<String>()
         val assignedScopes = mutableListOf<Pair<RoleScopeType, UUID?>>()
         val assignmentId: UUID = uuidV7()
         var currentOrganisationStatus: OrganisationStatus? = OrganisationStatus.ACTIVE
@@ -648,6 +863,27 @@ class RoleManagementServiceTests {
             organisationId: UUID,
             roleId: UUID,
         ): RoleSnapshot? = roles[roleId]
+
+        override fun lockRole(
+            organisationId: UUID,
+            roleId: UUID,
+        ): RoleSnapshot? {
+            calls += "lock"
+            return roles[roleId]
+        }
+
+        override fun activePermissionCodes(
+            organisationId: UUID,
+            roleId: UUID,
+        ): Set<String> {
+            calls += "held"
+            return heldCodes.toSet()
+        }
+
+        override fun isActivePermission(permissionCode: String) = permissionCode !in inactiveCodes
+
+        override fun requiredViewCodes(permissionCodes: Collection<String>) =
+            requirements.filterKeys { it in permissionCodes }
 
         override fun createRole(
             organisationId: UUID,
@@ -691,6 +927,7 @@ class RoleManagementServiceTests {
             permissionId: UUID,
             actorId: UUID,
         ): Boolean {
+            calls += "grant"
             grantedPermissions += permissionId
             return true
         }
@@ -701,6 +938,7 @@ class RoleManagementServiceTests {
             permissionId: UUID,
             actorId: UUID,
         ): Boolean {
+            calls += "remove"
             removedPermissions += permissionId
             return true
         }

@@ -109,6 +109,61 @@ class JooqIamAdministrationPersistenceTests(
         )
     }
 
+    /** Takes the role row lock inside the caller's transaction and reads the role back. */
+    @Test
+    fun `locks a role row only inside its organisation`() {
+        val organisationId = insertOrganisation()
+        val roleId = persistence.createRole(organisationId, "OPS", "Operations", null, uuidV7())
+
+        assertEquals(roleId, persistence.lockRole(organisationId, roleId)?.id)
+        assertNull(persistence.lockRole(uuidV7(), roleId))
+    }
+
+    /** Lists only the ACTIVE catalogue codes a role holds, as runtime resolution counts them. */
+    @Test
+    fun `lists the active permission codes a role holds`() {
+        val organisationId = insertOrganisation()
+        val roleId = persistence.createRole(organisationId, "OPS", "Operations", null, uuidV7())
+        val active = "test.active.${uuidV7()}"
+        val deprecated = "test.deprecated.${uuidV7()}"
+        persistence.grantPermission(organisationId, roleId, insertPermission(active), uuidV7())
+        persistence.grantPermission(
+            organisationId,
+            roleId,
+            insertPermission(deprecated, "DEPRECATED"),
+            uuidV7(),
+        )
+
+        assertEquals(setOf(active), persistence.activePermissionCodes(organisationId, roleId))
+        assertEquals(emptySet(), persistence.activePermissionCodes(uuidV7(), roleId))
+    }
+
+    /** Tells an ACTIVE catalogue code from a deprecated or unknown one. */
+    @Test
+    fun `reports whether a catalogue permission is active`() {
+        val deprecated = "test.deprecated.${uuidV7()}"
+        insertPermission(deprecated, "DEPRECATED")
+
+        assertTrue(persistence.isActivePermission("branch.view"))
+        assertFalse(persistence.isActivePermission(deprecated))
+        assertFalse(persistence.isActivePermission("no.such.code"))
+    }
+
+    /** Reads the view requirements from the catalogue, never from code. */
+    @Test
+    fun `reads the view requirements of the catalogue`() {
+        assertEquals(
+            mapOf(
+                "user.invite" to setOf("membership.view", "user.view"),
+                "branch.suspend" to setOf("branch.view"),
+            ),
+            persistence.requiredViewCodes(
+                listOf("user.invite", "branch.suspend", "branch.view", "auth.select_branch", "x"),
+            ),
+        )
+        assertEquals(emptyMap(), persistence.requiredViewCodes(emptyList()))
+    }
+
     /** Creates idempotent tenant and branch role assignments under the same organisation. */
     @Test
     fun `assigns tenant and branch scoped roles idempotently`() {
@@ -372,7 +427,10 @@ class JooqIamAdministrationPersistenceTests(
             .execute()
     }
 
-    private fun insertPermission(permissionCode: String): UUID {
+    private fun insertPermission(
+        permissionCode: String,
+        status: String = "ACTIVE",
+    ): UUID {
         val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
@@ -383,7 +441,7 @@ class JooqIamAdministrationPersistenceTests(
             .set(PERMISSION.MODULE_CODE, "tenant")
             .set(PERMISSION.RISK_LEVEL, "CRITICAL")
             .set(PERMISSION.SYSTEM_PERMISSION, true)
-            .set(PERMISSION.STATUS, "ACTIVE")
+            .set(PERMISSION.STATUS, status)
             .set(PERMISSION.KIND, "VIEW")
             .set(PERMISSION.GRANT_SCOPE, "TENANT")
             .set(PERMISSION.CREATED_AT, now)

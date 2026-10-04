@@ -211,8 +211,8 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   required code is a `VIEW`, and an `ACTIVE` mutation requires only `ACTIVE` views. A kind cannot
   be a cross-table `CHECK` and no trigger is allowed (ADR 0024), so the migration and that test
   are the enforcement. **No data backfill**: no `role_permission` or `membership_permission` row
-  is touched, nothing about who can do what changes, and the rule itself (role-composition
-  check, named 403, `missing_view_permissions`) lands in later changes that read these rows. The
+  is touched, nothing about who can do what changes, and the rule itself (role composition,
+  `missing_view_permissions`, then the named 403) lands in later changes that read these rows. The
   catalogue API (`GET /api/v1/tenant/permissions`) publishes `kind`, `grant_scope` and
   `required_view_permissions`. Re-runnable, with pre- and post-condition asserts in-file; it
   raises, naming the codes, if the catalogue holds a permission it cannot classify — see
@@ -284,6 +284,15 @@ outside those documents.
 - A migration that adds a permission code must also insert its `kind`, its `grant_scope` and, for
   a `MUTATION`, the `permission_view_requirement` rows naming the view(s) it implies (ADR 0030;
   `V22` made the columns `NOT NULL`). `PermissionCatalogueMetadataTests` fails otherwise.
+- **Role composition refuses a mutation without its view** (ADR 0030 point 2): the only way to
+  compose a role is `assign-permission`/`remove-permission` (`RoleManagementService`), which lock
+  the role row first and answer 400 `validation_failed` when a mutation is granted without every
+  view `permission_view_requirement` pairs with it (only `ACTIVE` codes count) or a view a held
+  mutation needs is removed. Role list and detail report `missing_view_permissions` (page only;
+  legacy violators are reported, never backfilled, and may still be activated). Memberships
+  (direct overrides) and platform roles are found with the operator SQL in
+  `docs/operations/permission-view-gap-report.md`, tested by `PermissionViewGapReportTests`; read
+  the SQL, do not copy the mapping into code.
 - The seeded **administrator roles hold every permission of their scope** and are derived, never
   listed: a newly approved tenant's `TENANT_ADMIN` is every `ACTIVE` permission with
   `grant_scope = 'TENANT'`, read from the catalogue at seeding time (and by the readiness check);

@@ -29,6 +29,7 @@ class RoleManagementService(
     private val eventPublisher: TransitionEventPublisher,
     private val permissionCacheInvalidator: PermissionCacheInvalidator,
     private val permissionGuard: PermissionGuard,
+    private val compositionGuard: RoleCompositionGuard,
 ) {
     /** Creates an active tenant-managed role after validating its unique code and name. */
     @Transactional
@@ -105,13 +106,18 @@ class RoleManagementService(
     @Transactional
     fun assignPermissionToRole(command: AssignPermissionToRole) {
         requireTenantPermission(command.actorId, command.organisationId, "role.assign_permission")
-        val role = requiredRole(command.organisationId, command.roleId)
+        val role = persistence.lockRole(command.organisationId, command.roleId).orResourceNotFound()
         requireMutable(role)
         val permissionId =
             persistence
                 .permissionIdByCode(
                     command.permissionCode,
                 ).orResourceNotFound()
+        compositionGuard.requireViewsHeld(
+            command.organisationId,
+            command.roleId,
+            command.permissionCode,
+        )
         persistence.grantPermission(
             command.organisationId,
             command.roleId,
@@ -137,13 +143,18 @@ class RoleManagementService(
     @Transactional
     fun removePermissionFromRole(command: RemovePermissionFromRole) {
         requireTenantPermission(command.actorId, command.organisationId, "role.remove_permission")
-        val role = requiredRole(command.organisationId, command.roleId)
+        val role = persistence.lockRole(command.organisationId, command.roleId).orResourceNotFound()
         requireMutable(role)
         val permissionId =
             persistence
                 .permissionIdByCode(
                     command.permissionCode,
                 ).orResourceNotFound()
+        compositionGuard.requireNoDependants(
+            command.organisationId,
+            command.roleId,
+            command.permissionCode,
+        )
         persistence.removePermission(
             command.organisationId,
             command.roleId,

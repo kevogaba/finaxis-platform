@@ -164,8 +164,8 @@ touched no role, and `V23` applied the rule.
 
 **`permission_view_requirement`** pairs a `MUTATION` with each view it requires: 61 rows for the 60
 mutations, because `user.invite` needs two. A role or a caller that holds the mutation must also
-hold these views (ADR 0030, enforced by later changes; the catalogue test already enforces it for
-the seeded roles; custom roles are checked by later changes).
+hold these views (ADR 0030). Role composition enforces it for custom roles (see "Role
+composition"); the catalogue test enforces it for the seeded roles.
 
 | Mutation | Required views |
 | --- | --- |
@@ -200,8 +200,55 @@ required code that is not a `VIEW`, and an `ACTIVE` mutation that requires a vie
 `ACTIVE` (runtime honours only `ACTIVE` codes). A `DEPRECATED` mutation such as `branch.activate`
 may still name an `ACTIVE` view. The same test is also **strict** about seeded roles: it fails if
 the platform roles, the bootstrap `local-admin` role or any default bundle built in code hold a
-mutation without its views (today none does). The runtime does not yet refuse such a role;
-a later change does.
+mutation without its views (today none does). The mutation-time check that refuses a caller who
+holds a mutation without its view is a later change; role composition (below) already refuses to
+build such a role.
+
+## Role composition
+
+A role is composed only by `POST /tenant/roles/{role_id}/permissions` (`assign-permission`) and
+`DELETE /tenant/roles/{role_id}/permissions/{role_permission_id}` (`remove-permission`); the role
+create and update routes carry no permission codes and seeded roles are immutable. Those two
+operations enforce [ADR 0030](../adr/0030-mutation-permission-implies-view-permission.md) point 2,
+reading the pairings from `permission_view_requirement` and counting only `ACTIVE` codes, as
+runtime resolution does:
+
+- **Assign** a mutation whose required views the role does not hold answers **400
+  `validation_failed`** before anything is written. The `detail` lists **every** missing view and
+  the code that needs it, for example `Missing view permissions: membership.view (required by
+  user.invite); user.view (required by user.invite).` A view held but not `ACTIVE` counts as
+  missing. Assigning a view, or a code that needs no view, never fails. Re-assigning a mutation
+  the role already holds is an idempotent no-op; assigning one that is not `ACTIVE` (it grants
+  nothing) is written without the check. Neither is refused. Making such a mutation `ACTIVE`
+  later (a migration or hand SQL) can leave a role holding it without its views, so run both
+  gap reports after any change that makes a mutation `ACTIVE`.
+- **Remove** a view that another **held** `ACTIVE` mutation needs answers
+  **400 `validation_failed`** naming the dependants (`Permission branch.view is required by
+  held permissions: branch.close, branch.suspend.`). Removing a mutation or a context code never
+  fails.
+- Only the code being assigned is checked, never the rest of the role, so a legacy violating role
+  is repaired one code at a time (add the missing view, then the next).
+- **Both operations lock the role row first** (`SELECT ... FOR NO KEY UPDATE` through
+  `IamAdministrationPersistence.lockRole`) and read the held set afterwards. Two concurrent
+  compositions of one role therefore run one after the other and the second validates against what
+  the first committed; without the lock one request removing `branch.view` and one adding
+  `branch.suspend` could each pass against its own snapshot and commit a violating role. The lock
+  does not block the foreign-key inserts of role assignments.
+
+**Reporting, not backfilling.** There is no migration that repairs existing roles. Role list
+(`GET /tenant/roles`) and role detail (`GET /tenant/roles/{role_id}`) carry
+**`missing_view_permissions`**: the sorted flat list of view codes the role's held `ACTIVE`
+mutations need and the role lacks (`[]` when it complies). It is computed for the roles on the page
+only, by one query per page, so pagination and totals are unaffected. Activating a legacy violating
+role stays allowed; the report is the signal.
+
+**Memberships and platform roles: the operator query.** A membership's effective set is its
+`ACTIVE` role grants plus its direct `ALLOW` overrides minus its direct `DENY` overrides, so a
+direct `ALLOW` of a mutation without its view, or a `DENY` of a view a held mutation needs, violates
+the rule though every role the membership holds complies, and no API field reports it. Platform
+roles have no listing API at all. Both are covered by the documented, tested operator SQL in
+[the permission view-gap report](../operations/permission-view-gap-report.md)
+(`docs/operations/sql/permission-view-gap-roles.sql` and `permission-view-gap-memberships.sql`).
 
 ## Role administration
 

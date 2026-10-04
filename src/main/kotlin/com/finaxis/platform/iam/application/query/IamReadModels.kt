@@ -73,16 +73,22 @@ data class BranchAssignmentDetail(
     val updatedAt: Instant,
 )
 
-/** Summary projection of a security role. */
+/**
+ * Summary projection of a security role.
+ *
+ * [missingViewPermissions] is the sorted flat list of view codes the role's held `ACTIVE`
+ * mutation codes need and the role lacks (empty when it complies; ADR 0030 point 3).
+ */
 data class RoleSummary(
     val id: UUID,
     val roleCode: String,
     val roleName: String,
     val systemRole: Boolean,
     val status: String,
+    val missingViewPermissions: List<String>,
 )
 
-/** Detailed projection of a security role. */
+/** Detailed projection of a security role; see [RoleSummary] for [missingViewPermissions]. */
 data class RoleDetail(
     val id: UUID,
     val organisationId: UUID,
@@ -91,6 +97,7 @@ data class RoleDetail(
     val description: String?,
     val systemRole: Boolean,
     val status: String,
+    val missingViewPermissions: List<String>,
     val createdAt: Instant,
     val updatedAt: Instant,
 )

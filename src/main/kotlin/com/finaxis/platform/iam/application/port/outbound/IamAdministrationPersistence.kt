@@ -26,6 +26,17 @@ interface RolePersistence {
         roleId: UUID,
     ): RoleSnapshot?
 
+    /**
+     * Finds a role like [findRole] and takes a row lock on it (`FOR NO KEY UPDATE`) that the
+     * caller's transaction holds until it ends, so a concurrent composition of the same role
+     * waits and then validates against what this one committed (ADR 0030 point 2).
+     * Must run inside a transaction.
+     */
+    fun lockRole(
+        organisationId: UUID,
+        roleId: UUID,
+    ): RoleSnapshot?
+
     /** Creates an active tenant role and returns its identifier. */
     fun createRole(
         organisationId: UUID,
@@ -62,6 +73,24 @@ interface RolePermissionPersistence {
 
     /** Returns a permission risk level for audit-sensitive administration decisions. */
     fun permissionRiskLevel(permissionCode: String): String?
+
+    /** Whether [permissionCode] is in the catalogue with status `ACTIVE`. */
+    fun isActivePermission(permissionCode: String): Boolean
+
+    /**
+     * Codes of the `ACTIVE` catalogue permissions [roleId] holds. A deprecated or disabled code
+     * grants nothing at runtime, so it is not listed.
+     */
+    fun activePermissionCodes(
+        organisationId: UUID,
+        roleId: UUID,
+    ): Set<String>
+
+    /**
+     * The view codes the catalogue pairs with each of [permissionCodes]
+     * (`permission_view_requirement`). A view, a context code or an unknown code is absent.
+     */
+    fun requiredViewCodes(permissionCodes: Collection<String>): Map<String, Set<String>>
 
     /** Grants a permission idempotently and returns whether a row was created. */
     fun grantPermission(

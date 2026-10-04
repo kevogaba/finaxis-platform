@@ -1177,9 +1177,11 @@ Endpoints:
 - `GET /{role_id}/permissions`: list role permissions. Permission `role.view`.
   Shape: page.
 - `POST /{role_id}/permissions`: grant role permission. Permission `role.assign_permission`.
-  Shape: mutation.
+  Shape: mutation. Refused with `400 validation_failed` when it grants a mutation permission
+  whose required views the role does not hold (see "Role composition" below).
 - `DELETE /{role_id}/permissions/{role_permission_id}`: remove role permission grant.
-  Permission `role.remove_permission`. Shape: mutation.
+  Permission `role.remove_permission`. Shape: mutation. Refused with `400 validation_failed` when
+  it removes a view that a held mutation permission needs.
 
 Create role and assign-permission examples:
 
@@ -1208,10 +1210,53 @@ Role detail response:
   "description": "Can operate loan origination workflows.",
   "system_role": false,
   "status": "ACTIVE",
+  "missing_view_permissions": [],
   "created_at": "2026-07-25T08:00:00Z",
   "updated_at": "2026-07-25T08:10:00Z"
 }
 ```
+
+#### Role composition and `missing_view_permissions`
+
+A role that holds a mutation permission must hold every view permission the catalogue pairs with
+it (`required_view_permissions` on [Permissions](#permissions); [ADR
+0030](../adr/0030-mutation-permission-implies-view-permission.md)), so the user can see their
+writes. The two composition routes enforce it, counting only `ACTIVE` permissions, and take a row
+lock on the role first so concurrent requests cannot both commit a violating role:
+
+- **Grant** a mutation whose views are not all held: `400`, `code` `validation_failed`, nothing
+  written. The `detail` lists every missing view and the permission that needs it:
+
+```json
+{
+  "type": "urn:finaxis:problem:validation_failed",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "Missing view permissions: branch.view (required by branch.suspend).",
+  "instance": "/api/v1/tenant/roles/55555555-5555-7555-8555-555555555555/permissions",
+  "code": "validation_failed",
+  "request_id": "019f7d3b-3fa4-7f91-a0a4-49b038244bd0"
+}
+```
+
+  The problem carries no `violations` member: the `detail` lists them in a fixed format.
+
+  With several missing views the entries are joined by `; `, one per view and needing mutation.
+
+- **Remove** a view that another held mutation needs: `400`, `code` `validation_failed`, `detail`
+  `Permission branch.view is required by held permissions: branch.close, branch.suspend.`
+- Granting a view never fails, and granting a **new** mutation fails only on **its own** missing
+  views, so a role that already violates the rule can be repaired one permission at a time.
+  Re-granting a mutation the role already holds is an idempotent no-op; granting one that is not
+  `ACTIVE` (it grants nothing) is written without the check. Neither is ever refused. Removing a
+  mutation or a context permission never fails.
+
+Role list items and the role detail carry **`missing_view_permissions`**: the sorted flat list of
+view codes the role's held `ACTIVE` mutation permissions need and the role lacks (`[]` when it
+complies). It is computed for the roles on the returned page only, so pagination is unaffected.
+Activating a role that violates the rule stays allowed; the field is the signal. Memberships carry
+no such field: operators find violating memberships (direct overrides) and platform roles, which no
+API lists, with [the operator view-gap report](../operations/permission-view-gap-report.md).
 
 ### Role Assignments
 
