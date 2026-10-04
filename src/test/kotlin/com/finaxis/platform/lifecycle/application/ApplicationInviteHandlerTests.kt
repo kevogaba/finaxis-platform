@@ -292,6 +292,8 @@ private class ApplicationInviteStoreFake : UserProvisioningStore {
         userId: UUID,
     ): Boolean = false
 
+    override fun hasActiveMembershipBeyondBootstrap(organisationId: UUID): Boolean = false
+
     override fun branchState(
         organisationId: UUID,
         branchId: UUID,

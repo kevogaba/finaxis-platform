@@ -4,6 +4,7 @@ import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.iam.application.query.BranchAssignmentFilter
 import com.finaxis.platform.iam.application.query.BranchAssignmentSummary
 import com.finaxis.platform.iam.application.query.IamQueryService
+import com.finaxis.platform.iam.application.query.MembershipDetail
 import com.finaxis.platform.iam.application.query.MembershipFilter
 import com.finaxis.platform.iam.application.query.MembershipSummary
 import com.finaxis.platform.lifecycle.FoundationCaller
@@ -47,22 +48,15 @@ class IamLifecycleReadAdapter(
         membershipId: UUID,
         caller: FoundationCaller,
     ): LifecycleMembershipDetail =
-        iamQueryService.getMembership(organisationId, membershipId, caller).let {
-            LifecycleMembershipDetail(
-                it.id,
-                it.organisationId,
-                it.userId,
-                it.username,
-                it.email,
-                it.displayName,
-                it.userStatus,
-                it.membershipStatus,
-                it.membershipType,
-                it.primaryBranchId,
-                it.createdAt,
-                it.updatedAt,
-            )
-        }
+        iamQueryService.getMembership(organisationId, membershipId, caller).toLifecycle()
+
+    override fun getMembershipAfterAuthorizedMutation(
+        organisationId: UUID,
+        membershipId: UUID,
+    ): LifecycleMembershipDetail =
+        iamQueryService
+            .getMembershipAfterAuthorizedMutation(organisationId, membershipId)
+            .toLifecycle()
 
     override fun searchBranchAssignments(
         organisationId: UUID,
@@ -103,6 +97,22 @@ class IamLifecycleReadAdapter(
                 it.updatedAt,
             )
         }
+
+    private fun MembershipDetail.toLifecycle() =
+        LifecycleMembershipDetail(
+            id,
+            organisationId,
+            userId,
+            username,
+            email,
+            displayName,
+            userStatus,
+            membershipStatus,
+            membershipType,
+            primaryBranchId,
+            createdAt,
+            updatedAt,
+        )
 
     private fun MembershipSummary.toLifecycle() =
         LifecycleMembershipSummary(id, userId, membershipStatus, membershipType, primaryBranchId)

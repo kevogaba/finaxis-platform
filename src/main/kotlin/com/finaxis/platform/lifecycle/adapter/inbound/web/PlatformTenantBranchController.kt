@@ -1,17 +1,22 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
-import com.finaxis.platform.lifecycle.PermissionGuard
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ActivateBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BranchDetailResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BranchDraftResultResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BranchSummaryResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateBranchRequest
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SubmitBranchRequest
+import com.finaxis.platform.lifecycle.application.ActingScope
+import com.finaxis.platform.lifecycle.application.ActivateBranchCommand
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.CreateBranchCommand
+import com.finaxis.platform.lifecycle.application.SubmitBranchForApprovalCommand
 import com.finaxis.platform.lifecycle.application.query.BranchDetail
 import com.finaxis.platform.lifecycle.application.query.BranchFilter
 import com.finaxis.platform.lifecycle.application.query.BranchSummary
@@ -55,7 +60,6 @@ import java.util.UUID
 class PlatformTenantBranchController(
     private val branchProvisioningService: BranchProvisioningService,
     private val foundationQueryService: FoundationQueryService,
-    private val permissionGuard: PermissionGuard,
 ) {
     /**
      * Searches branches belonging to a specific tenant organisation.
@@ -259,7 +263,7 @@ class PlatformTenantBranchController(
         ),
         ApiResponse(
             responseCode = "404",
-            description = "Tenant not found",
+            description = "Tenant not found (the platform organisation is never a valid tenant)",
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -283,8 +287,6 @@ class PlatformTenantBranchController(
         @RequestBody @Valid request: CreateBranchRequest,
     ): ResponseEntity<BranchDraftResultResponse> {
         val caller = CallerContextResolver.getPlatformCaller()
-        permissionGuard.requirePlatformPermission(caller.actorId, "branch.create")
-
         val command =
             CreateBranchCommand(
                 organisationId = tenantId,
@@ -295,6 +297,7 @@ class PlatformTenantBranchController(
                 timezone = request.timezone,
                 address = request.address,
                 requestedBy = caller.actorId,
+                scope = ActingScope.PLATFORM,
             )
         val result = branchProvisioningService.createDraft(command)
         val location =
@@ -304,6 +307,217 @@ class PlatformTenantBranchController(
         return ResponseEntity
             .created(location)
             .body(BranchDraftResultResponse(result.branchId, result.status.name))
+    }
+
+    /**
+     * Submits a tenant branch draft for approval as the platform administrator.
+     */
+    @PostMapping("/{branch_id}/submit")
+    @IdempotentMutation(scope = IdempotencyScopeKind.PLATFORM)
+    @PreAuthorize("hasAuthority('branch.create')")
+    @Operation(
+        summary = "Submit tenant branch draft as platform administrator",
+        description =
+            "Submits a branch draft of the path tenant for operational approval. Requires " +
+                "`branch.create` in the platform organisation.",
+        parameters = [
+            Parameter(
+                name = "Idempotency-Key",
+                description = "Optional UUID; the server generates one when omitted.",
+                `in` = ParameterIn.HEADER,
+                schema = Schema(type = "string", format = "uuid"),
+            ),
+        ],
+    )
+    @ApiResponses(
+        ApiResponse(
+            responseCode = "200",
+            description = "Branch submitted",
+            content = [Content(schema = Schema(implementation = BranchDetailResponse::class))],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description = "Invalid request body (for example a reason over 500 characters)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden or not in platform context",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description =
+                "Tenant or branch not found (the platform organisation is never a valid tenant)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "409",
+            description =
+                "Branch or tenant state conflicts with submission, or the tenant already has an " +
+                    "active branch beyond its bootstrap head office " +
+                    "(code `lifecycle.platform_checker_closed`)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+    )
+    fun submit(
+        @PathVariable("tenant_id") tenantId: UUID,
+        @PathVariable("branch_id") branchId: UUID,
+        @RequestBody(required = false) @Valid request: SubmitBranchRequest?,
+    ): BranchDetailResponse {
+        val caller = CallerContextResolver.getPlatformCaller()
+        branchProvisioningService.submitForApproval(
+            SubmitBranchForApprovalCommand(
+                organisationId = tenantId,
+                branchId = branchId,
+                reason = request?.reason,
+                actorId = caller.actorId,
+                requestId = uuidV7(),
+                scope = ActingScope.PLATFORM,
+            ),
+        )
+        return foundationQueryService
+            .getBranchAfterAuthorizedMutation(
+                tenantId,
+                branchId,
+            ).toResponse()
+    }
+
+    /**
+     * Activates a tenant branch as the audited platform checker.
+     */
+    @PostMapping("/{branch_id}/activate")
+    @IdempotentMutation(scope = IdempotencyScopeKind.PLATFORM)
+    @PreAuthorize("hasAuthority('branch.activate')")
+    @Operation(
+        summary = "Activate tenant branch as platform checker",
+        description =
+            "Activates a pending branch of the path tenant on the tenant's behalf. Requires " +
+                "`branch.activate` in the platform organisation. The branch's creator cannot " +
+                "activate it, whether a tenant user or a platform administrator; the action is " +
+                "audited with the platform actor.",
+        parameters = [
+            Parameter(
+                name = "Idempotency-Key",
+                description = "Optional UUID; the server generates one when omitted.",
+                `in` = ParameterIn.HEADER,
+                schema = Schema(type = "string", format = "uuid"),
+            ),
+        ],
+    )
+    @ApiResponses(
+        ApiResponse(
+            responseCode = "200",
+            description = "Branch activated",
+            content = [Content(schema = Schema(implementation = BranchDetailResponse::class))],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description = "Invalid request body (for example a reason over 500 characters)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description =
+                "Forbidden, not in platform context, or the caller created or submitted the branch",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description =
+                "Tenant or branch not found (the platform organisation is never a valid tenant)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "409",
+            description =
+                "Branch or tenant state conflicts with activation, or the tenant already has an " +
+                    "active branch beyond its bootstrap head office " +
+                    "(code `lifecycle.platform_checker_closed`)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+    )
+    fun activate(
+        @PathVariable("tenant_id") tenantId: UUID,
+        @PathVariable("branch_id") branchId: UUID,
+        @RequestBody(required = false) @Valid request: ActivateBranchRequest?,
+    ): BranchDetailResponse {
+        val caller = CallerContextResolver.getPlatformCaller()
+        branchProvisioningService.activate(
+            ActivateBranchCommand(
+                organisationId = tenantId,
+                branchId = branchId,
+                reason = request?.reason,
+                actorId = caller.actorId,
+                requestId = uuidV7(),
+                scope = ActingScope.PLATFORM,
+            ),
+        )
+        return foundationQueryService
+            .getBranchAfterAuthorizedMutation(
+                tenantId,
+                branchId,
+            ).toResponse()
     }
 
     private fun BranchSummary.toResponse() =

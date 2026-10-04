@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.IDENTITY_DISPATCH_LOG
 import com.finaxis.platform.jooq.tables.references.KEYCLOAK_IDENTITY_LINK
@@ -223,6 +224,18 @@ private class JooqUserProvisioningMembershipStore(
         organisationId: UUID,
         userId: UUID,
     ): Boolean = existingMembershipId(organisationId, userId) != null
+
+    override fun hasActiveMembershipBeyondBootstrap(organisationId: UUID): Boolean =
+        dsl.fetchExists(
+            USER_ORGANISATION_MEMBERSHIP,
+            USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID
+                .eq(organisationId)
+                .and(
+                    USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS.eq(
+                        MembershipLifecycleState.ACTIVE.name,
+                    ),
+                ).and(USER_ORGANISATION_MEMBERSHIP.CREATED_BY.isDistinctFrom(SystemActor.ID)),
+        )
 
     override fun membershipInvitedBy(
         organisationId: UUID,

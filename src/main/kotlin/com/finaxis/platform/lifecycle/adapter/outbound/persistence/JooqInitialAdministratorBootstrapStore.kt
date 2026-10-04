@@ -1,12 +1,14 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
+import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapRecord
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStatus
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStore
 import com.finaxis.platform.lifecycle.application.InitialAdministratorDraft
 import org.jooq.DSLContext
 import org.jooq.Record
+import org.jooq.impl.DSL
 import org.springframework.stereotype.Component
 import java.time.Clock
 import java.time.OffsetDateTime
@@ -112,6 +114,17 @@ class JooqInitialAdministratorBootstrapStore(
             .set(t.ROW_VERSION, t.ROW_VERSION.plus(1))
             .where(t.ORGANISATION_ID.eq(organisationId))
             .execute()
+    }
+
+    override fun existingAdministratorUserId(organisationId: UUID): UUID? {
+        val t = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
+        return dsl
+            .select(USER_ACCOUNT.ID)
+            .from(t)
+            .join(USER_ACCOUNT)
+            .on(DSL.lower(USER_ACCOUNT.EMAIL).eq(DSL.lower(t.ADMIN_EMAIL)))
+            .where(t.ORGANISATION_ID.eq(organisationId))
+            .fetchOne(USER_ACCOUNT.ID)
     }
 
     override fun find(organisationId: UUID): InitialAdministratorBootstrapRecord? =

@@ -154,6 +154,10 @@ tables or columns outside those documents.
   credentials.
 - The application owns users, organisations, memberships, roles, permissions, scopes, and
   authorization rules. Runtime authorization evaluates **permission codes, never role names**.
+- Maker-checker: a platform-context actor holding the permission in the platform organisation may
+  be the audited checker of a pending membership only while the tenant has no ACTIVE member beyond
+  its bootstrap administrator, and of a pending branch only while it has no ACTIVE branch beyond
+  the bootstrap head office; the checker is never the maker or the beneficiary — ADR 0028.
 - Active organisation is request/session context, not a permanent `app_user` field. The
   Redis-backed HTTP session carries active-organisation context only — never authentication
   (every request authenticates via the bearer JWT).

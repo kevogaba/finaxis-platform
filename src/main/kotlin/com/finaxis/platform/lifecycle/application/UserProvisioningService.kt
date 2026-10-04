@@ -1,13 +1,17 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionCommand
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
+import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityDispatchType
 import com.finaxis.platform.lifecycle.application.port.outbound.MembershipProvisioningSnapshot
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
@@ -35,6 +39,7 @@ class UserProvisioningService(
     private val auditService: AuditService,
     private val eventPublisher: TransitionEventPublisher,
     private val clock: Clock,
+    private val permissionGuard: PermissionGuard,
 ) {
     /** Persists a local user invitation with branch and role prerequisites. */
     @Transactional
@@ -108,20 +113,20 @@ class UserProvisioningService(
         }
     }
 
-    /** Approves a pending local invitation and emits downstream provisioning requests as needed. */
+    /**
+     * Approves a pending local invitation and emits downstream provisioning requests as needed.
+     * The checker is neither the maker nor the beneficiary, whatever the scope: the inviter and
+     * the invited user can never approve, and a platform checker is held to the same rule as a
+     * tenant user (ADR 0028). A platform-scope approval authorises itself against the platform
+     * organisation here; a tenant-scope caller authorises in its adapter.
+     */
     @Transactional
     fun approveUser(command: ApproveUserCommand): UserApprovalResult {
+        if (command.scope == ActingScope.PLATFORM) permissionGuard.requirePlatformChecker(command)
         val snapshot = requireMembership(command.organisationId, command.membershipId)
-        val inviter = store.membershipInvitedBy(command.organisationId, command.membershipId)
-        if (inviter != null &&
-            command.approvedBy != com.finaxis.platform.common.persistence.SystemActor.ID &&
-            command.approvedBy == inviter
-        ) {
-            throw ForbiddenOperationException()
-        }
-        require(snapshot.status == MembershipLifecycleState.PENDING_APPROVAL) {
-            "Only pending memberships can be approved."
-        }
+        if (store.isMakerOrBeneficiary(command, snapshot)) throw ForbiddenOperationException()
+        if (command.scope == ActingScope.PLATFORM) store.requirePlatformCheckerOpen(command)
+        if (snapshot.status != MembershipLifecycleState.PENDING_APPROVAL) throw ConflictException()
         requireActiveAccessPrerequisites(command.organisationId, snapshot)
 
         val keycloakRequested = requestKeycloakProvisioningIfNeeded(command, snapshot)
@@ -149,7 +154,7 @@ class UserProvisioningService(
                 mapOf(
                     MEMBERSHIP_ID to snapshot.id.toString(),
                     "membershipActivated" to membershipActivated.toString(),
-                ),
+                ) + checkerScopeMetadata(command.scope),
         )
         val approved = requireMembership(command.organisationId, command.membershipId)
         return UserApprovalResult(
@@ -539,9 +544,7 @@ class UserProvisioningService(
         organisationId: UUID,
         membershipId: UUID,
     ): MembershipProvisioningSnapshot =
-        requireNotNull(store.membershipSnapshot(organisationId, membershipId)) {
-            "Membership was not found in the selected organisation."
-        }
+        store.membershipSnapshot(organisationId, membershipId) ?: throw ResourceNotFoundException()
 
     private fun audit(
         organisationId: UUID,
@@ -609,6 +612,44 @@ private fun membershipRevocationTransition(
             error("Membership is already revoked.")
         }
     }
+
+/**
+ * A platform checker acts only on an ACTIVE tenant that has no ACTIVE member beyond its bootstrap
+ * administrator, so it is the way out of the first-approval deadlock and not a standing approver.
+ */
+private fun UserProvisioningStore.requirePlatformCheckerOpen(command: ApproveUserCommand) {
+    if (organisationState(command.organisationId) != OrganisationLifecycleState.ACTIVE) {
+        throw ConflictException()
+    }
+    if (hasActiveMembershipBeyondBootstrap(command.organisationId)) {
+        throw ConflictException(
+            LifecycleErrorCodes.PLATFORM_CHECKER_CLOSED,
+            LifecycleErrorCodes.PLATFORM_CHECKER_CLOSED_DETAIL,
+        )
+    }
+}
+
+/** The inviter (maker) and the invited user (beneficiary) may never approve. */
+private fun UserProvisioningStore.isMakerOrBeneficiary(
+    command: ApproveUserCommand,
+    snapshot: MembershipProvisioningSnapshot,
+): Boolean {
+    val inviter = membershipInvitedBy(command.organisationId, command.membershipId)
+    val isMaker =
+        inviter != null &&
+            command.approvedBy != com.finaxis.platform.common.persistence.SystemActor.ID &&
+            command.approvedBy == inviter
+    return isMaker || command.approvedBy == snapshot.userId
+}
+
+/** Platform checker gate: the platform permission first, then never the platform organisation. */
+private fun PermissionGuard.requirePlatformChecker(command: ApproveUserCommand) {
+    requirePlatformPermission(command.approvedBy, "user.approve")
+    if (command.organisationId == PlatformOrganisation.ID) throw ResourceNotFoundException()
+}
+
+private fun checkerScopeMetadata(scope: ActingScope): Map<String, String> =
+    if (scope == ActingScope.PLATFORM) mapOf("checkerScope" to scope.name) else emptyMap()
 
 private fun transitionCommand(
     reason: String? = null,

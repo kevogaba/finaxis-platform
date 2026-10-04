@@ -536,13 +536,45 @@ Tenant detail response:
 Base path: `/api/v1/platform/tenants/{tenant_id}/branches`. List filters: `q`, `status`,
 `type`, `sort_by`, `sort_dir`, `page`, `size`.
 
-| Method | Path           | Summary                                            | Permission      | Shape    |
-|--------|----------------|----------------------------------------------------|-----------------|----------|
-| GET    | `/`            | Search branches for a platform-selected tenant     | `branch.view`   | page     |
-| POST   | `/`            | Create branch draft for a platform-selected tenant | `branch.create` | mutation |
-| GET    | `/{branch_id}` | Get tenant branch                                  | `branch.view`   | item     |
+| Method | Path                    | Summary                                            | Permission        | Shape    |
+|--------|-------------------------|----------------------------------------------------|-------------------|----------|
+| GET    | `/`                     | Search branches for a platform-selected tenant     | `branch.view`     | page     |
+| POST   | `/`                     | Create branch draft for a platform-selected tenant | `branch.create`   | mutation |
+| GET    | `/{branch_id}`          | Get tenant branch                                  | `branch.view`     | item     |
+| POST   | `/{branch_id}/submit`   | Submit a tenant branch draft for approval          | `branch.create`   | mutation |
+| POST   | `/{branch_id}/activate` | Activate a tenant branch as platform checker       | `branch.activate` | mutation |
 
-The create request and branch responses use the same fields as tenant-facing branches.
+The create request and branch responses use the same fields as tenant-facing branches. Every
+permission above is checked in the **platform** organisation only: no tenant membership or tenant
+role is needed, and a draft can be created while the tenant is `PROVISIONING` or `ACTIVE`
+(404 for no such tenant, 409 for any other state). Submit and activate return the branch and
+require the path tenant to own `branch_id` (404 otherwise; the platform organisation is never a
+valid `tenant_id`). The optional body of submit and activate is validated (`reason` at most 500
+characters, otherwise 400 `validation_failed`). The returned branch needs no `branch.view`: the
+route works with its mutation permission alone. Submit needs an `ACTIVE` or `PROVISIONING` tenant (409 otherwise); activation
+needs an `ACTIVE` tenant and a platform actor that neither created nor submitted the branch (403).
+Submit and activate are also bounded: **409 `lifecycle.platform_checker_closed`** once the tenant
+has an `ACTIVE` branch that the system actor did not create (the bootstrap head office does not
+count). See
+[Platform checker while a tenant has no approvers of its own](#platform-checker-while-a-tenant-has-no-approvers-of-its-own).
+
+### Platform Tenant Memberships
+
+Base path: `/api/v1/platform/tenants/{tenant_id}/memberships`.
+
+| Method | Path                        | Summary                                         | Permission     | Shape    |
+|--------|-----------------------------|-------------------------------------------------|----------------|----------|
+| POST   | `/{membership_id}/activate` | Approve a tenant membership as platform checker | `user.approve` | mutation |
+
+Takes no body and returns the membership as `GET /api/v1/tenant/memberships/{membership_id}`
+does: **200** when the membership became `ACTIVE`, **202** while Keycloak provisioning is queued.
+The permission is checked in the platform organisation, and the returned membership needs no
+`membership.view`: the route works with `user.approve` alone. `404` when the membership is not in the
+path tenant, `409` when the tenant is not `ACTIVE`, the membership is not pending approval, or the
+tenant already has an `ACTIVE` membership the system actor did not create (the bootstrap
+administrator does not count; code `lifecycle.platform_checker_closed`), and
+`403` when the platform actor invited the membership or is the invited user (the checker is
+neither the maker nor the beneficiary).
 
 ### Platform Tenant Users
 
@@ -973,7 +1005,12 @@ Tenant onboarding is a platform workflow:
    `POST /api/v1/platform/tenants/{tenant_id}/bootstrap/retry`.
 
 The maker-checker rule is enforced by the application service: the actor who requested or
-submitted a tenant draft cannot approve it. Self-approval returns 403:
+submitted a tenant draft cannot approve it, and neither can the platform user whose own account the
+draft names (by email) as its initial administrator, because the bootstrap approves that
+administrator's membership in the approver's name and nobody may approve their own membership. That
+refusal is 403 with code `lifecycle.approver_is_initial_administrator`, returned before any state
+change (the tenant stays `PENDING_APPROVAL`); if no account exists yet for the administrator email
+there is nothing to compare. Self-approval returns 403:
 
 ```json
 {
@@ -986,6 +1023,44 @@ submitted a tenant draft cannot approve it. Self-approval returns 403:
   "request_id": "019f7d45-f87d-7b55-9a68-208779281375"
 }
 ```
+
+### Platform checker while a tenant has no approvers of its own
+
+The bootstrap administrator is the maker of every invitation and branch the new tenant creates, so
+nobody inside it can approve them. A platform administrator can, as an audited checker
+([ADR 0028](../adr/0028-platform-checker-for-first-tenant-approvals.md)):
+
+1. the tenant administrator creates and submits a branch (`POST /api/v1/branches`,
+   `POST /api/v1/branches/{branch_id}/submit`);
+2. a platform administrator activates it
+   (`POST /api/v1/platform/tenants/{tenant_id}/branches/{branch_id}/activate`);
+3. the tenant administrator invites the second person (`POST /api/v1/tenant/users`);
+4. a platform administrator approves the invitation
+   (`POST /api/v1/platform/tenants/{tenant_id}/memberships/{membership_id}/activate`).
+
+There are two separate bounds, one per kind of item, and each answers **409
+`lifecycle.platform_checker_closed`** without changing anything once exceeded:
+
+- **membership activate** works only while the tenant has no `ACTIVE` membership that the system
+  actor did not create (the bootstrap administrator does not count);
+- **branch submit and activate** work only while the tenant has no `ACTIVE` branch that the system
+  actor did not create (the bootstrap head office does not count).
+
+The two do not depend on each other, so the four steps above all pass: step 2 does not close the
+membership bound, and step 4 does not need a branch bound. Only `ACTIVE` rows count, so suspending
+or revoking them reopens the route; a membership approved for a user with no Keycloak identity
+stays `PENDING_APPROVAL` (202) until the identity job activates it, during which the bound is still
+open. Creating a branch draft through the platform route and the tenant's own approvers are not
+bounded. If a tenant loses its only approver while its own members stay `ACTIVE`, that is a support
+matter.
+
+Tenant users still cannot approve their own invitations or activate their own branches (403). A
+platform administrator cannot approve what it created, its own membership, or a branch it
+submitted. The approval is attributed to the platform actor in the tenant's audit log, with
+`checkerScope = PLATFORM` in the `user.approve` metadata and, for a branch, a
+`branch.submit_as_platform_checker` row on submission and a `branch.activate_as_platform_checker`
+row on activation. A membership approved this way raises the same activation event as a tenant
+approval.
 
 Approval creates the durable tenant prerequisites atomically and queues the bootstrap. The
 bootstrap state is exposed on `TenantDetailResponse.bootstrap_status`:

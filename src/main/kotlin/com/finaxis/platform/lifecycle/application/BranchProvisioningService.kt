@@ -7,6 +7,8 @@ import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.persistence.PlatformOrganisation
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionCommand
@@ -35,11 +37,23 @@ class BranchProvisioningService(
     /** Creates a branch draft under an active or provisioning organisation. */
     @Transactional
     fun createDraft(command: CreateBranchCommand): BranchDraftResult {
-        permissionGuard.requireTenantPermission(
-            command.requestedBy,
-            command.organisationId,
-            "branch.create",
-        )
+        when (command.scope) {
+            ActingScope.TENANT -> {
+                permissionGuard.requireTenantPermission(
+                    command.requestedBy,
+                    command.organisationId,
+                    "branch.create",
+                )
+            }
+
+            ActingScope.PLATFORM -> {
+                requirePlatformPermission(
+                    command.requestedBy,
+                    command.organisationId,
+                    "branch.create",
+                )
+            }
+        }
         requireOrganisationAllowsBranch(command.organisationId)
         invalidOperationUnless(command.branchCode.isNotBlank())
         invalidOperationUnless(command.branchName.isNotBlank())
@@ -67,7 +81,12 @@ class BranchProvisioningService(
             command.organisationId,
             command.branchId,
             "branch.create",
+            command.scope,
         )
+        if (command.scope == ActingScope.PLATFORM) {
+            requireOrganisationAllowsBranch(command.organisationId)
+            requirePlatformCheckerOpen(command.organisationId)
+        }
         val branchCode =
             lifecycleStore.branchCode(command.organisationId, command.branchId).orResourceNotFound()
         conflictUnless(
@@ -86,9 +105,22 @@ class BranchProvisioningService(
                 TransitionCommand(reason = command.reason),
             ),
         )
+        if (command.scope == ActingScope.PLATFORM) {
+            audit(
+                command.organisationId,
+                command.branchId.toString(),
+                "branch.submit_as_platform_checker",
+                command.actorId.toString(),
+                mapOf(CHECKER_SCOPE to ActingScope.PLATFORM.name),
+            )
+        }
     }
 
-    /** Activates an approved branch only in an active organisation. */
+    /**
+     * Activates an approved branch only in an active organisation. The creator can never activate
+     * it, whatever the scope: a platform actor is held to the same maker-checker rule as a tenant
+     * user (ADR 0028).
+     */
     @Transactional
     fun activate(command: ActivateBranchCommand) {
         requireBranchPermission(
@@ -96,14 +128,14 @@ class BranchProvisioningService(
             command.organisationId,
             command.branchId,
             "branch.activate",
+            command.scope,
         )
-        val creator = lifecycleStore.createdBy(command.organisationId, command.branchId)
-        if (creator != null &&
-            command.actorId != com.finaxis.platform.common.persistence.SystemActor.ID &&
-            command.actorId == creator
+        if (command.scope ==
+            ActingScope.PLATFORM
         ) {
-            throw ForbiddenOperationException()
+            requirePlatformCheckerOpen(command.organisationId)
         }
+        if (actedAsMaker(command)) throw ForbiddenOperationException()
         conflictUnless(
             lifecycleStore.organisationState(command.organisationId) ==
                 OrganisationLifecycleState.ACTIVE,
@@ -116,6 +148,15 @@ class BranchProvisioningService(
                 TransitionCommand(reason = command.reason),
             ),
         )
+        if (command.scope == ActingScope.PLATFORM) {
+            audit(
+                command.organisationId,
+                command.branchId.toString(),
+                "branch.activate_as_platform_checker",
+                command.actorId.toString(),
+                mapOf(CHECKER_SCOPE to ActingScope.PLATFORM.name),
+            )
+        }
     }
 
     /** Suspends a branch, preventing new operational assignments. */
@@ -258,9 +299,49 @@ class BranchProvisioningService(
     }
 
     private fun requireOrganisationAllowsBranch(organisationId: java.util.UUID) {
-        conflictUnless(
-            lifecycleStore.organisationState(organisationId) in ALLOWED_BRANCH_CREATION_STATES,
-        )
+        val state = lifecycleStore.organisationState(organisationId).orResourceNotFound()
+        conflictUnless(state in ALLOWED_BRANCH_CREATION_STATES)
+    }
+
+    /**
+     * The branch's creator may not activate it. A platform checker also may not activate a branch
+     * it submitted itself, so no single platform actor can both put a tenant's draft up for
+     * approval and approve it (ADR 0028). The tenant route keeps the creator rule alone.
+     */
+    private fun actedAsMaker(command: ActivateBranchCommand): Boolean {
+        if (command.actorId == SystemActor.ID) return false
+        val creator = lifecycleStore.createdBy(command.organisationId, command.branchId)
+        val submitter =
+            if (command.scope == ActingScope.PLATFORM) {
+                lifecycleStore.submittedBy(command.organisationId, command.branchId)
+            } else {
+                null
+            }
+        return command.actorId == creator || command.actorId == submitter
+    }
+
+    /**
+     * A platform checker acts only while the tenant has no ACTIVE branch beyond the one the
+     * bootstrap seeds (the head office, created by the system actor), so it is the way out of the
+     * first-approval deadlock and not a standing approver (ADR 0028).
+     */
+    private fun requirePlatformCheckerOpen(organisationId: java.util.UUID) {
+        if (lifecycleStore.hasActiveBranchBeyondBootstrap(organisationId)) {
+            throw ConflictException(
+                LifecycleErrorCodes.PLATFORM_CHECKER_CLOSED,
+                LifecycleErrorCodes.PLATFORM_CHECKER_CLOSED_DETAIL,
+            )
+        }
+    }
+
+    /** The platform permission first; the platform organisation is never a tenant to act on. */
+    private fun requirePlatformPermission(
+        actorId: java.util.UUID,
+        organisationId: java.util.UUID,
+        permissionCode: String,
+    ) {
+        permissionGuard.requirePlatformPermission(actorId, permissionCode)
+        resourceNotFoundUnless(organisationId != PlatformOrganisation.ID)
     }
 
     private fun requireBranchPermission(
@@ -268,8 +349,22 @@ class BranchProvisioningService(
         organisationId: java.util.UUID,
         branchId: java.util.UUID,
         permissionCode: String,
+        scope: ActingScope = ActingScope.TENANT,
     ) {
-        permissionGuard.requireBranchPermission(actorId, organisationId, branchId, permissionCode)
+        when (scope) {
+            ActingScope.TENANT -> {
+                permissionGuard.requireBranchPermission(
+                    actorId,
+                    organisationId,
+                    branchId,
+                    permissionCode,
+                )
+            }
+
+            ActingScope.PLATFORM -> {
+                requirePlatformPermission(actorId, organisationId, permissionCode)
+            }
+        }
         // After the permission check so a caller without it cannot probe for existence. A branch
         // outside the organisation reads as absent, whatever branch the caller has selected.
         resourceNotFoundUnless(lifecycleStore.branchState(organisationId, branchId) != null)
@@ -296,6 +391,7 @@ class BranchProvisioningService(
         resourceId: String,
         action: String,
         actorId: String,
+        metadata: Map<String, String> = emptyMap(),
     ) {
         auditService.record(
             AuditCommand(
@@ -306,6 +402,7 @@ class BranchProvisioningService(
                 resourceType = "BRANCH",
                 resourceId = resourceId,
                 outcome = AuditOutcome.SUCCESS,
+                metadata = metadata,
             ),
         )
     }
@@ -313,6 +410,7 @@ class BranchProvisioningService(
     private companion object {
         val ALLOWED_BRANCH_CREATION_STATES =
             setOf(OrganisationLifecycleState.ACTIVE, OrganisationLifecycleState.PROVISIONING)
+        const val CHECKER_SCOPE = "checkerScope"
         const val BRANCH_ASSIGNED_TARGET = "finaxis.lifecycle.branch.user-assigned"
         const val BRANCH_ASSIGNMENT_REVOKED_TARGET = "finaxis.lifecycle.branch.user-revoked"
     }

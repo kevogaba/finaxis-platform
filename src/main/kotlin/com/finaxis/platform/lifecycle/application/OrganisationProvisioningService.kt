@@ -145,6 +145,16 @@ class OrganisationProvisioningService(
             errorUnless(command.actorId != record.submittedBy, SafeError.FORBIDDEN)
         }
         errorUnless(command.actorId != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
+        // The bootstrap approves its administrator's membership in the approver's name, and a user
+        // may never approve their own membership, so refuse now rather than fail it later.
+        if (adminBootstrapStore.existingAdministratorUserId(command.organisationId) ==
+            command.actorId
+        ) {
+            throw ForbiddenOperationException(
+                LifecycleErrorCodes.APPROVER_IS_INITIAL_ADMINISTRATOR,
+                LifecycleErrorCodes.APPROVER_IS_INITIAL_ADMINISTRATOR_DETAIL,
+            )
+        }
 
         lifecycleService.transition(
             OrganisationTransitionCommand(

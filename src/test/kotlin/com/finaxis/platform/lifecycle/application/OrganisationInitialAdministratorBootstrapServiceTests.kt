@@ -575,6 +575,13 @@ private class BootstrapProvisioningFake(
         branchId: UUID,
     ): UUID? = null
 
+    override fun hasActiveBranchBeyondBootstrap(organisationId: UUID): Boolean = false
+
+    override fun submittedBy(
+        organisationId: UUID,
+        branchId: UUID,
+    ): UUID? = null
+
     override fun userExists(userId: UUID) = true
 
     override fun membership(
@@ -743,6 +750,7 @@ private fun <S : Enum<S>> aggregate(
 
 private class FakeInitialAdminBootstrapStore : InitialAdministratorBootstrapStore {
     val records = mutableMapOf<UUID, InitialAdministratorBootstrapRecord>()
+    val existingAdministrators = mutableMapOf<UUID, UUID>()
 
     override fun createDraft(
         organisationId: UUID,
@@ -855,6 +863,9 @@ private class FakeInitialAdminBootstrapStore : InitialAdministratorBootstrapStor
                 rowVersion = record.rowVersion + 1,
             )
     }
+
+    override fun existingAdministratorUserId(organisationId: UUID): UUID? =
+        existingAdministrators[organisationId]
 
     override fun linkResolvedEntities(
         organisationId: UUID,
