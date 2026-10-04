@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.web.api.ApiJsonCodec
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
@@ -60,6 +61,7 @@ import java.util.UUID
 class PlatformTenantBranchController(
     private val branchProvisioningService: BranchProvisioningService,
     private val foundationQueryService: FoundationQueryService,
+    private val apiJsonCodec: ApiJsonCodec,
 ) {
     /**
      * Searches branches belonging to a specific tenant organisation.
@@ -541,7 +543,7 @@ class PlatformTenantBranchController(
             parentBranchId = parentBranchId,
             status = status,
             timezone = timezone,
-            address = emptyMap(), // addressJson parsed if needed, or simple map
+            address = apiJsonCodec.branchAddress(addressJson),
             openedOn = openedOn,
             closedOn = closedOn,
             statusReason = statusReason,

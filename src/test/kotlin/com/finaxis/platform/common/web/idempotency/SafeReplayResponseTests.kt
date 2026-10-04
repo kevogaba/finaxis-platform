@@ -165,6 +165,37 @@ class SafeReplayResponseTests {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = ["pin_code", "api_key", "auth_line", "session", "token"])
+    fun `a branch address object may carry free-form keys that look sensitive`(label: String) {
+        val body = """{"branch_id":"b-1","status":"DRAFT","address":{"$label":"560001"}}"""
+
+        assertEquals(body, factory.fromLive(IdempotencyResponse(200, emptyMap(), body)).storedBody)
+        assertEquals(
+            body,
+            factory.fromStored(status = 200, headers = emptyMap(), storedBody = body).storedBody,
+        )
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+        strings = [
+            """{"api_key":"x","address":{"pin_code":"560001"}}""",
+            """{"address":{"pin_code":"560001"},"api_key":"x"}""",
+            """{"other":{"pin_code":"560001"}}""",
+            """{"other":{"address":{"city":"Nairobi"},"session_id":"x"}}""",
+            """{"address_book":{"pin_code":"560001"}}""",
+            """{"address":"x","nested":{"client_secret":"y"}}""",
+        ],
+    )
+    fun `the address exemption does not cover sensitive names outside an address object`(
+        body: String,
+    ) {
+        assertFailsWith<IllegalArgumentException> {
+            factory.fromLive(IdempotencyResponse(200, emptyMap(), body))
+        }
+    }
+
     @Test
     fun `stored response is revalidated with the same sensitive alias rule`() {
         assertFailsWith<IllegalArgumentException> {
