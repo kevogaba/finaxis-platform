@@ -3,6 +3,7 @@ package com.finaxis.platform.iam.adapter.inbound.web
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
+import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
@@ -186,6 +187,26 @@ class PlatformUserLifecycleController(
                 ),
             ],
         ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description = "User not found",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
     )
     fun suspendUser(
         @PathVariable("user_id") userId: UUID,
@@ -232,10 +253,30 @@ class PlatformUserLifecycleController(
                 ),
             ],
         ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description = "User not found",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
     )
     fun reactivateUser(
         @PathVariable("user_id") userId: UUID,
-        @RequestBody @Valid request: ReactivateUserRequest,
+        @RequestBody(required = false) @Valid request: ReactivateUserRequest?,
     ): ResponseEntity<UserLifecycleResultResponse> {
         val caller = CallerContextResolver.getPlatformCaller()
         permissionGuard.requirePlatformPermission(caller.actorId, "user.activate")
@@ -244,7 +285,7 @@ class PlatformUserLifecycleController(
                 organisationId = PlatformOrganisation.ID,
                 userId = userId,
                 actorId = caller.actorId,
-                reason = DecisionRemark.optional(request.reason),
+                reason = DecisionRemark.optional(request?.reason),
                 requestId = uuidV7().toString(),
             ),
         )
@@ -274,6 +315,26 @@ class PlatformUserLifecycleController(
             content = [
                 Content(
                     schema = Schema(implementation = UserLifecycleResultResponse::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description = "User not found",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
                 ),
             ],
         ),

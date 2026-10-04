@@ -2,6 +2,7 @@ package com.finaxis.platform.iam.application.role
 
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.InvalidRequestException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
@@ -403,12 +404,28 @@ class RoleManagementServiceTests {
         fixture.persistence.memberships[fixture.userId] = fixture.activeMembership()
 
         val missingBranch =
-            assertFailsWith<ConflictException> {
+            assertFailsWith<InvalidRequestException> {
                 fixture.service.assignRoleToUser(
                     fixture.assignRole(scopeType = RoleScopeType.BRANCH),
                 )
             }
-        assertEquals("conflict", missingBranch.code)
+        assertEquals("validation_failed", missingBranch.code)
+        assertEquals(
+            "A branch-scoped role assignment requires a branch.",
+            missingBranch.safeDetail,
+        )
+        assertTrue(fixture.persistence.assignedScopes.isEmpty())
+
+        val unassignedBranch =
+            assertFailsWith<ConflictException> {
+                fixture.service.assignRoleToUser(
+                    fixture.assignRole(
+                        scopeType = RoleScopeType.BRANCH,
+                        branchId = fixture.branchId,
+                    ),
+                )
+            }
+        assertEquals("conflict", unassignedBranch.code)
 
         val tenantWithBranch =
             assertFailsWith<InvalidOperationException> {
@@ -420,6 +437,18 @@ class RoleManagementServiceTests {
                 )
             }
         assertEquals("invalid_operation", tenantWithBranch.code)
+    }
+
+    /** A caller that skipped request validation still gets a 400, never an unchecked failure. */
+    @Test
+    fun `revoking a branch scoped role without a branch is a validation error`() {
+        val failure =
+            assertFailsWith<InvalidRequestException> {
+                fixture.service.revokeRoleFromUser(fixture.revokeRole(RoleScopeType.BRANCH))
+            }
+
+        assertEquals("validation_failed", failure.code)
+        assertEquals(0, fixture.persistence.revokeCalls)
     }
 
     /** Treats an existing active assignment as an idempotent no-op with no second event. */
@@ -538,8 +567,8 @@ class RoleManagementServiceTests {
             requestId,
         )
 
-        fun revokeRole() =
-            RevokeRoleFromUser(organisationId, userId, roleId, RoleScopeType.TENANT, null, actorId)
+        fun revokeRole(scopeType: RoleScopeType = RoleScopeType.TENANT) =
+            RevokeRoleFromUser(organisationId, userId, roleId, scopeType, null, actorId)
 
         fun tenantRole() = RoleSnapshot(roleId, "OPS", false, RoleStatus.ACTIVE, 0)
 

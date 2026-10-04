@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.application
 
 import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.toAuditFailureReason
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningException
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningGateway
@@ -73,6 +74,8 @@ class KeycloakUserProvisioningJobRequestHandler(
         } catch (ex: IdentityProvisioningException) {
             recordFailure(jobRequest, ex)
         } catch (ex: ConflictException) {
+            recordFailure(jobRequest, ex)
+        } catch (ex: ResourceNotFoundException) {
             recordFailure(jobRequest, ex)
         } catch (ex: IllegalArgumentException) {
             recordFailure(jobRequest, ex)

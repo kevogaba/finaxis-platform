@@ -33,15 +33,16 @@ data class AssignPermissionRequest(
 )
 
 /** Request payload for assigning a role to a tenant membership. */
+@BranchScopeRequiresBranch
 data class AssignRoleRequest(
     @field:NotNull
     val userId: UUID,
     @field:NotNull
     val roleId: UUID,
     @field:NotNull
-    val scopeType: RoleAssignmentScopeType,
-    val branchId: UUID? = null,
-)
+    override val scopeType: RoleAssignmentScopeType,
+    override val branchId: UUID? = null,
+) : BranchScoped
 
 /** Summary response for a tenant role. */
 data class RoleSummaryResponse(

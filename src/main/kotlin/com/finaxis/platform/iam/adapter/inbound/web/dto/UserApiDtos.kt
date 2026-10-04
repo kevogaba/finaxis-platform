@@ -46,13 +46,14 @@ data class BranchAssignmentEntryDto(
 )
 
 /** Requested role assignment included in a tenant user invitation. */
+@BranchScopeRequiresBranch
 data class RoleAssignmentEntryDto(
     @field:NotNull
     val roleId: UUID,
     @field:NotNull
-    val scopeType: RoleAssignmentScopeType,
-    val branchId: UUID? = null,
-)
+    override val scopeType: RoleAssignmentScopeType,
+    override val branchId: UUID? = null,
+) : BranchScoped
 
 /** Local invitation result returned after a user and membership are recorded. */
 data class UserInvitationResultResponse(

@@ -306,12 +306,11 @@ class RoleManagementService(
         when (command.scopeType) {
             RoleScopeType.BRANCH -> {
                 conflictUnless(
-                    command.branchId != null &&
-                        persistence.hasActiveBranchAssignment(
-                            command.organisationId,
-                            command.userId,
-                            command.branchId,
-                        ),
+                    persistence.hasActiveBranchAssignment(
+                        command.organisationId,
+                        command.userId,
+                        requireBranchScopeBranchId(command.branchId),
+                    ),
                 )
             }
 
@@ -337,7 +336,7 @@ class RoleManagementService(
                 permissionGuard.requireBranchPermission(
                     actorId,
                     organisationId,
-                    requireNotNull(branchId),
+                    requireBranchScopeBranchId(branchId),
                     permissionCode,
                 )
             }

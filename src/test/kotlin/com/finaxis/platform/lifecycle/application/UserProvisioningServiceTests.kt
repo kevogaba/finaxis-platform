@@ -2,6 +2,8 @@ package com.finaxis.platform.lifecycle.application
 
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.InvalidRequestException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
@@ -673,6 +675,69 @@ class UserProvisioningServiceTests {
         assertTrue(fake.branchAssignments.isEmpty())
         assertTrue(fake.roleAssignments.isEmpty())
         assertTrue(audits.events.any { it.action == "membership.revoke" })
+    }
+
+    @Test
+    fun `revoking an already revoked membership is a 409 conflict that changes nothing`() {
+        val context = activeInvitationContext()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        val membershipId = fake.addMembership(context.org, userId, MembershipLifecycleState.REVOKED)
+        val command =
+            RevokeTenantMembershipCommand(
+                context.org,
+                membershipId,
+                context.actor,
+                Reason.required("Offboarding."),
+            )
+
+        val failure = assertFailsWith<ConflictException> { service.revokeTenantMembership(command) }
+
+        assertEquals("This membership has already been revoked.", failure.safeDetail)
+        assertEquals(
+            MembershipLifecycleState.REVOKED,
+            fake.memberships.getValue(context.org to membershipId).state,
+        )
+        assertTrue(audits.events.none { it.action == "membership.revoke" })
+        assertTrue(logs.logs.isEmpty())
+    }
+
+    @Test
+    fun `invitation rejects a branch scoped role without a branch as a validation error`() {
+        val context = activeInvitationContext()
+        val command =
+            inviteCommand(context)
+                .copy(
+                    roleAssignments =
+                        listOf(RoleAssignmentRequest(context.role, RoleAssignmentScopeType.BRANCH)),
+                )
+
+        val failure = assertFailsWith<InvalidRequestException> { service.inviteUser(command) }
+
+        assertEquals("validation_failed", failure.code)
+        assertEquals("A branch-scoped role assignment requires a branch.", failure.safeDetail)
+        assertTrue(fake.users.isEmpty())
+    }
+
+    @Test
+    fun `invitation rejects a tenant scoped role with a branch as an invalid operation`() {
+        val context = activeInvitationContext()
+        val command =
+            inviteCommand(context)
+                .copy(
+                    roleAssignments =
+                        listOf(
+                            RoleAssignmentRequest(
+                                context.role,
+                                RoleAssignmentScopeType.TENANT,
+                                context.branch,
+                            ),
+                        ),
+                )
+
+        val failure = assertFailsWith<InvalidOperationException> { service.inviteUser(command) }
+
+        assertEquals("invalid_operation", failure.code)
+        assertTrue(fake.users.isEmpty())
     }
 
     @Test

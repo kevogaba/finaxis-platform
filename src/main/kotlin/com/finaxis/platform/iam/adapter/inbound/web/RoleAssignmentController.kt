@@ -17,6 +17,7 @@ import com.finaxis.platform.iam.application.role.AssignRoleToUser
 import com.finaxis.platform.iam.application.role.RevokeRoleFromUser
 import com.finaxis.platform.iam.application.role.RoleManagementService
 import com.finaxis.platform.iam.application.role.RoleScopeType
+import com.finaxis.platform.iam.application.role.requireBranchScopeBranchId
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.TenantCaller
 import com.finaxis.platform.lifecycle.adapter.inbound.web.CallerContextResolver
@@ -322,7 +323,7 @@ class RoleAssignmentController(
         permissionCode: String,
     ) {
         if (scopeType == RoleAssignmentScopeType.BRANCH) {
-            val targetBranchId = requireNotNull(branchId)
+            val targetBranchId = requireBranchScopeBranchId(branchId)
             permissionGuard.requireBranchPermission(
                 caller.actorId,
                 caller.activeOrganisationId,
