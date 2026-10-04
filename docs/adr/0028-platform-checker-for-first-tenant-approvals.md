@@ -10,6 +10,10 @@ Amended by #208 (`V21__branch_approve_permission.sql`): the permission that appr
 branch is `branch.approve`; `branch.activate` is deprecated and no longer checked. This ADR's
 branch rules (the window, the creator and submitter rules) are unchanged.
 
+Amended by the branch amender rule: on both routes the approver of a branch is also never anyone
+who amended it (has a successful `branch.update` on it), see the fourth bullet of decision 5. The
+window and the creator and submitter rules are unchanged.
+
 Resolves GitHub issue #153. Relaxes, in one named place, the maker-checker rule that
 `UserProvisioningService.approveUser` and `BranchProvisioningService.activate` enforce. Does not
 amend [ADR 0004](0004-membership-activation-notification-pipeline.md): the notification pipeline
@@ -94,8 +98,26 @@ checker step:
      its own membership (in any role) through the platform route;
    - the platform actor did not **submit** the branch: a platform administrator may submit a draft
      the tenant never put up for approval, but cannot then also activate it, so no single platform
-     actor requests and approves. This applies to platform activation only; the tenant route keeps
-     the creator rule alone, which is the documented tenant behaviour;
+     actor requests and approves. This applies to platform activation only; the tenant route refuses
+     the creator and anyone who amended the branch (next bullet), and a tenant submitter is not
+     refused, which is the documented tenant behaviour;
+   - the approver did not **amend** the branch, on the tenant and the platform route alike: a
+     returned draft is amendable by anyone holding `branch.update`, so without this rule one
+     person could amend, resubmit and approve someone else's draft. An amender is anyone with a
+     successful `branch.update` audit event on the branch, not just the latest one: a "latest
+     amender only" rule can be laundered by any later PATCH, even one that changes nothing. "Ever"
+     is exactly "any amender of the version being approved", because a branch is amendable only in
+     `DRAFT` or `ACTIVE` and `ACTIVATE` is reachable only from `PENDING_APPROVAL`, so every
+     `branch.update` precedes the pending version. The row's `updated_by` is not used: every status
+     transition stamps it too (a checker's return, a submit), so at approval time it is always the
+     submitter. A checker who only returned the draft is not an amender and may approve a later
+     resubmission. The refusal is `403` `lifecycle.approver_is_branch_modifier`, judged at the same
+     point as the creator rule. The cost: an amender whose edit was later overwritten still cannot
+     approve, so a tiny tenant may need a third person, or the platform checker inside its window;
+   - the rule reads `branch.update` rows of the audit trail, so any future audit retention or purge
+     job (the `audit_retention_days` setting) must exclude the `branch.update` events of branches
+     that are not `ACTIVE` or terminal, or the rule fails open. A durable column on `branch` is the
+     long-term alternative;
    - all comparisons are on user id, not on request context, so a person who is both a platform
      administrator and a tenant member cannot approve what they invited by switching context.
 6. The path tenant is a real tenant: the platform organisation itself is never a valid
@@ -137,7 +159,8 @@ checker step:
    checked and audited, and the bound limits standing exposure rather than being a rate limit.
 9. **A person who is both a platform administrator and an `ACTIVE` member of the tenant** may submit
    a tenant's draft on the platform route and activate it on the tenant route (if it did not create
-   it). That is consistent with the tenant rule, which is creator-only, and is not a new path; the
+   it). That is consistent with the tenant rule, which refuses the creator and anyone who amended
+   the branch but not the submitter, and is not a new path; the
    platform-route submitter rule (above) binds only platform activation.
 10. **The initial administrator cannot approve the tenant that names them.** The bootstrap approves
     its administrator's membership in the name of the platform user who approved the tenant, and

@@ -106,7 +106,7 @@ class BranchProvisioningService(
         audit(
             command.organisationId,
             command.branchId.toString(),
-            "branch.update",
+            BRANCH_UPDATE_AUDIT_ACTION,
             command.actorId.toString(),
             mapOf("changedFields" to command.changedFields.joinToString(",")),
         )
@@ -186,7 +186,8 @@ class BranchProvisioningService(
     /**
      * Approves and activates a pending branch (`branch.approve`) only in an active organisation.
      * The creator can never activate it, whatever the scope: a platform actor is held to the same
-     * maker-checker rule as a tenant user (ADR 0028). `branch.activate` is deprecated (V21) and no
+     * maker-checker rule as a tenant user (ADR 0028), and so is anyone who amended it
+     * (see [requireApproverIsNotBranchMaker]). `branch.activate` is deprecated (V21) and no
      * longer checked.
      */
     @Transactional
@@ -203,7 +204,7 @@ class BranchProvisioningService(
         ) {
             requirePlatformCheckerOpen(command.organisationId)
         }
-        if (actedAsMaker(command)) throw ForbiddenOperationException()
+        requireApproverIsNotBranchMaker(command)
         conflictUnless(
             lifecycleStore.organisationState(command.organisationId) ==
                 OrganisationLifecycleState.ACTIVE,
@@ -433,17 +434,33 @@ class BranchProvisioningService(
     }
 
     /**
-     * The branch's creator may not activate it. A platform checker also may not activate a branch
-     * it submitted itself, so no single platform actor can both put a tenant's draft up for
-     * approval and approve it (ADR 0028). The tenant route keeps the creator rule alone.
+     * The one maker-checker rule of branch approval, shared by the tenant `/activate` route and
+     * the platform checker route. The branch's creator may not activate it. A platform checker
+     * also may not activate a branch it submitted itself, so no single platform actor can both put
+     * a tenant's draft up for approval and approve it (ADR 0028); the tenant route keeps the
+     * creator rule for the submitter. On either route anyone who amended the branch (has a
+     * successful `branch.update` on it) may not approve it either, so nobody can amend, resubmit
+     * and approve another person's draft, however many later amends follow theirs. A returning
+     * checker is none of these, so may still approve.
      */
-    private fun actedAsMaker(command: ActivateBranchCommand): Boolean =
-        isBranchMaker(
-            command.actorId,
-            command.organisationId,
-            command.branchId,
-            includeSubmitter = command.scope == ActingScope.PLATFORM,
-        )
+    private fun requireApproverIsNotBranchMaker(command: ActivateBranchCommand) {
+        val actedAsMaker =
+            isBranchMaker(
+                command.actorId,
+                command.organisationId,
+                command.branchId,
+                includeSubmitter = command.scope == ActingScope.PLATFORM,
+            )
+        if (actedAsMaker) throw ForbiddenOperationException()
+        if (command.actorId != SystemActor.ID &&
+            lifecycleStore.hasAmended(command.organisationId, command.branchId, command.actorId)
+        ) {
+            throw ForbiddenOperationException(
+                LifecycleErrorCodes.APPROVER_IS_BRANCH_MODIFIER,
+                LifecycleErrorCodes.APPROVER_IS_BRANCH_MODIFIER_DETAIL,
+            )
+        }
+    }
 
     /**
      * Whether [actorId] made the branch: its creator, or when [includeSubmitter] the actor of its
@@ -542,7 +559,7 @@ class BranchProvisioningService(
                 actorId = actorId,
                 tenantId = organisationId.toString(),
                 action = action,
-                resourceType = "BRANCH",
+                resourceType = BRANCH_AUDIT_ENTITY_TYPE,
                 resourceId = resourceId,
                 outcome = AuditOutcome.SUCCESS,
                 reason = reason,

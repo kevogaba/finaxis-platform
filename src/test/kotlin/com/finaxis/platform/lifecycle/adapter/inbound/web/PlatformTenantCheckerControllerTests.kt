@@ -22,6 +22,7 @@ import com.finaxis.platform.lifecycle.application.ApproveUserCommand
 import com.finaxis.platform.lifecycle.application.BranchDraftResult
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.CreateBranchCommand
+import com.finaxis.platform.lifecycle.application.LifecycleErrorCodes
 import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.ReturnBranchCommand
 import com.finaxis.platform.lifecycle.application.SubmitBranchForApprovalCommand
@@ -410,6 +411,27 @@ class PlatformTenantCheckerControllerTests
                 .post("${ApiPaths.PLATFORM_TENANTS}/$tenantId/branches/$branchId/activate") {
                     with(authentication(platformToken(authorities)))
                 }.andExpect { status { isConflict() } }
+        }
+
+        @Test
+        fun `platform activation of a branch the caller amended is a coded 403 problem`() {
+            doThrow(
+                ForbiddenOperationException(
+                    LifecycleErrorCodes.APPROVER_IS_BRANCH_MODIFIER,
+                    LifecycleErrorCodes.APPROVER_IS_BRANCH_MODIFIER_DETAIL,
+                ),
+            ).whenever(branchProvisioningService).activate(any())
+
+            mockMvc
+                .post("${ApiPaths.PLATFORM_TENANTS}/$tenantId/branches/$branchId/activate") {
+                    with(authentication(platformToken(setOf("branch.approve"))))
+                }.andExpect {
+                    status { isForbidden() }
+                    jsonPath("$.code") { value("lifecycle.approver_is_branch_modifier") }
+                    jsonPath("$.detail") {
+                        value("The approver cannot be someone who amended the branch.")
+                    }
+                }
         }
 
         @Test

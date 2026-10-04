@@ -1507,6 +1507,12 @@ private class UserProvisioningFake :
         branchId: UUID,
     ): UUID? = null
 
+    override fun hasAmended(
+        organisationId: UUID,
+        branchId: UUID,
+        actorId: UUID,
+    ): Boolean = false
+
     override fun updateBranch(command: UpdateBranchCommand) = false
 
     override fun claimOpenParent(

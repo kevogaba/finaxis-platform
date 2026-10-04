@@ -238,15 +238,20 @@ tenant's own `GET /tenant`, as an always-present nullable field.
 Approvals are maker-checker: the actor that created a thing cannot approve it, whatever its
 permissions. `UserProvisioningService.approveUser` refuses the actor that invited the membership
 **and the invited user themselves** (the checker is neither the maker nor the beneficiary), and
-`BranchProvisioningService.activate` refuses the actor that created the branch. Both compare
-user ids, so switching organisation context does not get round them.
+`BranchProvisioningService.activate` refuses the actor that created the branch and the actor who
+**amended** it (anyone with a successful `branch.update` audit event on it, 403
+`lifecycle.approver_is_branch_modifier`), because a returned draft is amendable by anyone holding
+`branch.update` and one person must not amend, resubmit and approve another's draft. The checker who
+merely returned a draft is not an amender and may approve its resubmission. An amender whose edit
+was later overwritten is still refused, so a tiny tenant may need a third person or the platform
+checker. Both compare user ids, so switching organisation context does not get round them.
 
-A freshly approved tenant has one user, the bootstrap `TENANT_ADMIN`, who is the maker of
-everything it creates and so cannot finish onboarding a second person or a first branch. The
-resolution is [ADR 0028](../adr/0028-platform-checker-for-first-tenant-approvals.md): a
-**platform-context** actor may be the audited checker of a tenant's pending membership or branch.
-The checker is neither the maker nor the beneficiary: the platform actor cannot approve what it
-created, a membership of its own account, or a branch it submitted itself. The tenant's own rule is
+A freshly approved tenant has one user, the bootstrap `TENANT_ADMIN`, who is the maker of everything
+it creates and so cannot finish onboarding a second person or a first branch. The resolution is
+[ADR 0028](../adr/0028-platform-checker-for-first-tenant-approvals.md): a **platform-context** actor
+may be the audited checker of a tenant's pending membership or branch. The checker is neither the
+maker nor the beneficiary: the platform actor cannot approve what it created, a membership of its
+own account, a branch it submitted itself, or a branch it amended. The tenant's own rule is
 unchanged, and the permission is checked in the **platform organisation**, never in the tenant, so
 no tenant membership is needed. Two separate bounds apply (409 `lifecycle.platform_checker_closed`
 otherwise): a pending membership can be checked by the platform only while the tenant has no

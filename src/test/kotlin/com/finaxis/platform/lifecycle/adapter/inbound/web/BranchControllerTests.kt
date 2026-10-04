@@ -30,6 +30,7 @@ import com.finaxis.platform.lifecycle.application.ActingScope
 import com.finaxis.platform.lifecycle.application.ActivateBranchCommand
 import com.finaxis.platform.lifecycle.application.BranchDraftResult
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
+import com.finaxis.platform.lifecycle.application.LifecycleErrorCodes
 import com.finaxis.platform.lifecycle.application.ReactivateBranchCommand
 import com.finaxis.platform.lifecycle.application.ReturnBranchCommand
 import com.finaxis.platform.lifecycle.application.SubmitBranchForApprovalCommand
@@ -42,6 +43,7 @@ import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argThat
 import org.mockito.kotlin.doAnswer
+import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -427,6 +429,31 @@ class BranchControllerTests
                     status { isOk() }
                     jsonPath("$.id") { value(branchId.toString()) }
                     jsonPath("$.status") { value("ACTIVE") }
+                }
+        }
+
+        @Test
+        fun `activating a branch the caller amended is a 403 problem with its own code`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            doThrow(
+                ForbiddenOperationException(
+                    LifecycleErrorCodes.APPROVER_IS_BRANCH_MODIFIER,
+                    LifecycleErrorCodes.APPROVER_IS_BRANCH_MODIFIER_DETAIL,
+                ),
+            ).whenever(branchProvisioningService).activate(any())
+
+            mockMvc
+                .post("${ApiPaths.BRANCHES}/$branchId/activate") {
+                    contentType = MediaType.APPLICATION_JSON
+                    content = "{}"
+                    with(authentication(tenantToken(setOf("branch.approve"), tenantId, branchId)))
+                }.andExpect {
+                    status { isForbidden() }
+                    jsonPath("$.code") { value("lifecycle.approver_is_branch_modifier") }
+                    jsonPath("$.detail") {
+                        value("The approver cannot be someone who amended the branch.")
+                    }
                 }
         }
 

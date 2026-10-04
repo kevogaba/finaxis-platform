@@ -10,6 +10,11 @@ Amended by #208 (`V21__branch_approve_permission.sql`): the permission that appr
 branch is `branch.approve`; `branch.activate` is deprecated and no longer checked. This ADR's
 branch rules (the window, the creator and submitter rules) are unchanged.
 
+Amended by the branch amender rule (ADR 0028, decision 5): the approver of a branch is also never
+anyone who amended it (has a successful `branch.update` on it), on either route, because a
+returned draft is amendable by anyone holding `branch.update`. Returning, amending and
+resubmitting are otherwise as written below.
+
 Resolves GitHub issue #178, the design gate of the approval-model gap #155, and fixes the scope of
 its sub-issues #179, #180 and #181. Closes #182 as not planned. Builds on
 [ADR 0002](0002-fsm-transition-infrastructure.md) and
@@ -254,7 +259,10 @@ since #208) in 3b are unchanged.
 - **Resubmission.** A returned branch is `DRAFT`, and `SUBMIT` is unchanged, so the same route
   resubmits it. `submittedBy` resolves the latest `SUBMIT` row, so the submitter of the new
   request is whoever resubmits, and a branch the creator drafted still cannot be activated by the
-  creator, however many times it loops.
+  creator, however many times it loops. Anyone who amended the draft (has a successful
+  `branch.update` on it, however many amends followed) is barred from approving it too, on both
+  routes, with `403` `lifecycle.approver_is_branch_modifier`; the checker who returned it amended
+  nothing and may approve the resubmission.
 - **Platform checker (ADR 0028).** A platform actor reaches the transition through the platform
   route with the same `ActingScope.PLATFORM` flag as `activate`, and there is one rule for the
   window: **returning as a checker is a checker step and is bounded exactly like activating**.
