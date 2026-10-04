@@ -180,6 +180,8 @@ data class PermissionJdbcEntity(
     val riskLevel: String,
     val systemPermission: Boolean = true,
     val status: String,
+    val kind: String,
+    val grantScope: String,
     @CreatedDate override val createdAt: Instant? = null,
     @CreatedBy override val createdBy: UUID? = null,
     @LastModifiedDate override val updatedAt: Instant? = null,

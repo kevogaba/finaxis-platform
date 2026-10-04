@@ -23,6 +23,7 @@ fourteen migrations were collapsed and why that reset was safe.
 | `V18__branch_opened_closed_on_backfill.sql` | Data-only, best-effort backfill of `branch.opened_on` / `closed_on` for branches that predate the release that stamps them on transition (#165): where still `NULL`, the date of the earliest `branch_transition_log` row entering `ACTIVE` / `CLOSED` in the organisation's timezone (UTC for a zone not in the IANA list (this includes offset ids such as `+03:00`, `UTC+03:00` or `GMT+3`, which are dated in UTC and can be a day off)). The dates are approximate, branches with no matching log row stay `NULL`, `closed_on` is clamped up to `opened_on` (and a derived `opened_on` down to a stored `closed_on`) to satisfy `chk_branch_dates`, and no other column is touched. Idempotent. `V14`–`V17` are described in `CLAUDE.md` |
 | `V19__branch_update_permission.sql` | Reference data only (no DDL), #203: seeds the `branch.update` permission (`branch` module, `HIGH`, id `40000000-…-000000000064`) that now gates `PATCH /api/v1/branches/{id}` in place of `branch.create`. Granted to `PLATFORM_SUPER_ADMIN`, and **copied to every role and every direct membership override (same `ALLOW`/`DENY` effect) that holds `branch.create` at migration time**, so nobody who could `PATCH` loses the ability; a role without `branch.create` receives nothing. To take `PATCH` away from a role, revoke `branch.update`. Idempotent (`ON CONFLICT DO NOTHING`), with pre- and post-condition checks. See [authorization model](../security/authorization-model.md#branch-update) |
 | `V20__platform_organisation_stays_active.sql` | One `CHECK`, no data, #205: `chk_organisation_platform_always_active` on `organisation` (`id <> '00000000-…-000000000000' OR status = 'ACTIVE'`) so the reserved `PLATFORM` organisation can never leave `ACTIVE`. Constrains that one row only; asserts in-file that it exists and is `ACTIVE`; fails an offending `UPDATE` with `check_violation` (23514). A CHECK, not a trigger ([ADR 0024](../adr/0024-journal-line-append-guard-and-trigger-policy.md) does not apply); `DELETE` is not covered by it and is refused by the foreign keys instead. See [authorization model](../security/authorization-model.md#the-platform-organisation-is-never-a-tenant) |
+| `V22__permission_catalogue_metadata.sql` | Catalogue metadata, no grant changes (ADR 0030): `permission.kind` (`VIEW` / `MUTATION` / `CONTEXT`), `permission.grant_scope` (`TENANT` / `PLATFORM`), both `NOT NULL` once the 81 live codes are classified (so a later permission migration must insert them), and the join table `permission_view_requirement` (`permission_id` and `required_view_permission_id`, both `permission (id)`, unique pair, never equal; 61 rows because `user.invite` needs two views). No role or override is touched. Re-runnable with in-file asserts. See [authorization model](../security/authorization-model.md#catalogue-metadata) |
 
 `V1`–`V3` will never be edited again. Every future change is a forward-only `V4+` migration.
 
@@ -47,6 +48,7 @@ erDiagram
     ORGANISATION ||--o{ ROLE : owns
     ROLE ||--o{ ROLE_PERMISSION : grants
     PERMISSION ||--o{ ROLE_PERMISSION : is_granted
+    PERMISSION ||--o{ PERMISSION_VIEW_REQUIREMENT : requires_view
     USER_ORGANISATION_MEMBERSHIP ||--o{ USER_ROLE_ASSIGNMENT : receives
     ROLE ||--o{ USER_ROLE_ASSIGNMENT : assigns
     ORGANISATION ||--o{ ORGANISATION_SETTING : configures
@@ -112,7 +114,8 @@ key. That write cost is deliberate. See
 | `keycloak_identity_link` | Binds a user to a Keycloak subject. Stores no secret. Keycloak authenticates; the application authorizes. |
 | `user_organisation_membership` | The user's access boundary for one organisation, plus invite-pending flags and optional primary branch. No membership means no access. |
 | `user_branch_assignment` | Active operational branch scope. A partial unique index permits historical revoked rows while blocking duplicate active grants. |
-| `permission` | Global, platform-defined permission catalogue with `risk_level` (`LOW`…`CRITICAL`). Codes, not role names, drive runtime authorization. |
+| `permission` | Global, platform-defined permission catalogue with `risk_level` (`LOW`…`CRITICAL`). Codes, not role names, drive runtime authorization. Since `V22` each code also carries a `kind` (`VIEW`/`MUTATION`/`CONTEXT`) and a `grant_scope` (`TENANT`/`PLATFORM`), both `NOT NULL`. |
+| `permission_view_requirement` | Pairs a `MUTATION` permission with each `VIEW` permission it requires (ADR 0030), so a role or caller holding the mutation must also hold the views. A join table because `user.invite` needs two. Reference data, changed only by a forward migration; that the ends are a mutation and a view is asserted by the migration and `PermissionCatalogueMetadataTests`, not by a constraint (no trigger, ADR 0024). |
 | `role` | Organisation-owned. The same `role_code` may exist independently per organisation. |
 | `role_permission` | Grants a catalogue permission to an organisation's role. |
 | `membership_permission` | Direct `ALLOW`/`DENY` override on one membership, layered over role-derived grants. `DENY` wins. |

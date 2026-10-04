@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.adapter.inbound.web.dto
 
 import com.finaxis.platform.lifecycle.application.RoleAssignmentScopeType
+import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.NotNull
 import jakarta.validation.constraints.Pattern
@@ -101,6 +102,26 @@ data class PermissionSummaryResponse(
     val moduleCode: String,
     val riskLevel: String,
     val status: String,
+    @field:Schema(
+        description =
+            "VIEW reads a resource, MUTATION changes state, CONTEXT gates the " +
+                "caller's own session or a platform-only setting.",
+        allowableValues = ["VIEW", "MUTATION", "CONTEXT"],
+    )
+    val kind: String,
+    @field:Schema(
+        description =
+            "TENANT: evaluated in a tenant organisation. PLATFORM: only ever " +
+                "evaluated in the platform organisation.",
+        allowableValues = ["TENANT", "PLATFORM"],
+    )
+    val grantScope: String,
+    @field:Schema(
+        description =
+            "Codes of the view permissions a MUTATION requires, sorted. A role or " +
+                "caller holding the mutation must also hold these. Empty for VIEW and CONTEXT.",
+    )
+    val requiredViewPermissions: List<String>,
 )
 
 /** Detailed response for an immutable permission catalogue entry. */
@@ -112,6 +133,26 @@ data class PermissionDetailResponse(
     val description: String?,
     val riskLevel: String,
     val status: String,
+    @field:Schema(
+        description =
+            "VIEW reads a resource, MUTATION changes state, CONTEXT gates the " +
+                "caller's own session or a platform-only setting.",
+        allowableValues = ["VIEW", "MUTATION", "CONTEXT"],
+    )
+    val kind: String,
+    @field:Schema(
+        description =
+            "TENANT: evaluated in a tenant organisation. PLATFORM: only ever " +
+                "evaluated in the platform organisation.",
+        allowableValues = ["TENANT", "PLATFORM"],
+    )
+    val grantScope: String,
+    @field:Schema(
+        description =
+            "Codes of the view permissions a MUTATION requires, sorted. A role or " +
+                "caller holding the mutation must also hold these. Empty for VIEW and CONTEXT.",
+    )
+    val requiredViewPermissions: List<String>,
     val createdAt: Instant,
     val updatedAt: Instant,
 )

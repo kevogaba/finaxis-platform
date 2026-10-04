@@ -54,7 +54,13 @@ class EffectivePermissionCacheStartupClearerIntegrationTests(
 
                 // Flyway already ran V19; re-running it (idempotent) copies the override that
                 // this membership gained after it, which is what a real migration does to rows
-                // that were cached before it.
+                // that were cached before it. V22 made permission.kind and grant_scope NOT NULL
+                // and V19's frozen insert predates them, so they are relaxed for the re-run; the
+                // transaction is rolled back below, which restores them.
+                jdbcTemplate.execute(
+                    "ALTER TABLE permission ALTER COLUMN kind DROP NOT NULL, " +
+                        "ALTER COLUMN grant_scope DROP NOT NULL",
+                )
                 jdbcTemplate.execute(
                     ClassPathResource("db/migration/V19__branch_update_permission.sql")
                         .inputStream

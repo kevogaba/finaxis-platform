@@ -1299,10 +1299,37 @@ Permission response:
   "description": "View active tenant metadata.",
   "risk_level": "LOW",
   "status": "ACTIVE",
+  "kind": "VIEW",
+  "grant_scope": "TENANT",
+  "required_view_permissions": [],
   "created_at": "2026-07-25T08:00:00Z",
   "updated_at": "2026-07-25T08:00:00Z"
 }
 ```
+
+Catalogue metadata (ADR 0030, `V22`), on both the list items and the detail, with the same
+fields:
+
+- `kind`: `VIEW` (a read), `MUTATION` (changes state) or `CONTEXT` (gates the caller's own session
+  context or a platform-only setting; requires nothing).
+- `grant_scope`: `TENANT` (evaluated in a tenant organisation) or `PLATFORM` (only ever evaluated
+  in the PLATFORM organisation, so a tenant role holding it gains nothing).
+- `required_view_permissions`: the codes of the view permissions a `MUTATION` implies, sorted
+  (`user.invite` has two: `membership.view` and `user.view`). Always present; empty for a `VIEW`
+  or `CONTEXT` code.
+
+```json
+{
+  "permission_code": "user.invite",
+  "kind": "MUTATION",
+  "grant_scope": "TENANT",
+  "required_view_permissions": ["membership.view", "user.view"]
+}
+```
+
+Paging, sorting and the filters are unchanged: the pairings are read for the page's rows in one
+extra bounded lookup. See
+[the authorization model](../security/authorization-model.md#catalogue-metadata).
 
 ### Audit Events
 

@@ -122,7 +122,13 @@ data class RoleAssignmentDetail(
     val updatedAt: Instant,
 )
 
-/** Summary projection of a system permission. */
+/**
+ * Summary projection of a system permission.
+ *
+ * [kind] is `VIEW`, `MUTATION` or `CONTEXT`, [grantScope] is `TENANT` or `PLATFORM`, and
+ * [requiredViewPermissions] holds the codes of the views a mutation implies, sorted (empty for a
+ * view or a context code). All three are catalogue metadata (ADR 0030).
+ */
 data class PermissionSummary(
     val id: UUID,
     val permissionCode: String,
@@ -130,9 +136,12 @@ data class PermissionSummary(
     val moduleCode: String,
     val riskLevel: String,
     val status: String,
+    val kind: String,
+    val grantScope: String,
+    val requiredViewPermissions: List<String>,
 )
 
-/** Detailed projection of a system permission. */
+/** Detailed projection of a system permission; see [PermissionSummary] for the metadata. */
 data class PermissionDetail(
     val id: UUID,
     val permissionCode: String,
@@ -141,6 +150,9 @@ data class PermissionDetail(
     val description: String?,
     val riskLevel: String,
     val status: String,
+    val kind: String,
+    val grantScope: String,
+    val requiredViewPermissions: List<String>,
     val createdAt: Instant,
     val updatedAt: Instant,
 )

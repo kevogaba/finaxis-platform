@@ -8,9 +8,6 @@ import com.finaxis.platform.common.audit.AuditSeverity
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.persistence.SystemActor
-import com.finaxis.platform.lifecycle.PermissionGuard
-import com.finaxis.platform.lifecycle.PlatformCaller
-import com.finaxis.platform.lifecycle.TenantCaller
 import java.util.UUID
 
 /**
@@ -58,26 +55,4 @@ internal fun AuditService.requireNotPlatformOrganisation(
         LifecycleErrorCodes.PLATFORM_ORGANISATION_PROTECTED,
         LifecycleErrorCodes.PLATFORM_ORGANISATION_PROTECTED_DETAIL,
     )
-}
-
-/**
- * Checks the permission a retry of the initial-administrator bootstrap needs: the tenant
- * permission for a tenant caller, the platform permission for a platform caller.
- */
-internal fun PermissionGuard.requireRetryPermission(
-    command: RetryInitialAdministratorBootstrapCommand,
-) {
-    when (val caller = command.caller) {
-        is TenantCaller -> {
-            requireTenantPermission(
-                caller.actorId,
-                command.organisationId,
-                "tenant.bootstrap_retry",
-            )
-        }
-
-        is PlatformCaller -> {
-            requirePlatformPermission(caller.actorId, "tenant.bootstrap_retry")
-        }
-    }
 }
