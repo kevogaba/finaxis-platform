@@ -140,10 +140,7 @@ class OrganisationProvisioningService(
             adminBootstrapStore
                 .find(command.organisationId)
                 .orResourceNotFound()
-        errorUnless(command.actorId != record.requestedBy, SafeError.FORBIDDEN)
-        if (record.submittedBy != null) {
-            errorUnless(command.actorId != record.submittedBy, SafeError.FORBIDDEN)
-        }
+        requireNotMaker(record, command.actorId)
         errorUnless(command.actorId != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
         // The bootstrap approves its administrator's membership in the approver's name, and a user
         // may never approve their own membership, so refuse now rather than fail it later.
@@ -203,6 +200,38 @@ class OrganisationProvisioningService(
                 TransitionCommand(reason = command.reason),
             ),
         )
+    }
+
+    /**
+     * Returns a pending organisation to draft with a reason (ADR 0029, 3c). Checker only: the
+     * actor needs `tenant.reject` and, as for [approveProvisioning], may be neither the requester
+     * nor the submitter, so a maker cannot pull their own submission back through this route.
+     *
+     * Permission first, so an unauthorised caller learns nothing; then the bootstrap record, whose
+     * absence (an unknown tenant, the platform organisation) is a 404; then the maker-checker
+     * rule; then the FSM's own state conflict. The transition runs before the record is reset, so
+     * a tenant that is not pending is refused without touching the record. The record then
+     * becomes a draft again, exactly as [rejectProvisioning] leaves it, and the amend and
+     * resubmit that follow re-establish what depends on it.
+     */
+    @Transactional
+    fun returnForChanges(command: ReturnOrganisationForChangesCommand) {
+        permissionGuard.requirePlatformPermission(command.actorId, "tenant.reject")
+        val record =
+            adminBootstrapStore
+                .find(command.organisationId)
+                .orResourceNotFound()
+        requireNotMaker(record, command.actorId)
+        errorUnless(!SystemActor.isSystemActor(command.actorId), SafeError.INVALID_OPERATION)
+
+        lifecycleService.transition(
+            OrganisationTransitionCommand(
+                command.organisationId,
+                OrganisationLifecycleTransition.RETURN_FOR_CHANGES,
+                TransitionCommand(reason = command.reason),
+            ),
+        )
+        adminBootstrapStore.reject(command.organisationId)
     }
 
     /** Retries a failed initial administrator bootstrap process. */
@@ -436,6 +465,22 @@ class OrganisationProvisioningService(
                     sensitive = false,
                 ),
             )
+
+        /**
+         * The tenant maker-checker rule, shared by every checker decision on a pending tenant
+         * (approve and return): the actor may be neither the requester nor the submitter of the
+         * current submission. One place, so a dedicated error code (#156) changes it once.
+         */
+        fun requireNotMaker(
+            record: InitialAdministratorBootstrapRecord,
+            actorId: UUID,
+        ) {
+            errorUnless(actorId != record.requestedBy, SafeError.FORBIDDEN)
+            if (record.submittedBy != null) {
+                errorUnless(actorId != record.submittedBy, SafeError.FORBIDDEN)
+            }
+        }
+
         const val USER = "USER"
         const val SYSTEM = "SYSTEM"
         const val ORGANISATION = "ORGANISATION"

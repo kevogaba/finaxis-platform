@@ -13,6 +13,7 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateTenantDraftR
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.DeprovisionTenantRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReactivateTenantRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.RejectTenantRequest
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReturnTenantRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SuspendTenantRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.TenantDetailResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.TenantDraftResultResponse
@@ -26,6 +27,7 @@ import com.finaxis.platform.lifecycle.application.OrganisationProvisioningServic
 import com.finaxis.platform.lifecycle.application.ReactivateOrganisationCommand
 import com.finaxis.platform.lifecycle.application.RejectOrganisationProvisioningCommand
 import com.finaxis.platform.lifecycle.application.RetryInitialAdministratorBootstrapCommand
+import com.finaxis.platform.lifecycle.application.ReturnOrganisationForChangesCommand
 import com.finaxis.platform.lifecycle.application.SubmitOrganisationForApprovalCommand
 import com.finaxis.platform.lifecycle.application.SuspendOrganisationCommand
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
@@ -722,6 +724,124 @@ class PlatformTenantController(
     }
 
     /**
+     * Returns a pending tenant approval request to draft for changes.
+     */
+    @PostMapping("/{tenant_id}/return")
+    @IdempotentMutation(scope = IdempotencyScopeKind.PLATFORM)
+    @PreAuthorize("hasAuthority('tenant.reject')")
+    @Operation(
+        summary = "Return tenant for changes",
+        description =
+            "Returns a pending tenant approval request to draft with a required reason, so " +
+                "its maker can amend the draft and submit it again. Checker only: the requester " +
+                "and the submitter cannot return their own tenant. A rejected tenant stays " +
+                "rejected. The reason is the tenant's `status_reason` until its next transition.",
+        parameters = [
+            Parameter(
+                name = "Idempotency-Key",
+                description = "Optional UUID; the server generates one when omitted.",
+                `in` = ParameterIn.HEADER,
+                schema = Schema(type = "string", format = "uuid"),
+            ),
+        ],
+    )
+    @ApiResponses(
+        ApiResponse(
+            responseCode = "200",
+            description = "Tenant returned to draft",
+            content = [Content(schema = Schema(implementation = TenantDetailResponse::class))],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description =
+                "Missing body or reason (`invalid_json`), or a reason that is blank or not " +
+                    "3 to 500 characters (`validation_failed`)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description =
+                "Forbidden: `tenant.reject` is missing, or the caller requested or submitted " +
+                    "the tenant",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description = "Tenant not found (the platform organisation is never a tenant)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "422",
+            description =
+                "Caller is the system actor (`invalid_operation`); effectively unreachable, " +
+                    "as the permission check refuses a sentinel actor first",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "409",
+            description = "Tenant is not pending approval",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+    )
+    fun returnForChanges(
+        @PathVariable("tenant_id") tenantId: UUID,
+        @RequestBody @Valid request: ReturnTenantRequest,
+    ): TenantDetailResponse {
+        val caller = CallerContextResolver.getPlatformCaller()
+        // The permission is checked by the service. The response is read back without
+        // `tenant.view`: a checker holding only `tenant.reject` must not see its own committed
+        // return answered with a 403.
+        organisationProvisioningService.returnForChanges(
+            ReturnOrganisationForChangesCommand(
+                organisationId = tenantId,
+                reason = request.reason,
+                actorId = caller.actorId,
+            ),
+        )
+        val updated = foundationQueryService.getTenantAfterAuthorizedMutation(tenantId)
+        val bootstrapRecord = adminBootstrapStore.find(tenantId)
+        return updated.toResponse(
+            bootstrapStatus = bootstrapRecord?.status?.name,
+            bootstrapFailureCode = bootstrapRecord?.lastFailureCode,
+        )
+    }
+
+    /**
      * Suspends an active tenant organisation.
      */
     @PostMapping("/{tenant_id}/suspend")
@@ -1126,6 +1246,7 @@ class PlatformTenantController(
         baseCurrencyCode = baseCurrencyCode,
         timezone = timezone,
         status = status,
+        statusReason = statusReason,
         bootstrapStatus = bootstrapStatus,
         bootstrapFailureCode = bootstrapFailureCode,
         createdAt = createdAt,

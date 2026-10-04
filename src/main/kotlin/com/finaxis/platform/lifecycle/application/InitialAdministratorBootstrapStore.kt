@@ -32,7 +32,10 @@ interface InitialAdministratorBootstrapStore {
         actorId: UUID,
     )
 
-    /** Rejects the approval request, returning the status to DRAFT. */
+    /**
+     * Returns the record to a draft after a reject or a return for changes: status DRAFT,
+     * submitter and approver cleared, the requester and the administrator block untouched.
+     */
     fun reject(organisationId: UUID)
 
     /**

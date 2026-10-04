@@ -13,6 +13,7 @@ stateDiagram-v2
     PENDING_APPROVAL --> PROVISIONING: START_PROVISIONING
     PROVISIONING --> ACTIVE: ACTIVATE
     PENDING_APPROVAL --> REJECTED: REJECT
+    PENDING_APPROVAL --> DRAFT: RETURN_FOR_CHANGES
     ACTIVE --> SUSPENDED: SUSPEND
     SUSPENDED --> ACTIVE: REACTIVATE
     ACTIVE --> DEPROVISIONING: START_DEPROVISIONING
@@ -135,12 +136,41 @@ each resubmission with no exit event in between; externalizing a `*.returned-for
 a follow-up of its own if a consumer needs it
 ([transactional outbox](transactional-outbox-amqp.md)).
 
-## Planned transitions (ADR 0029)
+## Return a pending tenant to draft (ADR 0029, #181)
 
-**Accepted but not yet implemented.** The organisation graph above does not contain this edge; it
-is recorded here so the plan is findable, and this section must be rewritten when it lands.
+The organisation graph has one edge out of `PENDING_APPROVAL` back to `DRAFT`,
+`OrganisationLifecycleTransition.RETURN_FOR_CHANGES`, with a required reason (3 to 500 characters)
+persisted as `status_reason`, in the transition log and on the `organisation.return_for_changes`
+audit row. `REJECT` is unchanged and stays terminal; recovering a rejected tenant is #172, not this
+edge. The edge has no guard of its own and uses `internalEventFactories()`, so it publishes no
+externalized event: consumers of `organisation.approval-requested` see a repeat on each
+resubmission with no exit event in between
+([transactional outbox](transactional-outbox-amqp.md)).
 
-- Organisation: `PENDING_APPROVAL --> DRAFT: RETURN_FOR_CHANGES` (reason required; checker only;
-  internal event only). **Accepted, planned** (#181). `REJECT` stays terminal.
+`OrganisationProvisioningService.returnForChanges` is **checker only**, behind `tenant.reject`: the
+actor may be neither the requester nor the submitter (`requested_by` and `submitted_by` on the
+bootstrap record, the rule `approveProvisioning` applies) and may not be the system actor, so a
+maker cannot pull their own submission back through it. The order is permission (so a caller
+without it learns nothing), the bootstrap record (404 for an unknown tenant and for the platform
+organisation, which has none), the maker-checker rule, then the FSM's own state conflict (409). The
+transition runs first and the record is reset after, so a tenant that is not pending is refused
+without touching the record.
+
+`organisation_initial_administrator_bootstrap` is reset exactly as `REJECT` already resets it:
+status back to `DRAFT`, `submitted_by`/`submitted_at` and `approved_by`/`approved_at` cleared,
+`requested_by` and the administrator block untouched, in the same transaction as the transition.
+The invariant is that the record describes the draft as currently amended and its submitter is the
+actor of the current submission. A returned tenant is a `DRAFT`: `PATCH /platform/tenants/{id}`
+amends it (replacing the administrator block), `POST .../submit` resubmits it (setting the new
+submitter), and the maker-checker rule and the approver-is-the-initial-administrator refusal
+(ADR 0028) are read from the record at approval, never cached, so they hold across the loop. The
+returning checker, like any amender, is not a maker and may approve a later resubmission.
+
+The reason is the tenant's `status_reason` until its next transition (an amend keeps it, the next
+`SUBMIT` replaces it); the history stays in the transition log and the audit trail. The platform
+tenant detail and the tenant's own `GET /tenant` expose it as an always-present, nullable
+`status_reason`. See
+[foundation API](../api/foundation-api.md#return-tenant-for-changes) and
+[authorization model](../security/authorization-model.md#tenant-return-for-changes).
 
 See [ADR 0029](../adr/0029-approval-model-per-resource-extensions.md).

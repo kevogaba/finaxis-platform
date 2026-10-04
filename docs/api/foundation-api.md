@@ -585,13 +585,15 @@ Base path: `/api/v1/platform/tenants`. List filters: `q`, `status`, `country`,
 | POST   | `/{tenant_id}/submit`          | Submit tenant draft | `tenant.submit_for_approval` | mutation      |
 | POST   | `/{tenant_id}/approve`         | Approve tenant      | `tenant.approve`             | mutation, 202 |
 | POST   | `/{tenant_id}/reject`          | Reject tenant draft | `tenant.reject`              | mutation      |
+| POST   | `/{tenant_id}/return`          | Return to draft     | `tenant.reject`              | mutation      |
 | POST   | `/{tenant_id}/suspend`         | Suspend tenant      | `tenant.suspend`             | mutation      |
 | POST   | `/{tenant_id}/reactivate`      | Reactivate tenant   | `tenant.reactivate`          | mutation      |
 | POST   | `/{tenant_id}/deprovision`     | Deprovision tenant  | `tenant.deprovision`         | mutation      |
 | POST   | `/{tenant_id}/bootstrap/retry` | Retry bootstrap     | `tenant.bootstrap_retry`     | mutation      |
 
 `POST /{tenant_id}/approve` takes an optional decision remark, see
-[Decision remarks](#decision-remarks).
+[Decision remarks](#decision-remarks). `POST /{tenant_id}/return` takes a required reason, see
+[Return tenant for changes](#return-tenant-for-changes).
 
 `base_currency_code` is the tenant's functional currency for every future journal line, so create
 and amend validate it against the ledger's own currency authority and not only against its shape:
@@ -656,12 +658,73 @@ Tenant detail response:
   "base_currency_code": "KES",
   "timezone": "Africa/Nairobi",
   "status": "ACTIVE",
+  "status_reason": "KYC pack reviewed.",
   "bootstrap_status": "COMPLETED",
   "bootstrap_failure_code": null,
   "created_at": "2026-07-25T08:00:00Z",
   "updated_at": "2026-07-25T08:20:00Z"
 }
 ```
+
+`status_reason` is the reason recorded by the tenant's **last transition**, so a maker can read why
+a tenant was returned to draft. It is **always present** and nullable: `null` when the last
+transition recorded none, never omitted. An amend keeps it and the next transition (the
+resubmission) replaces it, while the transition log and the audit trail keep the history. Every
+route that answers a `TenantDetailResponse` carries it: the platform tenant detail, the tenant
+detail that each platform mutation other than create returns, and the tenant's own
+`GET /api/v1/tenant`, so the maker of a returned tenant and the tenant itself read the same value.
+Its OpenAPI schema is a required, nullable string.
+
+#### Return tenant for changes
+
+`POST /api/v1/platform/tenants/{tenant_id}/return` sends a tenant that is `PENDING_APPROVAL` back
+to `DRAFT` ([ADR 0029](../adr/0029-approval-model-per-resource-extensions.md), issue #181) and
+answers `200` with the tenant detail (`status` `DRAFT`, `status_reason` the reason). The body is
+required:
+
+```json
+{ "reason": "Registration number has a typo." }
+```
+
+`reason` is 3 to 500 characters and not blank. A missing or unreadable body, or an absent or `null`
+`reason`, is `400 invalid_json`; a blank or out-of-range `reason` is `400 validation_failed`. There
+is no `422`. Validation runs when the body is bound, before any permission or existence check.
+
+- **Permission.** `tenant.reject`, the existing permission for the checker's non-approving
+  decision, checked in the platform organisation by the application service. No new code.
+- **Checker only.** The caller must be neither the tenant's requester nor the actor of its current
+  submission (the rule `approve` applies, `403 forbidden`), and not the system actor. A maker
+  cannot withdraw a tenant through this route: a tenant has no maker-side withdraw, a maker amends
+  a `DRAFT` only. A maker holding `tenant.reject` can still terminally reject their own submission,
+  as before.
+- **Check order.** The permission (`403`, before any existence signal); the tenant (`404` for an
+  unknown id and for the platform organisation); the maker-checker rule (`403`); the state (`409`).
+- **State.** Only `PENDING_APPROVAL` can be returned; any other state, including `REJECTED`, answers
+  `409 conflict` and changes nothing. `reject` is unchanged and stays terminal (recovering a
+  rejected tenant is a separate piece of work).
+- **Bootstrap record.** The initial-administrator record becomes a draft again, as `reject` leaves
+  it: status `DRAFT`, `submitted_by`/`submitted_at` and `approved_by`/`approved_at` cleared,
+  `requested_by` and the administrator block untouched, in the same transaction.
+- **Amend and resubmit.** A returned tenant is a `DRAFT`: `PATCH /{tenant_id}` amends it, which
+  replaces the administrator block, and `POST /{tenant_id}/submit` resubmits it; `submit` is
+  unchanged, so the submitter of the new request is whoever resubmits. The maker-checker rule and
+  the `lifecycle.approver_is_initial_administrator` refusal are read from the record at approval,
+  so they hold across the loop: the requester and the new submitter cannot approve, and if the
+  amended administrator is the account of whoever approves, that approval is refused. The checker
+  who returned a tenant, like any amender, is not a maker and may approve a later resubmission; so
+  may the earlier submitter, who is not the submitter of the current request (an accepted
+  consequence of reading the rule from the record at approval). A returned tenant cannot be
+  approved until it is resubmitted (`409`).
+- **System actor.** The system actor is refused with `422 invalid_operation`; this is effectively
+  unreachable, because the permission check runs first and a sentinel actor holds no platform grant.
+- **Events.** None. The transition publishes an internal event only; consumers of
+  `finaxis.lifecycle.organisation.approval-requested` see a repeat per resubmission with no event
+  for the return in between (see
+  [transactional outbox](../architecture/transactional-outbox-amqp.md)).
+- **Audit.** The FSM writes `organisation.return_for_changes` with the reason.
+- **Response and idempotency.** The detail is read back without `tenant.view`, so a role holding
+  only `tenant.reject` gets the result of its own return. The route accepts an optional
+  `Idempotency-Key`; a replay returns the stored response and returns the tenant once.
 
 ### Platform Tenant Branches
 
@@ -779,7 +842,8 @@ Base path: `/api/v1/tenant`.
 | GET    | `/`  | Get current tenant from active context | `tenant.view` | item  |
 
 The response uses `TenantDetailResponse`, including `bootstrap_status` and
-`bootstrap_failure_code`.
+`bootstrap_failure_code`, and the always-present, nullable `status_reason` of the tenant's last
+transition (see [Platform Tenant Administration](#platform-tenant-administration)).
 
 ### Tenant Users
 
@@ -899,8 +963,9 @@ the membership itself:
 | Membership activate, **202** (identity provisioning queued) | none; the membership stays `PENDING_APPROVAL` | `user.approve` only; the later job-driven `membership.activate` row carries no reason |
 | Tenant approve, **202**                                  | the organisation and its head office | the `START_PROVISIONING`, head office and organisation `ACTIVATE` transition rows |
 
-No status reason is added to a response body: the membership and tenant details do not expose one
-(the tenant's belongs to the tenant detail work), and branch details already do.
+The membership detail does not expose a status reason. The platform tenant detail does, as
+`status_reason` (see [Platform Tenant Administration](#platform-tenant-administration)), and so
+does the branch detail.
 
 ### Branch Assignments
 
@@ -1179,7 +1244,10 @@ Tenant onboarding is a platform workflow:
 
 1. A maker creates a draft with `POST /api/v1/platform/tenants`.
 2. The maker submits it with `POST /api/v1/platform/tenants/{tenant_id}/submit`.
-3. A different checker approves or rejects it.
+3. A different checker approves, rejects, or returns it for changes. A returned tenant is a draft
+   again: the maker amends it with `PATCH` and resubmits it, and the checker's reason is readable
+   as `status_reason` on the tenant detail (see
+   [Return tenant for changes](#return-tenant-for-changes)). A rejected tenant stays rejected.
 4. Approval returns 202 and queues asynchronous initial-administrator bootstrap.
 5. Failed bootstrap can be retried with
    `POST /api/v1/platform/tenants/{tenant_id}/bootstrap/retry`.
