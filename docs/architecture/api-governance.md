@@ -20,13 +20,24 @@ Application defaults are configured under `finaxis.pagination`:
 ```yaml
 finaxis:
   pagination:
-    default-page-size: 50
-    max-page-size: 200
+    default-page-size: 25
+    max-page-size: 100
 ```
+
+These are the shipped defaults. `max-page-size` may be lowered but never raised above `100`:
+`PaginationProperties` refuses to start with a larger value.
 
 Listing endpoints should accept `Pageable` and return a bounded page/slice/envelope. Exceptions are
 allowed only for small static reference values, metadata, health, and other explicitly documented
 bounded values. The architecture test fails controller `GET` methods that return raw collections.
+
+Invalid paging or sort input from a client is a 400, never a 500. The pagination interceptor
+rejects a malformed or out-of-range `page` or `size` (any value of a repeated parameter), and the
+query services reject an unknown `sort_by` or a `sort_dir` other than `ASC`/`DESC` through
+`requireValidPage` and `requireValidSort`. Both throw `InvalidPageRequestException`, which
+`ApiExceptionHandler` maps to a `400` `invalid_parameter` problem (with a `sort_by`/`sort_dir`
+violation where applicable). Do not use `require()` on a client-supplied paging, sort or filter
+value: an `IllegalArgumentException` has no mapping and surfaces as `internal_error`.
 
 ## Versioning
 

@@ -105,10 +105,11 @@ Every collection endpoint returns `ApiPage<T>`:
 ```
 
 Collection query parameters always include `page` and `size`. `page` is zero-based and defaults
-to `0`. `size` defaults to `25`; valid values are `1` through `100`. Resource-specific filter,
-search, and sort parameters are listed with each table below. In the OpenAPI document each list
-response is a typed page schema such as `ApiPageRoleSummaryResponse` whose `items` reference the
-item schema.
+to `0`. `size` defaults to `25`; valid values are `1` through the configured
+`finaxis.pagination.max-page-size` (`100` by default, and never above `100`). Resource-specific
+filter, search, and sort parameters are listed with each table below. In the OpenAPI document each
+list response is a typed page schema such as `ApiPageRoleSummaryResponse` whose `items` reference
+the item schema.
 
 `sort_dir` accepts `ASC` or `DESC`, case-insensitively. `sort_by` values are **camelCase**, unlike
 every other wire name, and are published as an enum per endpoint:
@@ -123,6 +124,15 @@ every other wire name, and are published as an enum per endpoint:
 `GET /tenant/memberships` and `GET /tenant/branch-assignments` do not sort: they ignore
 `sort_by` and `sort_dir` like any unknown query parameter, and the OpenAPI document does not
 publish them. Other list endpoints do not accept sort parameters.
+
+**Invalid paging or sort input is a client error, never a 500.** A `page` that is negative or not
+an integer, a `size` outside `1` to `max-page-size` (`100` by default) or not an integer, a
+`sort_by` that is not one of the values published for the endpoint, and a `sort_dir` other than
+`ASC` or `DESC` all answer `400 Bad Request` with the standard problem body and `code`
+`invalid_parameter`. When a `page` or `size` parameter is repeated, any one bad value counts. For
+`sort_by` and `sort_dir` the problem carries one violation whose `field` is the parameter and whose
+`message` names the accepted values without echoing the rejected one; paging problems carry no
+violation. Absent parameters take their defaults, and valid requests are unaffected.
 
 ### Errors
 

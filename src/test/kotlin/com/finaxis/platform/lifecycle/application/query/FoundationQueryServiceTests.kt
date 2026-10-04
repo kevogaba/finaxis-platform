@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.application.query
 
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.web.api.ApiPage
+import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import com.finaxis.platform.common.web.api.apiPageOf
 import com.finaxis.platform.lifecycle.FoundationCaller
 import com.finaxis.platform.lifecycle.PermissionGuard
@@ -66,26 +67,75 @@ class FoundationQueryServiceTests {
     @Test
     fun `searchTenants validates page parameters`() {
         val caller = PlatformCaller(actorId, UUID.randomUUID())
-        assertFailsWith<IllegalArgumentException> {
-            service.searchTenants(TenantFilter(page = -1), caller)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            service.searchTenants(TenantFilter(size = 0), caller)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            service.searchTenants(TenantFilter(size = 101), caller)
-        }
+        assertRejected(null) { service.searchTenants(TenantFilter(page = -1), caller) }
+        assertRejected(null) { service.searchTenants(TenantFilter(size = 0), caller) }
+        assertRejected(null) { service.searchTenants(TenantFilter(size = 101), caller) }
     }
 
     @Test
     fun `searchTenants validates sort fields`() {
         val caller = PlatformCaller(actorId, UUID.randomUUID())
-        assertFailsWith<IllegalArgumentException> {
+        assertRejected("sort_by") {
             service.searchTenants(TenantFilter(sortBy = "invalid"), caller)
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertRejected("sort_dir") {
             service.searchTenants(TenantFilter(sortBy = "displayName", sortDir = "UP"), caller)
         }
+    }
+
+    @Test
+    fun `searchTenants accepts valid paging and sorting unchanged`() {
+        val caller = PlatformCaller(actorId, UUID.randomUUID())
+        val filter = TenantFilter(page = 0, size = 100, sortBy = "displayName", sortDir = "desc")
+        assertEquals(0, service.searchTenants(filter, caller).items.size)
+    }
+
+    @Test
+    fun `searchBranches validates page and sort parameters`() {
+        val caller = TenantCaller(actorId, tenantId)
+        assertRejected(null) { service.searchBranches(tenantId, BranchFilter(page = -1), caller) }
+        assertRejected(null) { service.searchBranches(tenantId, BranchFilter(size = 0), caller) }
+        assertRejected(null) {
+            service.searchBranches(tenantId, BranchFilter(size = 101), caller)
+        }
+        assertRejected("sort_by") {
+            service.searchBranches(tenantId, BranchFilter(sortBy = "bogus"), caller)
+        }
+        assertRejected("sort_dir") {
+            service.searchBranches(
+                tenantId,
+                BranchFilter(sortBy = "branchCode", sortDir = "sideways"),
+                caller,
+            )
+        }
+        assertEquals(
+            0,
+            service
+                .searchBranches(
+                    tenantId,
+                    BranchFilter(size = 1, sortBy = "branchCode", sortDir = "asc"),
+                    caller,
+                ).items.size,
+        )
+    }
+
+    @Test
+    fun `listBusinessDateHistory validates page parameters`() {
+        val caller = TenantCaller(actorId, tenantId)
+        assertRejected(null) {
+            service.listBusinessDateHistory(tenantId, BusinessDateHistoryFilter(page = -1), caller)
+        }
+        assertRejected(null) {
+            service.listBusinessDateHistory(tenantId, BusinessDateHistoryFilter(size = 101), caller)
+        }
+    }
+
+    private fun assertRejected(
+        parameter: String?,
+        block: () -> Unit,
+    ) {
+        val failure = assertFailsWith<InvalidPageRequestException>(block = block)
+        assertEquals(parameter, failure.parameter)
     }
 
     @Test

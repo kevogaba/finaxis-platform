@@ -39,12 +39,14 @@ class PaginationConfiguration {
                 response: HttpServletResponse,
                 handler: Any,
             ): Boolean {
-                request.parameterMap["page"]?.singleOrNull()?.let { page ->
+                // Every value of a repeated parameter must be valid: MVC binds only one of them,
+                // and which one must not decide between a 400 and a 500.
+                request.parameterMap["page"]?.forEach { page ->
                     if (page.toIntOrNull()?.takeIf { it >= 0 } == null) {
                         throw InvalidPageRequestException()
                     }
                 }
-                request.parameterMap["size"]?.singleOrNull()?.let { size ->
+                request.parameterMap["size"]?.forEach { size ->
                     if (size.toIntOrNull()?.takeIf { it in 1..properties.maxPageSize } == null) {
                         throw InvalidPageRequestException()
                     }

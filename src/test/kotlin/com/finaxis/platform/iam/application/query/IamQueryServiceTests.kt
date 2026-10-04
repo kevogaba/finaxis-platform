@@ -2,6 +2,7 @@ package com.finaxis.platform.iam.application.query
 
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.web.api.ApiPage
+import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import com.finaxis.platform.common.web.api.apiPageOf
 import com.finaxis.platform.lifecycle.FoundationCaller
 import com.finaxis.platform.lifecycle.PermissionGuard
@@ -64,13 +65,13 @@ class IamQueryServiceTests {
     @Test
     fun `searchUsers validates pagination`() {
         val caller = TenantCaller(actorId, tenantId)
-        assertFailsWith<IllegalArgumentException> {
+        assertRejected(null) {
             service.searchUsers(tenantId, UserInTenantFilter(page = -1), caller)
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertRejected(null) {
             service.searchUsers(tenantId, UserInTenantFilter(size = 0), caller)
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertRejected(null) {
             service.searchUsers(tenantId, UserInTenantFilter(size = 101), caller)
         }
     }
@@ -122,10 +123,10 @@ class IamQueryServiceTests {
 
         val permitted = FakePermissionGuard()
         val permittedService = IamQueryService(queries, queries, queries, queries, permitted)
-        assertFailsWith<IllegalArgumentException> {
+        assertRejected(null) {
             permittedService.searchMemberships(tenantId, MembershipFilter(page = -1), caller)
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertRejected(null) {
             permittedService.searchMemberships(tenantId, MembershipFilter(size = 101), caller)
         }
 
@@ -159,14 +160,74 @@ class IamQueryServiceTests {
     }
 
     @Test
-    fun `searchRoles validates sorting parameters`() {
+    fun `searchRoles validates paging and sorting parameters`() {
         val caller = PlatformCaller(actorId, UUID.randomUUID())
-        assertFailsWith<IllegalArgumentException> {
+        assertRejected("sort_by") {
             service.searchRoles(tenantId, RoleFilter(sortBy = "invalid"), caller)
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertRejected("sort_dir") {
             service.searchRoles(tenantId, RoleFilter(sortBy = "roleCode", sortDir = "UP"), caller)
         }
+        assertRejected(null) { service.searchRoles(tenantId, RoleFilter(page = -1), caller) }
+        assertRejected(null) { service.searchRoles(tenantId, RoleFilter(size = 101), caller) }
+        assertEquals(
+            1,
+            service
+                .searchRoles(tenantId, RoleFilter(sortBy = "roleName", sortDir = "desc"), caller)
+                .items.size,
+        )
+    }
+
+    @Test
+    fun `searchPermissions validates paging and sorting parameters`() {
+        val caller = TenantCaller(actorId, tenantId)
+        assertRejected("sort_by") {
+            service.searchPermissions(tenantId, PermissionFilter(sortBy = "bogus"), caller)
+        }
+        assertRejected("sort_dir") {
+            service.searchPermissions(
+                tenantId,
+                PermissionFilter(sortBy = "riskLevel", sortDir = "sideways"),
+                caller,
+            )
+        }
+        assertRejected(null) {
+            service.searchPermissions(tenantId, PermissionFilter(page = -1), caller)
+        }
+        assertRejected(null) {
+            service.searchPermissions(tenantId, PermissionFilter(size = 0), caller)
+        }
+    }
+
+    @Test
+    fun `branch assignment role assignment and role permission lists validate paging`() {
+        val caller = TenantCaller(actorId, tenantId)
+        assertRejected(null) {
+            service.searchBranchAssignments(tenantId, BranchAssignmentFilter(page = -1), caller)
+        }
+        assertRejected(null) {
+            service.searchBranchAssignments(tenantId, BranchAssignmentFilter(size = 101), caller)
+        }
+        assertRejected(null) {
+            service.searchRoleAssignments(tenantId, RoleAssignmentFilter(page = -1), caller)
+        }
+        assertRejected(null) {
+            service.searchRoleAssignments(tenantId, RoleAssignmentFilter(size = 0), caller)
+        }
+        assertRejected(null) {
+            service.listRolePermissions(tenantId, itemId, RolePermissionFilter(size = 101), caller)
+        }
+        assertRejected(null) {
+            service.listRolePermissions(tenantId, itemId, RolePermissionFilter(page = -1), caller)
+        }
+    }
+
+    private fun assertRejected(
+        parameter: String?,
+        block: () -> Unit,
+    ) {
+        val failure = assertFailsWith<InvalidPageRequestException>(block = block)
+        assertEquals(parameter, failure.parameter)
     }
 
     @Test

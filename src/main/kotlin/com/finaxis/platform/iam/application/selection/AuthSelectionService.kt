@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.application.selection
 
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.web.api.requireValidPage
 import com.finaxis.platform.iam.application.authorization.AuthorizationService
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.port.outbound.BranchSelectionPage
@@ -61,10 +62,7 @@ class AuthSelectionService(
         page: Int,
         size: Int,
     ): BranchSelectionPage {
-        require(page >= 0) { "Page must not be negative" }
-        require(size in MINIMUM_PAGE_SIZE..MAXIMUM_PAGE_SIZE) {
-            "Page size must be between $MINIMUM_PAGE_SIZE and $MAXIMUM_PAGE_SIZE"
-        }
+        requireValidPage(page, size)
         val existingContext = currentContext ?: denied("Select an organisation first")
         val userId = eligibleUserId(keycloakSubject)
         if (existingContext.userId != userId) {
@@ -96,10 +94,7 @@ class AuthSelectionService(
         page: Int,
         size: Int,
     ): OrganisationSelectionPage {
-        require(page >= 0) { "Page must not be negative" }
-        require(size in MINIMUM_PAGE_SIZE..MAXIMUM_PAGE_SIZE) {
-            "Page size must be between $MINIMUM_PAGE_SIZE and $MAXIMUM_PAGE_SIZE"
-        }
+        requireValidPage(page, size)
         val userId = eligibleUserId(keycloakSubject)
         val result = lookup.findOrganisationSelections(userId, page, size)
         return result.copy(
@@ -294,9 +289,4 @@ class AuthSelectionService(
 
     private fun denied(message: String): Nothing =
         throw OrganisationSelectionDeniedException(message)
-
-    private companion object {
-        const val MINIMUM_PAGE_SIZE = 1
-        const val MAXIMUM_PAGE_SIZE = 100
-    }
 }
