@@ -582,6 +582,15 @@ private class BootstrapProvisioningFake(
         branchId: UUID,
     ): UUID? = null
 
+    override fun updateBranch(command: UpdateBranchCommand) = false
+
+    override fun claimOpenParent(
+        organisationId: UUID,
+        parentBranchId: UUID,
+    ) = true
+
+    override fun lockBranchHierarchy(organisationId: UUID) = Unit
+
     override fun userExists(userId: UUID) = true
 
     override fun membership(

@@ -1,6 +1,10 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
+import com.finaxis.platform.common.application.ApplicationException
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.web.api.ApiExceptionHandler
@@ -25,6 +29,7 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SuspendBranchReque
 import com.finaxis.platform.lifecycle.application.ActivateBranchCommand
 import com.finaxis.platform.lifecycle.application.BranchDraftResult
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
+import com.finaxis.platform.lifecycle.application.UpdateBranchCommand
 import com.finaxis.platform.lifecycle.application.query.BranchDetail
 import com.finaxis.platform.lifecycle.application.query.BranchSummary
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
@@ -47,6 +52,7 @@ import org.springframework.security.test.web.servlet.request
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
+import org.springframework.test.web.servlet.patch
 import org.springframework.test.web.servlet.post
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.header
@@ -57,6 +63,7 @@ import kotlin.test.assertEquals
 
 private const val REASON_BODY = "{\"reason\":\"Valid reason\"}"
 
+@Suppress("LargeClass") // One endpoint-per-test suite for one controller; splitting buys nothing.
 @WebMvcTest(controllers = [BranchController::class], useDefaultFilters = false)
 @AutoConfigureMockMvc
 @Import(
@@ -530,6 +537,7 @@ class BranchControllerTests
                     HttpMethod.POST to "$branchRoute/suspend",
                     HttpMethod.POST to "$branchRoute/reactivate",
                     HttpMethod.POST to "$branchRoute/close",
+                    HttpMethod.PATCH to branchRoute,
                 )
 
             routes.forEach { (method, path) ->
@@ -556,6 +564,219 @@ class BranchControllerTests
                     ).andExpect(status().isForbidden)
                     .andExpect(header().exists(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER))
             }
+        }
+
+        @Test
+        fun `update changes the name only and leaves the parent alone`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            stubUpdateResponse(tenantId, branchId, "ACTIVE")
+
+            patch(branchId, tenantId, "{\"branch_name\":\"Riverside\"}").andExpect {
+                status { isOk() }
+                jsonPath("$.id") { value(branchId.toString()) }
+            }
+
+            val command = captureUpdate()
+            assertEquals(tenantId, command.organisationId)
+            assertEquals(branchId, command.branchId)
+            assertEquals("Riverside", command.branchName)
+            assertEquals(false, command.changesParent)
+            assertEquals(null, command.timezone)
+            assertEquals(null, command.address)
+        }
+
+        @Test
+        fun `update changes timezone and address and a parent`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            val parentId = uuidV7()
+            stubUpdateResponse(tenantId, branchId, "DRAFT")
+
+            patch(
+                branchId,
+                tenantId,
+                "{\"timezone\":\"Africa/Kampala\",\"parent_branch_id\":\"$parentId\"," +
+                    "\"address\":{\"city\":\"Kampala\"}}",
+            ).andExpect { status { isOk() } }
+
+            val command = captureUpdate()
+            assertEquals(null, command.branchName)
+            assertEquals("Africa/Kampala", command.timezone)
+            assertEquals(true, command.changesParent)
+            assertEquals(parentId, command.parentBranchId)
+            assertEquals(mapOf("city" to "Kampala"), command.address)
+        }
+
+        @Test
+        fun `update treats an explicit null parent as detaching the branch`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            stubUpdateResponse(tenantId, branchId, "ACTIVE")
+
+            patch(branchId, tenantId, "{\"parent_branch_id\":null}").andExpect {
+                status { isOk() }
+            }
+
+            val command = captureUpdate()
+            assertEquals(true, command.changesParent)
+            assertEquals(null, command.parentBranchId)
+        }
+
+        @Test
+        fun `update returns the stored address and dates in the response`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            stubUpdateResponse(tenantId, branchId, "ACTIVE")
+
+            patch(branchId, tenantId, "{\"branch_name\":\"Riverside\"}").andExpect {
+                jsonPath("$.status") { value("ACTIVE") }
+                jsonPath("$.timezone") { value("Africa/Nairobi") }
+                jsonPath("$.address") { isMap() }
+                jsonPath("$.opened_on") { value(null) }
+            }
+        }
+
+        @Test
+        fun `update rejects an empty object and a missing body`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+
+            patch(branchId, tenantId, "{}").andExpect {
+                status { isBadRequest() }
+                jsonPath("$.code") { value("validation_failed") }
+            }
+            patch(branchId, tenantId, null).andExpect {
+                status { isBadRequest() }
+                jsonPath("$.code") { value("invalid_json") }
+            }
+
+            verify(branchProvisioningService, org.mockito.kotlin.never()).update(any())
+        }
+
+        @Test
+        fun `update rejects invalid fields before the service is reached`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            val bodies =
+                listOf(
+                    "{\"branch_name\":\"   \"}",
+                    "{\"branch_name\":\"A\"}",
+                    "{\"branch_name\":\"${"x".repeat(101)}\"}",
+                    "{\"timezone\":\"\"}",
+                )
+            bodies.forEach { body ->
+                patch(branchId, tenantId, body).andExpect {
+                    status { isBadRequest() }
+                    jsonPath("$.code") { value("validation_failed") }
+                }
+            }
+            // The code and type are not updatable, and unknown fields are refused outright.
+            listOf(
+                "{\"branch_code\":\"NEW-CODE\"}",
+                "{\"branch_type\":\"OPERATIONAL\"}",
+                "{\"parent_branch_id\":\"not-a-uuid\"}",
+            ).forEach { body ->
+                patch(branchId, tenantId, body).andExpect {
+                    status { isBadRequest() }
+                    jsonPath("$.code") { value("invalid_json") }
+                }
+            }
+
+            verify(branchProvisioningService, org.mockito.kotlin.never()).update(any())
+        }
+
+        @Test
+        fun `update accepts a name with a line break as create does and rejects a blank one`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            stubUpdateResponse(tenantId, branchId, "ACTIVE")
+
+            patch(branchId, tenantId, "{\"branch_name\":\"North\\nWing\"}")
+                .andExpect { status { isOk() } }
+            patch(branchId, tenantId, "{\"timezone\":\"Africa/Nairobi\\n\"}")
+                .andExpect { status { isOk() } }
+            patch(branchId, tenantId, "{\"branch_name\":\" \\n \\t \"}").andExpect {
+                status { isBadRequest() }
+                jsonPath("$.code") { value("validation_failed") }
+            }
+        }
+
+        @Test
+        fun `update is forbidden without branch create`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+
+            patch(branchId, tenantId, "{\"branch_name\":\"Riverside\"}", setOf("branch.view"))
+                .andExpect { status { isForbidden() } }
+
+            verify(branchProvisioningService, org.mockito.kotlin.never()).update(any())
+        }
+
+        @Test
+        fun `update surfaces the service refusals as problems`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            val body = "{\"branch_name\":\"Riverside\"}"
+
+            refuseUpdateWith(ConflictException())
+            patch(branchId, tenantId, body).andExpect {
+                status { isConflict() }
+                jsonPath("$.code") { value("conflict") }
+            }
+            refuseUpdateWith(ResourceNotFoundException())
+            patch(branchId, tenantId, body).andExpect { status { isNotFound() } }
+            refuseUpdateWith(ForbiddenOperationException())
+            patch(branchId, tenantId, body).andExpect { status { isForbidden() } }
+            refuseUpdateWith(InvalidOperationException())
+            patch(branchId, tenantId, body).andExpect { status { isUnprocessableContent() } }
+        }
+
+        private fun refuseUpdateWith(refusal: ApplicationException) {
+            whenever(branchProvisioningService.update(any())).doAnswer { throw refusal }
+        }
+
+        @Test
+        fun `update administers a branch other than the selected one`() {
+            val tenantId = uuidV7()
+            val targetBranchId = uuidV7()
+            val selectedBranchId = uuidV7()
+            stubUpdateResponse(tenantId, targetBranchId, "ACTIVE")
+
+            patch(
+                targetBranchId,
+                tenantId,
+                "{\"branch_name\":\"Riverside\"}",
+                selectedBranchId = selectedBranchId,
+            ).andExpect {
+                status { isOk() }
+                jsonPath("$.id") { value(targetBranchId.toString()) }
+            }
+
+            assertEquals(targetBranchId, captureUpdate().branchId)
+            verify(foundationQueryService, org.mockito.kotlin.never())
+                .getBranch(any(), any(), any())
+        }
+
+        private fun patch(
+            branchId: UUID,
+            tenantId: UUID,
+            body: String?,
+            permissions: Set<String> = setOf("branch.create"),
+            selectedBranchId: UUID? = branchId,
+        ) = mockMvc.patch("${ApiPaths.BRANCHES}/$branchId") {
+            header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())
+            if (body != null) {
+                contentType = MediaType.APPLICATION_JSON
+                content = body
+            }
+            with(authentication(tenantToken(permissions, tenantId, selectedBranchId)))
+        }
+
+        private fun captureUpdate(): UpdateBranchCommand {
+            val captor = org.mockito.kotlin.argumentCaptor<UpdateBranchCommand>()
+            verify(branchProvisioningService).update(captor.capture())
+            return captor.firstValue
         }
 
         private fun assertAdministersOtherBranch(
@@ -592,25 +813,47 @@ class BranchControllerTests
         ) {
             whenever(
                 foundationQueryService.getBranch(eq(tenantId), eq(branchId), any()),
-            ).thenReturn(
-                BranchDetail(
-                    id = branchId,
-                    organisationId = tenantId,
-                    branchCode = "HQ-01",
-                    branchName = "Headquarters",
-                    branchType = "HEAD_OFFICE",
-                    parentBranchId = null,
-                    status = lifecycleStatus,
-                    timezone = "Africa/Nairobi",
-                    addressJson = "{}",
-                    openedOn = null,
-                    closedOn = null,
-                    statusReason = null,
-                    createdAt = Instant.parse("2026-07-18T10:00:00Z"),
-                    updatedAt = Instant.parse("2026-07-18T10:00:00Z"),
-                ),
-            )
+            ).thenReturn(branchDetail(tenantId, branchId, lifecycleStatus))
         }
+
+        /**
+         * The update response comes from the permission-free read: the service has already
+         * authorised the target branch, and a branch-scoped maker holds no tenant-wide
+         * branch.view. The gated read is deliberately left unstubbed so a regression fails.
+         */
+        private fun stubUpdateResponse(
+            tenantId: UUID,
+            branchId: UUID,
+            lifecycleStatus: String,
+        ) {
+            whenever(
+                foundationQueryService.getBranchAfterAuthorizedMutation(
+                    eq(tenantId),
+                    eq(branchId),
+                ),
+            ).thenReturn(branchDetail(tenantId, branchId, lifecycleStatus))
+        }
+
+        private fun branchDetail(
+            tenantId: UUID,
+            branchId: UUID,
+            lifecycleStatus: String,
+        ) = BranchDetail(
+            id = branchId,
+            organisationId = tenantId,
+            branchCode = "HQ-01",
+            branchName = "Headquarters",
+            branchType = "HEAD_OFFICE",
+            parentBranchId = null,
+            status = lifecycleStatus,
+            timezone = "Africa/Nairobi",
+            addressJson = "{}",
+            openedOn = null,
+            closedOn = null,
+            statusReason = null,
+            createdAt = Instant.parse("2026-07-18T10:00:00Z"),
+            updatedAt = Instant.parse("2026-07-18T10:00:00Z"),
+        )
 
         private fun branchMutationPayload(path: String): String =
             when {
@@ -636,7 +879,7 @@ class BranchControllerTests
                 }
 
                 else -> {
-                    ""
+                    "{\"branch_name\":\"Headquarters\"}"
                 }
             }
 

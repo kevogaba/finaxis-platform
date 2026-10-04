@@ -98,15 +98,45 @@ class TenantAdminOrganisationFixture(
     fun grantPlatformPermissionsOnly(
         actorId: UUID,
         vararg permissionCodes: String,
+    ) = grantPermissionsOnly(PlatformOrganisation.ID, actorId, "PLATFORM_NARROW", permissionCodes)
+
+    /**
+     * Grants [actorId] a dedicated role in [organisationId] holding exactly [permissionCodes] and
+     * nothing else, so a test can prove a tenant route refuses a member who lacks its permission.
+     */
+    fun grantTenantPermissionsOnly(
+        organisationId: UUID,
+        actorId: UUID,
+        vararg permissionCodes: String,
+    ) = grantPermissionsOnly(organisationId, actorId, "TENANT_NARROW", permissionCodes)
+
+    /**
+     * Grants [actorId] a dedicated role holding exactly [permissionCodes], assigned at BRANCH scope
+     * on [branchId] only, so a test can prove a route works for a branch-scoped maker who holds
+     * nothing tenant-wide.
+     */
+    fun grantBranchPermissionsOnly(
+        organisationId: UUID,
+        branchId: UUID,
+        actorId: UUID,
+        vararg permissionCodes: String,
+    ) = grantPermissionsOnly(organisationId, actorId, "BRANCH_NARROW", permissionCodes, branchId)
+
+    private fun grantPermissionsOnly(
+        organisationId: UUID,
+        actorId: UUID,
+        roleCodePrefix: String,
+        permissionCodes: Array<out String>,
+        branchId: UUID? = null,
     ) {
         val now = OffsetDateTime.now()
         val roleId =
             requireNotNull(
                 dsl
                     .insertInto(ROLE)
-                    .set(ROLE.ORGANISATION_ID, PlatformOrganisation.ID)
-                    .set(ROLE.ROLE_CODE, "PLATFORM_NARROW_${uuidV7()}")
-                    .set(ROLE.ROLE_NAME, "Narrow platform role")
+                    .set(ROLE.ORGANISATION_ID, organisationId)
+                    .set(ROLE.ROLE_CODE, "${roleCodePrefix}_${uuidV7()}")
+                    .set(ROLE.ROLE_NAME, "Narrow test role")
                     .set(ROLE.SYSTEM_ROLE, false)
                     .set(ROLE.STATUS, "ACTIVE")
                     .set(ROLE.CREATED_AT, now)
@@ -128,7 +158,7 @@ class TenantAdminOrganisationFixture(
                 ) { "$code must exist in the seeded catalogue" }
             dsl
                 .insertInto(ROLE_PERMISSION)
-                .set(ROLE_PERMISSION.ORGANISATION_ID, PlatformOrganisation.ID)
+                .set(ROLE_PERMISSION.ORGANISATION_ID, organisationId)
                 .set(ROLE_PERMISSION.ROLE_ID, roleId)
                 .set(ROLE_PERMISSION.PERMISSION_ID, permissionId)
                 .set(ROLE_PERMISSION.GRANTED_AT, now)
@@ -139,7 +169,7 @@ class TenantAdminOrganisationFixture(
                 .set(ROLE_PERMISSION.UPDATED_BY, SystemActor.ID)
                 .execute()
         }
-        assignRole(PlatformOrganisation.ID, actorId, roleId)
+        assignRole(organisationId, actorId, roleId, branchId)
     }
 
     private fun grantRole(
@@ -164,6 +194,7 @@ class TenantAdminOrganisationFixture(
         organisationId: UUID,
         actorId: UUID,
         roleId: UUID,
+        branchId: UUID? = null,
     ) {
         val now = OffsetDateTime.now()
         dsl
@@ -184,8 +215,8 @@ class TenantAdminOrganisationFixture(
             .set(USER_ROLE_ASSIGNMENT.ORGANISATION_ID, organisationId)
             .set(USER_ROLE_ASSIGNMENT.USER_ID, actorId)
             .set(USER_ROLE_ASSIGNMENT.ROLE_ID, roleId)
-            .set(USER_ROLE_ASSIGNMENT.SCOPE_TYPE, "TENANT")
-            .set(USER_ROLE_ASSIGNMENT.BRANCH_ID, null as UUID?)
+            .set(USER_ROLE_ASSIGNMENT.SCOPE_TYPE, if (branchId == null) "TENANT" else "BRANCH")
+            .set(USER_ROLE_ASSIGNMENT.BRANCH_ID, branchId)
             .set(USER_ROLE_ASSIGNMENT.STATUS, "ACTIVE")
             .set(USER_ROLE_ASSIGNMENT.ASSIGNED_AT, now)
             .set(USER_ROLE_ASSIGNMENT.CREATED_AT, now)

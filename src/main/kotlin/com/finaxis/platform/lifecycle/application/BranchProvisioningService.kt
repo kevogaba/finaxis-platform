@@ -19,7 +19,9 @@ import com.finaxis.platform.lifecycle.domain.BranchLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import java.time.DateTimeException
 import java.time.Instant
+import java.time.ZoneId
 
 /**
  * Organisation-scoped branch lifecycle and user-assignment use cases. Every status change uses
@@ -71,6 +73,69 @@ class BranchProvisioningService(
             command.requestedBy.toString(),
         )
         return BranchDraftResult(branchId, BranchLifecycleState.DRAFT)
+    }
+
+    /**
+     * Updates a draft or active branch's name, parent, timezone or address in place. A draft is
+     * amendable so a returned or withdrawn one can be corrected; a branch that is pending approval,
+     * suspended or closed is not. `branch.create` is the permission, as for every other action a
+     * branch's maker takes (ADR 0029), and it is checked against the target branch.
+     */
+    @Transactional
+    fun update(command: UpdateBranchCommand) {
+        requireBranchPermission(
+            command.actorId,
+            command.organisationId,
+            command.branchId,
+            "branch.create",
+        )
+        conflictUnless(
+            lifecycleStore.branchState(command.organisationId, command.branchId) in
+                AMENDABLE_BRANCH_STATES,
+        )
+        invalidOperationUnless(command.changedFields.isNotEmpty())
+        command.branchName?.let { invalidOperationUnless(it.isNotBlank()) }
+        command.timezone?.let(::requireZoneId)
+        if (command.changesParent && command.parentBranchId != null) {
+            requireAcyclicParent(command, command.parentBranchId)
+        }
+        conflictUnless(lifecycleStore.updateBranch(command))
+        // Field names only: an address is personal data and a name is not worth repeating.
+        audit(
+            command.organisationId,
+            command.branchId.toString(),
+            "branch.update",
+            command.actorId.toString(),
+            mapOf("changedFields" to command.changedFields.joinToString(",")),
+        )
+    }
+
+    /**
+     * The new parent must be a branch of this organisation other than the branch itself, not
+     * closed or archived, and the branch must not already sit above it. The hierarchy lock is taken
+     * first so the ancestor walk reads a tree no concurrent move can change before this one
+     * commits, and the parent is claimed last so a concurrent close cannot slip past it.
+     */
+    private fun requireAcyclicParent(
+        command: UpdateBranchCommand,
+        parentId: java.util.UUID,
+    ) {
+        invalidOperationUnless(parentId != command.branchId)
+        lifecycleStore.lockBranchHierarchy(command.organisationId)
+        resourceNotFoundUnless(
+            lifecycleStore.parentBelongsToOrganisation(command.organisationId, parentId),
+        )
+        val visited = mutableSetOf<java.util.UUID>()
+        var ancestor: java.util.UUID? = parentId
+        while (ancestor != null && visited.add(ancestor)) {
+            invalidOperationUnless(ancestor != command.branchId)
+            ancestor = lifecycleStore.parentBranchId(command.organisationId, ancestor)
+        }
+        // The closure guard refuses to close a branch that still has an active child, and this is
+        // the re-parenting tool, so it must not put a branch under one that is already closed.
+        if (!lifecycleStore.claimOpenParent(command.organisationId, parentId)) {
+            throw ConflictException(safeDetail = "A closed or archived branch cannot be a parent.")
+        }
     }
 
     /** Validates branch boundaries and submits a draft for approval. */
@@ -408,11 +473,21 @@ class BranchProvisioningService(
     }
 
     private companion object {
+        val AMENDABLE_BRANCH_STATES =
+            setOf(BranchLifecycleState.DRAFT, BranchLifecycleState.ACTIVE)
         val ALLOWED_BRANCH_CREATION_STATES =
             setOf(OrganisationLifecycleState.ACTIVE, OrganisationLifecycleState.PROVISIONING)
         const val CHECKER_SCOPE = "checkerScope"
         const val BRANCH_ASSIGNED_TARGET = "finaxis.lifecycle.branch.user-assigned"
         const val BRANCH_ASSIGNMENT_REVOKED_TARGET = "finaxis.lifecycle.branch.user-revoked"
+    }
+}
+
+private fun requireZoneId(timezone: String) {
+    try {
+        ZoneId.of(timezone)
+    } catch (_: DateTimeException) {
+        throw InvalidOperationException()
     }
 }
 

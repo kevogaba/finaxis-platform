@@ -41,12 +41,14 @@ import com.finaxis.platform.lifecycle.application.OrganisationSetupRequirement
 import com.finaxis.platform.lifecycle.application.OrganisationSummary
 import com.finaxis.platform.lifecycle.application.RevokeUserBranchAssignmentCommand
 import com.finaxis.platform.lifecycle.application.StoredSetting
+import com.finaxis.platform.lifecycle.application.UpdateBranchCommand
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import org.jooq.Condition
 import org.jooq.DSLContext
+import org.jooq.Field
 import org.jooq.JSONB
 import org.jooq.impl.DSL
 import org.springframework.stereotype.Component
@@ -61,6 +63,7 @@ import java.util.UUID
  * branch assignments. It intentionally performs no physical deletes during deprovisioning.
  */
 @Component
+@Suppress("TooManyFunctions") // Implements the cohesive BranchLifecycleStore port.
 class JooqOrganisationBranchProvisioningStore(
     private val dsl: DSLContext,
     private val clock: Clock,
@@ -264,6 +267,59 @@ class JooqOrganisationBranchProvisioningStore(
             .set(BRANCH_TRANSITION_LOG.METADATA_JSONB, JSONB.jsonb("{\"creation\":true}"))
             .execute()
         return id
+    }
+
+    override fun updateBranch(command: UpdateBranchCommand): Boolean {
+        val changes = mutableMapOf<Field<*>, Any?>()
+        command.branchName?.let { changes[BRANCH.BRANCH_NAME] = it }
+        if (command.changesParent) changes[BRANCH.PARENT_BRANCH_ID] = command.parentBranchId
+        command.timezone?.let { changes[BRANCH.TIMEZONE] = it }
+        command.address?.let {
+            changes[BRANCH.ADDRESS_JSONB] = JSONB.jsonb(objectMapper.writeValueAsString(it))
+        }
+        // The status predicate is the guard: a suspend or close committed since the caller read the
+        // state makes this match no row, and the caller reports that as a conflict.
+        return dsl
+            .update(BRANCH)
+            .set(changes)
+            .set(BRANCH.UPDATED_AT, now())
+            .set(BRANCH.UPDATED_BY, command.actorId)
+            .set(BRANCH.ROW_VERSION, BRANCH.ROW_VERSION.plus(1))
+            .where(BRANCH.ORGANISATION_ID.eq(command.organisationId))
+            .and(BRANCH.ID.eq(command.branchId))
+            .and(
+                BRANCH.STATUS.`in`(
+                    BranchLifecycleState.DRAFT.name,
+                    BranchLifecycleState.ACTIVE.name,
+                ),
+            ).execute() == 1
+    }
+
+    override fun claimOpenParent(
+        organisationId: UUID,
+        parentBranchId: UUID,
+    ): Boolean =
+        dsl
+            .update(BRANCH)
+            .set(BRANCH.ROW_VERSION, BRANCH.ROW_VERSION.plus(1))
+            .where(BRANCH.ORGANISATION_ID.eq(organisationId))
+            .and(BRANCH.ID.eq(parentBranchId))
+            .and(
+                BRANCH.STATUS.notIn(
+                    BranchLifecycleState.CLOSED.name,
+                    BranchLifecycleState.ARCHIVED.name,
+                ),
+            ).execute() == 1
+
+    override fun lockBranchHierarchy(organisationId: UUID) {
+        // NO KEY UPDATE excludes another parent change but not the key-share locks branch inserts
+        // take on this row, so creating branches is not held up.
+        dsl
+            .select(ORGANISATION.ID)
+            .from(ORGANISATION)
+            .where(ORGANISATION.ID.eq(organisationId))
+            .forNoKeyUpdate()
+            .fetch()
     }
 
     override fun branchCodeExists(

@@ -55,6 +55,12 @@ activate it. Submission and activation by the platform also write a
 `branch.submit_as_platform_checker` and a `branch.activate_as_platform_checker` audit row
 respectively. See [ADR 0028](../adr/0028-platform-checker-for-first-tenant-approvals.md).
 
+A `DRAFT` or `ACTIVE` branch can be edited in place (`PATCH /branches/{branch_id}`): name, parent,
+timezone and address, never the code or type. It writes `branch.update` audit with the changed field
+names only, and refuses a parent that would make the branch its own ancestor or that is `CLOSED`
+or `ARCHIVED`. The last rule is not enforced by create, submit or activate (a known limitation, see
+[lifecycle FSMs](../architecture/lifecycle-fsm.md)).
+
 Draft creation writes `branch.create_draft` audit. Every branch FSM transition persists a
 transition log, publishes its configured transition event, and records an audit event through
 `FoundationLifecycleService`.

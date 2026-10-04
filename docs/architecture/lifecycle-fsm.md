@@ -35,6 +35,21 @@ active assignment unless the command has first revoked or reassigned it. User ac
 a Keycloak link or explicit invitation completion. Membership activation requires an active
 organisation and user, plus active branch and role assignments when operational access is needed.
 
+A branch's name, parent, timezone and address change through `PATCH /branches/{id}`
+(`BranchProvisioningService.update`), which is deliberately **not** a transition: it moves no
+state, so it has no transition-log row and publishes no event. It writes a `branch.update` audit
+row and increments `row_version`, and is allowed only in `DRAFT` and `ACTIVE`, so a draft returned
+for changes (below) is amendable. See [foundation API](../api/foundation-api.md#update-branch).
+
+The closure guard refuses to close a branch with an `ACTIVE` child, and the update is the way to
+re-parent one, so it refuses a `CLOSED`/`ARCHIVED` parent (409) and claims the new parent by
+bumping its `row_version` in the same transaction: a close that already read the parent then fails
+its optimistic-lock check instead of closing a branch that now has an active child.
+
+**Known limitation:** the other ways a branch gets a parent do not enforce this. Creating a branch
+under, or submitting or activating a branch beneath, a `CLOSED` or `ARCHIVED` parent is not
+refused, so that state is still reachable through them. The update does not repair it either.
+
 Branch transitions also stamp two columns in the same `UPDATE` that writes the new state
 (`JooqFoundationLifecyclePersistence.saveBranch`), from the organisation's current business date
 and not the wall clock: `opened_on` on entry to `ACTIVE` (only when still null, so a
@@ -99,8 +114,9 @@ it to RabbitMQ.
 recorded here so the plan is findable, and this section must be rewritten as each lands.
 
 - Branch: `PENDING_APPROVAL --> DRAFT: RETURN_FOR_CHANGES` (reason required; a checker returns, or
-  the maker withdraws; internal event only). **Accepted, planned after #165** (branch update):
-  without it a returned draft could not be amended, closed, suspended or recreated. Issue #180.
+  the maker withdraws; internal event only). **Accepted, planned after #165** (branch update, now
+  in place): without it a returned draft could not be amended, closed, suspended or recreated.
+  Issue #180.
 - Organisation: `PENDING_APPROVAL --> DRAFT: RETURN_FOR_CHANGES` (reason required; checker only;
   internal event only). **Accepted, planned** (#181). `REJECT` stays terminal.
 

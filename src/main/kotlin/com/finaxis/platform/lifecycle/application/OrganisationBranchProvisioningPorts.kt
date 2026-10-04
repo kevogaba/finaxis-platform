@@ -376,6 +376,31 @@ interface BranchLifecycleStore {
      */
     fun hasActiveBranchBeyondBootstrap(organisationId: UUID): Boolean
 
+    /**
+     * Applies the changes in [command] to a branch that is still `DRAFT` or `ACTIVE`, bumping its
+     * row version; false when no such branch row matched, that is its status changed meanwhile.
+     */
+    fun updateBranch(command: UpdateBranchCommand): Boolean
+
+    /**
+     * Claims [parentBranchId] as a parent for a branch being moved under it: false when it is
+     * `CLOSED` or `ARCHIVED` (or absent). On success the parent row is written (its version is
+     * bumped, nothing else), so a close that read the parent before this transaction commits fails
+     * its optimistic-lock check instead of closing a branch that now has an active child, and a
+     * close that committed first is seen here. A read lock would not do: the close's own update
+     * has already passed its child check by the time it would wait.
+     */
+    fun claimOpenParent(
+        organisationId: UUID,
+        parentBranchId: UUID,
+    ): Boolean
+
+    /**
+     * Serialises parent changes inside one organisation until the transaction ends, so two moves
+     * that are each acyclic alone cannot together close a cycle. Requires a transaction.
+     */
+    fun lockBranchHierarchy(organisationId: UUID)
+
     /** Resolves the user who performed the latest SUBMIT transition of a branch, if any. */
     fun submittedBy(
         organisationId: UUID,

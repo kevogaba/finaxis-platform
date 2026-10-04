@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
+import com.finaxis.platform.common.application.InvalidRequestException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiJsonCodec
 import com.finaxis.platform.common.web.api.ApiPage
@@ -17,6 +18,7 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateBranchReques
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReactivateBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SubmitBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SuspendBranchRequest
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.UpdateBranchRequest
 import com.finaxis.platform.lifecycle.application.ActivateBranchCommand
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.CloseBranchCommand
@@ -24,6 +26,7 @@ import com.finaxis.platform.lifecycle.application.CreateBranchCommand
 import com.finaxis.platform.lifecycle.application.ReactivateBranchCommand
 import com.finaxis.platform.lifecycle.application.SubmitBranchForApprovalCommand
 import com.finaxis.platform.lifecycle.application.SuspendBranchCommand
+import com.finaxis.platform.lifecycle.application.UpdateBranchCommand
 import com.finaxis.platform.lifecycle.application.query.BranchDetail
 import com.finaxis.platform.lifecycle.application.query.BranchFilter
 import com.finaxis.platform.lifecycle.application.query.BranchSummary
@@ -44,6 +47,7 @@ import org.springframework.http.ResponseEntity
 import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.validation.annotation.Validated
 import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PatchMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
@@ -304,6 +308,127 @@ class BranchController(
                 caller,
             )
         return detail.toResponse()
+    }
+
+    /**
+     * Updates a draft or active branch's name, parent, timezone or address.
+     */
+    @PatchMapping("/{branch_id}")
+    @IdempotentMutation(scope = IdempotencyScopeKind.TENANT)
+    @PreAuthorize("hasAuthority('branch.create')")
+    @Operation(
+        summary = "Update branch",
+        description =
+            "Updates the name, parent, timezone or address of a draft or active branch. " +
+                "Absent fields are unchanged; an explicit null parent_branch_id detaches the " +
+                "branch. The code and type cannot be changed.",
+        parameters = [
+            Parameter(
+                name = "Idempotency-Key",
+                description = "Optional UUID; the server generates one when omitted.",
+                `in` = ParameterIn.HEADER,
+                schema = Schema(type = "string", format = "uuid"),
+            ),
+        ],
+    )
+    @ApiResponses(
+        ApiResponse(
+            responseCode = "200",
+            description = "Branch updated",
+            content = [Content(schema = Schema(implementation = BranchDetailResponse::class))],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description = "Invalid request",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description = "Branch or parent not found",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "409",
+            description = "Branch is not a draft or active branch",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "422",
+            description = "Invalid timezone or parent, or a parent cycle",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+    )
+    fun update(
+        @PathVariable("branch_id") branchId: UUID,
+        @RequestBody @Valid request: UpdateBranchRequest,
+    ): BranchDetailResponse {
+        val caller = CallerContextResolver.getTenantCaller()
+        if (listOf(
+                request.branchName,
+                request.parentBranchId,
+                request.timezone,
+                request.address,
+            ).all { it == null }
+        ) {
+            throw InvalidRequestException("validation_failed", "At least one field is required.")
+        }
+        branchProvisioningService.update(
+            UpdateBranchCommand(
+                organisationId = caller.activeOrganisationId,
+                branchId = branchId,
+                actorId = caller.actorId,
+                branchName = request.branchName,
+                changesParent = request.parentBranchId != null,
+                parentBranchId = request.parentBranchId?.orElse(null),
+                timezone = request.timezone,
+                address = request.address,
+            ),
+        )
+        // The service has authorised branch.create on this very branch; a branch-scoped maker holds
+        // no tenant-wide branch.view, and a gated read here would roll the update back with a 403.
+        return foundationQueryService
+            .getBranchAfterAuthorizedMutation(caller.activeOrganisationId, branchId)
+            .toResponse()
     }
 
     /**
