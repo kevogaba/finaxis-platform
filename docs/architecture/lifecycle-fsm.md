@@ -75,3 +75,16 @@ writes the per-aggregate transition log and `audit_event`, then publishes the ev
 its `eventFactories`. The membership activation factory produces an
 `ExternalizedTransitionEvent`; the notifications module consumes it after Namastack externalizes
 it to RabbitMQ.
+
+## Planned transitions (ADR 0029)
+
+**Accepted but not yet implemented.** The graphs above do not contain these edges; they are
+recorded here so the plan is findable, and this section must be rewritten as each lands.
+
+- Branch: `PENDING_APPROVAL --> DRAFT: RETURN_FOR_CHANGES` (reason required; a checker returns, or
+  the maker withdraws; internal event only). **Accepted, planned after #165** (branch update):
+  without it a returned draft could not be amended, closed, suspended or recreated. Issue #180.
+- Organisation: `PENDING_APPROVAL --> DRAFT: RETURN_FOR_CHANGES` (reason required; checker only;
+  internal event only). **Accepted, planned** (#181). `REJECT` stays terminal.
+
+See [ADR 0029](../adr/0029-approval-model-per-resource-extensions.md).
