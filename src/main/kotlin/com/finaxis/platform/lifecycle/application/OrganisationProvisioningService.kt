@@ -83,6 +83,11 @@ class OrganisationProvisioningService(
     /** Amends an existing organisation draft before it is submitted. */
     @Transactional
     fun amendDraft(command: AmendOrganisationDraftCommand) {
+        auditService.requireNotPlatformOrganisation(
+            command.organisationId,
+            "organisation.amend_draft",
+            command.actorId,
+        )
         // Lock before reading the state: an amendment writes the draft's own columns and the
         // administrator block unconditionally, so it must not be judged a draft by a read that a
         // concurrent submission has since made untrue.
@@ -110,6 +115,11 @@ class OrganisationProvisioningService(
     /** Validates metadata and moves a draft into the approval workflow. */
     @Transactional
     fun submitForApproval(command: SubmitOrganisationForApprovalCommand) {
+        auditService.requireNotPlatformOrganisation(
+            command.organisationId,
+            "organisation.submit_for_approval",
+            command.actorId,
+        )
         // Lock first (see [approveProvisioning]): the metadata and administrator validated below
         // are the ones that get submitted, not ones an amendment is about to replace.
         lifecycleStore.lockOrganisation(command.organisationId)
@@ -153,6 +163,11 @@ class OrganisationProvisioningService(
      */
     @Transactional
     fun approveProvisioning(command: ApproveOrganisationProvisioningCommand) {
+        auditService.requireNotPlatformOrganisation(
+            command.organisationId,
+            "organisation.approve",
+            command.actorId,
+        )
         lifecycleStore.lockOrganisation(command.organisationId)
         val record =
             adminBootstrapStore
@@ -208,6 +223,11 @@ class OrganisationProvisioningService(
     /** Rejects a pending organisation request and preserves its draft data for auditability. */
     @Transactional
     fun rejectProvisioning(command: RejectOrganisationProvisioningCommand) {
+        auditService.requireNotPlatformOrganisation(
+            command.organisationId,
+            "organisation.reject",
+            command.actorId,
+        )
         errorUnless(command.actorId != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
         // Lock first (see [approveProvisioning]); it also gives this path the same lock order as
         // the others, organisation then bootstrap record, where it used to take them the other
@@ -229,10 +249,11 @@ class OrganisationProvisioningService(
      * actor needs `tenant.reject` and, as for [approveProvisioning], may be neither the requester
      * nor the submitter, so a maker cannot pull their own submission back through this route.
      *
-     * Permission first, so an unauthorised caller learns nothing; then the organisation lock,
+     * Permission first, so an unauthorised caller learns nothing; then the refusal of the
+     * platform organisation (409, `requireNotPlatformOrganisation`); then the organisation lock,
      * before the record is read and held through the transition, for the reason given on
-     * [approveProvisioning]; then the bootstrap record, whose absence (an unknown tenant, the
-     * platform organisation) is a 404; then the maker-checker rule; then the FSM's own state
+     * [approveProvisioning]; then the bootstrap record, whose absence (an unknown tenant) is a
+     * 404; then the maker-checker rule; then the FSM's own state
      * conflict. The transition runs before the record is reset, so a tenant that is not pending
      * is refused without touching the record. The record then becomes a draft again, exactly as
      * [rejectProvisioning] leaves it, and the amend and resubmit that follow re-establish what
@@ -241,6 +262,11 @@ class OrganisationProvisioningService(
     @Transactional
     fun returnForChanges(command: ReturnOrganisationForChangesCommand) {
         permissionGuard.requirePlatformPermission(command.actorId, "tenant.reject")
+        auditService.requireNotPlatformOrganisation(
+            command.organisationId,
+            "organisation.return_for_changes",
+            command.actorId,
+        )
         lifecycleStore.lockOrganisation(command.organisationId)
         val record =
             adminBootstrapStore
@@ -263,27 +289,20 @@ class OrganisationProvisioningService(
     @Transactional
     @Suppress("TooGenericExceptionCaught")
     fun retryBootstrap(command: RetryInitialAdministratorBootstrapCommand) {
+        // The caller's permission first, then the platform refusal, then the first read: an
+        // unauthorised caller learns neither whether the tenant exists nor that this one is
+        // special.
+        permissionGuard.requireRetryPermission(command)
+        auditService.requireNotPlatformOrganisation(
+            command.organisationId,
+            "tenant.bootstrap_retry",
+            command.caller.actorId,
+        )
         val record =
             adminBootstrapStore
                 .find(command.organisationId)
                 .orResourceNotFound()
         errorUnless(record.status == InitialAdministratorBootstrapStatus.FAILED, SafeError.CONFLICT)
-        when (val caller = command.caller) {
-            is TenantCaller -> {
-                permissionGuard.requireTenantPermission(
-                    caller.actorId,
-                    command.organisationId,
-                    "tenant.bootstrap_retry",
-                )
-            }
-
-            is PlatformCaller -> {
-                permissionGuard.requirePlatformPermission(
-                    caller.actorId,
-                    "tenant.bootstrap_retry",
-                )
-            }
-        }
         try {
             bootstrapService.bootstrap(command.organisationId)
         } catch (ex: Exception) {
@@ -330,6 +349,7 @@ class OrganisationProvisioningService(
     /** Suspends an active organisation without deleting data. */
     @Transactional
     fun suspend(command: SuspendOrganisationCommand) {
+        auditService.requireNotPlatformOrganisation(command.organisationId, "organisation.suspend")
         lifecycleService.transition(
             OrganisationTransitionCommand(
                 command.organisationId,
@@ -342,6 +362,10 @@ class OrganisationProvisioningService(
     /** Reactivates an organisation only when its local operating prerequisites still exist. */
     @Transactional
     fun reactivate(command: ReactivateOrganisationCommand) {
+        auditService.requireNotPlatformOrganisation(
+            command.organisationId,
+            "organisation.reactivate",
+        )
         accessStore.requireCompleteSetup(command.organisationId)
         lifecycleService.transition(
             OrganisationTransitionCommand(
@@ -355,6 +379,10 @@ class OrganisationProvisioningService(
     /** Performs controlled metadata-only deprovisioning and intentionally retains tenant data. */
     @Transactional
     fun deprovision(command: DeprovisionOrganisationCommand) {
+        auditService.requireNotPlatformOrganisation(
+            command.organisationId,
+            "organisation.deprovision",
+        )
         startDeprovisioning(command)
         deprovisionBranches(command)
         revokeMemberships(command)

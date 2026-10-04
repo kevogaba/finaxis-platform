@@ -89,7 +89,11 @@ checker step:
      administrator and a tenant member cannot approve what they invited by switching context.
 6. The path tenant is a real tenant: the platform organisation itself is never a valid
    `{tenant_id}` for these routes (404, after the permission check), and submitting a branch obeys
-   the same tenant-state rule as creating one (`ACTIVE` or `PROVISIONING`, otherwise 409).
+   the same tenant-state rule as creating one (`ACTIVE` or `PROVISIONING`, otherwise 409). The
+   tenant's *own* lifecycle routes (`/platform/tenants/{tenant_id}/suspend`, `/deprovision`,
+   `/approve` and the rest) answer the platform organisation with a **409**
+   `lifecycle.platform_organisation_protected` instead, since it is the resource addressed and not
+   a parent of one (#205; see the authorization model).
 7. **The bound.** Each checker step is available only while the tenant has no self-sufficient
    approver of that kind, counted as follows, and answers **409
    `lifecycle.platform_checker_closed`** otherwise, changing nothing:

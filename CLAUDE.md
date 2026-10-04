@@ -150,6 +150,23 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   Flyway, before traffic; a Redis outage then is a logged warning, not a failed boot): the new
   permission is effective on a new instance's first request with no operator action. SQL run
   outside Flyway needs the cache flushed (restart, or delete `iam.effective-permissions:*`)
+- `V20__platform_organisation_stays_active.sql` — **one table CHECK, no data** (#205):
+  `chk_organisation_platform_always_active` on `organisation`,
+  `id <> '00000000-…-000000000000' OR status = 'ACTIVE'`, so the reserved `PLATFORM` organisation
+  can never leave `ACTIVE` (a suspended or deprovisioned platform organisation refuses every
+  platform principal, and deprovisioning revokes every platform membership; recovery would be only
+  by SQL). It is the database layer of three: `OrganisationProvisioningService` refuses the
+  platform organisation on every tenant-id method with a 409
+  `lifecycle.platform_organisation_protected`, after recording a durable `DENIED` audit row
+  (`AuditService.recordIndependently`, so the rollback cannot take it), and the organisation
+  transition graph carries a guard on every edge, so each holds without the others. It
+  constrains one row and nothing else (every tenant keeps the full lifecycle), asserts in-file
+  that the platform row exists and is `ACTIVE` before adding the constraint (which validates
+  existing rows), and fails an offending
+  `UPDATE` with SQLSTATE 23514 naming the constraint. It is a declarative CHECK, not a trigger, so
+  ADR 0024 does not apply, and it does not cover `DELETE`, which no code performs and the foreign
+  keys refuse while the seeded platform roles exist. Supersedes nothing — see
+  `docs/security/authorization-model.md` and `docs/architecture/lifecycle-fsm.md`
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -177,9 +194,9 @@ calendar and the chart of accounts from it, `V7` the journal tables, `V8` the po
 one-control-account-per-class uniqueness, `V12` the manual-journal external reference, `V13`
 the journal-line append guard, `V14` the daily-balance projection, `V15` the branch
 trial-balance index, `V16` the corrected fingerprint comment, and `V17` the cancelled draft
-state. `V18` is a data backfill of the branch lifecycle dates and `V19` a foundation permission
-seed (`branch.update`); neither is accounting. Do not invent accounting tables or columns outside
-those documents.
+state. `V18` is a data backfill of the branch lifecycle dates, `V19` a foundation permission
+seed (`branch.update`) and `V20` a foundation CHECK pinning the platform organisation to `ACTIVE`;
+none is accounting. Do not invent accounting tables or columns outside those documents.
 
 ## Authorization
 

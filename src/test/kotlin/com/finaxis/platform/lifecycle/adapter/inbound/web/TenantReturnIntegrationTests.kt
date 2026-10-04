@@ -1,8 +1,8 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
-import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.web.api.ApiJsonCodec
 import com.finaxis.platform.common.web.idempotency.IdempotencyKeyFilter
@@ -243,11 +243,14 @@ class TenantReturnIntegrationTests
         }
 
         @Test
-        fun `an unknown tenant and the platform organisation are not found for a checker`() {
+        fun `an unknown tenant is not found and the platform organisation is refused`() {
             val checker = admin()
 
-            listOf(uuidV7(), PlatformOrganisation.ID).forEach { target ->
-                returnTenant(target, checker).andExpect { status { isNotFound() } }
+            returnTenant(uuidV7(), checker).andExpect { status { isNotFound() } }
+            // The platform organisation exists, so it is a refusal (issue #205), not a 404.
+            returnTenant(PlatformOrganisation.ID, checker).andExpect {
+                status { isConflict() }
+                jsonPath("$.code") { value("lifecycle.platform_organisation_protected") }
             }
             // A tenant context never reaches the platform route.
             val owner = seedUser("owner")

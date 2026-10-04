@@ -3,8 +3,10 @@ package com.finaxis.platform.lifecycle.application
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
+import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.context.ActorContext
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
@@ -17,6 +19,7 @@ import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogRepository
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleTransition
+import com.finaxis.platform.lifecycle.domain.FoundationLifecycleDefinitions
 import com.finaxis.platform.lifecycle.domain.LifecycleAggregate
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleTransition
@@ -359,6 +362,76 @@ class FoundationLifecycleServiceTests {
         assertTrue(logs.items.isEmpty())
         assertTrue(audits.items.isEmpty())
     }
+
+    @Test
+    fun `no declared transition can move the platform organisation`() {
+        // Whatever the caller, whichever edge: the engine itself refuses the reserved PLATFORM
+        // organisation (issue #205), so a future caller that skips OrganisationProvisioningService
+        // still cannot suspend, deprovision or archive it.
+        val platformId = PlatformOrganisation.ID
+        val definitions = FoundationLifecycleDefinitions.organisationGraph().definitions()
+        assertEquals(OrganisationLifecycleTransition.entries.size, definitions.size)
+
+        definitions.forEach { definition ->
+            persistence.organisations[platformId] =
+                LifecycleAggregate(platformId, definition.from, ORGANISATION)
+
+            val failure =
+                assertThrows<ConflictException>(definition.transition.name) {
+                    service.transition(
+                        OrganisationTransitionCommand(platformId, definition.transition),
+                    )
+                }
+
+            assertEquals(PLATFORM_PROTECTED_DETAIL, failure.safeDetail, definition.transition.name)
+            assertEquals(
+                definition.from,
+                persistence.organisations.getValue(platformId).state,
+                definition.transition.name,
+            )
+        }
+        assertTrue(logs.items.isEmpty())
+        assertTrue(events.published.isEmpty())
+        // Each refusal is audited as DENIED in its own transaction, so a probe leaves a trail.
+        assertEquals(definitions.size, audits.items.size)
+        assertTrue(audits.items.all { it.outcome == AuditOutcome.DENIED })
+    }
+
+    @Test
+    fun `the platform organisation guard does not restrict other tenants`() {
+        val organisationId = uuidV7()
+        persistence.organisations[organisationId] =
+            LifecycleAggregate(organisationId, OrganisationLifecycleState.ACTIVE, ORGANISATION)
+
+        service.transition(
+            OrganisationTransitionCommand(organisationId, OrganisationLifecycleTransition.SUSPEND),
+        )
+
+        assertEquals(
+            OrganisationLifecycleState.SUSPENDED,
+            persistence.organisations.getValue(organisationId).state,
+        )
+    }
+
+    @Test
+    fun `platform branches and memberships still transition`() {
+        // Only the organisation aggregate is protected: platform memberships and branches move
+        // through their own lifecycles (the platform user routes), and that must keep working.
+        val platformId = PlatformOrganisation.ID
+        val branchId = uuidV7()
+        persistence.organisationStates[platformId] = OrganisationLifecycleState.ACTIVE
+        persistence.branches[platformId to branchId] =
+            LifecycleAggregate(branchId, BranchLifecycleState.ACTIVE, BRANCH)
+
+        service.transition(
+            BranchTransitionCommand(platformId, branchId, BranchLifecycleTransition.SUSPEND),
+        )
+
+        assertEquals(
+            BranchLifecycleState.SUSPENDED,
+            persistence.branches.getValue(platformId to branchId).state,
+        )
+    }
 }
 
 private class FakeLifecyclePersistence :
@@ -477,6 +550,9 @@ private class CapturingTransitionPublisher : TransitionEventPublisher {
     }
 }
 
+private const val PLATFORM_PROTECTED_DETAIL =
+    "The platform organisation cannot be suspended, deprovisioned or otherwise changed " +
+        "through the tenant lifecycle."
 private const val ORGANISATION = "ORGANISATION"
 private const val BRANCH = "BRANCH"
 private const val MEMBERSHIP = "MEMBERSHIP"

@@ -1,8 +1,8 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.context.RequestContexts
-import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.lifecycle.PlatformCaller
 import com.finaxis.platform.lifecycle.TenantCaller
 import org.springframework.security.core.context.SecurityContextHolder

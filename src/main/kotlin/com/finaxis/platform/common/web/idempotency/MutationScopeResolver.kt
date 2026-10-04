@@ -1,8 +1,8 @@
 package com.finaxis.platform.common.web.idempotency
 
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.context.RequestContexts
-import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.web.api.ApiJsonCodec
 import jakarta.servlet.http.HttpServletRequest
 import org.springframework.stereotype.Component

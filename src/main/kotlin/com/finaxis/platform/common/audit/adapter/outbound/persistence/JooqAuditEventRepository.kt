@@ -3,8 +3,8 @@ package com.finaxis.platform.common.audit.adapter.outbound.persistence
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.context.RequestContexts
-import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import org.jooq.DSLContext
