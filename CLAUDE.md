@@ -261,7 +261,9 @@ none is accounting. Do not invent accounting tables or columns outside those doc
   centralized exception handling.
 - All listing APIs must paginate; never return unbounded collections.
 - Use DTOs at API boundaries unless explicitly documented otherwise. Use Bean Validation for
-  request DTOs and typed configuration properties.
+  request DTOs and typed configuration properties. Every `@RequestBody` DTO carrying
+  constraints must be `@Valid` (nested ones `@field:Valid`), enforced by
+  `RequestBodyValidationArchitectureTest`.
 - Update smoke tests, docs, and examples whenever endpoint paths change.
 - See `docs/architecture/api-governance.md` and `docs/architecture/api-versioning.md`.
 

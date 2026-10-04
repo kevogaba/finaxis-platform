@@ -18,6 +18,8 @@ import com.finaxis.platform.lifecycle.application.ActingScope
 import com.finaxis.platform.lifecycle.application.ActivateBranchCommand
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.CreateBranchCommand
+import com.finaxis.platform.lifecycle.application.DecisionRemark
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.ReturnBranchCommand
 import com.finaxis.platform.lifecycle.application.SubmitBranchForApprovalCommand
 import com.finaxis.platform.lifecycle.application.query.BranchDetail
@@ -404,7 +406,7 @@ class PlatformTenantBranchController(
             SubmitBranchForApprovalCommand(
                 organisationId = tenantId,
                 branchId = branchId,
-                reason = request?.reason,
+                reason = DecisionRemark.optional(request?.reason),
                 actorId = caller.actorId,
                 requestId = uuidV7(),
                 scope = ActingScope.PLATFORM,
@@ -511,7 +513,7 @@ class PlatformTenantBranchController(
             ActivateBranchCommand(
                 organisationId = tenantId,
                 branchId = branchId,
-                reason = request?.reason,
+                reason = DecisionRemark.optional(request?.reason),
                 actorId = caller.actorId,
                 requestId = uuidV7(),
                 scope = ActingScope.PLATFORM,
@@ -621,7 +623,7 @@ class PlatformTenantBranchController(
             ReturnBranchCommand(
                 organisationId = tenantId,
                 branchId = branchId,
-                reason = request.reason,
+                reason = Reason.required(request.reason),
                 actorId = caller.actorId,
                 scope = ActingScope.PLATFORM,
             ),

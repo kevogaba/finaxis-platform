@@ -2,7 +2,9 @@ package com.finaxis.platform.lifecycle.adapter.inbound.web.dto
 
 import com.fasterxml.jackson.annotation.JsonFormat
 import com.fasterxml.jackson.annotation.JsonInclude
+import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.InitialAdministratorDraft
+import com.finaxis.platform.lifecycle.application.Reason
 import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.Valid
 import jakarta.validation.constraints.Email
@@ -135,7 +137,7 @@ data class InitialAdminDto(
 /** Request payload for rejecting a submitted tenant draft. */
 data class RejectTenantRequest(
     @field:NotBlank
-    @field:Size(min = 3, max = 500)
+    @field:Size(min = Reason.MIN_LENGTH, max = Reason.MAX_LENGTH)
     @field:Schema(example = "Incomplete registration documents.")
     val reason: String,
 )
@@ -143,7 +145,7 @@ data class RejectTenantRequest(
 /** Request payload for suspending an active tenant. */
 data class SuspendTenantRequest(
     @field:NotBlank
-    @field:Size(min = 3, max = 500)
+    @field:Size(min = Reason.MIN_LENGTH, max = Reason.MAX_LENGTH)
     @field:Schema(example = "Regulatory compliance review.")
     val reason: String,
 )
@@ -151,21 +153,21 @@ data class SuspendTenantRequest(
 /** Request payload for returning a pending tenant to draft for changes. */
 data class ReturnTenantRequest(
     @field:NotBlank
-    @field:Size(min = 3, max = 500)
+    @field:Size(min = Reason.MIN_LENGTH, max = Reason.MAX_LENGTH)
     @field:Schema(example = "Registration number has a typo.")
     val reason: String,
 )
 
 /** Optional decision remark for approving a submitted tenant. */
 data class ApproveTenantRequest(
-    @field:Size(max = 500)
+    @field:Size(max = DecisionRemark.MAX_LENGTH)
     @field:Schema(example = "KYC pack reviewed.")
     val reason: String? = null,
 )
 
 /** Request payload for reactivating a suspended tenant. */
 data class ReactivateTenantRequest(
-    @field:Size(max = 500)
+    @field:Size(max = DecisionRemark.MAX_LENGTH)
     @field:Schema(example = "Compliance review completed successfully.")
     val reason: String? = null,
 )
@@ -173,7 +175,7 @@ data class ReactivateTenantRequest(
 /** Request payload for metadata-only deprovisioning of a tenant. */
 data class DeprovisionTenantRequest(
     @field:NotBlank
-    @field:Size(min = 3, max = 500)
+    @field:Size(min = Reason.MIN_LENGTH, max = Reason.MAX_LENGTH)
     @field:Schema(example = "Offboarding requested by client.")
     val reason: String,
 )

@@ -31,6 +31,7 @@ import com.finaxis.platform.lifecycle.application.FoundationLifecycleService
 import com.finaxis.platform.lifecycle.application.OrganisationListFilter
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.application.OrganisationTransitionCommand
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.LifecycleAggregate
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
@@ -410,7 +411,7 @@ class JooqFoundationLifecyclePersistenceTests(
         insertActiveAssignments(organisationId, userId, branchId)
 
         organisationProvisioningService.deprovision(
-            DeprovisionOrganisationCommand(organisationId, "Contract ended"),
+            DeprovisionOrganisationCommand(organisationId, Reason.required("Contract ended")),
         )
 
         assertDeprovisionedAccess(organisationId, branchId, membershipId)

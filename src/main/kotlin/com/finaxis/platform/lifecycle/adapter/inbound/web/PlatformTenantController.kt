@@ -21,10 +21,12 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.TenantSummaryRespo
 import com.finaxis.platform.lifecycle.application.AmendOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
 import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
+import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.DeprovisionOrganisationCommand
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStore
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.application.ReactivateOrganisationCommand
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.RejectOrganisationProvisioningCommand
 import com.finaxis.platform.lifecycle.application.RetryInitialAdministratorBootstrapCommand
 import com.finaxis.platform.lifecycle.application.ReturnOrganisationForChangesCommand
@@ -615,7 +617,7 @@ class PlatformTenantController(
         val command =
             ApproveOrganisationProvisioningCommand(
                 organisationId = tenantId,
-                reason = request?.reason,
+                reason = DecisionRemark.optional(request?.reason),
                 actorId = caller.actorId,
                 requestId = uuidV7(),
             )
@@ -714,7 +716,7 @@ class PlatformTenantController(
         val command =
             RejectOrganisationProvisioningCommand(
                 organisationId = tenantId,
-                reason = request.reason,
+                reason = Reason.required(request.reason),
                 actorId = caller.actorId,
                 requestId = uuidV7(),
             )
@@ -834,7 +836,7 @@ class PlatformTenantController(
         organisationProvisioningService.returnForChanges(
             ReturnOrganisationForChangesCommand(
                 organisationId = tenantId,
-                reason = request.reason,
+                reason = Reason.required(request.reason),
                 actorId = caller.actorId,
             ),
         )
@@ -932,7 +934,7 @@ class PlatformTenantController(
         val command =
             SuspendOrganisationCommand(
                 organisationId = tenantId,
-                reason = request.reason,
+                reason = Reason.required(request.reason),
             )
         organisationProvisioningService.suspend(command)
         val updated = foundationQueryService.getTenant(tenantId, caller)
@@ -1021,7 +1023,7 @@ class PlatformTenantController(
     )
     fun reactivate(
         @PathVariable("tenant_id") tenantId: UUID,
-        @RequestBody(required = false) request: ReactivateTenantRequest?,
+        @RequestBody(required = false) @Valid request: ReactivateTenantRequest?,
     ): TenantDetailResponse {
         val caller = CallerContextResolver.getPlatformCaller()
         permissionGuard.requirePlatformPermission(caller.actorId, "tenant.reactivate")
@@ -1029,7 +1031,7 @@ class PlatformTenantController(
         val command =
             ReactivateOrganisationCommand(
                 organisationId = tenantId,
-                reason = request?.reason,
+                reason = DecisionRemark.optional(request?.reason),
             )
         organisationProvisioningService.reactivate(command)
         val updated = foundationQueryService.getTenant(tenantId, caller)
@@ -1126,7 +1128,7 @@ class PlatformTenantController(
         val command =
             DeprovisionOrganisationCommand(
                 organisationId = tenantId,
-                reason = request.reason,
+                reason = Reason.required(request.reason),
             )
         organisationProvisioningService.deprovision(command)
         val updated = foundationQueryService.getTenant(tenantId, caller)

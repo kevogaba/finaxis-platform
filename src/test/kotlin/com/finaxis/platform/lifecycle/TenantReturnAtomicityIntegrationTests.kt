@@ -12,6 +12,7 @@ import com.finaxis.platform.jooq.tables.references.ORGANISATION_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.ReturnOrganisationForChangesCommand
 import com.finaxis.platform.lifecycle.application.SubmitOrganisationForApprovalCommand
 import org.jooq.DSLContext
@@ -127,7 +128,11 @@ class TenantReturnAtomicityIntegrationTests(
     private fun returnTenant(tenantId: UUID) =
         withRequestContext {
             organisationProvisioningService.returnForChanges(
-                ReturnOrganisationForChangesCommand(tenantId, "Typo in the legal name.", checkerId),
+                ReturnOrganisationForChangesCommand(
+                    tenantId,
+                    Reason.required("Typo in the legal name."),
+                    checkerId,
+                ),
             )
         }
 

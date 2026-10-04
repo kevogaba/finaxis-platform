@@ -13,6 +13,7 @@ import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisionin
 import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.InitialAdministratorDraft
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.ReturnOrganisationForChangesCommand
 import com.finaxis.platform.lifecycle.application.SubmitOrganisationForApprovalCommand
 import org.jooq.DSLContext
@@ -290,7 +291,11 @@ class TenantApprovalReturnRaceIntegrationTests(
         tenantId: UUID,
         actorId: UUID,
     ) = service.returnForChanges(
-        ReturnOrganisationForChangesCommand(tenantId, "Please correct the draft.", actorId),
+        ReturnOrganisationForChangesCommand(
+            tenantId,
+            Reason.required("Please correct the draft."),
+            actorId,
+        ),
     )
 
     private fun submit(

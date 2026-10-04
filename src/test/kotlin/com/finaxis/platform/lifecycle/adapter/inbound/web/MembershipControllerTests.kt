@@ -19,6 +19,7 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReactivateMembersh
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.RevokeMembershipRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SuspendMembershipRequest
 import com.finaxis.platform.lifecycle.application.ApproveUserCommand
+import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.UserApprovalResult
 import com.finaxis.platform.lifecycle.application.UserProvisioningService
 import com.finaxis.platform.lifecycle.application.query.LifecycleIamReadService
@@ -254,7 +255,7 @@ class MembershipControllerTests
                 }.andExpect { status { isOk() } }
 
             verify(userProvisioningService).approveUser(
-                argThat<ApproveUserCommand> { reason == "x".repeat(500) },
+                argThat<ApproveUserCommand> { reason?.value == "x".repeat(500) },
             )
             verify(userProvisioningService).approveUser(
                 argThat<ApproveUserCommand> { reason == null },

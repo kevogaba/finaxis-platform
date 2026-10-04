@@ -51,7 +51,7 @@ data class AmendOrganisationDraftCommand(
 /** Submits an organisation draft to the approval workflow. */
 data class SubmitOrganisationForApprovalCommand(
     val organisationId: UUID,
-    val reason: String? = null,
+    val reason: DecisionRemark? = null,
     val actorId: UUID = uuidV7(),
     val requestId: UUID = uuidV7(),
 )
@@ -59,7 +59,7 @@ data class SubmitOrganisationForApprovalCommand(
 /** Approves a submitted organisation and performs its durable local setup. */
 data class ApproveOrganisationProvisioningCommand(
     val organisationId: UUID,
-    val reason: String? = null,
+    val reason: DecisionRemark? = null,
     val actorId: UUID = uuidV7(),
     val requestId: UUID = uuidV7(),
 )
@@ -67,7 +67,7 @@ data class ApproveOrganisationProvisioningCommand(
 /** Rejects an organisation approval request without deleting the draft data. */
 data class RejectOrganisationProvisioningCommand(
     val organisationId: UUID,
-    val reason: String,
+    val reason: Reason,
     val actorId: UUID = uuidV7(),
     val requestId: UUID = uuidV7(),
 )
@@ -75,26 +75,26 @@ data class RejectOrganisationProvisioningCommand(
 /** Returns a pending organisation to draft so its maker can amend and resubmit it. */
 data class ReturnOrganisationForChangesCommand(
     val organisationId: UUID,
-    val reason: String,
+    val reason: Reason,
     val actorId: UUID,
 )
 
 /** Suspends an active organisation while retaining all of its data. */
 data class SuspendOrganisationCommand(
     val organisationId: UUID,
-    val reason: String,
+    val reason: Reason,
 )
 
 /** Reactivates an organisation after its operational prerequisites are checked. */
 data class ReactivateOrganisationCommand(
     val organisationId: UUID,
-    val reason: String? = null,
+    val reason: DecisionRemark? = null,
 )
 
 /** Starts and completes metadata-only organisation deprovisioning. */
 data class DeprovisionOrganisationCommand(
     val organisationId: UUID,
-    val reason: String,
+    val reason: Reason,
 )
 
 /** Compact organisation projection for application queries. */
@@ -197,7 +197,7 @@ data class UpdateBranchCommand(
 data class SubmitBranchForApprovalCommand(
     val organisationId: UUID,
     val branchId: UUID,
-    val reason: String? = null,
+    val reason: DecisionRemark? = null,
     val actorId: UUID,
     val requestId: UUID,
     val scope: ActingScope = ActingScope.TENANT,
@@ -207,7 +207,7 @@ data class SubmitBranchForApprovalCommand(
 data class ActivateBranchCommand(
     val organisationId: UUID,
     val branchId: UUID,
-    val reason: String? = null,
+    val reason: DecisionRemark? = null,
     val actorId: UUID,
     val requestId: UUID,
     val scope: ActingScope = ActingScope.TENANT,
@@ -217,7 +217,7 @@ data class ActivateBranchCommand(
 data class ReturnBranchCommand(
     val organisationId: UUID,
     val branchId: UUID,
-    val reason: String,
+    val reason: Reason,
     val actorId: UUID,
     val scope: ActingScope = ActingScope.TENANT,
 )
@@ -226,7 +226,7 @@ data class ReturnBranchCommand(
 data class SuspendBranchCommand(
     val organisationId: UUID,
     val branchId: UUID,
-    val reason: String,
+    val reason: Reason,
     val actorId: UUID,
 )
 
@@ -234,7 +234,7 @@ data class SuspendBranchCommand(
 data class ReactivateBranchCommand(
     val organisationId: UUID,
     val branchId: UUID,
-    val reason: String? = null,
+    val reason: DecisionRemark? = null,
     val actorId: UUID,
 )
 
@@ -242,7 +242,7 @@ data class ReactivateBranchCommand(
 data class CloseBranchCommand(
     val organisationId: UUID,
     val branchId: UUID,
-    val reason: String,
+    val reason: Reason,
     val actorId: UUID,
 )
 
