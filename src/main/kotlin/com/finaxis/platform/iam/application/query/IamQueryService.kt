@@ -100,11 +100,28 @@ class IamQueryService(
                 )
             }
         }
-        return userQueries.findMembershipById(organisationId, membershipId)
+        return findMembership(organisationId, membershipId)
+    }
+
+    /**
+     * Retrieves a membership of [organisationId] without a permission check, for the response of
+     * a mutation the caller was already authorised to make on that membership (the platform
+     * checker echoing what it just approved, ADR 0028). Never expose it as a read endpoint: it
+     * is still bound to [organisationId], so an id of another tenant reads as not found.
+     */
+    fun getMembershipAfterAuthorizedMutation(
+        organisationId: UUID,
+        membershipId: UUID,
+    ): MembershipDetail = findMembership(organisationId, membershipId)
+
+    private fun findMembership(
+        organisationId: UUID,
+        membershipId: UUID,
+    ): MembershipDetail =
+        userQueries.findMembershipById(organisationId, membershipId)
             ?: throw ResourceNotFoundException(
                 safeDetail = "Membership not found: $membershipId",
             )
-    }
 
     /** Searches membership summaries, validating caller context and permissions. */
     fun searchMemberships(

@@ -50,6 +50,7 @@ data class ApproveUserCommand(
     val requestId: String? = null,
     val bootstrapRequestId: String? = null,
     val bootstrapAttempt: Int? = null,
+    val scope: ActingScope = ActingScope.TENANT,
 )
 
 /** Suspends a global user account from an organisation workflow context. */

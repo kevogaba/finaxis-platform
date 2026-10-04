@@ -46,6 +46,15 @@ During organisation deprovisioning, draft and pending branches can also be moved
 `SUSPENDED` through internal FSM transitions so cleanup remains logged instead of becoming an
 unattributed bulk update.
 
+A platform administrator can create a tenant's branch draft
+(`POST /platform/tenants/{tenant_id}/branches`) with the platform permission alone. It can also
+submit and activate a tenant's branch as the audited checker, but only **while the tenant has no
+ACTIVE branch other than the one the bootstrap created** (409 `lifecycle.platform_checker_closed`
+otherwise); the creator, and a platform administrator that submitted the branch, still cannot
+activate it. Submission and activation by the platform also write a
+`branch.submit_as_platform_checker` and a `branch.activate_as_platform_checker` audit row
+respectively. See [ADR 0028](../adr/0028-platform-checker-for-first-tenant-approvals.md).
+
 Draft creation writes `branch.create_draft` audit. Every branch FSM transition persists a
 transition log, publishes its configured transition event, and records an audit event through
 `FoundationLifecycleService`.

@@ -60,6 +60,15 @@ stateDiagram-v2
     SUSPENDED --> REVOKED: REVOKE
 ```
 
+Maker-checker is enforced around the `ACTIVATE` transitions, not inside the graph: a membership
+is not approved by its inviter or by the invited user, and a branch is not activated by its
+creator. A platform-context actor may be the checker of a pending membership (only while the
+tenant has no `ACTIVE` member beyond its bootstrap administrator) or of a pending branch (only
+while it has no `ACTIVE` branch beyond the bootstrap head office) through the same services
+(`ActingScope.PLATFORM`), so the graphs, guards, transition logs and event factories are the same on
+both paths and a platform-approved membership raises the same activation event. See
+[ADR 0028](../adr/0028-platform-checker-for-first-tenant-approvals.md).
+
 Each transition is an explicit command. Guard failures expose a safe business message and retain
 diagnostic logging. A successful lifecycle transaction updates only through its lifecycle service,
 writes the per-aggregate transition log and `audit_event`, then publishes the events created by

@@ -325,6 +325,7 @@ interface OrganisationQueryStore {
 }
 
 /** Branch lifecycle persistence port, always scoped to its owning organisation. */
+@Suppress("TooManyFunctions") // One cohesive branch-lookup port; splitting it buys nothing.
 interface BranchLifecycleStore {
     /** Resolves the lifecycle state of an owning organisation. */
     fun organisationState(organisationId: UUID): OrganisationLifecycleState?
@@ -365,6 +366,18 @@ interface BranchLifecycleStore {
 
     /** Resolves the creator (maker) user ID of a branch. */
     fun createdBy(
+        organisationId: UUID,
+        branchId: UUID,
+    ): UUID?
+
+    /**
+     * Returns whether the organisation has an ACTIVE branch that the bootstrap did not create,
+     * that is one whose creator is not the system actor (the bootstrap seeds the head office).
+     */
+    fun hasActiveBranchBeyondBootstrap(organisationId: UUID): Boolean
+
+    /** Resolves the user who performed the latest SUBMIT transition of a branch, if any. */
+    fun submittedBy(
         organisationId: UUID,
         branchId: UUID,
     ): UUID?

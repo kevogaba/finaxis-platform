@@ -135,6 +135,16 @@ data class OrganisationDraftResult(
     val status: OrganisationLifecycleState,
 )
 
+/**
+ * The authority a maker or checker step is exercised under. [PLATFORM] means the permission is
+ * checked in the reserved platform organisation, so no tenant membership is required; an actor
+ * who also happens to be an active tenant member may still use it. See ADR 0028.
+ */
+enum class ActingScope {
+    TENANT,
+    PLATFORM,
+}
+
 /** Creates a branch draft inside an active or provisioning organisation. */
 data class CreateBranchCommand(
     val organisationId: UUID,
@@ -145,6 +155,7 @@ data class CreateBranchCommand(
     val timezone: String,
     val address: Map<String, String> = emptyMap(),
     val requestedBy: UUID,
+    val scope: ActingScope = ActingScope.TENANT,
 )
 
 /** Submits a branch draft to approval. */
@@ -154,6 +165,7 @@ data class SubmitBranchForApprovalCommand(
     val reason: String? = null,
     val actorId: UUID,
     val requestId: UUID,
+    val scope: ActingScope = ActingScope.TENANT,
 )
 
 /** Activates an approved branch. */
@@ -163,6 +175,7 @@ data class ActivateBranchCommand(
     val reason: String? = null,
     val actorId: UUID,
     val requestId: UUID,
+    val scope: ActingScope = ActingScope.TENANT,
 )
 
 /** Suspends an active branch. */

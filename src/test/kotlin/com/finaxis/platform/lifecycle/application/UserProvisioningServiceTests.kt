@@ -1,11 +1,14 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.PlatformOrganisation
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
@@ -25,6 +28,10 @@ import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleTransition
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.verify
+import org.mockito.kotlin.doThrow
+import org.mockito.kotlin.whenever
+import org.springframework.security.access.AccessDeniedException
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -70,6 +77,7 @@ class UserProvisioningServiceTests {
             AuditService(audits, clock),
             events,
             clock,
+            permissionGuard,
         )
 
     @Test
@@ -226,6 +234,256 @@ class UserProvisioningServiceTests {
             )
 
         assertTrue(approval.keycloakProvisioningRequested)
+    }
+
+    @Test
+    fun `platform checker activates a pending membership and the audit names the scope`() {
+        val context = activeInvitationContext()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        fake.identityLinks += userId
+        val invitation = service.inviteUser(inviteCommand(context))
+        val platformChecker = uuidV7()
+
+        val approval =
+            service.approveUser(
+                ApproveUserCommand(
+                    context.org,
+                    invitation.membershipId,
+                    platformChecker,
+                    scope = ActingScope.PLATFORM,
+                ),
+            )
+
+        assertEquals(MembershipLifecycleState.ACTIVE, approval.membershipStatus)
+        assertEquals(MembershipLifecycleTransition.ACTIVATE.name, logs.logs.last().transition)
+        assertTrue(
+            events.externalTargets().contains("finaxis.lifecycle.membership.activated"),
+            "the platform path must raise the same activation event as the tenant path",
+        )
+        val audit = audits.events.single { it.action == "user.approve" }
+        assertEquals(platformChecker.toString(), audit.actorId)
+        assertEquals(context.org.toString(), audit.tenantId)
+        assertEquals("PLATFORM", audit.metadata["checkerScope"])
+    }
+
+    @Test
+    fun `a tenant approval records no platform checker scope`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+
+        service.approveUser(
+            ApproveUserCommand(context.org, invitation.membershipId, context.checker),
+        )
+
+        assertEquals(
+            null,
+            audits.events.single { it.action == "user.approve" }.metadata["checkerScope"],
+        )
+    }
+
+    @Test
+    fun `the platform checker keeps the maker-checker rule for memberships it created`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+
+        assertFailsWith<ForbiddenOperationException> {
+            service.approveUser(
+                ApproveUserCommand(
+                    context.org,
+                    invitation.membershipId,
+                    context.actor,
+                    scope = ActingScope.PLATFORM,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `platform approval answers 404 for a membership outside the tenant path`() {
+        val context = activeInvitationContext()
+        val otherTenant = uuidV7()
+        fake.organisationStates[otherTenant] = OrganisationLifecycleState.ACTIVE
+        val userId = fake.addUser("other@example.test", "other", UserLifecycleState.ACTIVE)
+        val foreignMembership =
+            fake.addMembership(otherTenant, userId, MembershipLifecycleState.PENDING_APPROVAL)
+
+        listOf(foreignMembership, uuidV7()).forEach { membershipId ->
+            assertFailsWith<ResourceNotFoundException> {
+                service.approveUser(
+                    ApproveUserCommand(
+                        context.org,
+                        membershipId,
+                        uuidV7(),
+                        scope = ActingScope.PLATFORM,
+                    ),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `platform approval is refused while the tenant is not active`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        fake.organisationStates[context.org] = OrganisationLifecycleState.SUSPENDED
+
+        assertFailsWith<ConflictException> {
+            service.approveUser(
+                ApproveUserCommand(
+                    context.org,
+                    invitation.membershipId,
+                    uuidV7(),
+                    scope = ActingScope.PLATFORM,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `approving a membership that is no longer pending is a conflict`() {
+        val context = activeInvitationContext()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        val membershipId = fake.addMembership(context.org, userId, MembershipLifecycleState.ACTIVE)
+
+        assertFailsWith<ConflictException> {
+            service.approveUser(ApproveUserCommand(context.org, membershipId, context.checker))
+        }
+    }
+
+    @Test
+    fun `no acting scope lets a user approve their own membership`() {
+        ActingScope.entries.forEach { scope ->
+            val context = activeInvitationContext()
+            val beneficiary =
+                fake.addUser(
+                    "self-$scope@example.test",
+                    "self$scope",
+                    UserLifecycleState.ACTIVE,
+                )
+            fake.identityLinks += beneficiary
+            val membershipId =
+                fake.addMembership(
+                    context.org,
+                    beneficiary,
+                    MembershipLifecycleState.PENDING_APPROVAL,
+                )
+            fake.membershipInviters[context.org to membershipId] = context.actor
+
+            assertFailsWith<ForbiddenOperationException>(scope.name) {
+                service.approveUser(
+                    ApproveUserCommand(context.org, membershipId, beneficiary, scope = scope),
+                )
+            }
+            assertEquals(
+                MembershipLifecycleState.PENDING_APPROVAL,
+                fake.memberships.getValue(context.org to membershipId).state,
+            )
+        }
+    }
+
+    @Test
+    fun `a platform approval asks the platform permission and is refused without it`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        val platformChecker = uuidV7()
+        doThrow(AccessDeniedException("no"))
+            .whenever(permissionGuard)
+            .requirePlatformPermission(platformChecker, "user.approve")
+
+        assertFailsWith<AccessDeniedException> {
+            service.approveUser(
+                ApproveUserCommand(
+                    context.org,
+                    invitation.membershipId,
+                    platformChecker,
+                    scope = ActingScope.PLATFORM,
+                ),
+            )
+        }
+        assertEquals(
+            MembershipLifecycleState.PENDING_APPROVAL,
+            fake.memberships.getValue(context.org to invitation.membershipId).state,
+        )
+    }
+
+    @Test
+    fun `a platform approval cannot act inside the platform organisation itself`() {
+        val platformChecker = uuidV7()
+        val userId = fake.addUser("p@example.test", "p", UserLifecycleState.ACTIVE)
+        fake.organisationStates[PlatformOrganisation.ID] = OrganisationLifecycleState.ACTIVE
+        val membershipId =
+            fake.addMembership(
+                PlatformOrganisation.ID,
+                userId,
+                MembershipLifecycleState.PENDING_APPROVAL,
+            )
+
+        assertFailsWith<ResourceNotFoundException> {
+            service.approveUser(
+                ApproveUserCommand(
+                    PlatformOrganisation.ID,
+                    membershipId,
+                    platformChecker,
+                    scope = ActingScope.PLATFORM,
+                ),
+            )
+        }
+        verify(permissionGuard).requirePlatformPermission(platformChecker, "user.approve")
+    }
+
+    @Test
+    fun `the platform checker is closed once the tenant has an active member of its own`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        val other = fake.addUser("other@example.test", "other", UserLifecycleState.ACTIVE)
+        fake.addMembership(context.org, other, MembershipLifecycleState.ACTIVE)
+
+        val error =
+            assertFailsWith<ConflictException> {
+                service.approveUser(
+                    ApproveUserCommand(
+                        context.org,
+                        invitation.membershipId,
+                        uuidV7(),
+                        scope = ActingScope.PLATFORM,
+                    ),
+                )
+            }
+        assertEquals(LifecycleErrorCodes.PLATFORM_CHECKER_CLOSED, error.code)
+        assertEquals(
+            MembershipLifecycleState.PENDING_APPROVAL,
+            fake.memberships.getValue(context.org to invitation.membershipId).state,
+        )
+        // The tenant's own approver is not bounded.
+        service.approveUser(ApproveUserCommand(context.org, invitation.membershipId, uuidV7()))
+    }
+
+    @Test
+    fun `the bootstrap administrator alone does not close the platform checker`() {
+        val context = activeInvitationContext()
+        val admin = fake.addUser("admin@example.test", "admin", UserLifecycleState.ACTIVE)
+        val adminMembership =
+            fake.addMembership(
+                context.org,
+                admin,
+                MembershipLifecycleState.ACTIVE,
+            )
+        fake.membershipInviters[context.org to adminMembership] = SystemActor.ID
+        val user = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        fake.identityLinks += user
+        val invitation = service.inviteUser(inviteCommand(context))
+
+        val approval =
+            service.approveUser(
+                ApproveUserCommand(
+                    context.org,
+                    invitation.membershipId,
+                    uuidV7(),
+                    scope = ActingScope.PLATFORM,
+                ),
+            )
+
+        assertEquals(MembershipLifecycleState.ACTIVE, approval.membershipStatus)
     }
 
     @Test
@@ -519,6 +777,13 @@ private class UserProvisioningFake :
         )
     }
 
+    override fun hasActiveMembershipBeyondBootstrap(organisationId: UUID): Boolean =
+        memberships.any { (key, aggregate) ->
+            key.first == organisationId &&
+                aggregate.state == MembershipLifecycleState.ACTIVE &&
+                membershipInviters[key] != SystemActor.ID
+        }
+
     override fun membershipExists(
         organisationId: UUID,
         userId: UUID,
@@ -778,6 +1043,13 @@ private class UserProvisioningFake :
         branchAssignments.remove(BranchAssignmentKey(command.organisationId, command.userId))
 
     override fun createdBy(
+        organisationId: UUID,
+        branchId: UUID,
+    ): UUID? = null
+
+    override fun hasActiveBranchBeyondBootstrap(organisationId: UUID): Boolean = false
+
+    override fun submittedBy(
         organisationId: UUID,
         branchId: UUID,
     ): UUID? = null

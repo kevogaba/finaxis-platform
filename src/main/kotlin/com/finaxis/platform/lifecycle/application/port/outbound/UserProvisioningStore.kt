@@ -74,6 +74,12 @@ interface UserProvisioningMembershipStore {
         membershipId: UUID,
     ): UUID? = null
 
+    /**
+     * Returns whether the organisation has an ACTIVE membership that the bootstrap did not create,
+     * that is one whose creator is not the system actor.
+     */
+    fun hasActiveMembershipBeyondBootstrap(organisationId: UUID): Boolean
+
     /** Returns whether the user already has a membership row (any status) in the organisation. */
     fun membershipExists(
         organisationId: UUID,

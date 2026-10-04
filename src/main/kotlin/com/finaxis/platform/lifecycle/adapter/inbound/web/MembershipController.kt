@@ -610,22 +610,6 @@ class MembershipController(
             primaryBranchId = primaryBranchId,
         )
 
-    private fun LifecycleMembershipDetail.toResponse() =
-        MembershipDetailResponse(
-            id = id,
-            organisationId = organisationId,
-            userId = userId,
-            username = username,
-            email = email,
-            displayName = displayName,
-            userStatus = userStatus,
-            membershipStatus = membershipStatus,
-            membershipType = membershipType,
-            primaryBranchId = primaryBranchId,
-            createdAt = createdAt,
-            updatedAt = updatedAt,
-        )
-
     private companion object {
         const val MAXIMUM_PAGE_SIZE = 100L
     }

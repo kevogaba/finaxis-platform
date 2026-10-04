@@ -5,6 +5,7 @@ import java.util.UUID
 /**
  * Outbound port for persisting initial administrator bootstrap metadata and maker-checker state.
  */
+@Suppress("TooManyFunctions") // One cohesive record port; splitting it buys nothing.
 interface InitialAdministratorBootstrapStore {
     /** Creates the initial bootstrap record in DRAFT status. */
     fun createDraft(
@@ -33,6 +34,12 @@ interface InitialAdministratorBootstrapStore {
 
     /** Rejects the approval request, returning the status to DRAFT. */
     fun reject(organisationId: UUID)
+
+    /**
+     * Resolves, by email, the account that already exists for the draft's named initial
+     * administrator, or null when none exists yet (the bootstrap will create it).
+     */
+    fun existingAdministratorUserId(organisationId: UUID): UUID?
 
     /** Finds the bootstrap record for an organisation. */
     fun find(organisationId: UUID): InitialAdministratorBootstrapRecord?
