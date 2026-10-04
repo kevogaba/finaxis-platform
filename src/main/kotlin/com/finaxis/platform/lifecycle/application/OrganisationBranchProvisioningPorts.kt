@@ -338,6 +338,15 @@ interface OrganisationQueryStore {
     fun list(filter: OrganisationListFilter): OrganisationPage
 }
 
+/**
+ * The audit action recorded for every successful branch amendment. The approval rule reads these
+ * events to learn who ever amended a branch, so the writer and the reader share this one constant.
+ */
+const val BRANCH_UPDATE_AUDIT_ACTION = "branch.update"
+
+/** The audit `entity_type` of every branch event, shared by the audit writer and the reader. */
+const val BRANCH_AUDIT_ENTITY_TYPE = "BRANCH"
+
 /** Branch lifecycle persistence port, always scoped to its owning organisation. */
 @Suppress("TooManyFunctions") // One cohesive branch-lookup port; splitting it buys nothing.
 interface BranchLifecycleStore {
@@ -420,6 +429,19 @@ interface BranchLifecycleStore {
         organisationId: UUID,
         branchId: UUID,
     ): UUID?
+
+    /**
+     * Whether [actorId] has a successful `branch.update` audit event on the branch, that is
+     * whether they ever amended it. Amends happen only in `DRAFT` or `ACTIVE` and an approval is
+     * only reachable from `PENDING_APPROVAL`, so "ever" is every amender of the version being
+     * approved. The row's own `updated_by` cannot answer this: every status transition (a
+     * checker's return, a submit) stamps it too, so at approval time it is always the submitter.
+     */
+    fun hasAmended(
+        organisationId: UUID,
+        branchId: UUID,
+        actorId: UUID,
+    ): Boolean
 }
 
 /** Organisation-scoped persistence port for user-to-branch assignments. */

@@ -512,6 +512,25 @@ and answers `200` with the branch detail above, so the response carries the stor
 The platform route has no equivalent: a platform administrator creates, submits and activates a
 tenant's branch but does not edit it.
 
+#### Approving a branch (`activate`)
+
+`POST /branches/{branch_id}/activate` (tenant) and
+`POST /platform/tenants/{tenant_id}/branches/{branch_id}/activate` (platform checker) share one
+maker-checker rule. The order is: the permission (403), the branch (404), on the platform route
+the window (409), the maker-checker rule (403), then the tenant state (409) and the branch state
+(409):
+
+- `403 forbidden` when the approver **created** the branch, and, on the platform route, when it
+  **submitted** it. A tenant submitter is not refused (ADR 0028).
+- `403 lifecycle.approver_is_branch_modifier` when the approver **amended** the branch, on either
+  route: anyone with a successful `branch.update` audit event on it, however many amends came
+  later (the row's `updated_by` is not used: a checker's return and every submit stamp it, so at
+  approval time it is always the submitter). The checker who only *returned* the draft amended
+  nothing and may approve its resubmission. An amender whose edit was later overwritten is still
+  refused, so a tiny tenant may need a third person or the platform checker.
+- `409 lifecycle.platform_checker_closed`, `409 conflict` (tenant not `ACTIVE`, branch not
+  `PENDING_APPROVAL`) as before.
+
 `opened_on` and `closed_on` are business dates (`dd-MM-yyyy`) taken from the tenant's current
 business date, never the wall clock, and are `null` until they apply:
 
@@ -556,7 +575,9 @@ a flag in the request:
 - **Maker-checker.** Returning is the one decision a maker may take on their own branch: it hands
   the branch back to them and can never activate anything. The creator rule (and, on the platform
   route, the submitter rule) keeps applying to every later `ACTIVATE`; a branch the creator drafted
-  cannot be activated by the creator however many times it loops.
+  cannot be activated by the creator however many times it loops. Anyone who amended the
+  draft is barred too (`403 lifecycle.approver_is_branch_modifier`); the checker who returned it
+  is not, unless they also amended it.
 - **Check order.** The permission asked depends on the caller, so the caller is classified first
   (reading `created_by` and the latest submitter, scoped to the path organisation; a branch absent
   from it has neither, so it classifies as a return and a missing branch looks the same as another
@@ -787,7 +808,8 @@ require the path tenant to own `branch_id` (404 otherwise; the platform organisa
 valid `tenant_id`). The optional body of submit and activate is validated (`reason` at most 500
 characters, otherwise 400 `validation_failed`). The returned branch needs no `branch.view`: the
 route works with its mutation permission alone. Submit needs an `ACTIVE` or `PROVISIONING` tenant (409 otherwise); activation
-needs an `ACTIVE` tenant and a platform actor that neither created nor submitted the branch (403).
+needs an `ACTIVE` tenant and a platform actor that neither created, submitted nor amended the
+branch (403; `lifecycle.approver_is_branch_modifier` for an amender).
 Submit and activate are also bounded: **409 `lifecycle.platform_checker_closed`** once the tenant
 has an `ACTIVE` branch that the system actor did not create (the bootstrap head office does not
 count). See

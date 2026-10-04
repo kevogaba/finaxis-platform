@@ -45,6 +45,16 @@ object LifecycleErrorCodes {
         "The approver cannot be the tenant's initial administrator."
 
     /**
+     * A branch approval was refused because the approver amended the branch (has a successful
+     * `branch.update` on it), so one person cannot amend, resubmit and approve another's draft.
+     */
+    const val APPROVER_IS_BRANCH_MODIFIER = "lifecycle.approver_is_branch_modifier"
+
+    /** The safe detail that accompanies [APPROVER_IS_BRANCH_MODIFIER]. */
+    const val APPROVER_IS_BRANCH_MODIFIER_DETAIL =
+        "The approver cannot be someone who amended the branch."
+
+    /**
      * The reserved `PLATFORM` organisation was named as the target of a tenant lifecycle action
      * (amend, submit, approve, reject, return, suspend, reactivate, deprovision, bootstrap retry).
      * It is the identity every platform principal authenticates against, so it is never a tenant
