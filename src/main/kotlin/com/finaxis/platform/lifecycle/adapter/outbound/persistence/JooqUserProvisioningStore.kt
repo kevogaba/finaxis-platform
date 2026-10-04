@@ -68,6 +68,14 @@ private class JooqUserProvisioningAccountStore(
             .where(DSL.lower(USER_ACCOUNT.EMAIL).eq(email.lowercase()))
             .fetchOne(USER_ACCOUNT.ID)
 
+    override fun usernameInUse(username: String): Boolean =
+        dsl.fetchExists(
+            dsl
+                .selectOne()
+                .from(USER_ACCOUNT)
+                .where(DSL.lower(USER_ACCOUNT.USERNAME).eq(username.lowercase())),
+        )
+
     override fun createUserAccount(
         email: String,
         username: String,

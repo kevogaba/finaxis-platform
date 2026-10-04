@@ -615,6 +615,13 @@ check (`403`) and precedes any existence or state check; the platform branch and
 under a tenant still answer `404` for it. See
 [the platform organisation is never a tenant](../security/authorization-model.md#the-platform-organisation-is-never-a-tenant).
 
+`POST /` (create draft) and `PATCH /{tenant_id}` (amend draft) answer **`409 conflict`** with the
+detail "A tenant with that tenant code already exists." when `tenant_code` is held by another
+organisation, and change nothing: no new row on create, the draft untouched on amend (an amend that
+keeps the draft's own code is not a clash). The lookup is a courtesy; two concurrent requests that
+both pass it get the same `409` from the database's unique index on the loser (#211; both were a
+`500`).
+
 `suspend`, `reactivate` and `deprovision` on a tenant id that does not exist are
 `404 resource_not_found` (#207); `suspend` used to be a `500`, the other two a `409`. The permission
 check runs first, so a caller without the route's permission gets `403` for any id, known or not,
@@ -811,9 +818,12 @@ Takes an optional decision remark body (see [Decision remarks](#decision-remarks
 membership as `GET /api/v1/tenant/memberships/{membership_id}` does: **200** when the membership became `ACTIVE`, **202** while Keycloak provisioning is queued.
 The permission is checked in the platform organisation, and the returned membership needs no
 `membership.view`: the route works with `user.approve` alone. `404` when the membership is not in the
-path tenant, `409` when the tenant is not `ACTIVE`, the membership is not pending approval, or the
-tenant already has an `ACTIVE` membership the system actor did not create (the bootstrap
-administrator does not count; code `lifecycle.platform_checker_closed`), and
+path tenant, `409` when the tenant is not `ACTIVE`, the membership is not pending approval, the
+user has no active branch or role assignment yet or the user account is not in a state that allows
+provisioning or activation (the same prerequisites as the tenant route, see
+[Memberships](#memberships)), or the tenant already has an `ACTIVE` membership the system actor did
+not create (the bootstrap administrator does not count; code
+`lifecycle.platform_checker_closed`), and
 `403` when the platform actor invited the membership or is the invited user (the checker is
 neither the maker nor the beneficiary).
 
@@ -940,6 +950,26 @@ invite is `400 validation_failed` with the violation attributed to
 entry that names a `branch_id` is `422 invalid_operation` (also formerly a `500`). See
 [Role Assignments](#role-assignments).
 
+Every other client mistake in the invite is refused with a `4xx` problem (`code`, `detail`,
+`request_id`), and **atomically**: a refused invitation leaves no user, membership, branch
+assignment, role assignment or audit row behind (#211; each used to be a `500`). Permission checks
+still run first, so a caller without `user.invite` gets `403` for a well-formed body (a body that
+fails Bean Validation is a `400` before any permission check, as on every route).
+
+- **`409 conflict`**: the user (matched by email, ignoring case) already has a membership in the
+  organisation, in any state including `REVOKED`; the `username` is already held by another user
+  (usernames are global and case-insensitive); or the organisation is not `ACTIVE`. The email and
+  username lookups are courtesies that give the specific message; two concurrent invitations for
+  one new email or username can both pass them, and the loser, refused by the database's unique
+  index, gets the same `409` with "A user with this email or username already exists; retry the
+  invitation."
+- **`422 invalid_operation`**: a `role_id` is unknown, belongs to another organisation or is not
+  `ACTIVE`; a `branch_id` (`primary_branch_id`, a branch assignment or a branch-scoped role) is
+  unknown, belongs to another organisation or is not `ACTIVE`; or a `TENANT` role names a branch.
+  The detail never echoes the offending value.
+- **`400 validation_failed`**: an email the service refuses though the DTO accepts it (for example
+  `user@localhost`), no branch assignment for a member type that needs one, or no role assignment.
+
 ### Memberships
 
 Base path: `/api/v1/tenant/memberships`. List filters: `q`, `membership_status`,
@@ -978,6 +1008,15 @@ Membership response and revoke request:
   "reason": "User left the organisation."
 }
 ```
+
+Activating (approving) a membership answers `409 conflict`, and changes nothing, when the
+membership is not `PENDING_APPROVAL`; when the user has no active branch assignment (member types
+`SYSTEM` and `AUDITOR` are exempt) or no active role assignment yet; or when the user account is not
+in a state that allows identity provisioning (a user without a linked identity must be `DRAFT` or
+`PENDING_APPROVAL`) or the membership activation (a user with a linked identity must be `ACTIVE` or
+`INVITED`). The detail names the missing prerequisite, for example `The membership cannot be
+approved until the user has an active role assignment.` These were `500`s before #211. The
+permission check (`403`) and the unknown-membership check (`404`) still come first.
 
 Revoking a membership that is already `REVOKED` is `409 conflict` with the detail
 `This membership has already been revoked.`, and changes nothing: no state change, no transition
