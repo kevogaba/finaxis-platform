@@ -4,11 +4,11 @@ import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditSeverity
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.context.RequestContext
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.context.TenantContext
 import com.finaxis.platform.common.id.uuidV7
-import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import com.finaxis.platform.jooq.tables.references.ORGANISATION

@@ -1,6 +1,6 @@
 package com.finaxis.platform.iam.adapter.outbound.authorization
 
-import com.finaxis.platform.common.persistence.PlatformOrganisation
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.iam.application.authorization.AuthorizationService
 import com.finaxis.platform.lifecycle.PermissionGuard
 import org.springframework.stereotype.Component

@@ -1,8 +1,8 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
-import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal

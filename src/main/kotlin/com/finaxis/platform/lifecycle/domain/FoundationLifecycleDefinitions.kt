@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.domain
 
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.InternalTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionDefinition
@@ -174,10 +175,28 @@ interface LifecyclePrerequisites {
 
 /** Foundation graphs. Legal directions are explicit and independent of UI or role names. */
 object FoundationLifecycleDefinitions {
-    /** Defines the complete explicit organisation lifecycle graph. */
+    /**
+     * The safe detail of the refusal to transition the reserved `PLATFORM` organisation. Public
+     * so the application layer's own refusal (`OrganisationProvisioningService`) says exactly the
+     * same thing as this graph's guard.
+     */
+    const val PLATFORM_ORGANISATION_PROTECTED_DETAIL =
+        "The platform organisation cannot be suspended, deprovisioned or otherwise changed " +
+            "through the tenant lifecycle."
+
+    /**
+     * Defines the complete explicit organisation lifecycle graph.
+     *
+     * Every edge carries `PLATFORM_ORGANISATION_GUARD`: the reserved `PLATFORM` organisation is the
+     * identity every platform principal authenticates against, so no transition, from any state,
+     * may move it (issue #205). It is enforced here, in the engine, and not only in
+     * `OrganisationProvisioningService`, so a future caller of `FoundationLifecycleService` cannot
+     * route around it; `V20` adds the same line in the database.
+     */
     fun organisationGraph(): OrganisationGraph =
         TransitionGraph(
-            organisationProvisioningDefinitions() + organisationDeprovisioningDefinitions(),
+            (organisationProvisioningDefinitions() + organisationDeprovisioningDefinitions())
+                .map { it.copy(guards = it.guards + PLATFORM_ORGANISATION_GUARD) },
         )
 
     private fun organisationProvisioningDefinitions(): List<
@@ -703,6 +722,19 @@ private fun branchClosureGuard(
         requireLifecycleGuard(
             !prerequisites.branchHasActiveChildren(organisationId, branchId),
             "Close or re-parent active child branches before closing this branch.",
+        )
+    }
+
+private val PLATFORM_ORGANISATION_GUARD:
+    TransitionGuard<
+        OrganisationLifecycleState,
+        OrganisationLifecycleTransition,
+        LifecycleAggregate<OrganisationLifecycleState>,
+    > =
+    TransitionGuard { context ->
+        requireLifecycleGuard(
+            context.aggregate.aggregateId != PlatformOrganisation.ID.toString(),
+            FoundationLifecycleDefinitions.PLATFORM_ORGANISATION_PROTECTED_DETAIL,
         )
     }
 

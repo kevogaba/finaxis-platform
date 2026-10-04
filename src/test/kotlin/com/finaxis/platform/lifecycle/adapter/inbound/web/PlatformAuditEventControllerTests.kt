@@ -8,8 +8,8 @@ import com.finaxis.platform.common.audit.AuditEventSummary
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditQueryService
 import com.finaxis.platform.common.audit.AuditSeverity
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
-import com.finaxis.platform.common.persistence.PlatformOrganisation
 import com.finaxis.platform.common.web.api.ApiExceptionHandler
 import com.finaxis.platform.common.web.api.ApiJsonCodec
 import com.finaxis.platform.common.web.api.ApiProblemFactory

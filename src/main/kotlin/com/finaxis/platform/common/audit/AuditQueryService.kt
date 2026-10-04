@@ -1,7 +1,7 @@
 package com.finaxis.platform.common.audit
 
 import com.finaxis.platform.common.application.ResourceNotFoundException
-import com.finaxis.platform.common.persistence.PlatformOrganisation
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import org.springframework.stereotype.Service
 import java.time.Instant

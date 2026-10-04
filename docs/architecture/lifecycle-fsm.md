@@ -32,6 +32,17 @@ stateDiagram-v2
     CLOSED --> ARCHIVED: ARCHIVE
 ```
 
+**The platform organisation never transitions.** Every edge of the organisation graph carries a
+guard (`FoundationLifecycleDefinitions.organisationGraph`) that refuses the reserved `PLATFORM`
+organisation, so no caller of `FoundationLifecycleService` can suspend, deprovision or otherwise
+move it; the refusal is a `TransitionGuardException`, mapped to a `409` and audited as `DENIED` like
+any guard. `OrganisationProvisioningService` refuses it earlier and with its own code
+(`lifecycle.platform_organisation_protected`), recording a `DENIED` audit row first through
+`AuditService.recordIndependently` (a new transaction, so the `409`'s rollback cannot take it), and
+`V20` pins its status to `ACTIVE` in the database (#205). The guard is on the organisation aggregate
+only: platform branches and memberships keep their ordinary lifecycles. See
+[the platform organisation is never a tenant](../security/authorization-model.md#the-platform-organisation-is-never-a-tenant).
+
 Branch activation requires an active or provisioning organisation. Closing a branch requires no
 active assignment unless the command has first revoked or reassigned it. User activation requires
 a Keycloak link or explicit invitation completion. Membership activation requires an active
@@ -152,9 +163,10 @@ resubmission with no exit event in between
 actor may be neither the requester nor the submitter (`requested_by` and `submitted_by` on the
 bootstrap record, the rule `approveProvisioning` applies) and may not be the system actor, so a
 maker cannot pull their own submission back through it. The order is permission (so a caller
-without it learns nothing), the organisation lock, the bootstrap record (404 for an unknown
-tenant and for the platform organisation, which has none), the maker-checker rule, then the FSM's
-own state conflict (409). The transition runs first and the record is reset after, so a tenant
+without it learns nothing), the refusal of the platform organisation (409
+`lifecycle.platform_organisation_protected`), the organisation lock, the bootstrap record (404 for
+an unknown tenant), the maker-checker rule, then the FSM's own state conflict (409). The
+transition runs first and the record is reset after, so a tenant
 that is not pending is refused without touching the record.
 
 Every provisioning decision (approve, return, reject, submit and amend) locks the organisation row

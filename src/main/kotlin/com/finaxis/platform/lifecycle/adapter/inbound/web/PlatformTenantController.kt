@@ -384,7 +384,8 @@ class PlatformTenantController(
         ),
         ApiResponse(
             responseCode = "409",
-            description = "Tenant is no longer amendable",
+            description =
+                "Tenant is no longer amendable" + PLATFORM_PROTECTED,
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -491,7 +492,8 @@ class PlatformTenantController(
         ),
         ApiResponse(
             responseCode = "409",
-            description = "Tenant state conflicts with submission",
+            description =
+                "Tenant state conflicts with submission" + PLATFORM_PROTECTED,
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -593,7 +595,8 @@ class PlatformTenantController(
         ),
         ApiResponse(
             responseCode = "409",
-            description = "Tenant state conflicts with approval",
+            description =
+                "Tenant state conflicts with approval" + PLATFORM_PROTECTED,
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -691,7 +694,8 @@ class PlatformTenantController(
         ),
         ApiResponse(
             responseCode = "409",
-            description = "Tenant state conflicts with rejection",
+            description =
+                "Tenant state conflicts with rejection" + PLATFORM_PROTECTED,
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -787,7 +791,7 @@ class PlatformTenantController(
         ),
         ApiResponse(
             responseCode = "404",
-            description = "Tenant not found (the platform organisation is never a tenant)",
+            description = "Tenant not found",
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -809,7 +813,8 @@ class PlatformTenantController(
         ),
         ApiResponse(
             responseCode = "409",
-            description = "Tenant is not pending approval",
+            description =
+                "Tenant is not pending approval" + PLATFORM_PROTECTED,
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -907,7 +912,8 @@ class PlatformTenantController(
         ),
         ApiResponse(
             responseCode = "409",
-            description = "Tenant state conflicts with suspension",
+            description =
+                "Tenant state conflicts with suspension" + PLATFORM_PROTECTED,
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -1003,7 +1009,8 @@ class PlatformTenantController(
         ),
         ApiResponse(
             responseCode = "409",
-            description = "Tenant state conflicts with reactivation",
+            description =
+                "Tenant state conflicts with reactivation" + PLATFORM_PROTECTED,
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -1099,7 +1106,8 @@ class PlatformTenantController(
         ),
         ApiResponse(
             responseCode = "409",
-            description = "Tenant state conflicts with deprovisioning",
+            description =
+                "Tenant state conflicts with deprovisioning" + PLATFORM_PROTECTED,
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -1196,7 +1204,8 @@ class PlatformTenantController(
         ),
         ApiResponse(
             responseCode = "409",
-            description = "Bootstrap cannot be retried in the current state",
+            description =
+                "Bootstrap cannot be retried in the current state" + PLATFORM_PROTECTED,
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -1255,5 +1264,11 @@ class PlatformTenantController(
 
     private companion object {
         const val MAXIMUM_PAGE_SIZE = 100L
+
+        // The 409 every tenant action answers for the reserved platform organisation (issue #205),
+        // appended to each route's own 409 description.
+        const val PLATFORM_PROTECTED =
+            ", or the target is the platform organisation " +
+                "(`lifecycle.platform_organisation_protected`)"
     }
 }
