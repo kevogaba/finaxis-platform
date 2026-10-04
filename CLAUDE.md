@@ -167,6 +167,37 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   ADR 0024 does not apply, and it does not cover `DELETE`, which no code performs and the foreign
   keys refuse while the seeded platform roles exist. Supersedes nothing — see
   `docs/security/authorization-model.md` and `docs/architecture/lifecycle-fsm.md`
+- `V21__branch_approve_permission.sql` — **reference data only, no schema** (#208):
+  `branch.approve` is now THE permission that approves a pending branch (tenant and platform
+  `/activate`, and the checker's half of `/return`; a maker's withdraw stays `branch.create`,
+  reactivating a suspended branch `branch.reactivate`), and `branch.activate` is
+  **DEPRECATED**: runtime honours only `ACTIVE` permissions and no route checks it. It adds no
+  code, so no id is allocated. Approval authority is **rebuilt from `branch.activate`**: while
+  it is `ACTIVE`, every pre-existing `branch.approve` row, which conferred nothing because
+  nothing checked it, is **discarded** (role grants and membership overrides, `ALLOW` and `DENY`
+  alike, that have no `branch.activate` counterpart), then every `role_permission` row (system
+  roles of existing tenants included) and every `membership_permission` override of
+  `branch.activate` is copied with the same effect, and `branch.approve` is repaired to `ACTIVE`.
+  Every principal's effective approval ability is therefore identical before and after: nobody
+  widened, nobody narrowed, and an admin who composed an approver role around the dead code must
+  re-grant it knowingly. While it rebuilds, V21 takes `LOCK TABLE role_permission,
+  membership_permission IN SHARE ROW EXCLUSIVE MODE`, so grant writes by instances of the old
+  release wait for the commit instead of being copied stale. A `DISABLED` source disables
+  `branch.approve` and discards nothing. A `DEPRECATED` source with `branch.approve` `ACTIVE`
+  **raises whatever the rows say** (the old runtime authorized nobody through a deprecated
+  code, and matching rows cannot prove V21 completed earlier, so accepting them would open
+  approval to every holder at once; the message says to disable `branch.approve` by hand or
+  re-activate `branch.activate` and run again), which also makes a hand re-run refuse. The
+  `branch.activate` rows are left in place, harmless. The effective-permission cache is
+  namespaced by schema version and cleared at start by the mechanism introduced with V19.
+  During a rolling deploy, old instances check the deprecated `branch.activate` and refuse
+  approvals until replaced: fail-safe. The readiness
+  check behind tenant reactivation counts only the codes of the current bundle and ignores
+  extra rows, so `branch.activate` simply leaves `OrganisationBootstrapDefaults` (new tenants
+  get `branch.approve` and not the deprecated code) and existing tenants stay ready. Asserts its
+  preconditions and post-conditions in-file; supersedes the docs that named `branch.activate`
+  as the checker's permission — see `docs/security/authorization-model.md` ("Branch approval")
+  and ADRs 0028 and 0029
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -195,7 +226,8 @@ one-control-account-per-class uniqueness, `V12` the manual-journal external refe
 the journal-line append guard, `V14` the daily-balance projection, `V15` the branch
 trial-balance index, `V16` the corrected fingerprint comment, and `V17` the cancelled draft
 state. `V18` is a data backfill of the branch lifecycle dates, `V19` a foundation permission
-seed (`branch.update`) and `V20` a foundation CHECK pinning the platform organisation to `ACTIVE`;
+seed (`branch.update`), `V20` a foundation CHECK pinning the platform organisation to `ACTIVE`
+and `V21` the move of branch approval to `branch.approve` (deprecating `branch.activate`);
 none is accounting. Do not invent accounting tables or columns outside those documents.
 
 ## Authorization

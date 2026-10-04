@@ -636,7 +636,6 @@ private object OrganisationBootstrapDefaults {
             "branch.create",
             "branch.update",
             "branch.approve",
-            "branch.activate",
             "branch.suspend",
             "branch.close",
             // Foundation API – branch
@@ -821,7 +820,6 @@ private object OrganisationBootstrapDefaults {
                     "branch.create",
                     "branch.update",
                     "branch.approve",
-                    "branch.activate",
                     "branch.suspend",
                     "branch.close",
                     "branch.view",

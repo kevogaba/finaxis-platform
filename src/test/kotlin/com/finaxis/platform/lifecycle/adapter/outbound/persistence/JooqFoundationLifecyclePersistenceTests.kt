@@ -426,6 +426,13 @@ class JooqFoundationLifecyclePersistenceTests(
         assertEquals(REQUIRED_PERMISSION_CODES, baselinePermissionCodes())
         assertEquals(REQUIRED_PERMISSION_CODES.size, tenantAdminPermissionCount(organisationId))
         assertEquals(IAM_ADMIN_PERMISSION_CODES, rolePermissionCodes(organisationId, "IAM_ADMIN"))
+        // branch.approve is the one permission that approves a branch (#208); a new tenant never
+        // receives the deprecated branch.activate.
+        listOf("TENANT_ADMIN", "BRANCH_MANAGER").forEach { roleCode ->
+            val held = rolePermissionCodes(organisationId, roleCode)
+            assertTrue("branch.approve" in held, roleCode)
+            assertTrue("branch.activate" !in held, roleCode)
+        }
         // The roles that can draft a branch can also amend one (#203); nobody else can.
         listOf("TENANT_ADMIN", "BRANCH_MANAGER").forEach { roleCode ->
             assertTrue("branch.update" in rolePermissionCodes(organisationId, roleCode), roleCode)
@@ -726,7 +733,6 @@ class JooqFoundationLifecyclePersistenceTests(
                 "branch.create",
                 "branch.update",
                 "branch.approve",
-                "branch.activate",
                 "branch.suspend",
                 "branch.close",
                 "branch.view",

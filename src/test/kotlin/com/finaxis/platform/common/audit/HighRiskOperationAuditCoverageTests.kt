@@ -329,6 +329,8 @@ class HighRiskOperationAuditCoverageTests(
 
         val auditedActionByPermission =
             mapOf(
+                // Deprecated by V21 (#208) and checked by no route, but still a HIGH row in the
+                // catalogue, so it stays mapped to the action the approval it used to gate emits.
                 "branch.activate" to "branch.activate",
                 "fiscal_period.close" to "fiscal_period.close",
                 "fiscal_period.open" to "fiscal_period.open",
@@ -343,7 +345,7 @@ class HighRiskOperationAuditCoverageTests(
                 "posting_rule.create" to "posting_rule.create",
                 "posting_rule.update" to "posting_rule.create_version",
                 "reconciliation.resolve" to "reconciliation.resolve",
-                "branch.approve" to "branch.submit",
+                "branch.approve" to "branch.activate",
                 "branch.close" to "branch.close",
                 "branch.create" to "branch.create_draft",
                 "branch.reactivate" to "branch.reactivate",

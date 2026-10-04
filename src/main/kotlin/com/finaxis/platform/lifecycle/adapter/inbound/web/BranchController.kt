@@ -546,10 +546,10 @@ class BranchController(
      */
     @PostMapping("/{branch_id}/activate")
     @IdempotentMutation(scope = IdempotencyScopeKind.TENANT)
-    @PreAuthorize("hasAuthority('branch.activate')")
+    @PreAuthorize("hasAuthority('branch.approve')")
     @Operation(
         summary = "Activate branch",
-        description = "Activates an approved branch.",
+        description = "Approves a pending branch and activates it. Requires `branch.approve`.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -625,7 +625,7 @@ class BranchController(
             caller.actorId,
             caller.activeOrganisationId,
             branchId,
-            "branch.activate",
+            "branch.approve",
         )
 
         val command =
@@ -651,7 +651,7 @@ class BranchController(
      */
     @PostMapping("/{branch_id}/return")
     @IdempotentMutation(scope = IdempotencyScopeKind.TENANT)
-    @PreAuthorize("hasAnyAuthority('branch.create', 'branch.activate')")
+    @PreAuthorize("hasAnyAuthority('branch.create', 'branch.approve')")
     @Operation(
         summary = "Return or withdraw branch",
         description =
@@ -659,7 +659,7 @@ class BranchController(
                 "maker can amend and resubmit it. The same call serves two intents, told apart " +
                 "by the caller: the branch's creator or latest submitter withdraws their own " +
                 "request and needs `branch.create`; anyone else returns it as a checker and " +
-                "needs `branch.activate`. The branch keeps its code and its creator.",
+                "needs `branch.approve`. The branch keeps its code and its creator.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
