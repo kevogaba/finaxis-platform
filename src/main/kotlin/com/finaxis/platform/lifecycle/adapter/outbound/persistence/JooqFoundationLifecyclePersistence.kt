@@ -7,6 +7,7 @@ import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogWriter
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.BRANCH_TRANSITION_LOG
+import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
 import com.finaxis.platform.jooq.tables.references.KEYCLOAK_IDENTITY_LINK
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_TRANSITION_LOG
@@ -28,10 +29,15 @@ import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import org.jooq.DSLContext
+import org.jooq.Field
 import org.jooq.JSONB
+import org.jooq.Record1
+import org.jooq.Select
+import org.jooq.impl.DSL
 import org.springframework.dao.OptimisticLockingFailureException
 import org.springframework.stereotype.Component
 import java.time.Clock
+import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.UUID
 
@@ -181,11 +187,18 @@ class JooqFoundationLifecyclePersistence(
     ): LifecycleAggregate<BranchLifecycleState> {
         val expectedVersion = requireExpectedVersion(aggregate)
         val organisationId = requireExpectedOrganisationId(aggregate)
+        val businessDate =
+            DSL
+                .select(BUSINESS_DATE.CURRENT_BUSINESS_DATE)
+                .from(BUSINESS_DATE)
+                .where(BUSINESS_DATE.ORGANISATION_ID.eq(organisationId))
         val updated =
             dsl
                 .update(BRANCH)
                 .set(BRANCH.STATUS, aggregate.state.name)
                 .set(BRANCH.STATUS_REASON, aggregate.transitionReason)
+                .set(BRANCH.OPENED_ON, openedOn(aggregate.state, businessDate))
+                .set(BRANCH.CLOSED_ON, closedOn(aggregate.state, businessDate))
                 .set(BRANCH.UPDATED_AT, now())
                 .set(BRANCH.UPDATED_BY, actorId())
                 .set(BRANCH.ROW_VERSION, BRANCH.ROW_VERSION.plus(1))
@@ -196,6 +209,27 @@ class JooqFoundationLifecyclePersistence(
         requireUpdated(updated, BRANCH_TYPE, aggregate.aggregateId)
         return aggregate
     }
+
+    /**
+     * `opened_on` is the tenant business date of the first activation: a reactivation keeps it,
+     * and a branch that never became active (suspended from a draft, then closed) has none.
+     */
+    private fun openedOn(
+        state: BranchLifecycleState,
+        businessDate: Select<Record1<LocalDate?>>,
+    ): Field<LocalDate?> =
+        if (state == BranchLifecycleState.ACTIVE) {
+            DSL.coalesce(BRANCH.OPENED_ON, DSL.field(businessDate))
+        } else {
+            BRANCH.OPENED_ON
+        }
+
+    /** `closed_on` is the tenant business date of the closure; CLOSED only moves to ARCHIVED. */
+    private fun closedOn(
+        state: BranchLifecycleState,
+        businessDate: Select<Record1<LocalDate?>>,
+    ): Field<LocalDate?> =
+        if (state == BranchLifecycleState.CLOSED) DSL.field(businessDate) else BRANCH.CLOSED_ON
 
     override fun saveUser(
         aggregate: LifecycleAggregate<UserLifecycleState>,

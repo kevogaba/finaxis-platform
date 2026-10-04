@@ -116,6 +116,17 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
 - `V17__accounting_posting_rule_version_cancelled.sql` — widens `chk_posting_rule_version_status`
   for `CANCELLED`, the terminal state a withdrawn draft moves to, so a draft whose author can no
   longer act on it does not block its rule's next version for good
+- `V18__branch_opened_closed_on_backfill.sql` — a **data-only, best-effort backfill** of
+  `branch.opened_on` and `branch.closed_on` for branches that predate the release that began
+  stamping them on transition (#165). Where the column is still `NULL` it derives the date from the
+  earliest `branch_transition_log` row entering `ACTIVE` / `CLOSED`, as that row's `created_at`
+  converted to a date in the **organisation's** timezone (a zone not in the IANA list falls back to
+  UTC; this includes offset ids such as `+03:00`, `UTC+03:00` or `GMT+3`, which can be a day off).
+  The dates are **approximate** — a wall-clock day, not the business date at that moment — and a
+  branch with no matching log row stays `NULL`. A derived `closed_on` earlier than `opened_on` is
+  clamped up to it (and a derived `opened_on` later than a stored `closed_on` down to it) so
+  `chk_branch_dates` can never fail the upgrade. Idempotent; writes no other column, not even
+  `updated_at` or `row_version`
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -143,8 +154,8 @@ calendar and the chart of accounts from it, `V7` the journal tables, `V8` the po
 one-control-account-per-class uniqueness, `V12` the manual-journal external reference, `V13`
 the journal-line append guard, `V14` the daily-balance projection, `V15` the branch
 trial-balance index, `V16` the corrected fingerprint comment, and `V17` the cancelled draft
-state. Do not invent accounting
-tables or columns outside those documents.
+state. `V18` is a data backfill of the branch lifecycle dates, not accounting. Do not invent
+accounting tables or columns outside those documents.
 
 ## Authorization
 

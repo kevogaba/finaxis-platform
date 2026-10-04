@@ -130,7 +130,9 @@ class SafeReplayResponseFactory(
                     require(fieldName == exemptField || !containsProhibitedFieldName(fieldName)) {
                         "Replay response body contains a prohibited field"
                     }
-                    rejectProhibitedFields(value)
+                    // The keys of an `address` object are client-chosen free-form line labels
+                    // (for example `pin_code`), not credentials, so they are not name-checked.
+                    if (fieldName != ADDRESS_FIELD) rejectProhibitedFields(value)
                 }
             }
 
@@ -172,6 +174,7 @@ class SafeReplayResponseFactory(
         const val NO_CONTENT_STATUS: Int = 204
         val STANDARD_SAFE_HEADERS: Set<String> = setOf("Location", "ETag")
 
+        const val ADDRESS_FIELD = "address"
         const val TENANT_SETTING_KEY_FIELD = "key"
         val TENANT_SETTING_RESPONSE_FIELDS: Set<String> =
             setOf("key", "value", "value_type", "sensitive", "platform_admin_only")
