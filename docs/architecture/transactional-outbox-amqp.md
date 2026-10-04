@@ -58,6 +58,8 @@ convention onto the human-readable, PascalCase catalogue used elsewhere in proje
 | — | `UserInvited`, `UserActivated`, `UserSuspended`, `UserDeactivated` | **No** — these user FSM transitions currently use `InternalTransitionEvent` only. |
 | — | `PermissionAssignedToRole` | **No** — audited (`role.assign_permission`) but not externalized. |
 | — | `KeycloakUserProvisioned` | **No, deliberately** — Keycloak provisioning success is now audited (`recordExternalDispatch`), but has no externalized event; nothing downstream consumes it yet. Add one when a real consumer needs it. |
+| — | Branch `RETURN_FOR_CHANGES` (`PENDING_APPROVAL` to `DRAFT`) | **No** — internal, accepted, planned after #165 (#180), **not yet implemented** ([ADR 0029](../adr/0029-approval-model-per-resource-extensions.md)). Consumers of `branch.approval-requested` will see a repeat per resubmit with no exit event; externalize a `*.returned-for-changes` event if a consumer needs it. |
+| — | Organisation `RETURN_FOR_CHANGES` (`PENDING_APPROVAL` to `DRAFT`) | **No** — internal, accepted, planned (#181), **not yet implemented** (ADR 0029). Same follow-up as for the branch. |
 
 This change deliberately closes only the gaps needed for the two new audited mutations
 (`TenantSettingsUpdated`, `BusinessDateAdvanced`); wiring the rest of the catalogue would touch
