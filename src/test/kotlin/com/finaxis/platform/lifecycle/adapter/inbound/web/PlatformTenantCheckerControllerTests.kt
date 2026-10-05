@@ -15,6 +15,7 @@ import com.finaxis.platform.common.web.idempotency.IdempotencyProperties
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
+import com.finaxis.platform.lifecycle.PlatformCaller
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateBranchRequest
 import com.finaxis.platform.lifecycle.application.ActingScope
 import com.finaxis.platform.lifecycle.application.ActivateBranchCommand
@@ -196,12 +197,10 @@ class PlatformTenantCheckerControllerTests
                         scope == ActingScope.PLATFORM
                 },
             )
-            // The response is the already-authorised projection, never the permission-gated read
-            // (branch.view), which would roll the mutation back for a role holding only the
-            // advertised permission.
+            // The response is the gated branch read (branch.view in the platform organisation),
+            // bound to the path tenant: step 5 requires the view with the mutation.
             verify(foundationQueryService, times(2))
-                .getBranchAfterAuthorizedMutation(eq(tenantId), eq(branchId))
-            verify(foundationQueryService, never()).getBranch(any(), any(), any())
+                .getBranch(eq(tenantId), eq(branchId), any<PlatformCaller>())
         }
 
         @Test
@@ -467,11 +466,8 @@ class PlatformTenantCheckerControllerTests
                         scope == ActingScope.PLATFORM
                 },
             )
-            // Never the branch.view gated read: a role holding only the mutation's permission
-            // would otherwise have the return rolled back.
             verify(foundationQueryService)
-                .getBranchAfterAuthorizedMutation(eq(tenantId), eq(branchId))
-            verify(foundationQueryService, never()).getBranch(any(), any(), any())
+                .getBranch(eq(tenantId), eq(branchId), any<PlatformCaller>())
         }
 
         @Test
@@ -580,7 +576,7 @@ class PlatformTenantCheckerControllerTests
 
         private fun stubBranchDetail(status: String) {
             whenever(
-                foundationQueryService.getBranchAfterAuthorizedMutation(eq(tenantId), eq(branchId)),
+                foundationQueryService.getBranch(eq(tenantId), eq(branchId), any()),
             ).thenReturn(
                 BranchDetail(
                     id = branchId,

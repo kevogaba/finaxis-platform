@@ -108,19 +108,6 @@ class FoundationQueryService(
     }
 
     /**
-     * Retrieves branch metadata without a permission check, for the response of a mutation the
-     * caller was already authorised to make on that branch (the platform checker echoing what it
-     * just submitted or activated, ADR 0028). Never expose it as a read endpoint: it is still
-     * bound to [organisationId], so a branch of another tenant reads as not found.
-     */
-    fun getBranchAfterAuthorizedMutation(
-        organisationId: UUID,
-        id: UUID,
-    ): BranchDetail =
-        store.findBranchById(organisationId, id)
-            ?: throw ResourceNotFoundException(safeDetail = "Branch not found: $id")
-
-    /**
      * Searches branches within an organisation, validating caller context and permissions. A
      * tenant caller sees the branches it holds `branch.view` on (every branch for a tenant-wide
      * grant), restricted in the store query so pages and totals are exact; a caller holding it
