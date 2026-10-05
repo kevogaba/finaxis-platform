@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
+import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
@@ -17,10 +18,11 @@ import com.finaxis.platform.iam.adapter.inbound.web.dto.ReactivateUserRequest
 import com.finaxis.platform.iam.adapter.inbound.web.dto.SuspendUserRequest
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
+import com.finaxis.platform.iam.application.query.GlobalUserDetail
 import com.finaxis.platform.iam.application.query.IamQueryService
 import com.finaxis.platform.iam.application.query.UserInTenantDetail
 import com.finaxis.platform.iam.application.query.UserInTenantSummary
-import com.finaxis.platform.lifecycle.PermissionGuard
+import com.finaxis.platform.lifecycle.PlatformCaller
 import com.finaxis.platform.lifecycle.application.DeactivateUserCommand
 import com.finaxis.platform.lifecycle.application.ReactivateUserCommand
 import com.finaxis.platform.lifecycle.application.SuspendUserCommand
@@ -115,9 +117,6 @@ class PlatformUserControllerTests
         @MockitoBean
         private lateinit var userProvisioningService: UserProvisioningService
 
-        @MockitoBean
-        private lateinit var permissionGuard: PermissionGuard
-
         @Test
         fun `read routes enforce authentication and permission`() {
             val tenantId = uuidV7()
@@ -205,6 +204,7 @@ class PlatformUserControllerTests
             val statuses = listOf("SUSPENDED", "ACTIVE", "DEACTIVATED")
 
             routes.forEachIndexed { index, (action, request) ->
+                readBackAs(userId, statuses[index])
                 mockMvc
                     .post("${ApiPaths.PLATFORM_USERS}/$userId/$action") {
                         contentType = MediaType.APPLICATION_JSON
@@ -212,6 +212,7 @@ class PlatformUserControllerTests
                         with(authentication(platformToken(setOf(permissions[index]))))
                     }.andExpect {
                         status { isOk() }
+                        jsonPath("$.user_id") { value(userId.toString()) }
                         jsonPath("$.status") { value(statuses[index]) }
                     }
             }
@@ -224,6 +225,46 @@ class PlatformUserControllerTests
                 PlatformOrganisation.ID,
                 commandCaptor.firstValue.organisationId,
             )
+        }
+
+        @Test
+        fun `the lifecycle routes hand the caller to the service and read back as that caller`() {
+            val userId = uuidV7()
+            val actorId = uuidV7()
+            readBackAs(userId, "SUSPENDED")
+
+            mockMvc
+                .post("${ApiPaths.PLATFORM_USERS}/$userId/suspend") {
+                    contentType = MediaType.APPLICATION_JSON
+                    content = """{"reason":"Security investigation"}"""
+                    with(authentication(platformToken(setOf("user.suspend"), actorId)))
+                }.andExpect { status { isOk() } }
+
+            val command = argumentCaptor<SuspendUserCommand>()
+            verify(userProvisioningService).suspendUser(command.capture())
+            kotlin.test.assertEquals(actorId, command.firstValue.actorId)
+            verify(iamQueryService)
+                .getGlobalUser(userId, PlatformCaller(actorId, PlatformOrganisation.ID))
+        }
+
+        @Test
+        fun `a service refusal names the missing permission and nothing is read back`() {
+            val userId = uuidV7()
+            doThrow(MissingPermissionException("user.view"))
+                .whenever(userProvisioningService)
+                .suspendUser(any())
+
+            mockMvc
+                .post("${ApiPaths.PLATFORM_USERS}/$userId/suspend") {
+                    contentType = MediaType.APPLICATION_JSON
+                    content = """{"reason":"Security investigation"}"""
+                    with(authentication(platformToken(setOf("user.suspend"))))
+                }.andExpect {
+                    status { isForbidden() }
+                    jsonPath("$.detail") { value("Missing permission: user.view.") }
+                }
+
+            verify(iamQueryService, never()).getGlobalUser(any(), any())
         }
 
         @Test
@@ -251,6 +292,7 @@ class PlatformUserControllerTests
         @Test
         fun `reactivateUser accepts no body an empty body or a reason`() {
             val userId = uuidV7()
+            readBackAs(userId, "ACTIVE")
             val bodies = listOf(null, "{}", """{"reason":"Investigation complete"}""")
 
             bodies.forEach { body ->
@@ -361,6 +403,7 @@ class PlatformUserControllerTests
         @Test
         fun `reactivateUser keeps its reason optional`() {
             val userId = uuidV7()
+            readBackAs(userId, "ACTIVE")
 
             listOf("{}", "{\"reason\":null}", "{\"reason\":\"ok\"}", "{\"reason\":\"  \"}")
                 .forEach { body ->
@@ -388,6 +431,15 @@ class PlatformUserControllerTests
 
             verify(userProvisioningService, org.mockito.kotlin.never())
                 .reactivateUser(any<ReactivateUserCommand>())
+        }
+
+        private fun readBackAs(
+            userId: UUID,
+            status: String,
+        ) {
+            whenever(iamQueryService.getGlobalUser(eq(userId), any())).thenReturn(
+                GlobalUserDetail(userId, status),
+            )
         }
 
         private fun reactivateUser(
@@ -459,17 +511,19 @@ class PlatformUserControllerTests
                 "ACTIVE",
             )
 
-        private fun platformToken(permissions: Set<String>) =
-            AppPrincipalAuthenticationToken(
-                AppPrincipal(
-                    userId = uuidV7(),
-                    keycloakSubject = "platform-user",
-                    organisationId = PlatformOrganisation.ID,
-                    membershipId = uuidV7(),
-                    branchId = null,
-                    email = "platform@finaxis.test",
-                    fullName = "Platform Administrator",
-                    permissions = permissions,
-                ),
-            )
+        private fun platformToken(
+            permissions: Set<String>,
+            userId: UUID = uuidV7(),
+        ) = AppPrincipalAuthenticationToken(
+            AppPrincipal(
+                userId = userId,
+                keycloakSubject = "platform-user",
+                organisationId = PlatformOrganisation.ID,
+                membershipId = uuidV7(),
+                branchId = null,
+                email = "platform@finaxis.test",
+                fullName = "Platform Administrator",
+                permissions = permissions,
+            ),
+        )
     }

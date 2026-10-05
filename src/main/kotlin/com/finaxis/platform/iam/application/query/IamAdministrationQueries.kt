@@ -88,6 +88,9 @@ interface IamUserQueries {
         userId: UUID,
     ): UserInTenantDetail?
 
+    /** Finds a global user account by id, whatever tenant memberships it holds. */
+    fun findUserById(userId: UUID): GlobalUserDetail?
+
     /** Searches memberships in an organisation. */
     fun searchMemberships(
         organisationId: UUID,

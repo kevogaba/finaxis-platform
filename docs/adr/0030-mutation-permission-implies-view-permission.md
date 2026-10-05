@@ -531,6 +531,13 @@ the documents the supersessions below name (`authorization-model.md`, `foundatio
   platform user controller and `UserProvisioningService` performs none. The mutation permission
   and `user.view` check moves into the application service, inside the mutation transaction, with
   a gated read-back, mirroring 6d.
+
+  *Status: implemented by this step's change.* `suspendUser`, `reactivateUser` and `deactivateUser`
+  make the mutation and view check first, inside the transaction, with the actor the commands
+  already carried. The controller reads the result back through the gated
+  `IamQueryService.getGlobalUser` (`user.view` in the platform organisation). The existing
+  `getUserInTenant` joins a membership in the organisation, and the platform organisation holds no
+  membership for a tenant user, so a global read-back needs its own gated query.
 - **7.** `test(architecture): forbid permission-free reads from web adapters`
   Delete the remaining helper declarations; the ArchUnit rules of point 6; the final documentation sweep
   turning "planned" into current.

@@ -1188,6 +1188,109 @@ class UserProvisioningServiceTests {
         assertTrue(audits.events.isEmpty())
     }
 
+    @Test
+    fun `each user lifecycle mutation asks its own permission in the platform before any lookup`() {
+        val actor = uuidV7()
+        val unknown = uuidV7()
+        val reason = Reason.required("because")
+        val cases =
+            mapOf<String, () -> Unit>(
+                "user.suspend" to {
+                    service.suspendUser(
+                        SuspendUserCommand(PlatformOrganisation.ID, unknown, actor, reason),
+                    )
+                },
+                "user.activate" to {
+                    service.reactivateUser(
+                        ReactivateUserCommand(PlatformOrganisation.ID, unknown, actor),
+                    )
+                },
+                "user.deactivate" to {
+                    service.deactivateUser(
+                        DeactivateUserCommand(PlatformOrganisation.ID, unknown, actor, reason),
+                    )
+                },
+            )
+
+        cases.forEach { (code, action) ->
+            doThrow(MissingPermissionException(code))
+                .whenever(permissionGuard)
+                .requirePlatformPermission(actor, code)
+
+            // An unknown user would be a 404: the refusal came first, so no existence signal.
+            val failure = assertFailsWith<MissingPermissionException>(code) { action() }
+
+            assertEquals("Missing permission: $code.", failure.safeDetail)
+        }
+        verify(permissionGuard, never()).requireTenantPermission(any(), any(), any())
+        assertTrue(logs.logs.isEmpty())
+        assertTrue(audits.events.isEmpty())
+    }
+
+    @Test
+    fun `a refused user suspension leaves the user and writes no log or audit`() {
+        val actor = uuidV7()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        doThrow(MissingPermissionException("user.view"))
+            .whenever(permissionGuard)
+            .requirePlatformPermission(actor, "user.suspend")
+
+        assertFailsWith<MissingPermissionException> {
+            service.suspendUser(
+                SuspendUserCommand(PlatformOrganisation.ID, userId, actor, Reason.required("risk")),
+            )
+        }
+
+        assertEquals(UserLifecycleState.ACTIVE, fake.users.getValue(userId).state)
+        assertTrue(logs.logs.isEmpty())
+        assertTrue(audits.events.isEmpty())
+    }
+
+    @Test
+    fun `a refused user deactivation revokes no assignment and publishes nothing`() {
+        val actor = uuidV7()
+        val org = uuidV7()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        fake.addMembership(org, userId, MembershipLifecycleState.ACTIVE)
+        fake.branchAssignments += BranchAssignmentKey(org, userId)
+        doThrow(MissingPermissionException("user.view"))
+            .whenever(permissionGuard)
+            .requirePlatformPermission(actor, "user.deactivate")
+
+        assertFailsWith<MissingPermissionException> {
+            service.deactivateUser(
+                DeactivateUserCommand(
+                    PlatformOrganisation.ID,
+                    userId,
+                    actor,
+                    Reason.required("left"),
+                ),
+            )
+        }
+
+        assertEquals(UserLifecycleState.ACTIVE, fake.users.getValue(userId).state)
+        assertEquals(1, fake.branchAssignments.size)
+        assertTrue(logs.logs.isEmpty())
+        assertTrue(audits.events.isEmpty())
+        assertTrue(events.externalTargets().isEmpty())
+    }
+
+    @Test
+    fun `an authorised user lifecycle mutation audits the actor the command names`() {
+        val actor = uuidV7()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+
+        service.suspendUser(
+            SuspendUserCommand(PlatformOrganisation.ID, userId, actor, Reason.required("risk")),
+        )
+
+        verify(permissionGuard).requirePlatformPermission(actor, "user.suspend")
+        assertEquals(
+            listOf(actor.toString()),
+            audits.events.filter { it.action == "user.suspend" }.map { it.actorId },
+        )
+    }
+
     private fun approve(
         context: InvitationContext,
         invitation: UserInvitationResult,

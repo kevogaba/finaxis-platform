@@ -210,9 +210,14 @@ class UserProvisioningService(
         )
     }
 
-    /** Suspends a global user account through the shared lifecycle FSM. */
+    /**
+     * Suspends a global user account through the shared lifecycle FSM. The actor needs
+     * `user.suspend` and `user.view` in the platform organisation, checked first, before the user
+     * is looked up (ADR 0030 decision 4), so an unknown id never answers a caller without them.
+     */
     @Transactional
     fun suspendUser(command: SuspendUserCommand) {
+        permissionGuard.requirePlatformPermission(command.actorId, "user.suspend")
         lifecycleService.transition(
             UserTransitionCommand(
                 command.organisationId,
@@ -232,9 +237,13 @@ class UserProvisioningService(
         )
     }
 
-    /** Reactivates a suspended global user account through the shared lifecycle FSM. */
+    /**
+     * Reactivates a suspended global user account through the shared lifecycle FSM. The actor
+     * needs `user.activate` and `user.view` in the platform organisation, checked first.
+     */
     @Transactional
     fun reactivateUser(command: ReactivateUserCommand) {
+        permissionGuard.requirePlatformPermission(command.actorId, "user.activate")
         lifecycleService.transition(
             UserTransitionCommand(
                 command.organisationId,
@@ -254,9 +263,13 @@ class UserProvisioningService(
         )
     }
 
-    /** Deactivates a global user account through start and complete FSM transitions. */
+    /**
+     * Deactivates a global user account through start and complete FSM transitions. The actor
+     * needs `user.deactivate` and `user.view` in the platform organisation, checked first.
+     */
     @Transactional
     fun deactivateUser(command: DeactivateUserCommand) {
+        permissionGuard.requirePlatformPermission(command.actorId, "user.deactivate")
         lifecycleService.transition(
             UserTransitionCommand(
                 command.organisationId,

@@ -336,6 +336,14 @@ it, at the same scope**: the tenant, the target branch, or the PLATFORM organisa
   held nowhere at all. Because the lookup resolves the same visibility the gated read-back asks for,
   the read-back cannot be refused by a grant revoked in between (the branch assignment assign route
   primes the same memo for the same reason).
+- **Platform user lifecycle authorises in the service.** `UserProvisioningService.suspendUser`,
+  `reactivateUser` and `deactivateUser` check `user.suspend`, `user.activate` or `user.deactivate`
+  with `user.view` in the platform organisation, inside the mutation transaction and before the
+  user is looked up, so an unknown id answers a caller without them with the named 403, never a
+  404. The controller keeps only the coarse `@PreAuthorize` gate and reads the result back through
+  the gated `IamQueryService.getGlobalUser` (`user.view` in the platform organisation; it needs no
+  platform membership, as these routes act on any user account), so the response status is the
+  stored one.
 - **A direct `DENY` of a view** removes it from the resolved set, so the operator who holds a
   mutation and a `DENY` of its view cannot mutate either, by design.
 - **Hand SQL on the catalogue fails open.** The pairing is reference data changed only by forward

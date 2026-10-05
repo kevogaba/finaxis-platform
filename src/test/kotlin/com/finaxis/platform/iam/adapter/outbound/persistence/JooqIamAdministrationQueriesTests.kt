@@ -70,6 +70,17 @@ class JooqIamAdministrationQueriesTests(
     }
 
     @Test
+    fun `findUserById resolves a user with no membership anywhere and misses an unknown id`() {
+        val userId = insertUserAccount("bob", "bob@example.test", "Bob")
+
+        val user = queries.findUserById(userId)
+
+        assertEquals(userId, user?.id)
+        assertEquals("ACTIVE", user?.userStatus)
+        assertNull(queries.findUserById(uuidV7()))
+    }
+
+    @Test
     fun `searchRoles retrieves organization roles`() {
         val orgId = insertOrganisation()
         val roleId = insertRole(orgId, "MAKER", "Maker Role")

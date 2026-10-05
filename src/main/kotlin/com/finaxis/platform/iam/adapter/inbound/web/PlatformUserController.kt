@@ -16,7 +16,7 @@ import com.finaxis.platform.iam.application.query.IamQueryService
 import com.finaxis.platform.iam.application.query.UserInTenantDetail
 import com.finaxis.platform.iam.application.query.UserInTenantFilter
 import com.finaxis.platform.iam.application.query.UserInTenantSummary
-import com.finaxis.platform.lifecycle.PermissionGuard
+import com.finaxis.platform.lifecycle.PlatformCaller
 import com.finaxis.platform.lifecycle.adapter.inbound.web.CallerContextResolver
 import com.finaxis.platform.lifecycle.application.DeactivateUserCommand
 import com.finaxis.platform.lifecycle.application.DecisionRemark
@@ -159,7 +159,7 @@ class PlatformUserController(
 @Validated
 class PlatformUserLifecycleController(
     private val userProvisioningService: UserProvisioningService,
-    private val permissionGuard: PermissionGuard,
+    private val iamQueryService: IamQueryService,
 ) {
     /** Suspends a global user account. */
     @PostMapping("/{user_id}/suspend")
@@ -167,7 +167,9 @@ class PlatformUserLifecycleController(
     @PreAuthorize("hasAuthority('user.suspend')")
     @Operation(
         summary = "Suspend global user",
-        description = "Suspends a global user account from the reserved platform context.",
+        description =
+            "Suspends a global user account from the reserved platform context. " +
+                "Requires user.suspend and user.view.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -213,7 +215,6 @@ class PlatformUserLifecycleController(
         @RequestBody @Valid request: SuspendUserRequest,
     ): ResponseEntity<UserLifecycleResultResponse> {
         val caller = CallerContextResolver.getPlatformCaller()
-        permissionGuard.requirePlatformPermission(caller.actorId, "user.suspend")
         userProvisioningService.suspendUser(
             SuspendUserCommand(
                 organisationId = PlatformOrganisation.ID,
@@ -223,7 +224,7 @@ class PlatformUserLifecycleController(
                 requestId = uuidV7().toString(),
             ),
         )
-        return ResponseEntity.ok(UserLifecycleResultResponse(userId, "SUSPENDED"))
+        return ResponseEntity.ok(readBack(userId, caller))
     }
 
     /** Reactivates a suspended global user account. */
@@ -233,7 +234,8 @@ class PlatformUserLifecycleController(
     @Operation(
         summary = "Reactivate global user",
         description =
-            "Reactivates a suspended global user account from the reserved platform context.",
+            "Reactivates a suspended global user account from the reserved platform context. " +
+                "Requires user.activate and user.view.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -279,7 +281,6 @@ class PlatformUserLifecycleController(
         @RequestBody(required = false) @Valid request: ReactivateUserRequest?,
     ): ResponseEntity<UserLifecycleResultResponse> {
         val caller = CallerContextResolver.getPlatformCaller()
-        permissionGuard.requirePlatformPermission(caller.actorId, "user.activate")
         userProvisioningService.reactivateUser(
             ReactivateUserCommand(
                 organisationId = PlatformOrganisation.ID,
@@ -289,7 +290,7 @@ class PlatformUserLifecycleController(
                 requestId = uuidV7().toString(),
             ),
         )
-        return ResponseEntity.ok(UserLifecycleResultResponse(userId, "ACTIVE"))
+        return ResponseEntity.ok(readBack(userId, caller))
     }
 
     /** Deactivates a global user account. */
@@ -298,7 +299,9 @@ class PlatformUserLifecycleController(
     @PreAuthorize("hasAuthority('user.deactivate')")
     @Operation(
         summary = "Deactivate global user",
-        description = "Deactivates a global user account from the reserved platform context.",
+        description =
+            "Deactivates a global user account from the reserved platform context. " +
+                "Requires user.deactivate and user.view.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -344,7 +347,6 @@ class PlatformUserLifecycleController(
         @RequestBody @Valid request: DeactivateUserRequest,
     ): ResponseEntity<UserLifecycleResultResponse> {
         val caller = CallerContextResolver.getPlatformCaller()
-        permissionGuard.requirePlatformPermission(caller.actorId, "user.deactivate")
         userProvisioningService.deactivateUser(
             DeactivateUserCommand(
                 organisationId = PlatformOrganisation.ID,
@@ -354,6 +356,14 @@ class PlatformUserLifecycleController(
                 requestId = uuidV7().toString(),
             ),
         )
-        return ResponseEntity.ok(UserLifecycleResultResponse(userId, "DEACTIVATED"))
+        return ResponseEntity.ok(readBack(userId, caller))
+    }
+
+    /** Reads the user back through the gated query; its own check hits the service's memo. */
+    private fun readBack(
+        userId: UUID,
+        caller: PlatformCaller,
+    ) = iamQueryService.getGlobalUser(userId, caller).let {
+        UserLifecycleResultResponse(it.id, it.userStatus)
     }
 }

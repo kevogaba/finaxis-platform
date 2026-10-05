@@ -6,6 +6,7 @@ import com.finaxis.platform.common.web.api.boundedPageOffset
 import com.finaxis.platform.iam.application.query.BranchAssignmentDetail
 import com.finaxis.platform.iam.application.query.BranchAssignmentFilter
 import com.finaxis.platform.iam.application.query.BranchAssignmentSummary
+import com.finaxis.platform.iam.application.query.GlobalUserDetail
 import com.finaxis.platform.iam.application.query.IamAssignmentQueries
 import com.finaxis.platform.iam.application.query.IamRoleQueries
 import com.finaxis.platform.iam.application.query.IamUserQueries
@@ -142,6 +143,18 @@ class JooqIamAdministrationQueries(
                         requireNotNull(
                             record.get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS),
                         ),
+                )
+            }
+
+    override fun findUserById(userId: UUID): GlobalUserDetail? =
+        dsl
+            .select(USER_ACCOUNT.ID, USER_ACCOUNT.STATUS)
+            .from(USER_ACCOUNT)
+            .where(USER_ACCOUNT.ID.eq(userId))
+            .fetchOne { record ->
+                GlobalUserDetail(
+                    id = requireNotNull(record.get(USER_ACCOUNT.ID)),
+                    userStatus = requireNotNull(record.get(USER_ACCOUNT.STATUS)),
                 )
             }
 

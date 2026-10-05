@@ -23,6 +23,15 @@ data class UserInTenantDetail(
     val membershipStatus: String,
 )
 
+/**
+ * A global user account as the platform user lifecycle routes read it back, with no tenant
+ * membership: its id and its stored status, which is all those routes answer with.
+ */
+data class GlobalUserDetail(
+    val id: UUID,
+    val userStatus: String,
+)
+
 /** Detailed projection of a user membership in a tenant. */
 data class MembershipDetail(
     val id: UUID,
