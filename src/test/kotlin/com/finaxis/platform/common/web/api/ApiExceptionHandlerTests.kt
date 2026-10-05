@@ -1,5 +1,9 @@
 package com.finaxis.platform.common.web.api
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
@@ -8,6 +12,7 @@ import jakarta.validation.ConstraintViolationException
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
+import org.slf4j.LoggerFactory
 import org.springframework.core.MethodParameter
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpInputMessage
@@ -18,6 +23,7 @@ import org.springframework.http.MediaType
 import org.springframework.http.converter.HttpMessageNotReadableException
 import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter
 import org.springframework.mock.web.MockHttpServletRequest
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.content
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
@@ -341,15 +347,100 @@ class ApiExceptionHandlerTests {
         assertFalse(response.contentAsString.contains("internal_error"))
     }
 
+    @Test
+    fun `an unexpected failure is logged by class and frames, never by message`() {
+        val appender = ListAppender<ILoggingEvent>().also { it.start() }
+        val logger = LoggerFactory.getLogger(ApiExceptionHandler::class.java) as Logger
+        val previousLevel = logger.level
+        logger.level = Level.DEBUG
+        logger.addAppender(appender)
+        try {
+            val response =
+                MockMvcBuilders
+                    .standaloneSetup(LeakyController())
+                    .setControllerAdvice(handler)
+                    .setMessageConverters(JacksonJsonHttpMessageConverter(ApiJsonCodec().mapper))
+                    .build()
+                    .perform(get("/api/v1/leaky/unexpected"))
+                    .andExpect(status().isInternalServerError)
+                    .andReturn()
+                    .response
+            assertFalse(response.contentAsString.contains(LEAKED_EMAIL))
+            assertFalse(response.contentAsString.contains(LEAKED_SQL))
+            assertTrue(response.contentAsString.contains("\"code\":\"internal_error\""))
+        } finally {
+            logger.detachAppender(appender)
+            logger.level = previousLevel
+        }
+
+        assertTrue(appender.list.isNotEmpty())
+        val error = appender.list.single { it.level == Level.ERROR }
+        assertNull(error.throwableProxy)
+        assertTrue(error.formattedMessage.contains("/api/v1/leaky/unexpected"))
+        assertTrue(
+            error.formattedMessage.contains("exceptionClass=java.lang.IllegalStateException"),
+        )
+        assertTrue(error.formattedMessage.contains("Caused by: java.lang.RuntimeException"))
+        assertTrue(error.formattedMessage.contains("\tat ${LeakyController::class.java.name}."))
+        appender.list.forEach {
+            assertNull(it.throwableProxy)
+            assertFalse(it.formattedMessage.contains(LEAKED_EMAIL))
+            assertFalse(it.formattedMessage.contains(LEAKED_SQL))
+        }
+    }
+
+    @Test
+    fun `a handled failure is debug logged without its message or throwable`() {
+        val appender = ListAppender<ILoggingEvent>().also { it.start() }
+        val logger = LoggerFactory.getLogger(ApiExceptionHandler::class.java) as Logger
+        val previousLevel = logger.level
+        logger.level = Level.DEBUG
+        logger.addAppender(appender)
+        try {
+            handler.application(ConflictException(safeDetail = "safe", cause = leaky()), request())
+        } finally {
+            logger.detachAppender(appender)
+            logger.level = previousLevel
+        }
+
+        val event = appender.list.single()
+        assertEquals(Level.DEBUG, event.level)
+        assertNull(event.throwableProxy)
+        assertTrue(event.formattedMessage.contains("code=conflict"))
+        assertFalse(event.formattedMessage.contains(LEAKED_EMAIL))
+        assertFalse(event.formattedMessage.contains(LEAKED_SQL))
+    }
+
+    private fun leaky(): Throwable =
+        IllegalStateException(
+            "$LEAKED_SQL ($LEAKED_EMAIL)",
+            RuntimeException("cause $LEAKED_EMAIL $LEAKED_SQL"),
+        )
+
     private fun request(): MockHttpServletRequest =
         MockHttpServletRequest("POST", "/api/v1/tenants").apply {
             addHeader("X-Request-Id", "request-123")
         }
 
     @RestController
+    private class LeakyController {
+        @GetMapping("/api/v1/leaky/unexpected")
+        fun unexpected(): Map<String, String> =
+            throw IllegalStateException(
+                "$LEAKED_SQL ($LEAKED_EMAIL)",
+                RuntimeException("cause $LEAKED_EMAIL $LEAKED_SQL"),
+            )
+    }
+
+    @RestController
     private class MethodOnlyController {
         @GetMapping("/api/v1/tenant/business-date")
         fun currentBusinessDate(): Map<String, String> = mapOf("business_date" to "25-07-2026")
+    }
+
+    private companion object {
+        const val LEAKED_EMAIL = "jane.doe@acme.test"
+        const val LEAKED_SQL = "insert into user_account (email) values"
     }
 
     @Suppress("unused")

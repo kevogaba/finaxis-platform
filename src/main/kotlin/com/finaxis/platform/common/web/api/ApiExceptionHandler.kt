@@ -1,6 +1,7 @@
 package com.finaxis.platform.common.web.api
 
 import com.finaxis.platform.common.application.ApplicationException
+import com.finaxis.platform.common.audit.toMessageFreeStackTraceOrUnavailable
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.validation.ConstraintViolationException
 import org.slf4j.LoggerFactory
@@ -248,13 +249,23 @@ class ApiExceptionHandler(
             exception,
         )
 
-    /** Maps unhandled failures while retaining diagnostic information only in server logs. */
+    /**
+     * Maps unhandled failures. The server log keeps the exception class and its message-free stack
+     * frames (never the throwable, whose message and causes' could carry an email or SQL).
+     */
     @ExceptionHandler(Exception::class)
     fun unexpected(
         exception: Exception,
         request: HttpServletRequest,
     ): ResponseEntity<ApiProblem> {
-        logger.error("Unexpected API exception for {}", request.requestURI, exception)
+        // The throwable is not passed to the logger: it would print its message and its causes',
+        // which can carry an email, SQL parameters or identity-provider output.
+        logger.error(
+            "Unexpected API exception for {}: exceptionClass={}\n{}",
+            request.requestURI,
+            exception.javaClass.name,
+            exception.toMessageFreeStackTraceOrUnavailable(),
+        )
         return response(
             problem(
                 HttpStatus.INTERNAL_SERVER_ERROR,
@@ -278,7 +289,14 @@ class ApiExceptionHandler(
         problem: ApiProblem,
         exception: Exception,
     ): ResponseEntity<ApiProblem> {
-        logger.debug("API problem code={}", problem.code, exception)
+        if (logger.isDebugEnabled) {
+            logger.debug(
+                "API problem code={} exceptionClass={}\n{}",
+                problem.code,
+                exception.javaClass.name,
+                exception.toMessageFreeStackTraceOrUnavailable(),
+            )
+        }
         return ResponseEntity
             .status(
                 problem.status,

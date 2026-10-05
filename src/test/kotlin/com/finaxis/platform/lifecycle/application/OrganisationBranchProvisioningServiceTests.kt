@@ -1635,7 +1635,7 @@ private class FakeInitialAdministratorBootstrapStore : InitialAdministratorBoots
     override fun updateStatus(
         organisationId: UUID,
         status: InitialAdministratorBootstrapStatus,
-        lastFailureCode: String?,
+        lastFailureCode: InitialAdministratorBootstrapFailureCode?,
         incrementAttempts: Boolean,
     ) {
         val record = records[organisationId] ?: error("Not found")

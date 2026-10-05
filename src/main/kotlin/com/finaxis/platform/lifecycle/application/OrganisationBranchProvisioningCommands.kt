@@ -126,10 +126,10 @@ data class OrganisationSummary(
     /** Resolved membership ID, present once the admin has been enrolled in the organisation. */
     val bootstrapMembershipId: UUID? = null,
     /**
-     * Safe failure code recorded on the last failed bootstrap attempt.
-     * Never contains raw exception messages or Keycloak payloads.
+     * Closed-set failure code recorded on the last failed bootstrap attempt. Never contains raw
+     * exception messages or Keycloak payloads; the detail lives in the application log.
      */
-    val lastBootstrapFailureCode: String? = null,
+    val lastBootstrapFailureCode: InitialAdministratorBootstrapFailureCode? = null,
 )
 
 /** Pagination-safe filter for organisation administration queries. */

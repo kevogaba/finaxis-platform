@@ -6,6 +6,7 @@ import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
+import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapService
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStatus
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStore
@@ -22,6 +23,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean
 import java.time.OffsetDateTime
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * Proves the guarantee behind `OrganisationProvisioningService.retryBootstrap`'s failure-path
@@ -69,9 +72,9 @@ class OrganisationProvisioningServiceRetryBootstrapAuditIntegrationTests(
         adminBootstrapStore.updateStatus(
             organisationId,
             InitialAdministratorBootstrapStatus.FAILED,
-            lastFailureCode = "Keycloak unavailable",
+            lastFailureCode = InitialAdministratorBootstrapFailureCode.IDENTITY_PROVIDER_FAILED,
         )
-        doThrow(IllegalStateException("Keycloak unavailable"))
+        doThrow(IllegalStateException("Keycloak unavailable for jane.doe@acme.test"))
             .whenever(bootstrapService)
             .bootstrap(organisationId)
 
@@ -95,5 +98,50 @@ class OrganisationProvisioningServiceRetryBootstrapAuditIntegrationTests(
                     .and(AUDIT_EVENT.OUTCOME.eq("FAILURE")),
             )
         assertEquals(1, recorded)
+    }
+
+    @Test
+    fun `a failed retry audit row holds the class name and the code but never the message`() {
+        val actorId = fixture.createPlatformOperator("retry-audit-redaction")
+        val organisationId = fixture.createActiveOrganisation("retry-redact", actorId)
+        adminBootstrapStore.updateStatus(
+            organisationId,
+            InitialAdministratorBootstrapStatus.FAILED,
+            lastFailureCode = InitialAdministratorBootstrapFailureCode.UNEXPECTED,
+        )
+        doThrow(IllegalStateException("Keycloak unavailable for jane.doe@acme.test"))
+            .whenever(bootstrapService)
+            .bootstrap(organisationId)
+
+        withRequestContext {
+            assertFailsWith<IllegalStateException> {
+                organisationProvisioningService.retryBootstrap(
+                    RetryInitialAdministratorBootstrapCommand(
+                        organisationId,
+                        PlatformCaller(actorId, PlatformOrganisation.ID),
+                    ),
+                )
+            }
+        }
+
+        val row =
+            dsl
+                .select(AUDIT_EVENT.REASON, AUDIT_EVENT.METADATA_JSONB)
+                .from(AUDIT_EVENT)
+                .where(
+                    AUDIT_EVENT.ACTION
+                        .eq("tenant.bootstrap_retry")
+                        .and(AUDIT_EVENT.ENTITY_ID.eq(organisationId))
+                        .and(AUDIT_EVENT.OUTCOME.eq("FAILURE")),
+                ).fetchSingle()
+        val reason = row.get(AUDIT_EVENT.REASON)
+        val metadata = row.get(AUDIT_EVENT.METADATA_JSONB).toString()
+        assertEquals("IllegalStateException", reason)
+        assertTrue(metadata.contains("INVALID_STATE"), metadata)
+        listOf(reason.orEmpty(), metadata).forEach {
+            assertFalse(it.contains("@"), it)
+            assertFalse(it.contains("Keycloak unavailable"), it)
+            assertFalse(it.contains("jane.doe"), it)
+        }
     }
 }

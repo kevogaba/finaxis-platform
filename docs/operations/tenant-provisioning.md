@@ -97,6 +97,64 @@ The global permission catalogue is seeded by Flyway with `permission_code`, `mod
 `tenant.create`, `tenant.submit_for_approval`, `tenant.approve`, `tenant.activate`,
 `tenant.suspend`, and `tenant.deprovision`.
 
+## Failed initial-administrator bootstrap
+
+When the bootstrap fails, the record moves to `FAILED` and `bootstrap_failure_code` (on
+`GET /api/v1/tenant` and the platform tenant routes) holds one code from a closed set, chosen from
+the exception's type: `IDENTITY_PROVIDER_FAILED`, `CONFLICT`, `NOT_FOUND`, `INVALID_STATE`,
+`DATABASE_ERROR` or `UNEXPECTED`. It never holds the exception message, because tenant members can
+read it and the message can carry SQL, identity-provider output or an email address.
+
+Where to look for the cause, in order:
+
+1. **The application log.** The failure is logged at `ERROR` as "Initial administrator bootstrap
+   failed for organisation `<id>` with code `<CODE>`" followed by `exceptionClass=`,
+   `rootCauseClass=` and the stack frames (`at Class.method(File:line)`, each cause under
+   `Caused by:`, bounded, with a marker when the cause chain is cut). **This recorder's line holds
+   no exception message**, neither the exception's nor a cause's, because a message can carry an
+   email address, SQL parameters or identity-provider output; the throwable is not passed to the
+   logger. Search the log for the organisation id, then read the classes and frames. What else
+   writes about the same failure:
+   - **JobRunr.** The bootstrap, Keycloak-provisioning and application-invite job handlers rethrow a
+     `SanitisedJobFailureException` to JobRunr (message = the closed code, or the exception class
+     name for the invite; no cause, except a message-free `InterruptedException` when the original
+     chain held one, because JobRunr recognises a stopped server or a deleted job by an
+     `InterruptedException` in the cause chain, so that detection is unchanged) for the failures
+     they catch: every `Exception` in the bootstrap and Keycloak handlers, the four listed types in
+     the invite handler. JobRunr's own `processing failed` log lines and the failed state in
+     `jobrunr_jobs` (exception message, cause message, stack text) then carry no message of the
+     original and only the handler's frames. The bootstrap and invite handlers always, and the
+     Keycloak handler for a failure it does not record, log a `WARN` "<job> failed:
+     exceptionClass=... rootCauseClass=..." with the message-free frames (after the recorder's
+     `ERROR` line when it wrote one), so the location is never lost. Retry counts and backoff are
+     unchanged. The synchronous `bootstrap/retry` route calls the service directly and still raises
+     the original exception to the API error handler, which maps it to the HTTP status.
+   - **The API error handler.** `ApiExceptionHandler` logs an unexpected failure at `ERROR` (and
+     a handled one at `DEBUG`) as the request path, `exceptionClass=` and the message-free
+     frames, never the throwable.
+   - **The dispatch table.** For a Keycloak (and an application-invite) job the raw message is
+     still kept in `identity_dispatch_log.last_error`, which no API returns: an operator
+     reading the database sees it, so treat that table as sensitive.
+   - **Not covered.** `jobrunr_jobs` keeps the job request's input (for the Keycloak job the
+     administrator's email and username). An exception type the invite handler does not catch
+     reaches JobRunr as raised. The Keycloak handler's uncaught types and its already-succeeded
+     branch are logged and sanitised but not recorded as a failed dispatch. On the API side,
+     Sentry's MVC exception resolver (default `sentry.exception-resolver-order` 1) runs after
+     Spring's own (the composite, 0), so the global handler resolves a failure first and Sentry's
+     MVC integration never sees it; the Sentry logback appender (production only) receives any
+     `ERROR` line, which for these failures is now message-free.
+2. **The audit trail.** A retry that fails again writes a `FAILURE` audit event for
+   `tenant.bootstrap_retry` whose `reason` is the exception class name and whose metadata carries
+   `bootstrapFailureCode`. A failed Keycloak provisioning job also records a `FAILURE` audit event
+   (`user.keycloak_provisioning`, reason is the exception class, no code) and keeps the raw
+   detail in the dispatch-tracking table (`identity_dispatch_log`), which no API returns.
+3. **Retry.** `POST /api/v1/platform/tenants/{tenant_id}/bootstrap/retry`
+   (`tenant.bootstrap_retry`) clears the code and runs the bootstrap again; a failure records a
+   fresh code.
+
+`UNEXPECTED` is also what `V24` wrote over every free-text value stored before it. That rewrite is
+one-way, so the cause of a failure from before `V24` is only in the logs of the time.
+
 ## Metadata-only deprovisioning
 
 Deprovisioning intentionally blocks access without hard-deleting records. It starts from

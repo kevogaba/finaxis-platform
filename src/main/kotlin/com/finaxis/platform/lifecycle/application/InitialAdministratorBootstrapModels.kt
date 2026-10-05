@@ -45,7 +45,7 @@ data class InitialAdministratorBootstrapRecord(
     val membershipId: UUID?,
     val headOfficeId: UUID?,
     val roleId: UUID?,
-    val lastFailureCode: String?,
+    val lastFailureCode: InitialAdministratorBootstrapFailureCode?,
     val createdAt: Instant,
     val submittedAt: Instant?,
     val approvedAt: Instant?,

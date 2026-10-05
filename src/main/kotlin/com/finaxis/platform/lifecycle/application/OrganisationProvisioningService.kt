@@ -327,7 +327,12 @@ class OrganisationProvisioningService(
                     resourceId = command.organisationId.toString(),
                     outcome = AuditOutcome.FAILURE,
                     reason = ex.toAuditFailureReason(),
-                    metadata = mapOf("previousBootstrapStatus" to record.status.name),
+                    metadata =
+                        mapOf(
+                            "previousBootstrapStatus" to record.status.name,
+                            "bootstrapFailureCode" to
+                                InitialAdministratorBootstrapFailureCode.from(ex).name,
+                        ),
                 ),
             )
             throw ex

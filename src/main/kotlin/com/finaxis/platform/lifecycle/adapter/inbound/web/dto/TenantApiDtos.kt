@@ -3,6 +3,7 @@ package com.finaxis.platform.lifecycle.adapter.inbound.web.dto
 import com.fasterxml.jackson.annotation.JsonFormat
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.finaxis.platform.lifecycle.application.DecisionRemark
+import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
 import com.finaxis.platform.lifecycle.application.InitialAdministratorDraft
 import com.finaxis.platform.lifecycle.application.Reason
 import io.swagger.v3.oas.annotations.media.Schema
@@ -207,7 +208,16 @@ data class TenantDetailResponse(
     )
     val statusReason: String? = null,
     val bootstrapStatus: String? = null,
-    val bootstrapFailureCode: String? = null,
+    @field:Schema(
+        nullable = true,
+        description =
+            "Why the last initial-administrator bootstrap attempt failed, as a code from a " +
+                "closed set: never free text. The raw detail is in the application log and " +
+                "the audit trail's exception class, not in any response. `null` when no " +
+                "attempt failed.",
+        example = "IDENTITY_PROVIDER_FAILED",
+    )
+    val bootstrapFailureCode: InitialAdministratorBootstrapFailureCode? = null,
     val createdAt: Instant,
     val updatedAt: Instant,
 )

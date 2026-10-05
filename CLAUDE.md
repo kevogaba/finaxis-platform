@@ -237,6 +237,42 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   to**, copying `V23`'s step 1a and step 2 for every tenant's `TENANT_ADMIN` (the drift test sees
   only `PLATFORM_SUPER_ADMIN` and `local-admin`) — see `docs/security/authorization-model.md` and
   ADR 0030
+- `V24__bootstrap_failure_code_closed_set.sql` — **data plus one declarative CHECK, no new
+  column**: `organisation_initial_administrator_bootstrap.last_failure_code` is now a **closed
+  set** (`IDENTITY_PROVIDER_FAILED`, `CONFLICT`, `NOT_FOUND`, `INVALID_STATE`, `DATABASE_ERROR`,
+  `UNEXPECTED`; `InitialAdministratorBootstrapFailureCode`, chosen from the exception's type, never
+  its message) or `NULL`. Until now the failure recorder stored the raw exception message
+  (truncated to 100 characters), which `GET /api/v1/tenant` and the platform tenant routes returned
+  to every `tenant.view` holder and which could carry SQL, Keycloak output or an email address.
+  **The rewrite is one-way and on purpose**: V24 sets every non-`NULL` value outside the set to
+  `UNEXPECTED` (a member is left alone; no other column, not even `updated_at` or `row_version`,
+  is written), destroying the stored raw text, then adds `chk_bootstrap_failure_code`, so no write
+  path can store free text again. A CHECK, not a trigger, so ADR 0024 does not apply. **Three places
+  no longer carry the exception message**: the recorder's `ERROR` line holds the organisation id,
+  the code, the exception and root-cause class names and the stack frames
+  (`toMessageFreeStackTrace`; the throwable is never passed to the logger); the bootstrap,
+  Keycloak-provisioning and application-invite job handlers rethrow a `SanitisedJobFailureException`
+  to JobRunr (message = the closed code, or the class name for the invite; no cause, except a
+  message-free `InterruptedException` when the original chain held one, which JobRunr uses to detect
+  a stopped server) for the failures they catch, so what JobRunr logs and stores in `jobrunr_jobs`
+  for those holds no message and its retries are unchanged (the bootstrap and Keycloak handlers
+  catch every `Exception`; the invite handler catches only its four listed types); the bootstrap and
+  invite handlers always, and the Keycloak handler for a failure it does not record, log a `WARN`
+  with the class names and frames, still without the message (the recorder's `ERROR` line is written
+  first for a failure it records); and `ApiExceptionHandler` logs the class and message-free frames,
+  never the throwable (so Sentry's MVC resolver, which runs after Spring's own, never sees an
+  exception that handler resolves; for these failures the Sentry logback appender receives the
+  message-free lines). Not covered: `identity_dispatch_log.last_error` still keeps the raw message
+  of a failed Keycloak or invite job (database only; no API returns it), `jobrunr_jobs` keeps the
+  job request's input (the administrator's email and username), an exception type the invite handler
+  does not catch reaches JobRunr as raised, and the Keycloak handler's uncaught types and
+  already-succeeded branch are sanitised and logged but not recorded as a failure. Only a failed
+  retry's audit row holds the code and the exception class name (the
+  Keycloak-job row has the class name only). **A new failure kind needs a new enum member and a
+  forward migration that widens the CHECK in the same change.** Idempotent, with pre- and
+  post-condition asserts in-file — see `docs/operations/tenant-provisioning.md` ("Failed
+  initial-administrator bootstrap") and `docs/security/authorization-model.md`
+  ("Bootstrap failure code")
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -267,9 +303,9 @@ trial-balance index, `V16` the corrected fingerprint comment, and `V17` the canc
 state. `V18` is a data backfill of the branch lifecycle dates, `V19` a foundation permission
 seed (`branch.update`), `V20` a foundation CHECK pinning the platform organisation to `ACTIVE`,
 `V21` the move of branch approval to `branch.approve` (deprecating `branch.activate`), `V22`
-the permission catalogue's kind, grant scope and view requirements, and `V23` the seeded
-administrator roles' grants; none is accounting. Do not invent accounting tables or columns
-outside those documents.
+the permission catalogue's kind, grant scope and view requirements, `V23` the seeded
+administrator roles' grants, and `V24` the closed bootstrap failure-code set; none is accounting.
+Do not invent accounting tables or columns outside those documents.
 
 ## Authorization
 

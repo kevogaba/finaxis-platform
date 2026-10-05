@@ -602,6 +602,37 @@ check, "Mutation-time check"), so a checker role holding `tenant.reject` alone i
 exposed on the platform tenant routes (`tenant.view`) and on the tenant's own `GET /tenant`, as an
 always-present nullable field.
 
+## Bootstrap failure code
+
+`bootstrap_failure_code` on `GET /tenant` (read at `tenant.view`) and on the platform tenant routes
+is a **closed code**, not a message: `IDENTITY_PROVIDER_FAILED`, `CONFLICT`, `NOT_FOUND`,
+`INVALID_STATE`, `DATABASE_ERROR` or `UNEXPECTED`, or `null`
+(`InitialAdministratorBootstrapFailureCode`). The recorder maps the failing exception by type and
+stores only the code; `V24` rewrote every earlier free-text value to `UNEXPECTED` and added
+`chk_bootstrap_failure_code`, so no path can store text. The reason is that this field is read by
+every tenant member who can view the tenant, and an exception message can carry SQL,
+identity-provider output or an email address. Where the failure text goes: the recorder's `ERROR`
+line carries the organisation id, the code, the exception and root-cause class names and the stack
+frames of the exception and its causes, never `getMessage()` of any of them (the throwable is not
+passed to the logger, as its message and its causes' would print an email, SQL or identity-provider
+output). The bootstrap, Keycloak-provisioning and application-invite job handlers rethrow a
+`SanitisedJobFailureException` to JobRunr for the failures they catch (every `Exception` in the
+first two, four listed types in the invite handler): message = the closed code, or the class name
+for the invite; no cause, except a message-free `InterruptedException` when the original chain held
+one, because JobRunr detects a stopped server or deleted job by it. So JobRunr's log lines and the
+failed state it stores in `jobrunr_jobs` hold no message of the original, and retries are unchanged.
+The bootstrap and invite handlers always, and the Keycloak handler for a failure it does not record,
+log a message-free `WARN` with the class names and frames. The synchronous `bootstrap/retry` route
+still raises the original to `ApiExceptionHandler`, which maps it and logs only its class and
+message-free frames; Sentry's MVC resolver runs after Spring's own, so it never sees an exception
+that handler resolves. **Still stored or not covered:** the raw message of a failed Keycloak or
+invite job in `identity_dispatch_log.last_error` (database only, no API returns it: a deliberate,
+flagged choice, so operators can diagnose); the job request's input (the administrator's email and
+username) in `jobrunr_jobs`; an exception type the invite handler does not catch reaches JobRunr as
+raised. A failed `tenant.bootstrap_retry` also writes an audit row with the code and the exception
+class name, never the message; the failed `user.keycloak_provisioning` audit row carries the class
+name but no code.
+
 ## Maker-checker and the platform checker
 
 Approvals are maker-checker: the actor that created a thing cannot approve it, whatever its

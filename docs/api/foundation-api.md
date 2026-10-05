@@ -1002,8 +1002,10 @@ Base path: `/api/v1/tenant`.
 | GET    | `/`  | Get current tenant from active context | `tenant.view` | item  |
 
 The response uses `TenantDetailResponse`, including `bootstrap_status` and
-`bootstrap_failure_code`, and the always-present, nullable `status_reason` of the tenant's last
-transition (see [Platform Tenant Administration](#platform-tenant-administration)).
+`bootstrap_failure_code` (a closed code, see
+[Maker-Checker Tenant Onboarding](#maker-checker-tenant-onboarding)), and the always-present,
+nullable `status_reason` of the tenant's last transition (see
+[Platform Tenant Administration](#platform-tenant-administration)).
 
 ### Tenant Users
 
@@ -1743,8 +1745,28 @@ bootstrap state is exposed on `TenantDetailResponse.bootstrap_status`:
 DRAFT -> PENDING_ACTIVATION -> QUEUED -> PROVISIONING_IDENTITY -> COMPLETED
 ```
 
-`FAILED` records a safe `bootstrap_failure_code` and allows retry through
+`FAILED` records a `bootstrap_failure_code` and allows retry through
 `tenant.bootstrap_retry`.
+
+`bootstrap_failure_code` is a **closed code**, never free text: `null` when no attempt failed,
+otherwise one of `IDENTITY_PROVIDER_FAILED` (the identity provider could not be reached, refused the
+call or is not enabled), `CONFLICT` (a username already in use, a membership already held, a state
+conflict), `NOT_FOUND` (a record the bootstrap needs is missing), `INVALID_STATE` (an internal
+invariant or precondition failed, such as a rejected transition or state), `DATABASE_ERROR` (the
+database refused a read or write) or `UNEXPECTED` (anything else). The code is chosen from the
+exception's type, never its message, and a database `CHECK` (`V24`) refuses any other value. It is
+published as an `enum` in the OpenAPI schema. Tenant members holding `tenant.view` read it on
+`GET /tenant`, and platform operators on the platform tenant routes, so the exception text (which
+can carry SQL, identity-provider output or an email address) is deliberately in no response. The
+`ERROR` log line the recorder writes holds the organisation id, the code, the exception and
+root-cause class names and the stack frames, never an exception message; the job handlers hand
+JobRunr, for the failures they catch, only the closed code or the exception class name (no message;
+no cause but a message-free `InterruptedException` where the original had one) and
+`ApiExceptionHandler` logs the class and frames only. The raw message of a failed Keycloak or invite
+job is still kept in `identity_dispatch_log.last_error`, which no API returns. A failed
+`tenant.bootstrap_retry` also writes an audit row with the code and the exception class name only
+(never the message); the failed `user.keycloak_provisioning` audit row carries the exception class
+name but no code. See [tenant provisioning](../operations/tenant-provisioning.md).
 
 Successful initial-administrator bootstrap durably creates or resolves:
 
