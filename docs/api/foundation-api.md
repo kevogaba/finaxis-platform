@@ -906,7 +906,9 @@ Base path: `/api/v1/platform/tenants/{tenant_id}/memberships`.
 | POST   | `/{membership_id}/activate` | Approve a tenant membership as platform checker | `user.approve` + `membership.view` | mutation |
 
 Takes an optional decision remark body (see [Decision remarks](#decision-remarks)) and returns the
-membership as `GET /api/v1/tenant/memberships/{membership_id}` does: **200** when the membership became `ACTIVE`, **202** while Keycloak provisioning is queued.
+membership as `GET /api/v1/tenant/memberships/{membership_id}` does, read back through the same
+gated query (`membership.view` in the platform organisation, bound to the path tenant): **200**
+when the membership became `ACTIVE`, **202** while Keycloak provisioning is queued.
 The permission is checked in the platform organisation, together with `membership.view` in the
 same organisation (the named 403 above): `user.approve` alone is refused. `404` when the
 membership is not in the path tenant, `409` when the tenant is not `ACTIVE`, the membership is not

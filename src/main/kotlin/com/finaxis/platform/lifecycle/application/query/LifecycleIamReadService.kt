@@ -22,16 +22,6 @@ interface LifecycleIamReadService {
     ): LifecycleMembershipDetail
 
     /**
-     * Retrieves a membership detail without a permission check, for the response of a mutation
-     * the caller was already authorised to make on that membership. Still bound to
-     * [organisationId].
-     */
-    fun getMembershipAfterAuthorizedMutation(
-        organisationId: UUID,
-        membershipId: UUID,
-    ): LifecycleMembershipDetail
-
-    /**
      * Searches branch-assignment summaries in an organisation, limited to the branches the caller
      * holds `branch_assignment.view` on (ADR 0030, decision 5).
      */

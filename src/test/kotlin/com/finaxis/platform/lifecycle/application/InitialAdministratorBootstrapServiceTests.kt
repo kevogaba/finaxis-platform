@@ -60,7 +60,7 @@ class InitialAdministratorBootstrapServiceTests {
     private val approvedBy = UUID.randomUUID()
 
     init {
-        whenever(userProvisioningService.approveUser(any())).thenReturn(asynchronousApproval)
+        whenever(userProvisioningService.approveAsSystem(any())).thenReturn(asynchronousApproval)
     }
 
     @Test
@@ -101,7 +101,7 @@ class InitialAdministratorBootstrapServiceTests {
 
         val newUserId = UUID.randomUUID()
         val newMembershipId = UUID.randomUUID()
-        whenever(userProvisioningService.inviteUser(any())).thenReturn(
+        whenever(userProvisioningService.inviteAsSystem(any())).thenReturn(
             UserInvitationResult(
                 newUserId,
                 newMembershipId,
@@ -123,7 +123,7 @@ class InitialAdministratorBootstrapServiceTests {
         )
 
         val inviteCaptor = argumentCaptor<InviteUserCommand>()
-        verify(userProvisioningService).inviteUser(inviteCaptor.capture())
+        verify(userProvisioningService).inviteAsSystem(inviteCaptor.capture())
         val inviteCmd = inviteCaptor.firstValue
         assertEquals(orgId, inviteCmd.organisationId)
         assertEquals(record.adminEmail, inviteCmd.email)
@@ -146,7 +146,7 @@ class InitialAdministratorBootstrapServiceTests {
         assertEquals(1, inviteCmd.bootstrapAttempt)
 
         val approveCaptor = argumentCaptor<ApproveUserCommand>()
-        verify(userProvisioningService).approveUser(approveCaptor.capture())
+        verify(userProvisioningService).approveAsSystem(approveCaptor.capture())
         val approveCmd = approveCaptor.firstValue
         assertEquals(orgId, approveCmd.organisationId)
         assertEquals(newMembershipId, approveCmd.membershipId)
@@ -178,10 +178,10 @@ class InitialAdministratorBootstrapServiceTests {
 
         service.bootstrap(orgId)
 
-        verify(userProvisioningService, never()).inviteUser(any())
+        verify(userProvisioningService, never()).inviteAsSystem(any())
 
         val approveCaptor = argumentCaptor<ApproveUserCommand>()
-        verify(userProvisioningService).approveUser(approveCaptor.capture())
+        verify(userProvisioningService).approveAsSystem(approveCaptor.capture())
         val approveCmd = approveCaptor.firstValue
         assertEquals(orgId, approveCmd.organisationId)
         assertEquals(existingMembershipId, approveCmd.membershipId)
@@ -252,7 +252,7 @@ class InitialAdministratorBootstrapServiceTests {
         whenever(adminBootstrapStore.find(orgId)).thenReturn(record)
         whenever(userProvisioningStore.dispatchStatus("$orgId:$userId:KEYCLOAK_PROVISIONING"))
             .thenReturn(null)
-        whenever(userProvisioningService.approveUser(any())).thenReturn(
+        whenever(userProvisioningService.approveAsSystem(any())).thenReturn(
             UserApprovalResult(
                 userId,
                 membershipId,

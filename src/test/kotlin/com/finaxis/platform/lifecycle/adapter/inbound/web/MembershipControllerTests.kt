@@ -14,10 +14,10 @@ import com.finaxis.platform.common.web.idempotency.IdempotencyProperties
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
-import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReactivateMembershipRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.RevokeMembershipRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SuspendMembershipRequest
+import com.finaxis.platform.lifecycle.application.ActingScope
 import com.finaxis.platform.lifecycle.application.ApproveUserCommand
 import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.UserApprovalResult
@@ -116,9 +116,6 @@ class MembershipControllerTests
         @MockitoBean
         private lateinit var lifecycleIamReadService: LifecycleIamReadService
 
-        @MockitoBean
-        private lateinit var permissionGuard: PermissionGuard
-
         @Test
         fun `searchMemberships returns a bounded page`() {
             val tenantId = uuidV7()
@@ -198,6 +195,7 @@ class MembershipControllerTests
             val tenantId = uuidV7()
             val membershipId = uuidV7()
             val userId = uuidV7()
+            val callerId = uuidV7()
             whenever(userProvisioningService.approveUser(any())).thenReturn(
                 approvalResult(userId, membershipId, keycloakRequested = true),
             )
@@ -205,13 +203,20 @@ class MembershipControllerTests
 
             mockMvc
                 .post("${ApiPaths.MEMBERSHIPS}/$membershipId/activate") {
-                    with(authentication(tenantToken(setOf("user.approve"), tenantId)))
+                    with(authentication(tenantToken(setOf("user.approve"), tenantId, callerId)))
                 }.andExpect {
                     status { isAccepted() }
                     jsonPath("$.id") { value(membershipId.toString()) }
                 }
 
-            verify(userProvisioningService).approveUser(any())
+            verify(userProvisioningService).approveUser(
+                argThat {
+                    organisationId == tenantId &&
+                        this.membershipId == membershipId &&
+                        approvedBy == callerId &&
+                        scope == ActingScope.TENANT
+                },
+            )
         }
 
         @Test
@@ -284,6 +289,7 @@ class MembershipControllerTests
         fun `suspend returns updated membership detail`() {
             val tenantId = uuidV7()
             val membershipId = uuidV7()
+            val callerId = uuidV7()
             stubMembershipDetail(tenantId, membershipId, "SUSPENDED")
 
             mockMvc
@@ -293,13 +299,23 @@ class MembershipControllerTests
                         apiJsonCodec.mapper.writeValueAsString(
                             SuspendMembershipRequest("Temporary audit closure"),
                         )
-                    with(authentication(tenantToken(setOf("membership.suspend"), tenantId)))
+                    with(
+                        authentication(
+                            tenantToken(setOf("membership.suspend"), tenantId, callerId),
+                        ),
+                    )
                 }.andExpect {
                     status { isOk() }
                     jsonPath("$.membership_status") { value("SUSPENDED") }
                 }
 
-            verify(userProvisioningService).suspendMembership(any())
+            verify(userProvisioningService).suspendMembership(
+                argThat {
+                    organisationId == tenantId &&
+                        this.membershipId == membershipId &&
+                        actorId == callerId
+                },
+            )
         }
 
         @Test
@@ -390,6 +406,7 @@ class MembershipControllerTests
         fun `reactivate returns updated membership detail`() {
             val tenantId = uuidV7()
             val membershipId = uuidV7()
+            val callerId = uuidV7()
             stubMembershipDetail(tenantId, membershipId, "ACTIVE")
 
             mockMvc
@@ -399,19 +416,30 @@ class MembershipControllerTests
                         apiJsonCodec.mapper.writeValueAsString(
                             ReactivateMembershipRequest("Audit completed"),
                         )
-                    with(authentication(tenantToken(setOf("membership.reactivate"), tenantId)))
+                    with(
+                        authentication(
+                            tenantToken(setOf("membership.reactivate"), tenantId, callerId),
+                        ),
+                    )
                 }.andExpect {
                     status { isOk() }
                     jsonPath("$.membership_status") { value("ACTIVE") }
                 }
 
-            verify(userProvisioningService).reactivateMembership(any())
+            verify(userProvisioningService).reactivateMembership(
+                argThat {
+                    organisationId == tenantId &&
+                        this.membershipId == membershipId &&
+                        actorId == callerId
+                },
+            )
         }
 
         @Test
         fun `revoke returns updated membership detail`() {
             val tenantId = uuidV7()
             val membershipId = uuidV7()
+            val callerId = uuidV7()
             stubMembershipDetail(tenantId, membershipId, "REVOKED")
 
             mockMvc
@@ -421,13 +449,23 @@ class MembershipControllerTests
                         apiJsonCodec.mapper.writeValueAsString(
                             RevokeMembershipRequest("Access no longer required"),
                         )
-                    with(authentication(tenantToken(setOf("membership.revoke"), tenantId)))
+                    with(
+                        authentication(
+                            tenantToken(setOf("membership.revoke"), tenantId, callerId),
+                        ),
+                    )
                 }.andExpect {
                     status { isOk() }
                     jsonPath("$.membership_status") { value("REVOKED") }
                 }
 
-            verify(userProvisioningService).revokeTenantMembership(any())
+            verify(userProvisioningService).revokeTenantMembership(
+                argThat {
+                    organisationId == tenantId &&
+                        this.membershipId == membershipId &&
+                        actorId == callerId
+                },
+            )
         }
 
         @Test

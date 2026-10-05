@@ -15,7 +15,6 @@ import com.finaxis.platform.iam.application.query.IamQueryService
 import com.finaxis.platform.iam.application.query.UserInTenantDetail
 import com.finaxis.platform.iam.application.query.UserInTenantFilter
 import com.finaxis.platform.iam.application.query.UserInTenantSummary
-import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.adapter.inbound.web.CallerContextResolver
 import com.finaxis.platform.lifecycle.application.BranchAssignmentRequest
 import com.finaxis.platform.lifecycle.application.InviteUserCommand
@@ -57,7 +56,6 @@ import java.util.UUID
 class TenantUserController(
     private val userProvisioningService: UserProvisioningService,
     private val iamQueryService: IamQueryService,
-    private val permissionGuard: PermissionGuard,
 ) {
     /** Searches users in the active tenant organisation. */
     @GetMapping
@@ -188,11 +186,6 @@ class TenantUserController(
         @RequestBody @Valid request: InviteUserRequest,
     ): ResponseEntity<UserInvitationResultResponse> {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            "user.invite",
-        )
         val result =
             userProvisioningService.inviteUser(
                 InviteUserCommand(

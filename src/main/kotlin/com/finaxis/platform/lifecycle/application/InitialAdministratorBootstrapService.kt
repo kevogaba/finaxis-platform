@@ -105,7 +105,7 @@ class InitialAdministratorBootstrapService(
                     bootstrapRequestId = "BOOTSTRAP-$organisationId",
                     bootstrapAttempt = record.attempts + 1,
                 )
-            val inviteResult = userProvisioningService.inviteUser(inviteCmd)
+            val inviteResult = userProvisioningService.inviteAsSystem(inviteCmd)
             userId = inviteResult.userId
             membershipId = inviteResult.membershipId
             adminBootstrapStore.linkResolvedEntities(
@@ -141,7 +141,7 @@ class InitialAdministratorBootstrapService(
                     bootstrapRequestId = "BOOTSTRAP-$organisationId",
                     bootstrapAttempt = record.attempts + 1,
                 )
-            val approvalResult = userProvisioningService.approveUser(approveCmd)
+            val approvalResult = userProvisioningService.approveAsSystem(approveCmd)
             if (!approvalResult.keycloakProvisioningRequested) {
                 completeBootstrapIfCorrelated(organisationId, userId)
             }

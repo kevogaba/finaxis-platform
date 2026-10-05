@@ -4,6 +4,7 @@ import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.application.InvalidRequestException
+import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
@@ -30,7 +31,9 @@ import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleTransition
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
+import org.mockito.kotlin.any
 import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.whenever
 import org.springframework.dao.DuplicateKeyException
@@ -1036,6 +1039,153 @@ class UserProvisioningServiceTests {
             fake.memberships.getValue(context.org to membershipId).state,
         )
         assertTrue(audits.events.any { it.action == "membership.reactivate" })
+    }
+
+    @Test
+    fun `an invitation asks user invite in the tenant first and a refusal writes nothing`() {
+        val context = activeInvitationContext()
+        // The organisation is not active: a 409 would follow if the permission were not first.
+        fake.organisationStates[context.org] = OrganisationLifecycleState.SUSPENDED
+        doThrow(MissingPermissionException("user.invite"))
+            .whenever(permissionGuard)
+            .requireTenantPermission(context.actor, context.org, "user.invite")
+
+        val failure =
+            assertFailsWith<MissingPermissionException> {
+                service.inviteUser(inviteCommand(context))
+            }
+
+        assertEquals("Missing permission: user.invite.", failure.safeDetail)
+        assertNothingWritten()
+    }
+
+    @Test
+    fun `a system invitation and approval ask no actor permission and keep the maker checker`() {
+        val context = activeInvitationContext()
+        val bootstrapActor = SystemActor.ID
+
+        val invitation =
+            service.inviteAsSystem(inviteCommand(context).copy(invitedBy = bootstrapActor))
+        val approval =
+            service.approveAsSystem(
+                ApproveUserCommand(context.org, invitation.membershipId, context.checker),
+            )
+
+        assertTrue(approval.keycloakProvisioningRequested)
+        verify(permissionGuard, never()).requireTenantPermission(any(), any(), any())
+        verify(permissionGuard, never()).requirePlatformPermission(any(), any())
+        val beneficiary = fake.users.keys.single()
+        assertFailsWith<ForbiddenOperationException> {
+            service.approveAsSystem(
+                ApproveUserCommand(context.org, invitation.membershipId, beneficiary),
+            )
+        }
+    }
+
+    @Test
+    fun `a system approval cannot act in the platform scope`() {
+        val context = activeInvitationContext()
+
+        assertFailsWith<IllegalArgumentException> {
+            service.approveAsSystem(
+                ApproveUserCommand(
+                    context.org,
+                    uuidV7(),
+                    context.checker,
+                    scope = ActingScope.PLATFORM,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `a tenant approval asks user approve in the tenant before any lookup`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        doThrow(MissingPermissionException("user.approve"))
+            .whenever(permissionGuard)
+            .requireTenantPermission(context.checker, context.org, "user.approve")
+
+        // A known and an unknown membership are refused identically: no existence signal.
+        listOf(invitation.membershipId, uuidV7()).forEach { membershipId ->
+            val failure =
+                assertFailsWith<MissingPermissionException> {
+                    service.approveUser(
+                        ApproveUserCommand(context.org, membershipId, context.checker),
+                    )
+                }
+            assertEquals("Missing permission: user.approve.", failure.safeDetail)
+        }
+
+        assertApprovalChangedNothing(context, invitation)
+        verify(permissionGuard, never()).requirePlatformPermission(any(), any())
+    }
+
+    @Test
+    fun `each membership mutation asks its own permission in the tenant before any lookup`() {
+        val context = activeInvitationContext()
+        val actor = context.actor
+        val unknown = uuidV7()
+        val reason = Reason.required("because")
+        val cases =
+            mapOf<String, () -> Unit>(
+                "membership.suspend" to {
+                    service.suspendMembership(
+                        SuspendMembershipCommand(context.org, unknown, actor, reason),
+                    )
+                },
+                "membership.reactivate" to {
+                    service.reactivateMembership(
+                        ReactivateMembershipCommand(context.org, unknown, actor),
+                    )
+                },
+                "membership.revoke" to {
+                    service.revokeTenantMembership(
+                        RevokeTenantMembershipCommand(context.org, unknown, actor, reason),
+                    )
+                },
+            )
+
+        cases.forEach { (code, action) ->
+            doThrow(MissingPermissionException(code))
+                .whenever(permissionGuard)
+                .requireTenantPermission(actor, context.org, code)
+
+            // An unknown membership would be a 404: the refusal came first.
+            val failure = assertFailsWith<MissingPermissionException>(code) { action() }
+
+            assertEquals("Missing permission: $code.", failure.safeDetail)
+        }
+        assertTrue(logs.logs.isEmpty())
+        assertTrue(audits.events.isEmpty())
+    }
+
+    @Test
+    fun `a refused membership suspension leaves the membership and writes no log or audit`() {
+        val context = activeInvitationContext()
+        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
+        val membershipId = fake.addMembership(context.org, userId, MembershipLifecycleState.ACTIVE)
+        doThrow(MissingPermissionException("membership.view"))
+            .whenever(permissionGuard)
+            .requireTenantPermission(context.actor, context.org, "membership.suspend")
+
+        assertFailsWith<MissingPermissionException> {
+            service.suspendMembership(
+                SuspendMembershipCommand(
+                    context.org,
+                    membershipId,
+                    context.actor,
+                    Reason.required("risk"),
+                ),
+            )
+        }
+
+        assertEquals(
+            MembershipLifecycleState.ACTIVE,
+            fake.memberships.getValue(context.org to membershipId).state,
+        )
+        assertTrue(logs.logs.isEmpty())
+        assertTrue(audits.events.isEmpty())
     }
 
     private fun approve(
