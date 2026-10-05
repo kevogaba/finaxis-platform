@@ -39,6 +39,7 @@ import com.finaxis.platform.accounting.domain.ManualJournalStatus
 import com.finaxis.platform.accounting.domain.ManualJournalTransition
 import com.finaxis.platform.accounting.domain.MoneyPolicy
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.id.uuidV7
 import java.math.BigDecimal
 import java.time.Clock
@@ -74,11 +75,9 @@ internal data class PermissionCheck(
  * was allowed to look has leaked the row's existence, and the only evidence of that is where the
  * check sits in [checks] relative to the store's own calls.
  *
- * A refusal throws [ForbiddenOperationException] with its defaults, because that is exactly what
- * the production adapter produces: `AccessDeniedException` extends it and discards the message it
- * is given. Accounting must not depend on the identity module, so the fake names the common
- * supertype the port documents rather than the identity subclass, and `assertFailsWith
- * <ForbiddenOperationException>` passes against either.
+ * A refusal throws [MissingPermissionException] naming the code, because that is exactly what the
+ * production adapter produces. It is a [ForbiddenOperationException], the common supertype the
+ * port documents, so `assertFailsWith<ForbiddenOperationException>` passes against either.
  */
 internal class FakeAccountingPermissionGuard : AccountingPermissionGuard {
     /** Every check made, in call order, refused ones included. */
@@ -139,7 +138,7 @@ internal class FakeAccountingPermissionGuard : AccountingPermissionGuard {
     ) {
         checks += PermissionCheck(kind, actorId, organisationId, permissionCode, branchId)
         if (permissionCode in refused) {
-            throw ForbiddenOperationException()
+            throw MissingPermissionException(permissionCode)
         }
     }
 }

@@ -164,8 +164,9 @@ touched no role, and `V23` applied the rule.
 
 **`permission_view_requirement`** pairs a `MUTATION` with each view it requires: 61 rows for the 60
 mutations, because `user.invite` needs two. A role or a caller that holds the mutation must also
-hold these views (ADR 0030). Role composition enforces it for custom roles (see "Role
-composition"); the catalogue test enforces it for the seeded roles.
+hold these views (ADR 0030). The runtime enforces it for every mutation ("Mutation-time check"
+below); role composition enforces it for custom roles (see "Role composition"); the catalogue test
+enforces it for the seeded roles.
 
 | Mutation | Required views |
 | --- | --- |
@@ -200,9 +201,9 @@ required code that is not a `VIEW`, and an `ACTIVE` mutation that requires a vie
 `ACTIVE` (runtime honours only `ACTIVE` codes). A `DEPRECATED` mutation such as `branch.activate`
 may still name an `ACTIVE` view. The same test is also **strict** about seeded roles: it fails if
 the platform roles, the bootstrap `local-admin` role or any default bundle built in code hold a
-mutation without its views (today none does). The mutation-time check that refuses a caller who
-holds a mutation without its view is a later change; role composition (below) already refuses to
-build such a role.
+mutation without its views (today none does). Role composition (below) refuses to build such a
+role, and a custom role that already holds one is not repaired by a migration: its holder is
+refused at mutation time with a named 403 until the role gains the view ("Mutation-time check").
 
 ## Role composition
 
@@ -249,6 +250,70 @@ the rule though every role the membership holds complies, and no API field repor
 roles have no listing API at all. Both are covered by the documented, tested operator SQL in
 [the permission view-gap report](../operations/permission-view-gap-report.md)
 (`docs/operations/sql/permission-view-gap-roles.sql` and `permission-view-gap-memberships.sql`).
+
+## Mutation-time check: a mutation implies its view
+
+[ADR 0030](../adr/0030-mutation-permission-implies-view-permission.md), decision 4. A route that
+mutates names its mutation code; the catalogue (`permission_view_requirement`, see "Catalogue
+metadata") says which view codes that mutation implies. **Every check the application makes
+through the `PermissionGuard` adapters requires the mutation code and every view code paired with
+it, at the same scope**: the tenant, the target branch, or the PLATFORM organisation.
+
+- **Central.** `LifecyclePermissionGuardAdapter` and `AccountingPermissionGuardAdapter` call
+  `AuthorizationService.requirePermissionWithViews` (and the target-branch and break-glass
+  variants), which reads the pairing through the `PermissionViewRequirementQueries` port. No call
+  site types a view, and none can forget it. Accounting has no inbound web adapter yet, but it
+  adopts the check now, so the first accounting route inherits it. A view or context code has no
+  pairing and is checked alone, exactly as before. The system actor stays exempt, except at the
+  break-glass check, which never exempts it.
+- **Same scope, same memo.** At a target branch the mutation code and each view are asked of the
+  branch's effective set (a tenant-wide grant or a grant on that branch) through the same
+  per-request `RequestPermissionCache` entry the gated branch read-back decides from, so the
+  pre-check and the read-back are one procedure over one piece of data and the read-back cannot
+  disagree with the pre-check or be refused for want of a grant. The pairing is read once per
+  request. It can fail only if the organisation stops being `ACTIVE` between the two (a concurrent
+  committed suspension): the request rolls back with a named 403 and a retry fails cleanly at the
+  pre-check.
+- **A named 403.** The refusal is `MissingPermissionException`, a `ForbiddenOperationException`:
+  `403 application/problem+json`, `code` still `forbidden`, and a `detail` that names the first
+  missing code, the mutation code first and then each view in code order: `Missing permission:
+  branch.view.` Every refusal the guard adapters make now names the code it needs, reads included.
+  Codes are public vocabulary (the catalogue, OpenAPI and `GET /auth/me` already list them) and the
+  check precedes any existence lookup on the routes listed under "Order", so naming adds no
+  oracle. A resource-level
+  `AccessDeniedException` that carries a resource reference, and `@PreAuthorize` denials, stay
+  generic. The view is **not** added to a route's `@PreAuthorize`: that would be an unnamed
+  duplicate of the application check and the wrong scope for a branch-scoped caller.
+- **Order.** Body validation (400), `@PreAuthorize` (403), then in the service the mutation and
+  view check (403, named), the platform-organisation 404 or 409, resource existence (404), the
+  ADR 0028 window (409), state (409), the mutation, the gated read-back. A refused request writes
+  nothing: no state change, transition log, audit success row, outbox row or idempotency row (the
+  refusal precedes every write and the idempotent transaction rolls back). Replay is unchanged: an
+  idempotent replay returns the stored response of the caller's own completed write after
+  `@PreAuthorize` only. **Until the assignment families move to the gated read-back (ADR 0030
+  rollout step 6c)**, two routes still read the resource before they check the mutation:
+  branch-assignment revoke and role-assignment revoke. On them a caller without the view is
+  refused by that target-aware read (an unnamed 403) and the mutation code is not named first.
+  Role-permission remove is named like the rest: its caller without `role.view` is refused with
+  `Missing permission: role.view.`. Tenant settings resolve the setting key (400) and
+  the organisation state (409) before the permission check. The refusal of a target-aware read
+  stays unnamed everywhere.
+- **A direct `DENY` of a view** removes it from the resolved set, so the operator who holds a
+  mutation and a `DENY` of its view cannot mutate either, by design.
+- **Hand SQL on the catalogue fails open.** The pairing is reference data changed only by forward
+  migration. An `ACTIVE` mutation with no `permission_view_requirement` row, because someone
+  deleted or reclassified it by hand, is checked alone: the rule is silently off for that code.
+  `PermissionCatalogueMetadataTests` guards the migrated database (every mutation paired with an
+  `ACTIVE` view), so run it, and the operator view-gap queries, after any hand SQL on the
+  catalogue. The accepted cost of keeping the rule in data (ADR 0030).
+
+**Lock-out implications.** A custom role (or a direct override, or a platform checker role) that
+holds a mutation code without its view stops being able to mutate when this check ships. What the
+caller gets is a clean `403` naming the missing view and no change, never a mutation that rolls
+back after the fact. Repair the role by adding the view (`assign-permission`), after listing the
+violators with the operator report shipped with the role-composition change. The seeded roles
+already comply (`V22`, `V23` and the drift tests), `PLATFORM_SUPER_ADMIN` holds every code, and
+the bootstrap `local-admin` holds every tenant code.
 
 ## Role administration
 
@@ -447,9 +512,11 @@ from the record at approval, so it holds across the return, amend, resubmit loop
 and may approve a later resubmission, as may the earlier submitter, who is not the submitter of
 the current request (an accepted consequence of reading the rule from the record at approval).
 
-The tenant returned is read back without `tenant.view`, so `tenant.reject` alone is enough. The
-`status_reason` it sets is exposed on the platform tenant routes (`tenant.view`) and on the
-tenant's own `GET /tenant`, as an always-present nullable field.
+`tenant.reject` is checked together with `tenant.view` in the platform organisation (the mutation
+check, "Mutation-time check"), so a checker role holding `tenant.reject` alone is refused with
+`Missing permission: tenant.view.` before anything changes. The `status_reason` it sets is
+exposed on the platform tenant routes (`tenant.view`) and on the tenant's own `GET /tenant`, as an
+always-present nullable field.
 
 ## Maker-checker and the platform checker
 

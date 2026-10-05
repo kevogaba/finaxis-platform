@@ -13,10 +13,9 @@ import com.finaxis.platform.accounting.domain.AccountingPermissions
 import com.finaxis.platform.accounting.schema.JournalSchemaFixture
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.foundation.ViewCoupledGrants
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import com.finaxis.platform.jooq.tables.references.GL_ACCOUNT_DAILY_BALANCE
-import com.finaxis.platform.jooq.tables.references.MEMBERSHIP_PERMISSION
-import com.finaxis.platform.jooq.tables.references.PERMISSION
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import org.jooq.DSLContext
@@ -475,38 +474,19 @@ class DailyBalanceProjectionIntegrationTests(
                 .returning(USER_ACCOUNT.ID)
                 .fetchOne()!!
                 .id!!
-        val membershipId =
-            dsl
-                .insertInto(USER_ORGANISATION_MEMBERSHIP)
-                .set(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID, organisationId)
-                .set(USER_ORGANISATION_MEMBERSHIP.USER_ID, userId)
-                .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, "ACTIVE")
-                .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, "STAFF")
-                .set(USER_ORGANISATION_MEMBERSHIP.JOINED_AT, now)
-                .set(USER_ORGANISATION_MEMBERSHIP.CREATED_AT, now)
-                .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT, now)
-                .returning(USER_ORGANISATION_MEMBERSHIP.ID)
-                .fetchOne()!!
-                .id!!
+        dsl
+            .insertInto(USER_ORGANISATION_MEMBERSHIP)
+            .set(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID, organisationId)
+            .set(USER_ORGANISATION_MEMBERSHIP.USER_ID, userId)
+            .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, "ACTIVE")
+            .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, "STAFF")
+            .set(USER_ORGANISATION_MEMBERSHIP.JOINED_AT, now)
+            .set(USER_ORGANISATION_MEMBERSHIP.CREATED_AT, now)
+            .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT, now)
+            .execute()
         if (permissionCode != null) {
-            val permissionId =
-                dsl
-                    .select(PERMISSION.ID)
-                    .from(PERMISSION)
-                    .where(PERMISSION.PERMISSION_CODE.eq(permissionCode))
-                    .fetchOne(PERMISSION.ID)
-                    ?: error("permission $permissionCode is not seeded")
-            dsl
-                .insertInto(MEMBERSHIP_PERMISSION)
-                .set(MEMBERSHIP_PERMISSION.ORGANISATION_ID, organisationId)
-                .set(MEMBERSHIP_PERMISSION.MEMBERSHIP_ID, membershipId)
-                .set(MEMBERSHIP_PERMISSION.PERMISSION_ID, permissionId)
-                .set(MEMBERSHIP_PERMISSION.EFFECT, "ALLOW")
-                .set(MEMBERSHIP_PERMISSION.GRANTED_AT, now)
-                .set(MEMBERSHIP_PERMISSION.CREATED_AT, now)
-                .set(MEMBERSHIP_PERMISSION.UPDATED_AT, now)
-                .onConflictDoNothing()
-                .execute()
+            // The mutation code and the views the catalogue pairs with it (ADR 0030).
+            ViewCoupledGrants.grantDirectly(dsl, organisationId, userId, permissionCode)
         }
         return userId
     }

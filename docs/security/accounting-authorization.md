@@ -377,7 +377,21 @@ Two alternatives were rejected:
 
 ## Runtime Enforcement
 
-Nothing changes about how enforcement works; accounting simply extends the vocabulary.
+Accounting extends the vocabulary, and it adopts the central view-coupling check of
+[ADR 0030](../adr/0030-mutation-permission-implies-view-permission.md) (decision 4):
+`AccountingPermissionGuardAdapter` requires **a mutation code and every view code the catalogue
+pairs with it** (`permission_view_requirement`; for accounting, the view of the same resource, so
+`gl_account.create` needs `gl_account.view`, `journal.approve` needs `journal.view`, and so on) at
+the same scope. A caller names only the mutation code and the adapter adds the views, so the first
+accounting route inherits the rule and no service can forget it. A holder of the mutation without
+the view is refused with `403 forbidden` and a detail that names the first missing code (`Missing
+permission: gl_account.view.`, the mutation code first), before the service reads or writes
+anything. The break-glass check applies the same rule: `journal.post_prior_period` needs
+`journal.view` and `fiscal_period.reopen` needs `fiscal_period.view`, each decided by the same
+locked, uncached read as the code itself, so a background identity is held to it too. The seeded
+accounting roles already hold the views (`ACCOUNTING_OPERATOR`, `ACCOUNTING_APPROVER`, the
+administrators); a custom role that holds an accounting mutation without its view is refused until
+the view is added. See "Mutation-time check" in the [authorization model](authorization-model.md).
 
 - Controllers use permission authorities for coarse gates
   (`@PreAuthorize("hasAuthority('gl_account.view')")`, `@authz.hasPermission(...)`).
@@ -402,6 +416,7 @@ deliberately left out of #34, which changes no enforcement code at all.
 | `AccountingPermissionCatalogueTests` | The 26 codes exist, are `ACTIVE`, agree with `AccountingPermissions` in both directions, occupy a contiguous `41000000-…01`–`…26` block, collide with no foundation code, are fully held by `PLATFORM_SUPER_ADMIN`, are entirely absent from `PLATFORM_SUPPORT`, and all appear on `local-admin` (`V23`) |
 | `AccountingSeparationOfDutiesPolicyTests` | The dedicated maker and checker roles hold opposite sides of every approval pair, no non-admin default bundle carries a break-glass code (the administrator holds them), both accounting roles are provisioned at organisation approval, and every code named by a default bundle exists and is `ACTIVE` |
 | `HighRiskOperationAuditCoverageTests` | Every HIGH/CRITICAL catalogue code maps to an audited action, every mapped action is reachable from production, and the `pendingEnforcement` ratchet still names only actions with no real call site |
+| `AccountingMutationViewCouplingIntegrationTests` | An accounting mutation without its view is refused with the view named, the mutation code is named first, nothing is written, a branch-scoped check needs the view at that branch, and a break-glass code is held to the same rule |
 | `FoundationSeedDataTests` | The exact 81-code catalogue, no duplicates, `local-admin` holding every `ACTIVE` tenant-scope code, and the exact `PLATFORM_SUPPORT` set |
 
 The migration also enforces its own invariants in `DO $$` blocks — pre-conditions (the two platform

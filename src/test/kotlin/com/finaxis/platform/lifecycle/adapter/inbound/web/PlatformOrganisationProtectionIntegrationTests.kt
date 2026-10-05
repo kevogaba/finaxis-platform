@@ -93,7 +93,7 @@ class PlatformOrganisationProtectionIntegrationTests
         @Test
         fun `a caller without the permission is refused with 403 before the platform guard`() {
             val narrow = seedUser("narrow")
-            fixture.grantPlatformPermissionsOnly(narrow, "tenant.view")
+            fixture.grantPlatformPermissionsWithViews(narrow, "tenant.view")
             val before = platformSnapshot()
 
             // The coarse authority is claimed on the token but not held in the database, so the

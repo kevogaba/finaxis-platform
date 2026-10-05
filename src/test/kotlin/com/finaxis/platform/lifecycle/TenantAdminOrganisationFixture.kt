@@ -3,6 +3,7 @@ package com.finaxis.platform.lifecycle
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
+import com.finaxis.platform.foundation.ViewCoupledGrants
 import com.finaxis.platform.jooq.tables.references.PERMISSION
 import com.finaxis.platform.jooq.tables.references.ROLE
 import com.finaxis.platform.jooq.tables.references.ROLE_PERMISSION
@@ -40,11 +41,12 @@ class TenantAdminOrganisationFixture(
     }
 
     /**
-     * Creates an ACTIVE organisation in which [actorId] is a plain member holding exactly
-     * [permissionCodes] and NOT the TENANT_ADMIN role. Since V23 that role holds every
-     * tenant-scope code, break-glass included, so a test that must prove the absence of a code
-     * (a backdated posting refused for want of `journal.post_prior_period`, a revocation that
-     * leaves the actor without it) cannot use [createActiveOrganisation].
+     * Creates an ACTIVE organisation in which [actorId] is a plain member holding
+     * [permissionCodes] (plus the views they imply, ADR 0030) and NOT the TENANT_ADMIN role.
+     * Since V23 that role holds every tenant-scope code, break-glass included, so a test that
+     * must prove the absence of a code (a backdated posting refused for want of
+     * `journal.post_prior_period`, a revocation that leaves the actor without it) cannot use
+     * [createActiveOrganisation].
      */
     fun createActiveOrganisationWithMember(
         labelPrefix: String,
@@ -52,7 +54,7 @@ class TenantAdminOrganisationFixture(
         vararg permissionCodes: String,
     ): UUID {
         val organisationId = provisionActiveOrganisation(labelPrefix, actorId)
-        grantTenantPermissionsOnly(organisationId, actorId, *permissionCodes)
+        grantTenantPermissionsWithViews(organisationId, actorId, *permissionCodes)
         return organisationId
     }
 
@@ -117,43 +119,106 @@ class TenantAdminOrganisationFixture(
     }
 
     /**
-     * Grants [actorId] a dedicated platform role holding exactly [permissionCodes] and nothing
-     * else, so a test can prove a route works with its advertised permission alone.
+     * Grants [actorId] a dedicated platform role holding [permissionCodes] **and every view the
+     * catalogue pairs with a mutation among them** (ADR 0030) and nothing else, so a test can
+     * prove a route works with its advertised permission and the view it implies.
      */
-    fun grantPlatformPermissionsOnly(
+    fun grantPlatformPermissionsWithViews(
         actorId: UUID,
         vararg permissionCodes: String,
-    ) = grantPermissionsOnly(PlatformOrganisation.ID, actorId, "PLATFORM_NARROW", permissionCodes)
+    ) = grantPermissionsWithViews(
+        PlatformOrganisation.ID,
+        actorId,
+        "PLATFORM_NARROW",
+        permissionCodes,
+    )
 
     /**
-     * Grants [actorId] a dedicated role in [organisationId] holding exactly [permissionCodes] and
-     * nothing else, so a test can prove a tenant route refuses a member who lacks its permission.
+     * Grants [actorId] a dedicated role in [organisationId] holding [permissionCodes] and the
+     * views they imply (ADR 0030) and nothing else, so a test can prove a tenant route refuses a
+     * member who lacks its permission.
      */
-    fun grantTenantPermissionsOnly(
+    fun grantTenantPermissionsWithViews(
         organisationId: UUID,
         actorId: UUID,
         vararg permissionCodes: String,
-    ) = grantPermissionsOnly(organisationId, actorId, "TENANT_NARROW", permissionCodes)
+    ) = grantPermissionsWithViews(organisationId, actorId, "TENANT_NARROW", permissionCodes)
 
     /**
-     * Grants [actorId] a dedicated role holding exactly [permissionCodes], assigned at BRANCH scope
-     * on [branchId] only, so a test can prove a route works for a branch-scoped maker who holds
-     * nothing tenant-wide.
+     * Grants [actorId] a dedicated role holding [permissionCodes] and the views they imply,
+     * assigned at BRANCH scope on [branchId] only, so a test can prove a route works for a
+     * branch-scoped maker who holds nothing tenant-wide.
      */
-    fun grantBranchPermissionsOnly(
+    fun grantBranchPermissionsWithViews(
         organisationId: UUID,
         branchId: UUID,
         actorId: UUID,
         vararg permissionCodes: String,
-    ) = grantPermissionsOnly(organisationId, actorId, "BRANCH_NARROW", permissionCodes, branchId)
+    ) = grantPermissionsWithViews(
+        organisationId,
+        actorId,
+        "BRANCH_NARROW",
+        permissionCodes,
+        branchId,
+    )
 
-    private fun grantPermissionsOnly(
+    /**
+     * As [grantPlatformPermissionsWithViews] but with **exactly** [permissionCodes]: no view is
+     * added, so a test can prove a mutation without its view is refused with the named 403.
+     */
+    fun grantPlatformPermissionsExactly(
+        actorId: UUID,
+        vararg permissionCodes: String,
+    ) = grantPermissionsWithViews(
+        PlatformOrganisation.ID,
+        actorId,
+        "PLATFORM_EXACT",
+        permissionCodes,
+        withViews = false,
+    )
+
+    /** As [grantTenantPermissionsWithViews] but with **exactly** [permissionCodes]: no views. */
+    fun grantTenantPermissionsExactly(
+        organisationId: UUID,
+        actorId: UUID,
+        vararg permissionCodes: String,
+    ) = grantPermissionsWithViews(
+        organisationId,
+        actorId,
+        "TENANT_EXACT",
+        permissionCodes,
+        withViews = false,
+    )
+
+    /** As [grantBranchPermissionsWithViews] but with **exactly** [permissionCodes]: no views. */
+    fun grantBranchPermissionsExactly(
+        organisationId: UUID,
+        branchId: UUID,
+        actorId: UUID,
+        vararg permissionCodes: String,
+    ) = grantPermissionsWithViews(
+        organisationId,
+        actorId,
+        "BRANCH_EXACT",
+        permissionCodes,
+        branchId,
+        withViews = false,
+    )
+
+    private fun grantPermissionsWithViews(
         organisationId: UUID,
         actorId: UUID,
         roleCodePrefix: String,
-        permissionCodes: Array<out String>,
+        requestedCodes: Array<out String>,
         branchId: UUID? = null,
+        withViews: Boolean = true,
     ) {
+        val permissionCodes =
+            if (withViews) {
+                ViewCoupledGrants.withRequiredViews(dsl, *requestedCodes)
+            } else {
+                requestedCodes.toSet()
+            }
         val now = OffsetDateTime.now()
         val roleId =
             requireNotNull(
@@ -233,7 +298,24 @@ class TenantAdminOrganisationFixture(
             .set(USER_ORGANISATION_MEMBERSHIP.CREATED_BY, SystemActor.ID)
             .set(USER_ORGANISATION_MEMBERSHIP.CREATED_AT, now)
             .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT, now)
+            // A second grant to one actor (a role at another branch) reuses the membership; the
+            // conflict target is the (organisation, user) key, so no other violation is swallowed.
+            .onConflict(
+                USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID,
+                USER_ORGANISATION_MEMBERSHIP.USER_ID,
+            ).doNothing()
             .execute()
+        val membershipStatus =
+            dsl
+                .select(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS)
+                .from(USER_ORGANISATION_MEMBERSHIP)
+                .where(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId))
+                .and(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(actorId))
+                .fetchOne(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS)
+        // A reused membership must be a live one, or the grant would silently confer nothing.
+        check(membershipStatus == "ACTIVE") {
+            "Membership of $actorId in $organisationId is $membershipStatus, not ACTIVE"
+        }
         dsl
             .insertInto(USER_ROLE_ASSIGNMENT)
             .set(USER_ROLE_ASSIGNMENT.ID, uuidV7())

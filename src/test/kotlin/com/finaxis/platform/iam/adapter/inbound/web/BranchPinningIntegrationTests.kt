@@ -98,7 +98,7 @@ class BranchPinningIntegrationTests {
             .set(ROLE_PERMISSION.UPDATED_AT, OffsetDateTime.now())
             .onConflictDoNothing()
             .execute()
-        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.clear()
+        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.invalidate()
     }
 
     @AfterEach
@@ -121,7 +121,7 @@ class BranchPinningIntegrationTests {
             dsl.deleteFrom(BRANCH).where(BRANCH.ID.eq(branchId)).execute()
         }
         createdBranchIds.clear()
-        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.clear()
+        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.invalidate()
     }
 
     @Test
@@ -423,7 +423,7 @@ class BranchPinningIntegrationTests {
             .where(ROLE_PERMISSION.ROLE_ID.eq(LOCAL_ADMIN_ROLE_ID))
             .and(ROLE_PERMISSION.PERMISSION_ID.`in`(permissionIds))
             .execute()
-        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.clear()
+        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.invalidate()
     }
 
     private fun restoreLocalAdminGrants() {
@@ -510,7 +510,7 @@ class BranchPinningIntegrationTests {
             .set(USER_ROLE_ASSIGNMENT.CREATED_AT, now)
             .set(USER_ROLE_ASSIGNMENT.UPDATED_AT, now)
             .execute()
-        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.clear()
+        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.invalidate()
     }
 
     private fun contextToken(branchId: UUID?): String =

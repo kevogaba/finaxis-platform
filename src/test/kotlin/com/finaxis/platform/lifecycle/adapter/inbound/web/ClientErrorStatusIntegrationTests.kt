@@ -52,7 +52,7 @@ class ClientErrorStatusIntegrationTests
         @Test
         fun `revoking an already revoked membership is a 409 and changes nothing`() {
             val memberId = seedUser("member")
-            fixture.grantTenantPermissionsOnly(organisationId, memberId, "user.view")
+            fixture.grantTenantPermissionsWithViews(organisationId, memberId, "user.view")
             val membershipId = membershipId(memberId)
             val revoke = "${ApiPaths.MEMBERSHIPS}/$membershipId/revoke"
             val body = """{"reason":"Access no longer required"}"""
@@ -78,7 +78,7 @@ class ClientErrorStatusIntegrationTests
         @Test
         fun `a branch scope role assignment without a branch is a 400 naming branch_id`() {
             val memberId = seedUser("member")
-            fixture.grantTenantPermissionsOnly(organisationId, memberId, "user.view")
+            fixture.grantTenantPermissionsWithViews(organisationId, memberId, "user.view")
             val before = assignmentCount(memberId)
 
             tenantPost(
@@ -98,7 +98,7 @@ class ClientErrorStatusIntegrationTests
         @Test
         fun `valid branch and tenant scope role assignments still succeed`() {
             val memberId = seedUser("member")
-            fixture.grantTenantPermissionsOnly(organisationId, memberId, "user.view")
+            fixture.grantTenantPermissionsWithViews(organisationId, memberId, "user.view")
             val branchId = headOfficeId()
             assignToBranch(memberId, branchId)
 
@@ -124,7 +124,7 @@ class ClientErrorStatusIntegrationTests
         @Test
         fun `a tenant scope role assignment naming a branch keeps its 422 from the service`() {
             val memberId = seedUser("member")
-            fixture.grantTenantPermissionsOnly(organisationId, memberId, "user.view")
+            fixture.grantTenantPermissionsWithViews(organisationId, memberId, "user.view")
 
             tenantPost(
                 ApiPaths.ROLE_ASSIGNMENTS,

@@ -23,6 +23,7 @@ import com.finaxis.platform.common.context.BranchContext
 import com.finaxis.platform.common.context.RequestContext
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.context.TenantContext
+import com.finaxis.platform.foundation.ViewCoupledGrants
 import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_PERIOD
 import com.finaxis.platform.jooq.tables.references.ACCOUNTING_FISCAL_YEAR
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
@@ -450,33 +451,7 @@ internal class PostingRuleFixture(
         actorId: UUID,
         permissionCode: String,
     ) {
-        val membershipId =
-            dsl
-                .select(USER_ORGANISATION_MEMBERSHIP.ID)
-                .from(USER_ORGANISATION_MEMBERSHIP)
-                .where(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId))
-                .and(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(actorId))
-                .fetchOne(USER_ORGANISATION_MEMBERSHIP.ID)
-                ?: error("no membership for $actorId in $organisationId")
-        val permissionId =
-            dsl
-                .select(PERMISSION.ID)
-                .from(PERMISSION)
-                .where(PERMISSION.PERMISSION_CODE.eq(permissionCode))
-                .fetchOne(PERMISSION.ID)
-                ?: error("permission $permissionCode is not seeded")
-        val now = OffsetDateTime.now()
-        dsl
-            .insertInto(MEMBERSHIP_PERMISSION)
-            .set(MEMBERSHIP_PERMISSION.ORGANISATION_ID, organisationId)
-            .set(MEMBERSHIP_PERMISSION.MEMBERSHIP_ID, membershipId)
-            .set(MEMBERSHIP_PERMISSION.PERMISSION_ID, permissionId)
-            .set(MEMBERSHIP_PERMISSION.EFFECT, "ALLOW")
-            .set(MEMBERSHIP_PERMISSION.GRANTED_AT, now)
-            .set(MEMBERSHIP_PERMISSION.CREATED_AT, now)
-            .set(MEMBERSHIP_PERMISSION.UPDATED_AT, now)
-            .onConflictDoNothing()
-            .execute()
+        ViewCoupledGrants.grantDirectly(dsl, organisationId, actorId, permissionCode)
     }
 
     companion object {

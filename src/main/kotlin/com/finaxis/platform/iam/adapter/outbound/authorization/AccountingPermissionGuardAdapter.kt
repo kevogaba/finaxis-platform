@@ -7,7 +7,9 @@ import java.util.UUID
 
 /**
  * Identity implementation of the accounting permission port, so accounting can enforce permission
- * codes without depending on the identity module. Mirrors [LifecyclePermissionGuardAdapter].
+ * codes without depending on the identity module. Mirrors [LifecyclePermissionGuardAdapter],
+ * including the central rule that a mutation code is checked together with every view code the
+ * catalogue pairs with it (ADR 0030, decision 4), so the first accounting route inherits it.
  */
 @Component
 class AccountingPermissionGuardAdapter(
@@ -18,7 +20,7 @@ class AccountingPermissionGuardAdapter(
         organisationId: UUID,
         permissionCode: String,
     ) {
-        authorizationService.requirePermission(actorId, organisationId, permissionCode)
+        authorizationService.requirePermissionWithViews(actorId, organisationId, permissionCode)
     }
 
     override fun requireBreakGlassPermission(
@@ -30,7 +32,11 @@ class AccountingPermissionGuardAdapter(
         // before consulting any grant; and deliberately not listEffectivePermissions either, which
         // resolves through the @RequestScope permission cache and would raise a scope error for
         // exactly the background service identity this path exists to serve.
-        authorizationService.requireBreakGlassPermission(actorId, organisationId, permissionCode)
+        authorizationService.requireBreakGlassPermissionWithViews(
+            actorId,
+            organisationId,
+            permissionCode,
+        )
     }
 
     override fun requireBranchPermission(
@@ -39,6 +45,11 @@ class AccountingPermissionGuardAdapter(
         branchId: UUID,
         permissionCode: String,
     ) {
-        authorizationService.requirePermission(actorId, organisationId, branchId, permissionCode)
+        authorizationService.requirePermissionWithViews(
+            actorId,
+            organisationId,
+            branchId,
+            permissionCode,
+        )
     }
 }

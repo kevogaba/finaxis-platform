@@ -107,9 +107,13 @@ class PlatformFirstApprovalIntegrationTests
                     "membership_id",
                 )
 
-            /** A platform administrator whose only platform permission is [code]. */
+            /** A platform administrator whose only permissions are [code] and its views. */
             fun narrowChecker(code: String): UUID =
-                seedUser("narrow").also { fixture.grantPlatformPermissionsOnly(it, code) }
+                seedUser("narrow").also { fixture.grantPlatformPermissionsWithViews(it, code) }
+
+            /** A platform administrator holding exactly [code]: no view, so it is refused. */
+            fun viewlessChecker(code: String): UUID =
+                seedUser("viewless").also { fixture.grantPlatformPermissionsExactly(it, code) }
 
             fun activeBranch(): UUID {
                 val branchId = createBranchAsTenantAdmin()
@@ -235,7 +239,7 @@ class PlatformFirstApprovalIntegrationTests
         }
 
         @Test
-        fun `a platform checker holding only user approve can approve a membership`() {
+        fun `a platform checker holding user approve and membership view approves a membership`() {
             val s = Scenario()
             val onlyApprove = s.narrowChecker("user.approve")
             val email = "narrow-${shortId()}@tenant.test"
@@ -266,7 +270,32 @@ class PlatformFirstApprovalIntegrationTests
         }
 
         @Test
-        fun `a platform checker holding only branch create can submit a branch`() {
+        fun `a platform checker holding the mutation permission without its view is refused`() {
+            val s = Scenario()
+            val branchId = s.createBranchAsTenantAdmin()
+            s.submitAsTenantAdmin(branchId)
+            val viewless = s.viewlessChecker("branch.approve")
+
+            narrowPost(
+                "${ApiPaths.PLATFORM_TENANTS}/${s.tenantId}/branches/$branchId/activate",
+                viewless,
+                "branch.approve",
+            ).andExpect {
+                status { isForbidden() }
+                jsonPath("$.code") { value("forbidden") }
+                jsonPath("$.detail") { value("Missing permission: branch.view.") }
+            }
+
+            // Nothing changed: still pending, no activation event.
+            assertEquals("PENDING_APPROVAL", branchStatus(branchId))
+            assertEquals(
+                0,
+                outboxRecords("finaxis.lifecycle.branch.activated", branchId.toString()),
+            )
+        }
+
+        @Test
+        fun `a platform checker holding branch create and branch view can submit a branch`() {
             val s = Scenario()
             val onlyCreate = s.narrowChecker("branch.create")
             val branchId = s.createBranchAsTenantAdmin()
@@ -295,7 +324,7 @@ class PlatformFirstApprovalIntegrationTests
         }
 
         @Test
-        fun `a platform checker holding only branch approve can activate a branch`() {
+        fun `a platform checker holding branch approve and branch view can activate a branch`() {
             val s = Scenario()
             val onlyApprove = s.narrowChecker("branch.approve")
             val branchId = s.createBranchAsTenantAdmin()

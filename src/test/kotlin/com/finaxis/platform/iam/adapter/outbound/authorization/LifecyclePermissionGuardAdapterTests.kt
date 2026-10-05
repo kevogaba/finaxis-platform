@@ -1,7 +1,8 @@
 package com.finaxis.platform.iam.adapter.outbound.authorization
 
+import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.context.PlatformOrganisation
-import com.finaxis.platform.iam.application.authorization.AccessDeniedException
+import com.finaxis.platform.iam.FixedViewRequirements
 import com.finaxis.platform.iam.application.authorization.AuthorizationService
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
@@ -19,12 +20,12 @@ import kotlin.test.assertFailsWith
 
 class LifecyclePermissionGuardAdapterTests {
     @Test
-    fun `requirePermission delegates denial to an AccessDeniedException`() {
+    fun `requirePermission names the missing code in a MissingPermissionException`() {
         val userId = UUID.randomUUID()
         val organisationId = UUID.randomUUID()
         val adapter = adapterWith(NoMemberships)
 
-        assertFailsWith<AccessDeniedException> {
+        assertFailsWith<MissingPermissionException> {
             adapter.requirePermission(userId, organisationId, "business_date.advance")
         }
     }
@@ -35,7 +36,7 @@ class LifecyclePermissionGuardAdapterTests {
         val organisationId = UUID.randomUUID()
         val adapter = adapterWith(NoMemberships)
 
-        assertFailsWith<AccessDeniedException> {
+        assertFailsWith<MissingPermissionException> {
             adapter.requireTenantPermission(userId, organisationId, "tenant.view")
         }
     }
@@ -47,7 +48,7 @@ class LifecyclePermissionGuardAdapterTests {
         val branchId = UUID.randomUUID()
         val adapter = adapterWith(NoMemberships)
 
-        assertFailsWith<AccessDeniedException> {
+        assertFailsWith<MissingPermissionException> {
             adapter.requireBranchPermission(userId, organisationId, branchId, "branch.view")
         }
     }
@@ -58,7 +59,7 @@ class LifecyclePermissionGuardAdapterTests {
         // Use memberships stub that recognises the platform org but has no permissions
         val adapter = adapterWith(NoMemberships)
 
-        assertFailsWith<AccessDeniedException> {
+        assertFailsWith<MissingPermissionException> {
             adapter.requirePlatformPermission(userId, "tenant.reactivate")
         }
     }
@@ -88,8 +89,9 @@ class LifecyclePermissionGuardAdapterTests {
 
     private fun adapterWith(lookup: MembershipSelectionLookup): LifecyclePermissionGuardAdapter {
         val resolver = EffectivePermissionResolver(NoPermissions, ConcurrentMapCacheManager())
-        val cache = RequestPermissionCache(resolver)
-        val authorizationService = AuthorizationService(lookup, cache, NoPermissions)
+        val cache = RequestPermissionCache(resolver, FixedViewRequirements())
+        val authorizationService =
+            AuthorizationService(lookup, cache, NoPermissions, FixedViewRequirements())
         return LifecyclePermissionGuardAdapter(authorizationService)
     }
 
