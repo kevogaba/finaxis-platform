@@ -521,6 +521,11 @@ the documents the supersessions below name (`authorization-model.md`, `foundatio
   gated`
   The platform tenant routes; an `actorId` on the three commands that lack one; the bootstrap status
   folded into the gated tenant detail.
+
+  *Status: implemented by this step's change.* Every platform tenant use case checks its permission
+  in `OrganisationProvisioningService`, `suspend`, `reactivate` and `deprovision` carry an
+  `actorId`, `getTenantAfterAuthorizedMutation` is deleted, and the bootstrap status is read with
+  the gated tenant detail (`GET /tenant` included).
 - **6e.** `refactor(iam): authorise platform user lifecycle in the service and read back gated`
   Platform user suspend, reactivate and deactivate: their permission checks live only in the
   platform user controller and `UserProvisioningService` performs none. The mutation permission

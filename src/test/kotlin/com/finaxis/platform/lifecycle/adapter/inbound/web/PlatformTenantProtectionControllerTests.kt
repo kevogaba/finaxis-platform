@@ -13,8 +13,6 @@ import com.finaxis.platform.common.web.api.WebJsonConfiguration
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
-import com.finaxis.platform.lifecycle.PermissionGuard
-import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStore
 import com.finaxis.platform.lifecycle.application.LifecycleErrorCodes
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
@@ -61,12 +59,6 @@ class PlatformTenantProtectionControllerTests
 
         @MockitoBean
         private lateinit var foundationQueryService: FoundationQueryService
-
-        @MockitoBean
-        private lateinit var adminBootstrapStore: InitialAdministratorBootstrapStore
-
-        @MockitoBean
-        private lateinit var permissionGuard: PermissionGuard
 
         @Test
         fun `every tenant action on the platform organisation answers the protection 409`() {

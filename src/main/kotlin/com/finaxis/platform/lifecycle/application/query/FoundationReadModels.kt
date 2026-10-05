@@ -27,6 +27,10 @@ data class TenantDetail(
     val statusReason: String?,
     val createdAt: Instant,
     val updatedAt: Instant,
+    /** The initial-administrator bootstrap status, or null when the tenant has no record. */
+    val bootstrapStatus: String? = null,
+    /** The failure code of the last bootstrap attempt, or null when none failed. */
+    val bootstrapFailureCode: String? = null,
 )
 
 /** Summary projection of an operating branch. */

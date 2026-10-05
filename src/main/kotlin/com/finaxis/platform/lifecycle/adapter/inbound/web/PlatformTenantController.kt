@@ -6,7 +6,6 @@ import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
-import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.AmendTenantDraftRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ApproveTenantRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateTenantDraftRequest
@@ -23,7 +22,6 @@ import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisionin
 import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.DeprovisionOrganisationCommand
-import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStore
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.application.ReactivateOrganisationCommand
 import com.finaxis.platform.lifecycle.application.Reason
@@ -81,8 +79,6 @@ import java.util.UUID
 class PlatformTenantController(
     private val organisationProvisioningService: OrganisationProvisioningService,
     private val foundationQueryService: FoundationQueryService,
-    private val adminBootstrapStore: InitialAdministratorBootstrapStore,
-    private val permissionGuard: PermissionGuard,
 ) {
     /**
      * Drafts a new tenant organisation with initial admin details.
@@ -153,7 +149,6 @@ class PlatformTenantController(
         @RequestBody @Valid request: CreateTenantDraftRequest,
     ): ResponseEntity<TenantDraftResultResponse> {
         val caller = CallerContextResolver.getPlatformCaller()
-        permissionGuard.requirePlatformPermission(caller.actorId, "tenant.create")
 
         val command =
             CreateOrganisationDraftCommand(
@@ -312,12 +307,7 @@ class PlatformTenantController(
         @PathVariable("tenant_id") tenantId: UUID,
     ): TenantDetailResponse {
         val caller = CallerContextResolver.getPlatformCaller()
-        val detail = foundationQueryService.getTenant(tenantId, caller)
-        val bootstrapRecord = adminBootstrapStore.find(tenantId)
-        return detail.toResponse(
-            bootstrapStatus = bootstrapRecord?.status?.name,
-            bootstrapFailureCode = bootstrapRecord?.lastFailureCode,
-        )
+        return foundationQueryService.getTenant(tenantId, caller).toResponse()
     }
 
     /**
@@ -402,7 +392,6 @@ class PlatformTenantController(
         @RequestBody @Valid request: AmendTenantDraftRequest,
     ): TenantDetailResponse {
         val caller = CallerContextResolver.getPlatformCaller()
-        permissionGuard.requirePlatformPermission(caller.actorId, "tenant.update_draft")
 
         val command =
             AmendOrganisationDraftCommand(
@@ -421,12 +410,7 @@ class PlatformTenantController(
                 admin = request.admin.toDomain(),
             )
         organisationProvisioningService.amendDraft(command)
-        val updated = foundationQueryService.getTenant(tenantId, caller)
-        val bootstrapRecord = adminBootstrapStore.find(tenantId)
-        return updated.toResponse(
-            bootstrapStatus = bootstrapRecord?.status?.name,
-            bootstrapFailureCode = bootstrapRecord?.lastFailureCode,
-        )
+        return foundationQueryService.getTenant(tenantId, caller).toResponse()
     }
 
     /**
@@ -509,7 +493,6 @@ class PlatformTenantController(
         @PathVariable("tenant_id") tenantId: UUID,
     ): TenantDetailResponse {
         val caller = CallerContextResolver.getPlatformCaller()
-        permissionGuard.requirePlatformPermission(caller.actorId, "tenant.submit_for_approval")
 
         val command =
             SubmitOrganisationForApprovalCommand(
@@ -518,12 +501,7 @@ class PlatformTenantController(
                 requestId = uuidV7(),
             )
         organisationProvisioningService.submitForApproval(command)
-        val updated = foundationQueryService.getTenant(tenantId, caller)
-        val bootstrapRecord = adminBootstrapStore.find(tenantId)
-        return updated.toResponse(
-            bootstrapStatus = bootstrapRecord?.status?.name,
-            bootstrapFailureCode = bootstrapRecord?.lastFailureCode,
-        )
+        return foundationQueryService.getTenant(tenantId, caller).toResponse()
     }
 
     /**
@@ -613,7 +591,6 @@ class PlatformTenantController(
         @RequestBody(required = false) @Valid request: ApproveTenantRequest?,
     ): TenantDetailResponse {
         val caller = CallerContextResolver.getPlatformCaller()
-        permissionGuard.requirePlatformPermission(caller.actorId, "tenant.approve")
 
         val command =
             ApproveOrganisationProvisioningCommand(
@@ -623,12 +600,7 @@ class PlatformTenantController(
                 requestId = uuidV7(),
             )
         organisationProvisioningService.approveProvisioning(command)
-        val updated = foundationQueryService.getTenant(tenantId, caller)
-        val bootstrapRecord = adminBootstrapStore.find(tenantId)
-        return updated.toResponse(
-            bootstrapStatus = bootstrapRecord?.status?.name,
-            bootstrapFailureCode = bootstrapRecord?.lastFailureCode,
-        )
+        return foundationQueryService.getTenant(tenantId, caller).toResponse()
     }
 
     /**
@@ -712,7 +684,6 @@ class PlatformTenantController(
         @RequestBody @Valid request: RejectTenantRequest,
     ): TenantDetailResponse {
         val caller = CallerContextResolver.getPlatformCaller()
-        permissionGuard.requirePlatformPermission(caller.actorId, "tenant.reject")
 
         val command =
             RejectOrganisationProvisioningCommand(
@@ -722,12 +693,7 @@ class PlatformTenantController(
                 requestId = uuidV7(),
             )
         organisationProvisioningService.rejectProvisioning(command)
-        val updated = foundationQueryService.getTenant(tenantId, caller)
-        val bootstrapRecord = adminBootstrapStore.find(tenantId)
-        return updated.toResponse(
-            bootstrapStatus = bootstrapRecord?.status?.name,
-            bootstrapFailureCode = bootstrapRecord?.lastFailureCode,
-        )
+        return foundationQueryService.getTenant(tenantId, caller).toResponse()
     }
 
     /**
@@ -831,9 +797,6 @@ class PlatformTenantController(
         @RequestBody @Valid request: ReturnTenantRequest,
     ): TenantDetailResponse {
         val caller = CallerContextResolver.getPlatformCaller()
-        // The permission is checked by the service. The response is read back without
-        // `tenant.view`: a checker holding only `tenant.reject` must not see its own committed
-        // return answered with a 403.
         organisationProvisioningService.returnForChanges(
             ReturnOrganisationForChangesCommand(
                 organisationId = tenantId,
@@ -841,12 +804,7 @@ class PlatformTenantController(
                 actorId = caller.actorId,
             ),
         )
-        val updated = foundationQueryService.getTenantAfterAuthorizedMutation(tenantId)
-        val bootstrapRecord = adminBootstrapStore.find(tenantId)
-        return updated.toResponse(
-            bootstrapStatus = bootstrapRecord?.status?.name,
-            bootstrapFailureCode = bootstrapRecord?.lastFailureCode,
-        )
+        return foundationQueryService.getTenant(tenantId, caller).toResponse()
     }
 
     /**
@@ -930,20 +888,15 @@ class PlatformTenantController(
         @RequestBody @Valid request: SuspendTenantRequest,
     ): TenantDetailResponse {
         val caller = CallerContextResolver.getPlatformCaller()
-        permissionGuard.requirePlatformPermission(caller.actorId, "tenant.suspend")
 
         val command =
             SuspendOrganisationCommand(
                 organisationId = tenantId,
                 reason = Reason.required(request.reason),
+                actorId = caller.actorId,
             )
         organisationProvisioningService.suspend(command)
-        val updated = foundationQueryService.getTenant(tenantId, caller)
-        val bootstrapRecord = adminBootstrapStore.find(tenantId)
-        return updated.toResponse(
-            bootstrapStatus = bootstrapRecord?.status?.name,
-            bootstrapFailureCode = bootstrapRecord?.lastFailureCode,
-        )
+        return foundationQueryService.getTenant(tenantId, caller).toResponse()
     }
 
     /**
@@ -1027,20 +980,15 @@ class PlatformTenantController(
         @RequestBody(required = false) @Valid request: ReactivateTenantRequest?,
     ): TenantDetailResponse {
         val caller = CallerContextResolver.getPlatformCaller()
-        permissionGuard.requirePlatformPermission(caller.actorId, "tenant.reactivate")
 
         val command =
             ReactivateOrganisationCommand(
                 organisationId = tenantId,
                 reason = DecisionRemark.optional(request?.reason),
+                actorId = caller.actorId,
             )
         organisationProvisioningService.reactivate(command)
-        val updated = foundationQueryService.getTenant(tenantId, caller)
-        val bootstrapRecord = adminBootstrapStore.find(tenantId)
-        return updated.toResponse(
-            bootstrapStatus = bootstrapRecord?.status?.name,
-            bootstrapFailureCode = bootstrapRecord?.lastFailureCode,
-        )
+        return foundationQueryService.getTenant(tenantId, caller).toResponse()
     }
 
     /**
@@ -1124,20 +1072,15 @@ class PlatformTenantController(
         @RequestBody @Valid request: DeprovisionTenantRequest,
     ): TenantDetailResponse {
         val caller = CallerContextResolver.getPlatformCaller()
-        permissionGuard.requirePlatformPermission(caller.actorId, "tenant.deprovision")
 
         val command =
             DeprovisionOrganisationCommand(
                 organisationId = tenantId,
                 reason = Reason.required(request.reason),
+                actorId = caller.actorId,
             )
         organisationProvisioningService.deprovision(command)
-        val updated = foundationQueryService.getTenant(tenantId, caller)
-        val bootstrapRecord = adminBootstrapStore.find(tenantId)
-        return updated.toResponse(
-            bootstrapStatus = bootstrapRecord?.status?.name,
-            bootstrapFailureCode = bootstrapRecord?.lastFailureCode,
-        )
+        return foundationQueryService.getTenant(tenantId, caller).toResponse()
     }
 
     /**
@@ -1221,7 +1164,6 @@ class PlatformTenantController(
         @PathVariable("tenant_id") tenantId: UUID,
     ): TenantDetailResponse {
         val caller = CallerContextResolver.getPlatformCaller()
-        permissionGuard.requirePlatformPermission(caller.actorId, "tenant.bootstrap_retry")
 
         val command =
             RetryInitialAdministratorBootstrapCommand(
@@ -1229,12 +1171,7 @@ class PlatformTenantController(
                 caller = caller,
             )
         organisationProvisioningService.retryBootstrap(command)
-        val updated = foundationQueryService.getTenant(tenantId, caller)
-        val bootstrapRecord = adminBootstrapStore.find(tenantId)
-        return updated.toResponse(
-            bootstrapStatus = bootstrapRecord?.status?.name,
-            bootstrapFailureCode = bootstrapRecord?.lastFailureCode,
-        )
+        return foundationQueryService.getTenant(tenantId, caller).toResponse()
     }
 
     private fun TenantSummary.toResponse() =
@@ -1247,23 +1184,21 @@ class PlatformTenantController(
             createdAt = createdAt,
         )
 
-    private fun TenantDetail.toResponse(
-        bootstrapStatus: String?,
-        bootstrapFailureCode: String?,
-    ) = TenantDetailResponse(
-        id = id,
-        tenantCode = tenantCode,
-        displayName = displayName,
-        countryCode = countryCode,
-        baseCurrencyCode = baseCurrencyCode,
-        timezone = timezone,
-        status = status,
-        statusReason = statusReason,
-        bootstrapStatus = bootstrapStatus,
-        bootstrapFailureCode = bootstrapFailureCode,
-        createdAt = createdAt,
-        updatedAt = updatedAt,
-    )
+    private fun TenantDetail.toResponse() =
+        TenantDetailResponse(
+            id = id,
+            tenantCode = tenantCode,
+            displayName = displayName,
+            countryCode = countryCode,
+            baseCurrencyCode = baseCurrencyCode,
+            timezone = timezone,
+            status = status,
+            statusReason = statusReason,
+            bootstrapStatus = bootstrapStatus,
+            bootstrapFailureCode = bootstrapFailureCode,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+        )
 
     private companion object {
         const val MAXIMUM_PAGE_SIZE = 100L

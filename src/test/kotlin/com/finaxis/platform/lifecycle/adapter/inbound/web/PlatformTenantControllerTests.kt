@@ -15,7 +15,6 @@ import com.finaxis.platform.common.web.idempotency.IdempotencyProperties
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
-import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.AmendTenantDraftRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateTenantDraftRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.DeprovisionTenantRequest
@@ -24,11 +23,12 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReactivateTenantRe
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.RejectTenantRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SuspendTenantRequest
 import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
-import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStore
+import com.finaxis.platform.lifecycle.application.DeprovisionOrganisationCommand
 import com.finaxis.platform.lifecycle.application.OrganisationDraftResult
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.application.ReactivateOrganisationCommand
 import com.finaxis.platform.lifecycle.application.Reason
+import com.finaxis.platform.lifecycle.application.SuspendOrganisationCommand
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
 import com.finaxis.platform.lifecycle.application.query.TenantDetail
 import com.finaxis.platform.lifecycle.application.query.TenantSummary
@@ -116,12 +116,6 @@ class PlatformTenantControllerTests
 
         @MockitoBean
         private lateinit var foundationQueryService: FoundationQueryService
-
-        @MockitoBean
-        private lateinit var adminBootstrapStore: InitialAdministratorBootstrapStore
-
-        @MockitoBean
-        private lateinit var permissionGuard: PermissionGuard
 
         @Test
         fun `createDraft succeeds with reserved platform context`() {
@@ -541,6 +535,73 @@ class PlatformTenantControllerTests
             }
 
             verify(organisationProvisioningService).suspend(any())
+        }
+
+        @Test
+        fun `suspend, reactivate and deprovision hand the service the authenticated actor`() {
+            val orgId = uuidV7()
+            val actor = uuidV7()
+            stubTenantDetail(orgId, "ACTIVE")
+            val reason = "{\"reason\":\"Regulatory review\"}"
+
+            withPlatformContext {
+                listOf(
+                    "suspend" to "tenant.suspend",
+                    "reactivate" to "tenant.reactivate",
+                    "deprovision" to "tenant.deprovision",
+                ).forEach { (action, permission) ->
+                    mockMvc
+                        .post("${ApiPaths.PLATFORM_TENANTS}/$orgId/$action") {
+                            contentType = MediaType.APPLICATION_JSON
+                            content = reason
+                            with(authentication(platformToken(setOf(permission), actor)))
+                        }.andExpect { status { isOk() } }
+                }
+            }
+
+            val suspend = org.mockito.kotlin.argumentCaptor<SuspendOrganisationCommand>()
+            verify(organisationProvisioningService).suspend(suspend.capture())
+            assertEquals(actor, suspend.firstValue.actorId)
+            val reactivate = org.mockito.kotlin.argumentCaptor<ReactivateOrganisationCommand>()
+            verify(organisationProvisioningService).reactivate(reactivate.capture())
+            assertEquals(actor, reactivate.firstValue.actorId)
+            val deprovision = org.mockito.kotlin.argumentCaptor<DeprovisionOrganisationCommand>()
+            verify(organisationProvisioningService).deprovision(deprovision.capture())
+            assertEquals(actor, deprovision.firstValue.actorId)
+            // Every response is read back through the gated detail, never a permission-free one.
+            verify(foundationQueryService, org.mockito.kotlin.times(3)).getTenant(eq(orgId), any())
+        }
+
+        @Test
+        fun `the tenant detail carries the bootstrap status folded into the gated read`() {
+            val orgId = uuidV7()
+            whenever(foundationQueryService.getTenant(eq(orgId), any())).thenReturn(
+                TenantDetail(
+                    id = orgId,
+                    tenantCode = "acme-test",
+                    displayName = "Acme Test",
+                    countryCode = "KE",
+                    baseCurrencyCode = "KES",
+                    timezone = "Africa/Nairobi",
+                    status = "ACTIVE",
+                    statusReason = null,
+                    createdAt = Instant.parse("2026-07-18T10:00:00Z"),
+                    updatedAt = Instant.parse("2026-07-18T10:00:00Z"),
+                    bootstrapStatus = "FAILED",
+                    bootstrapFailureCode = "keycloak_unavailable",
+                ),
+            )
+
+            withPlatformContext {
+                mockMvc
+                    .get("${ApiPaths.PLATFORM_TENANTS}/$orgId") {
+                        with(authentication(platformToken(setOf("tenant.view"))))
+                    }.andExpect {
+                        status { isOk() }
+                        jsonPath("$.bootstrap_status") { value("FAILED") }
+                        jsonPath("$.bootstrap_failure_code") { value("keycloak_unavailable") }
+                    }
+            }
         }
 
         @Test

@@ -20,7 +20,12 @@ class FoundationQueryService(
     private val store: FoundationQueryStore,
     private val permissionGuard: PermissionGuard,
 ) {
-    /** Retrieves detailed tenant metadata by id, validating caller context and permissions. */
+    /**
+     * Retrieves detailed tenant metadata by id, validating caller context and permissions. The
+     * initial-administrator bootstrap status is part of the detail, read with the tenant row, so
+     * a web adapter never reaches the bootstrap store itself. It is also the read-back of every
+     * platform tenant mutation, at `tenant.view` in the platform organisation.
+     */
     fun getTenant(
         id: UUID,
         caller: FoundationCaller,
@@ -40,15 +45,6 @@ class FoundationQueryService(
         return store.findTenantById(id)
             ?: throw ResourceNotFoundException(safeDetail = "Tenant not found: $id")
     }
-
-    /**
-     * Retrieves tenant metadata without a permission check, for the response of a mutation the
-     * caller was already authorised to make on that tenant (a checker holding only `tenant.reject`
-     * echoing the draft it just returned, ADR 0029). Never expose it as a read endpoint.
-     */
-    fun getTenantAfterAuthorizedMutation(id: UUID): TenantDetail =
-        store.findTenantById(id)
-            ?: throw ResourceNotFoundException(safeDetail = "Tenant not found: $id")
 
     /** Searches tenant summaries, restricting results to caller's tenant scope if restricted. */
     fun searchTenants(

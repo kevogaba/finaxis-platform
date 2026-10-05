@@ -286,7 +286,11 @@ it, at the same scope**: the tenant, the target branch, or the PLATFORM organisa
   duplicate of the application check and the wrong scope for a branch-scoped caller.
 - **Order.** Body validation (400), `@PreAuthorize` (403), then in the service the mutation and
   view check (403, named), the platform-organisation 404 or 409, resource existence (404), the
-  ADR 0028 window (409), state (409), the mutation, the gated read-back. A refused request writes
+  ADR 0028 window (409), state (409), the mutation, the gated read-back. The platform tenant
+  routes (`PlatformTenantController`) follow it in `OrganisationProvisioningService`: the
+  controller checks nothing, each command carries the acting `actorId`, and the response is the
+  gated tenant detail (platform `tenant.view`), which carries the initial-administrator bootstrap
+  status, so no web adapter reads the bootstrap store. A refused request writes
   nothing: no state change, transition log, audit success row, outbox row or idempotency row (the
   refusal precedes every write and the idempotent transaction rolls back). Replay is unchanged: an
   idempotent replay returns the stored response of the caller's own completed write after

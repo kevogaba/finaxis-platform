@@ -54,16 +54,16 @@ class FoundationQueryServiceTests {
     }
 
     @Test
-    fun `the post-mutation tenant read needs no permission and still reports a missing tenant`() {
-        permissionGuard.deny(UUID.fromString("00000000-0000-0000-0000-000000000000"), "tenant.view")
-        permissionGuard.deny(tenantId, "tenant.view")
+    fun `the tenant detail read-back is gated and reports a missing tenant`() {
+        val caller = PlatformCaller(actorId, UUID.randomUUID())
         store.tenants[tenantId] = tenantDetail(tenantId)
 
-        // A checker holding only tenant.reject reads back its own committed return.
-        assertEquals(tenantId, service.getTenantAfterAuthorizedMutation(tenantId).id)
+        assertEquals(tenantId, service.getTenant(tenantId, caller).id)
         assertFailsWith<ResourceNotFoundException> {
-            service.getTenantAfterAuthorizedMutation(UUID.randomUUID())
+            service.getTenant(UUID.randomUUID(), caller)
         }
+        permissionGuard.deny(UUID.fromString("00000000-0000-0000-0000-000000000000"), "tenant.view")
+        assertFailsWith<SecurityException> { service.getTenant(tenantId, caller) }
     }
 
     @Test

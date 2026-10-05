@@ -145,10 +145,12 @@ class FinancialTransactionAtomicityIntegrationTests(
 
     @Test
     fun `nested transactional services roll back together while the rejection audit survives`() {
-        val organisationId = createDraftOrganisation()
+        // The service authorises its own use cases, so the maker is a platform operator.
+        val maker = fixture.createPlatformOperator("atomicity-maker")
+        val organisationId = withRequestContext { createDraftOrganisation(maker) }
         withRequestContext {
             organisationProvisioningService.submitForApproval(
-                SubmitOrganisationForApprovalCommand(organisationId),
+                SubmitOrganisationForApprovalCommand(organisationId, actorId = maker),
             )
         }
 
@@ -171,7 +173,7 @@ class FinancialTransactionAtomicityIntegrationTests(
             runCatching {
                 withRequestContext {
                     organisationProvisioningService.submitForApproval(
-                        SubmitOrganisationForApprovalCommand(organisationId),
+                        SubmitOrganisationForApprovalCommand(organisationId, actorId = maker),
                     )
                 }
             }
@@ -266,7 +268,7 @@ class FinancialTransactionAtomicityIntegrationTests(
             ),
         )
 
-    private fun createDraftOrganisation(): UUID =
+    private fun createDraftOrganisation(requestedBy: UUID): UUID =
         organisationProvisioningService
             .createDraft(
                 CreateOrganisationDraftCommand(
@@ -277,7 +279,7 @@ class FinancialTransactionAtomicityIntegrationTests(
                     countryCode = "KE",
                     baseCurrencyCode = "KES",
                     timezone = "Africa/Nairobi",
-                    requestedBy = ACTOR_ID,
+                    requestedBy = requestedBy,
                 ),
             ).organisationId
 

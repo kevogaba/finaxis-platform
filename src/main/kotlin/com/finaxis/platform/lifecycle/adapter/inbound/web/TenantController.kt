@@ -3,7 +3,6 @@ package com.finaxis.platform.lifecycle.adapter.inbound.web
 import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.TenantDetailResponse
-import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStore
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
 import com.finaxis.platform.lifecycle.application.query.TenantDetail
 import io.swagger.v3.oas.annotations.Operation
@@ -27,7 +26,6 @@ import org.springframework.web.bind.annotation.RestController
 @SecurityRequirement(name = "bearer-key")
 class TenantController(
     private val foundationQueryService: FoundationQueryService,
-    private val adminBootstrapStore: InitialAdministratorBootstrapStore,
 ) {
     /**
      * Retrieves metadata for the currently active tenant organisation.
@@ -78,28 +76,22 @@ class TenantController(
     fun getCurrentTenant(): TenantDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
         val detail = foundationQueryService.getTenant(caller.activeOrganisationId, caller)
-        val bootstrapRecord = adminBootstrapStore.find(caller.activeOrganisationId)
-        return detail.toResponse(
-            bootstrapStatus = bootstrapRecord?.status?.name,
-            bootstrapFailureCode = bootstrapRecord?.lastFailureCode,
-        )
+        return detail.toResponse()
     }
 
-    private fun TenantDetail.toResponse(
-        bootstrapStatus: String?,
-        bootstrapFailureCode: String?,
-    ) = TenantDetailResponse(
-        id = id,
-        tenantCode = tenantCode,
-        displayName = displayName,
-        countryCode = countryCode,
-        baseCurrencyCode = baseCurrencyCode,
-        timezone = timezone,
-        status = status,
-        statusReason = statusReason,
-        bootstrapStatus = bootstrapStatus,
-        bootstrapFailureCode = bootstrapFailureCode,
-        createdAt = createdAt,
-        updatedAt = updatedAt,
-    )
+    private fun TenantDetail.toResponse() =
+        TenantDetailResponse(
+            id = id,
+            tenantCode = tenantCode,
+            displayName = displayName,
+            countryCode = countryCode,
+            baseCurrencyCode = baseCurrencyCode,
+            timezone = timezone,
+            status = status,
+            statusReason = statusReason,
+            bootstrapStatus = bootstrapStatus,
+            bootstrapFailureCode = bootstrapFailureCode,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+        )
 }

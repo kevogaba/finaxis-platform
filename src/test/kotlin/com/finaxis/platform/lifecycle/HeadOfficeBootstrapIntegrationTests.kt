@@ -38,26 +38,33 @@ class HeadOfficeBootstrapIntegrationTests(
 ) {
     @Test
     fun `head office bootstrap writes system audit transition and activation outbox trail`() {
+        val fixture = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
+        val maker = fixture.createPlatformOperator("head-office-maker")
+        val checker = fixture.createPlatformOperator("head-office-checker")
         val organisationId =
-            organisationProvisioningService
-                .createDraft(
-                    CreateOrganisationDraftCommand(
-                        tenantCode = "head-office-${uuidV7()}",
-                        displayName = "Head Office Audit Organisation",
-                        legalName = "Head Office Audit Organisation Limited",
-                        registrationNumber = "HO-${uuidV7()}",
-                        countryCode = "KE",
-                        baseCurrencyCode = "KES",
-                        timezone = "Africa/Nairobi",
-                        requestedBy = SystemActor.ID,
-                    ),
-                ).organisationId
-        organisationProvisioningService.submitForApproval(
-            SubmitOrganisationForApprovalCommand(organisationId),
-        )
-        organisationProvisioningService.approveProvisioning(
-            ApproveOrganisationProvisioningCommand(organisationId),
-        )
+            withRequestContext {
+                organisationProvisioningService
+                    .createDraft(
+                        CreateOrganisationDraftCommand(
+                            tenantCode = "head-office-${uuidV7()}",
+                            displayName = "Head Office Audit Organisation",
+                            legalName = "Head Office Audit Organisation Limited",
+                            registrationNumber = "HO-${uuidV7()}",
+                            countryCode = "KE",
+                            baseCurrencyCode = "KES",
+                            timezone = "Africa/Nairobi",
+                            requestedBy = maker,
+                        ),
+                    ).organisationId
+            }
+        withRequestContext {
+            organisationProvisioningService.submitForApproval(
+                SubmitOrganisationForApprovalCommand(organisationId, actorId = maker),
+            )
+            organisationProvisioningService.approveProvisioning(
+                ApproveOrganisationProvisioningCommand(organisationId, actorId = checker),
+            )
+        }
 
         val branchId = headOfficeId(organisationId)
 

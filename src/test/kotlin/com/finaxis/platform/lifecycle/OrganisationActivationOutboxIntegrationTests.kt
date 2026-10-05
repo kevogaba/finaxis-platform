@@ -12,7 +12,6 @@ import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestConstructor
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertTrue
 
@@ -21,33 +20,41 @@ import kotlin.test.assertTrue
 @TestConstructor(autowireMode = TestConstructor.AutowireMode.ALL)
 class OrganisationActivationOutboxIntegrationTests(
     private val organisationProvisioningService: OrganisationProvisioningService,
+    private val dsl: org.jooq.DSLContext,
     private val outboxRecords: OutboxRecordRepository,
 ) {
     @Test
     fun `organisation activation is durably externalized through Namastack outbox`() {
+        val fixture = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
+        val maker = fixture.createPlatformOperator("outbox-maker")
+        val checker = fixture.createPlatformOperator("outbox-checker")
         val organisationId =
-            organisationProvisioningService
-                .createDraft(
-                    CreateOrganisationDraftCommand(
-                        tenantCode = "outbox-${uuidV7()}",
-                        displayName = "Outbox Organisation",
-                        legalName = "Outbox Organisation Limited",
-                        registrationNumber = "OUTBOX-${uuidV7()}",
-                        countryCode = "KE",
-                        baseCurrencyCode = "KES",
-                        timezone = "Africa/Nairobi",
-                        requestedBy = LOCAL_USER_ID,
-                    ),
-                ).organisationId
-        organisationProvisioningService.submitForApproval(
-            com.finaxis.platform.lifecycle.application.SubmitOrganisationForApprovalCommand(
-                organisationId,
-            ),
-        )
-
-        organisationProvisioningService.approveProvisioning(
-            ApproveOrganisationProvisioningCommand(organisationId),
-        )
+            withRequestContext {
+                organisationProvisioningService
+                    .createDraft(
+                        CreateOrganisationDraftCommand(
+                            tenantCode = "outbox-${uuidV7()}",
+                            displayName = "Outbox Organisation",
+                            legalName = "Outbox Organisation Limited",
+                            registrationNumber = "OUTBOX-${uuidV7()}",
+                            countryCode = "KE",
+                            baseCurrencyCode = "KES",
+                            timezone = "Africa/Nairobi",
+                            requestedBy = maker,
+                        ),
+                    ).organisationId
+            }
+        withRequestContext {
+            organisationProvisioningService.submitForApproval(
+                com.finaxis.platform.lifecycle.application.SubmitOrganisationForApprovalCommand(
+                    organisationId,
+                    actorId = maker,
+                ),
+            )
+            organisationProvisioningService.approveProvisioning(
+                ApproveOrganisationProvisioningCommand(organisationId, actorId = checker),
+            )
+        }
 
         await()
             .atMost(60, TimeUnit.SECONDS)
@@ -66,7 +73,6 @@ class OrganisationActivationOutboxIntegrationTests(
     }
 
     private companion object {
-        val LOCAL_USER_ID: UUID = UUID.fromString("11111111-1111-1111-1111-111111111111")
         const val ORGANISATION_ACTIVATED_TARGET = "finaxis.lifecycle.organisation.activated"
     }
 }

@@ -689,6 +689,14 @@ Base path: `/api/v1/platform/tenants`. List filters: `q`, `status`, `country`,
 | POST   | `/{tenant_id}/deprovision`     | Deprovision tenant  | `tenant.deprovision` + `tenant.view` | mutation      |
 | POST   | `/{tenant_id}/bootstrap/retry` | Retry bootstrap     | `tenant.bootstrap_retry` + `tenant.view` | mutation      |
 
+Every route here authorises in `OrganisationProvisioningService`, inside the mutation
+transaction and before any existence signal: the mutation code with `tenant.view` in the platform
+organisation (a named `403`, `Missing permission: tenant.view.`), then the platform-organisation
+refusal below, then the tenant (`404`) and the state (the ADR 0028 window does not apply to tenant
+decisions). The `@PreAuthorize` gate stays the coarse one. Every `{tenant_id}` mutation answers
+with the same gated detail `GET /{tenant_id}` returns, `bootstrap_status` and
+`bootstrap_failure_code` included, read at `tenant.view`; create answers its own draft result.
+
 Every `{tenant_id}` mutation above (`PATCH`, `submit`, `approve`, `reject`, `return`, `suspend`,
 `reactivate`, `deprovision`, `bootstrap/retry`) answers
 **`409` `lifecycle.platform_organisation_protected`** when `{tenant_id}` is the reserved platform
@@ -811,7 +819,8 @@ required:
 is no `422`. Validation runs when the body is bound, before any permission or existence check.
 
 - **Permission.** `tenant.reject`, the existing permission for the checker's non-approving
-  decision, checked in the platform organisation by the application service. No new code.
+  decision, together with `tenant.view`, checked in the platform organisation by the application
+  service. No new code.
 - **Checker only.** The caller must be neither the tenant's requester nor the actor of its current
   submission (the rule `approve` applies, `403 forbidden`), and not the system actor. A maker
   cannot withdraw a tenant through this route: a tenant has no maker-side withdraw, a maker amends

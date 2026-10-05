@@ -15,8 +15,6 @@ import com.finaxis.platform.common.web.api.WebJsonConfiguration
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
-import com.finaxis.platform.lifecycle.PermissionGuard
-import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStore
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.ReturnOrganisationForChangesCommand
@@ -46,8 +44,8 @@ import java.util.UUID
 
 /**
  * The tenant return route (ADR 0029, 3c) and the `status_reason` of the tenant detail, against a
- * stubbed service: the coarse authority, the binding of the required body, the permission-free
- * read-back and the mapping of the service's refusals.
+ * stubbed service: the coarse authority, the binding of the required body, the gated read-back and
+ * the mapping of the service's refusals.
  */
 @WebMvcTest(controllers = [PlatformTenantController::class], useDefaultFilters = false)
 @AutoConfigureMockMvc
@@ -70,12 +68,6 @@ class PlatformTenantReturnControllerTests
 
         @MockitoBean
         private lateinit var foundationQueryService: FoundationQueryService
-
-        @MockitoBean
-        private lateinit var adminBootstrapStore: InitialAdministratorBootstrapStore
-
-        @MockitoBean
-        private lateinit var permissionGuard: PermissionGuard
 
         @Test
         fun `getTenant exposes the status reason of a returned tenant`() {
@@ -108,18 +100,18 @@ class PlatformTenantReturnControllerTests
         }
 
         @Test
-        fun `return sends a pending tenant back to draft and reads it back without tenant view`() {
+        fun `return sends a pending tenant back to draft and reads it back gated`() {
             val orgId = uuidV7()
             val actor = uuidV7()
-            whenever(foundationQueryService.getTenantAfterAuthorizedMutation(eq(orgId)))
-                .thenReturn(tenantDetail(orgId, "DRAFT", "Registration number has a typo."))
+            stubTenantDetail(orgId, "Registration number has a typo.")
 
             withPlatformContext {
                 mockMvc
                     .post("${ApiPaths.PLATFORM_TENANTS}/$orgId/return") {
                         contentType = MediaType.APPLICATION_JSON
                         content = """{"reason":"Registration number has a typo."}"""
-                        // tenant.reject alone: the response must not need tenant.view.
+                        // The service authorises (tenant.reject with tenant.view); the controller's
+                        // coarse gate is tenant.reject alone and the read-back is the gated one.
                         with(authentication(platformToken(setOf("tenant.reject"), actor)))
                     }.andExpect {
                         status { isOk() }
@@ -136,7 +128,7 @@ class PlatformTenantReturnControllerTests
                     actorId = actor,
                 ),
             )
-            verify(foundationQueryService, never()).getTenant(any(), any())
+            verify(foundationQueryService).getTenant(eq(orgId), any())
         }
 
         @Test

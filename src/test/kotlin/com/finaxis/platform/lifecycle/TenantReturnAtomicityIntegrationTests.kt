@@ -45,7 +45,7 @@ class TenantReturnAtomicityIntegrationTests(
     private val checkerId = uuidV7().also { seedUser(it) }
 
     init {
-        fixture.grantPlatformSuperAdmin(checkerId)
+        listOf(makerId, submitterId, checkerId).forEach(fixture::grantPlatformSuperAdmin)
     }
 
     private fun pendingTenant(): UUID =
