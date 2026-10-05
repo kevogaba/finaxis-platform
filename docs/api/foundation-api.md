@@ -201,14 +201,14 @@ same scope: the tenant, the target branch, or the platform organisation (ADR 003
 tables below list both codes. The check is central, runs first in the service (after body
 validation and the endpoint's `@PreAuthorize` gate, before the platform-organisation 404 or 409,
 any existence lookup, the ADR 0028 window and the state check), and writes nothing when it
-refuses, so an unknown id answers `403` and not `404` to a caller without the permission. Two
-routes still read the resource first until the later assignment change (branch-assignment revoke,
-role-assignment revoke), so there a caller without the view gets the target-aware read's unnamed
-`403`, and tenant settings resolve the setting key and organisation state first; refusals of the
-target-aware reads stay unnamed. Role-permission remove is named (`Missing permission:
-role.view.`). The
-refusal is `403 application/problem+json` with `code` `forbidden` and a `detail` naming the first
-missing code, the mutation code first and then each view in code order:
+refuses, so an unknown id answers `403` and not `404` to a caller without the permission. That
+holds for role-permission remove too (its permission check is the first thing the service does,
+before the grant is read), and for the two revoke routes that take only an assignment id, which
+resolve the assignment's scope through an authorised combined lookup (see
+[Branch Assignments](#branch-assignments) and [Role Assignments](#role-assignments)). Tenant
+settings resolve the setting key and organisation state first; refusals of the target-aware reads
+stay unnamed. The refusal is `403 application/problem+json` with `code` `forbidden` and a
+`detail` naming the first missing code, the mutation code first and then each view in code order:
 
 ```json
 {
@@ -1225,6 +1225,24 @@ and the application layer is the only authorisation.
   selected branch when the caller may view it, and is every viewable branch otherwise (clear the
   selection to list across all).
 
+- `POST /` reads the assignment it wrote **by its id**, gated like `GET /{assignment_id}` at that
+  assignment's branch, so a branch with more than a page of assignments can no longer answer `404`
+  after a successful assign.
+- **Behaviour change (ADR 0030 step 6c).** `POST /` now authorises at the **target branch**, like
+  every branch-targeted mutation: `user.assign_branch` and `branch_assignment.view`, each held
+  tenant-wide **or** on that branch. Before, the controller also demanded the tenant-wide
+  `user.assign_branch`, so a branch-scoped holder was refused at its own branch; it can now assign
+  at **its** branch (and gets a named `403` for any other branch). `DELETE /{assignment_id}` changed
+  the same way: a branch-scoped revoker, refused before, now revokes at its own branch.
+- `DELETE /{assignment_id}` is an authorised combined lookup, like the role-assignment revoke: the
+  service resolves where the caller may revoke (`user.revoke_branch` **and**
+  `branch_assignment.view`, tenant-wide or per branch; `403` naming the first code held nowhere),
+  then reads the row, never returned to the caller. A tenant-wide holder gets `404` for an unknown
+  id. A branch-scoped holder gets the **same** `403` (`Missing permission: user.revoke_branch.`,
+  same status and body apart from `request_id` and the echoed `instance` path) for an unknown id
+  and for an assignment on a branch it may not act on, so existence is no oracle; at its own
+  branch it revokes. A caller with no grant at all gets `403` naming the first missing code.
+
 Assign request and response:
 
 ```json
@@ -1266,8 +1284,14 @@ Endpoints:
   `role.view`. Shape: mutation. Refused with `400 validation_failed` when it grants a mutation
   permission whose required views the role does not hold (see "Role composition" below).
 - `DELETE /{role_id}/permissions/{role_permission_id}`: remove role permission grant.
-  Permission `role.remove_permission` + `role.view`. Shape: mutation. Refused with
-  `400 validation_failed` when it removes a view that a held mutation permission needs.
+  Permission `role.remove_permission` + `role.view`. Shape: mutation. The permission check is
+  first (`403` naming `Missing permission: role.view.` when the view is missing), then the role
+  and the grant are looked up (`404`). Refused with `400 validation_failed` when it removes a view
+  that a held mutation permission needs.
+
+`POST /{role_id}/permissions` reads the grant it wrote **by role and permission code**, gated by
+`role.view`, so a role holding more than a page of grants can no longer answer `404` after a
+successful grant.
 
 Create role and assign-permission examples:
 
@@ -1369,14 +1393,23 @@ row's branch; `TENANT`-scope rows need the tenant-wide view.
   enum-like filter, so for such a holder any value other than `BRANCH` (`TENANT`, `tenant`, an
   unknown value) is an empty page. No grant: `403`.
 
-**Behaviour change on the revoke route.** `DELETE /{assignment_id}` reads the row first, and that
-read is now target-aware, so a revoker no longer needs `role_assignment.view` tenant-wide: for a
-`BRANCH`-scope row the view **at that branch** is enough (in addition to `user.revoke_role`,
-checked at that branch as before). A branch-scoped revoker that was refused before now succeeds on
-a row at its own branch, and still gets `403` on a row at another branch and on a `TENANT`-scope
-row, which change nothing. The branch-assignment revoke pre-read and the assign read-back are
-target-aware in the same way (the tenant-scope `user.revoke_branch`/`user.assign_branch` check is
-unchanged).
+**Revoke is an authorised combined lookup.** `DELETE /{assignment_id}` takes only the assignment
+id, and the permission check depends on the assignment's scope, so the service resolves that scope
+itself: it first works out, from the caller's grants alone, where the caller may revoke (the
+mutation `user.revoke_role` **and** `role_assignment.view`, tenant-wide or per branch; `403` naming
+the first code held nowhere), then reads the row, which is never returned to the caller, and
+revokes only a row the caller may touch: a `BRANCH`-scope row on a branch where it holds both, or
+any row for a tenant-wide holder. Consequences:
+
+- A **tenant-wide** holder gets `404` for an unknown id.
+- A **branch-scoped** holder gets the **same** `403` (`Missing permission: user.revoke_role.`,
+  same status, same body apart from the per-request `request_id` and the echoed `instance` path)
+  for an unknown id, for a row on a branch it may not act on and for a `TENANT`-scope row, so the
+  response is no existence oracle.
+- A caller with **no grant at all** gets `403` naming the first missing code, whatever id it asks
+  for.
+- A branch-scoped revoker holding both codes at its own branch revokes a row there and gets the
+  gated detail back (`role_assignment.view` at that branch), as before.
 
 Assign role request and response:
 

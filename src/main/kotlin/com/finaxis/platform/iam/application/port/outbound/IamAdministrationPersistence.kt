@@ -100,6 +100,16 @@ interface RolePermissionPersistence {
         actorId: UUID,
     ): Boolean
 
+    /**
+     * The code of the permission granted by the role-permission row [rolePermissionId], only when
+     * that row is a grant of [roleId] in [organisationId]; null otherwise.
+     */
+    fun grantedPermissionCode(
+        organisationId: UUID,
+        roleId: UUID,
+        rolePermissionId: UUID,
+    ): String?
+
     /** Removes a role permission and returns whether an active mapping existed. */
     fun removePermission(
         organisationId: UUID,
@@ -126,6 +136,15 @@ interface RoleAssignmentPersistence {
         userId: UUID,
         branchId: UUID,
     ): Boolean
+
+    /**
+     * Finds the role assignment [assignmentId] of [organisationId], whatever its status. For the
+     * service's own authorised lookup: it is never returned to a caller.
+     */
+    fun findRoleAssignment(
+        organisationId: UUID,
+        assignmentId: UUID,
+    ): RoleAssignmentTarget?
 
     /** Finds an active role assignment for the full scope key. */
     fun activeRoleAssignment(
@@ -170,6 +189,14 @@ data class RoleSnapshot(
     val systemRole: Boolean,
     val status: RoleStatus,
     val rowVersion: Long,
+)
+
+/** The tuple of a role assignment row: who holds which role, and at what scope. */
+data class RoleAssignmentTarget(
+    val userId: UUID,
+    val roleId: UUID,
+    val scopeType: RoleScopeType,
+    val branchId: UUID?,
 )
 
 /** Minimal membership projection required before assigning a role. */

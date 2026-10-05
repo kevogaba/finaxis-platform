@@ -8,7 +8,7 @@ import com.finaxis.platform.common.web.api.ApiProblemFactory
 import com.finaxis.platform.common.web.api.WebJsonConfiguration
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.adapter.inbound.web.dto.AssignRoleRequest
-import com.finaxis.platform.iam.application.role.RevokeRoleFromUser
+import com.finaxis.platform.iam.application.role.RevokeRoleAssignment
 import com.finaxis.platform.iam.application.role.RoleAssignmentResult
 import com.finaxis.platform.iam.application.role.RoleScopeType
 import com.finaxis.platform.lifecycle.application.RoleAssignmentScopeType
@@ -51,7 +51,7 @@ class RoleAssignmentControllerTests
         apiJsonCodec: ApiJsonCodec,
     ) : FoundationIamControllerTestSupport(mockMvc, apiJsonCodec) {
         @Test
-        fun `role assignment assign and revoke use command result and resolved tuple`() {
+        fun `role assignment assign uses the command result and revoke passes only the id`() {
             val tenantId = uuidV7()
             val assignmentId = uuidV7()
             val userId = uuidV7()
@@ -102,12 +102,12 @@ class RoleAssignmentControllerTests
                     with(authentication(tenantToken(setOf("user.revoke_role"), tenantId)))
                 }.andExpect { status { isOk() } }
 
-            val commandCaptor = argumentCaptor<RevokeRoleFromUser>()
-            verify(roleManagementService).revokeRoleFromUser(commandCaptor.capture())
-            kotlin.test.assertEquals(userId, commandCaptor.firstValue.userId)
-            kotlin.test.assertEquals(roleId, commandCaptor.firstValue.roleId)
-            kotlin.test.assertEquals(RoleScopeType.BRANCH, commandCaptor.firstValue.scopeType)
-            kotlin.test.assertEquals(branchId, commandCaptor.firstValue.branchId)
+            // The service finds the assignment's tuple and scope itself, in an authorised combined
+            // lookup; client-supplied values are ignored.
+            val commandCaptor = argumentCaptor<RevokeRoleAssignment>()
+            verify(roleManagementService).revokeRoleAssignment(commandCaptor.capture())
+            kotlin.test.assertEquals(tenantId, commandCaptor.firstValue.organisationId)
+            kotlin.test.assertEquals(assignmentId, commandCaptor.firstValue.assignmentId)
         }
 
         @Test
@@ -167,7 +167,7 @@ class RoleAssignmentControllerTests
         }
 
         @Test
-        fun `role assignment revokes a branch scope role outside the selected branch`() {
+        fun `role assignment revoke leaves the scope decision to the service`() {
             val tenantId = uuidV7()
             val selectedBranchId = uuidV7()
             val targetBranchId = uuidV7()
@@ -197,15 +197,13 @@ class RoleAssignmentControllerTests
                     status { isOk() }
                 }
 
-            val commandCaptor = argumentCaptor<RevokeRoleFromUser>()
-            verify(roleManagementService).revokeRoleFromUser(commandCaptor.capture())
-            kotlin.test.assertEquals(targetBranchId, commandCaptor.firstValue.branchId)
-            verify(permissionGuard).requireBranchPermission(
-                any(),
-                eq(tenantId),
-                eq(targetBranchId),
-                eq("user.revoke_role"),
-            )
+            // The controller neither reads the row first nor checks a scope of its own: the
+            // service resolves the scope from the row and authorises at that scope.
+            verify(roleManagementService).revokeRoleAssignment(any())
+            verify(permissionGuard, org.mockito.kotlin.never())
+                .requireBranchPermission(any(), any(), any(), any())
+            verify(permissionGuard, org.mockito.kotlin.never())
+                .requireTenantPermission(any(), any(), any())
         }
 
         @Test

@@ -1,6 +1,5 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
-import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
@@ -531,24 +530,22 @@ class RoleController(
             ),
         )
         val grant =
-            iamQueryService
-                .listRolePermissions(
-                    caller.activeOrganisationId,
-                    roleId,
-                    RolePermissionFilter(size = MAXIMUM_PAGE_SIZE.toInt()),
-                    caller,
-                ).items
-                .firstOrNull { it.permissionCode == request.permissionCode }
-                ?: throw ResourceNotFoundException(
-                    safeDetail = "Role permission not found after grant",
-                )
+            iamQueryService.getRolePermissionByCode(
+                caller.activeOrganisationId,
+                roleId,
+                request.permissionCode,
+                caller,
+            )
         val response = grant.toResponse()
         return ResponseEntity
             .created(URI.create("${ApiPaths.ROLES}/$roleId/permissions/${grant.id}"))
             .body(response)
     }
 
-    /** Removes a permission grant after resolving its server-owned permission code. */
+    /**
+     * Removes a permission grant. The service authorises the caller first, then resolves the
+     * grant's server-owned permission code.
+     */
     @DeleteMapping("/{role_id}/permissions/{role_permission_id}")
     @IdempotentMutation(scope = IdempotencyScopeKind.TENANT)
     @PreAuthorize("hasAuthority('role.remove_permission')")
@@ -604,27 +601,11 @@ class RoleController(
         @PathVariable("role_permission_id") rolePermissionId: UUID,
     ): ApiPage<RolePermissionSummaryResponse> {
         val caller = CallerContextResolver.getTenantCaller()
-        val grant =
-            iamQueryService.getRolePermission(
-                caller.activeOrganisationId,
-                rolePermissionId,
-                caller,
-            )
-        if (grant.roleId !=
-            roleId
-        ) {
-            throw ResourceNotFoundException(safeDetail = "Role permission not found")
-        }
-        permissionGuard.requireTenantPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            "role.remove_permission",
-        )
         roleManagementService.removePermissionFromRole(
             RemovePermissionFromRole(
                 caller.activeOrganisationId,
                 roleId,
-                grant.permissionCode,
+                rolePermissionId,
                 caller.actorId,
                 uuidV7().toString(),
             ),
@@ -704,6 +685,9 @@ class RoleController(
         )
 
     private fun RolePermissionSummary.toResponse() =
+        RolePermissionSummaryResponse(id, roleId, permissionId, permissionCode, grantedAt)
+
+    private fun RolePermissionDetail.toResponse() =
         RolePermissionSummaryResponse(id, roleId, permissionId, permissionCode, grantedAt)
 
     private companion object {

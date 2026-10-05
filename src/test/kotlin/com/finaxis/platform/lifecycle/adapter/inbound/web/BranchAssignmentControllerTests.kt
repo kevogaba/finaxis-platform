@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
+import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiExceptionHandler
@@ -18,7 +19,7 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.AssignBranchReques
 import com.finaxis.platform.lifecycle.application.AssignUserToBranchCommand
 import com.finaxis.platform.lifecycle.application.BranchAssignmentType
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
-import com.finaxis.platform.lifecycle.application.RevokeUserBranchAssignmentCommand
+import com.finaxis.platform.lifecycle.application.RevokeBranchAssignmentCommand
 import com.finaxis.platform.lifecycle.application.query.LifecycleBranchAssignmentDetail
 import com.finaxis.platform.lifecycle.application.query.LifecycleBranchAssignmentFilter
 import com.finaxis.platform.lifecycle.application.query.LifecycleBranchAssignmentSummary
@@ -27,6 +28,7 @@ import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.beans.factory.annotation.Autowired
@@ -255,28 +257,21 @@ class BranchAssignmentControllerTests
         }
 
         @Test
-        fun `assign creates an assignment and resolves its generated identifier`() {
+        fun `assign creates an assignment and reads it back by its key`() {
             val tenantId = uuidV7()
             val userId = uuidV7()
             val branchId = uuidV7()
             val assignmentId = uuidV7()
             val request = AssignBranchRequest(userId, branchId, BranchAssignmentType.OPERATE)
+            whenever(branchProvisioningService.assignUser(any())).thenReturn(assignmentId)
             whenever(
-                lifecycleIamReadService.searchBranchAssignments(eq(tenantId), any(), any()),
+                lifecycleIamReadService.getBranchAssignment(eq(tenantId), eq(assignmentId), any()),
             ).thenReturn(
-                apiPageOf(
-                    listOf(
-                        LifecycleBranchAssignmentSummary(
-                            assignmentId,
-                            userId,
-                            branchId,
-                            "OPERATE",
-                            "ACTIVE",
-                        ),
-                    ),
-                    number = 0,
-                    size = 1,
-                    totalItems = 1,
+                assignmentDetail(
+                    tenantId = tenantId,
+                    assignmentId = assignmentId,
+                    userId = userId,
+                    branchId = branchId,
                 ),
             )
 
@@ -289,9 +284,14 @@ class BranchAssignmentControllerTests
                     status { isCreated() }
                     header { string("Location", "${ApiPaths.BRANCH_ASSIGNMENTS}/$assignmentId") }
                     jsonPath("$.id") { value(assignmentId.toString()) }
+                    jsonPath("$.user_id") { value(userId.toString()) }
+                    jsonPath("$.branch_id") { value(branchId.toString()) }
                 }
 
             verify(branchProvisioningService).assignUser(any<AssignUserToBranchCommand>())
+            // The read-back asks for exactly the row just written, never a page of a branch's rows.
+            verify(lifecycleIamReadService, never())
+                .searchBranchAssignments(any(), any(), any())
         }
 
         @Test
@@ -300,22 +300,15 @@ class BranchAssignmentControllerTests
             val userId = uuidV7()
             val targetBranchId = uuidV7()
             val assignmentId = uuidV7()
+            whenever(branchProvisioningService.assignUser(any())).thenReturn(assignmentId)
             whenever(
-                lifecycleIamReadService.searchBranchAssignments(eq(tenantId), any(), any()),
+                lifecycleIamReadService.getBranchAssignment(eq(tenantId), eq(assignmentId), any()),
             ).thenReturn(
-                apiPageOf(
-                    listOf(
-                        LifecycleBranchAssignmentSummary(
-                            assignmentId,
-                            userId,
-                            targetBranchId,
-                            "OPERATE",
-                            "ACTIVE",
-                        ),
-                    ),
-                    number = 0,
-                    size = 1,
-                    totalItems = 1,
+                assignmentDetail(
+                    tenantId = tenantId,
+                    assignmentId = assignmentId,
+                    userId = userId,
+                    branchId = targetBranchId,
                 ),
             )
 
@@ -361,23 +354,18 @@ class BranchAssignmentControllerTests
         }
 
         @Test
-        fun `revoke resolves the assignment tuple instead of trusting client supplied values`() {
+        fun `revoke passes only the assignment id and ignores client supplied values`() {
             val tenantId = uuidV7()
             val assignmentId = uuidV7()
-            val resolvedUserId = uuidV7()
-            val resolvedBranchId = uuidV7()
-            val detail =
+            whenever(
+                lifecycleIamReadService.getBranchAssignment(eq(tenantId), eq(assignmentId), any()),
+            ).thenReturn(
                 assignmentDetail(
                     tenantId = tenantId,
                     assignmentId = assignmentId,
-                    userId = resolvedUserId,
-                    branchId = resolvedBranchId,
-                    assignmentType = "APPROVE",
                     status = "REVOKED",
-                )
-            whenever(
-                lifecycleIamReadService.getBranchAssignment(eq(tenantId), eq(assignmentId), any()),
-            ).thenReturn(detail)
+                ),
+            )
 
             mockMvc
                 .delete("${ApiPaths.BRANCH_ASSIGNMENTS}/$assignmentId") {
@@ -391,31 +379,20 @@ class BranchAssignmentControllerTests
                     jsonPath("$.status") { value("REVOKED") }
                 }
 
-            val commandCaptor = argumentCaptor<RevokeUserBranchAssignmentCommand>()
-            verify(branchProvisioningService).revokeUserAssignment(commandCaptor.capture())
-            kotlin.test.assertEquals(resolvedUserId, commandCaptor.firstValue.userId)
-            kotlin.test.assertEquals(resolvedBranchId, commandCaptor.firstValue.branchId)
-            kotlin.test.assertEquals(
-                BranchAssignmentType.APPROVE,
-                commandCaptor.firstValue.assignmentType,
-            )
+            // The service finds the assignment's branch itself, in an authorised combined lookup.
+            val commandCaptor = argumentCaptor<RevokeBranchAssignmentCommand>()
+            verify(branchProvisioningService).revokeAssignment(commandCaptor.capture())
+            kotlin.test.assertEquals(tenantId, commandCaptor.firstValue.organisationId)
+            kotlin.test.assertEquals(assignmentId, commandCaptor.firstValue.assignmentId)
         }
 
         @Test
-        fun `revoke administers an assignment on a branch other than the selected one`() {
+        fun `revoke is not refused in the controller for a caller pinned to another branch`() {
             val tenantId = uuidV7()
             val assignmentId = uuidV7()
-            val assignmentBranchId = uuidV7()
-            val callerBranchId = uuidV7()
             whenever(
                 lifecycleIamReadService.getBranchAssignment(eq(tenantId), eq(assignmentId), any()),
-            ).thenReturn(
-                assignmentDetail(
-                    tenantId = tenantId,
-                    assignmentId = assignmentId,
-                    branchId = assignmentBranchId,
-                ),
-            )
+            ).thenReturn(assignmentDetail(tenantId = tenantId, assignmentId = assignmentId))
 
             mockMvc
                 .delete("${ApiPaths.BRANCH_ASSIGNMENTS}/$assignmentId") {
@@ -424,7 +401,7 @@ class BranchAssignmentControllerTests
                             tenantToken(
                                 setOf("user.revoke_branch"),
                                 tenantId,
-                                branchId = callerBranchId,
+                                branchId = uuidV7(),
                             ),
                         ),
                     )
@@ -432,9 +409,27 @@ class BranchAssignmentControllerTests
                     status { isOk() }
                 }
 
-            val commandCaptor = argumentCaptor<RevokeUserBranchAssignmentCommand>()
-            verify(branchProvisioningService).revokeUserAssignment(commandCaptor.capture())
-            kotlin.test.assertEquals(assignmentBranchId, commandCaptor.firstValue.branchId)
+            // Whether the caller may act on that assignment's branch is the service's decision.
+            verify(permissionGuard, never()).requireTenantPermission(any(), any(), any())
+            verify(branchProvisioningService).revokeAssignment(any<RevokeBranchAssignmentCommand>())
+        }
+
+        @Test
+        fun `revoke surfaces the service's refusal and writes no read back`() {
+            val tenantId = uuidV7()
+            val assignmentId = uuidV7()
+            whenever(branchProvisioningService.revokeAssignment(any()))
+                .thenThrow(MissingPermissionException("user.revoke_branch"))
+
+            mockMvc
+                .delete("${ApiPaths.BRANCH_ASSIGNMENTS}/$assignmentId") {
+                    with(authentication(tenantToken(setOf("user.revoke_branch"), tenantId)))
+                }.andExpect {
+                    status { isForbidden() }
+                    jsonPath("$.detail") { value("Missing permission: user.revoke_branch.") }
+                }
+
+            verify(lifecycleIamReadService, never()).getBranchAssignment(any(), any(), any())
         }
 
         @Test

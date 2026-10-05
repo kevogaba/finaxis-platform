@@ -306,9 +306,13 @@ outside those documents.
   branch or the platform organisation). It is central in the adapters, so call sites name only the
   mutation code, and a refusal is `MissingPermissionException` (403 `forbidden`, detail `Missing
   permission: <first missing code>.`, mutation code first), raised before any existence lookup and
-  before any write (except branch-assignment revoke and role-assignment revoke, which read
-  first until the 6c change; target-aware read refusals stay unnamed). Do not
-  add the view to a mutation route's `@PreAuthorize`. A test fixture that grants one mutation code
+  before any write (target-aware read refusals stay unnamed). A route that names only an
+  assignment id (branch-assignment and role-assignment revoke) authorises through an authorised
+  combined lookup in the service: `PermissionGuard.mutationBranchVisibility` first, then the row,
+  with one identical 403 for an unknown id and a row the caller may not touch (404 only for a
+  tenant-wide holder); never add an unrestricted existence read. Read-backs are by key (the row
+  just written), never "the first page". Do not add the view to a mutation route's
+  `@PreAuthorize`. A test fixture that grants one mutation code
   adds its views through `ViewCoupledGrants`/the fixture's `...WithViews` methods; use the
   `...Exactly` variants to prove a refusal.
 - Maker-checker: a platform-context actor holding the permission in the platform organisation may

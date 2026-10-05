@@ -14,7 +14,7 @@ import com.finaxis.platform.iam.application.query.RoleAssignmentDetail
 import com.finaxis.platform.iam.application.query.RoleAssignmentFilter
 import com.finaxis.platform.iam.application.query.RoleAssignmentSummary
 import com.finaxis.platform.iam.application.role.AssignRoleToUser
-import com.finaxis.platform.iam.application.role.RevokeRoleFromUser
+import com.finaxis.platform.iam.application.role.RevokeRoleAssignment
 import com.finaxis.platform.iam.application.role.RoleManagementService
 import com.finaxis.platform.iam.application.role.RoleScopeType
 import com.finaxis.platform.iam.application.role.requireBranchScopeBranchId
@@ -240,13 +240,20 @@ class RoleAssignmentController(
             .body(response)
     }
 
-    /** Revokes a role assignment after resolving its server-owned assignment tuple. */
+    /**
+     * Revokes a role assignment. The service resolves the assignment's tuple and scope itself, in
+     * an authorised combined lookup, and the response is the gated read of the revoked row.
+     */
     @DeleteMapping("/{assignment_id}")
     @IdempotentMutation(scope = IdempotencyScopeKind.TENANT)
     @PreAuthorize("hasAuthority('user.revoke_role')")
     @Operation(
         summary = "Revoke user role",
-        description = "Revokes a user role assignment.",
+        description =
+            "Revokes a user role assignment. The service resolves the assignment's scope " +
+                "itself and authorises at that scope. A tenant-wide holder gets 404 for an " +
+                "unknown id; any other caller gets the same 403 for an unknown id, a row on a " +
+                "branch it may not act on and a tenant-scope row.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -291,21 +298,10 @@ class RoleAssignmentController(
         @PathVariable("assignment_id") assignmentId: UUID,
     ): RoleAssignmentDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        val assignment =
-            iamQueryService.getRoleAssignment(caller.activeOrganisationId, assignmentId, caller)
-        requireAssignmentPermission(
-            caller,
-            RoleAssignmentScopeType.valueOf(assignment.scopeType),
-            assignment.branchId,
-            "user.revoke_role",
-        )
-        roleManagementService.revokeRoleFromUser(
-            RevokeRoleFromUser(
+        roleManagementService.revokeRoleAssignment(
+            RevokeRoleAssignment(
                 caller.activeOrganisationId,
-                assignment.userId,
-                assignment.roleId,
-                RoleScopeType.valueOf(assignment.scopeType),
-                assignment.branchId,
+                assignmentId,
                 caller.actorId,
                 uuidV7().toString(),
             ),

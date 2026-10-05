@@ -48,11 +48,15 @@ data class AssignPermissionToRole(
     val requestId: String? = null,
 )
 
-/** Removes one catalogue permission from a mutable role in the selected organisation. */
+/**
+ * Removes one permission grant of a mutable role in the selected organisation. The grant is named
+ * by its [rolePermissionId] and the service resolves its permission code after it has authorised
+ * the caller, so no read of the grant precedes the permission check.
+ */
 data class RemovePermissionFromRole(
     val organisationId: UUID,
     val roleId: UUID,
-    val permissionCode: String,
+    val rolePermissionId: UUID,
     val actorId: UUID,
     val requestId: String? = null,
 )
@@ -75,6 +79,18 @@ data class RevokeRoleFromUser(
     val roleId: UUID,
     val scopeType: RoleScopeType,
     val branchId: UUID?,
+    val actorId: UUID,
+    val requestId: String? = null,
+)
+
+/**
+ * Revokes the role assignment [assignmentId]. The assignment's scope (tenant, or the branch it is
+ * on) is found by the service itself, in an authorised combined lookup, because the permission
+ * check that guards the revocation depends on it.
+ */
+data class RevokeRoleAssignment(
+    val organisationId: UUID,
+    val assignmentId: UUID,
     val actorId: UUID,
     val requestId: String? = null,
 )

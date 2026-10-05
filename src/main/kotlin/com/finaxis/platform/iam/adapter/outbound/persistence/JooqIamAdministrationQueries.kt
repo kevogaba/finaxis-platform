@@ -607,10 +607,19 @@ class JooqIamAdministrationQueries(
         return apiPageOf(items, filter.page, filter.size, total)
     }
 
-    override fun findRolePermissionById(
+    override fun findRolePermissionByRoleAndCode(
         organisationId: UUID,
-        id: UUID,
+        roleId: UUID,
+        permissionCode: String,
     ): RolePermissionDetail? =
+        rolePermissionDetail(
+            ROLE_PERMISSION.ORGANISATION_ID
+                .eq(organisationId)
+                .and(ROLE_PERMISSION.ROLE_ID.eq(roleId))
+                .and(PERMISSION.PERMISSION_CODE.eq(permissionCode)),
+        )
+
+    private fun rolePermissionDetail(condition: Condition): RolePermissionDetail? =
         dsl
             .select(
                 ROLE_PERMISSION.ID,
@@ -625,8 +634,7 @@ class JooqIamAdministrationQueries(
             ).from(ROLE_PERMISSION)
             .join(PERMISSION)
             .on(ROLE_PERMISSION.PERMISSION_ID.eq(PERMISSION.ID))
-            .where(ROLE_PERMISSION.ID.eq(id))
-            .and(ROLE_PERMISSION.ORGANISATION_ID.eq(organisationId))
+            .where(condition)
             .fetchOne { record ->
                 RolePermissionDetail(
                     id = requireNotNull(record.get(ROLE_PERMISSION.ID)),

@@ -13,6 +13,7 @@ import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
 import com.finaxis.platform.iam.domain.PermissionEffect
 import com.finaxis.platform.iam.domain.UserStatus
+import com.finaxis.platform.lifecycle.BranchVisibility
 import org.junit.jupiter.api.assertThrows
 import org.springframework.cache.concurrent.ConcurrentMapCacheManager
 import java.util.UUID
@@ -154,6 +155,77 @@ class AuthorizationServiceViewCouplingTests {
     fun `break glass is not exempt for a system actor`() {
         assertEquals(BREAK_GLASS, firstMissing { breakGlass(SystemActor.ID) })
     }
+
+    @Test
+    fun `mutation visibility is every branch when the mutation and its views are tenant wide`() {
+        queries.tenantCodes = setOf("branch.suspend", "branch.view")
+
+        assertEquals(BranchVisibility.AllBranches, mutationVisibility())
+    }
+
+    @Test
+    fun `mutation visibility is the branches where the mutation and its view are both held`() {
+        val other = uuidV7()
+        queries.branchGrants =
+            mapOf(
+                "branch.suspend" to setOf(branchId, other),
+                "branch.view" to setOf(branchId, uuidV7()),
+            )
+
+        assertEquals(BranchVisibility.Branches(setOf(branchId)), mutationVisibility())
+
+        // A tenant-wide view serves every branch of the mutation's own grants.
+        queries.tenantCodes = setOf("branch.view")
+        assertEquals(BranchVisibility.Branches(setOf(branchId, other)), mutationVisibility())
+    }
+
+    @Test
+    fun `mutation visibility agrees with the target branch check at every branch`() {
+        queries.branchGrants =
+            mapOf("branch.suspend" to setOf(branchId), "branch.view" to setOf(branchId))
+        val visibility = mutationVisibility()
+
+        listOf(branchId, uuidV7()).forEach { target ->
+            val allowed =
+                runCatching {
+                    service().requirePermissionWithViews(
+                        userId,
+                        organisationId,
+                        target,
+                        "branch.suspend",
+                    )
+                }.isSuccess
+            assertEquals(allowed, visibility.canSee(target))
+        }
+    }
+
+    @Test
+    fun `mutation visibility names the first code held nowhere and never depends on a row`() {
+        assertEquals("branch.suspend", firstMissing { mutationVisibility() })
+
+        queries.branchGrants = mapOf("branch.suspend" to setOf(branchId))
+        assertEquals("branch.view", firstMissing { mutationVisibility() })
+
+        // Held somewhere but never together: no branch, and no refusal until a row is asked for.
+        queries.branchGrants =
+            mapOf("branch.suspend" to setOf(branchId), "branch.view" to setOf(uuidV7()))
+        assertEquals(BranchVisibility.Branches(emptySet()), mutationVisibility())
+    }
+
+    @Test
+    fun `mutation visibility honours a direct deny and exempts a system actor`() {
+        queries.tenantCodes = setOf("branch.suspend", "branch.view")
+        queries.direct = listOf(PermissionEffectAssignment("branch.view", PermissionEffect.DENY))
+        assertEquals("branch.view", firstMissing { mutationVisibility() })
+
+        assertEquals(
+            BranchVisibility.AllBranches,
+            service().mutationBranchVisibility(SystemActor.ID, organisationId, "branch.suspend"),
+        )
+    }
+
+    private fun mutationVisibility() =
+        service().mutationBranchVisibility(userId, organisationId, "branch.suspend")
 
     private fun tenant(code: String) =
         service().requirePermissionWithViews(userId, organisationId, code)

@@ -104,6 +104,21 @@ class JooqRolePermissionPersistence(
             .execute() > 0
     }
 
+    override fun grantedPermissionCode(
+        organisationId: UUID,
+        roleId: UUID,
+        rolePermissionId: UUID,
+    ): String? =
+        dsl
+            .select(PERMISSION.PERMISSION_CODE)
+            .from(ROLE_PERMISSION)
+            .join(PERMISSION)
+            .on(PERMISSION.ID.eq(ROLE_PERMISSION.PERMISSION_ID))
+            .where(ROLE_PERMISSION.ID.eq(rolePermissionId))
+            .and(ROLE_PERMISSION.ORGANISATION_ID.eq(organisationId))
+            .and(ROLE_PERMISSION.ROLE_ID.eq(roleId))
+            .fetchOne(PERMISSION.PERMISSION_CODE)
+
     override fun removePermission(
         organisationId: UUID,
         roleId: UUID,

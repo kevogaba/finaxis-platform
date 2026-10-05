@@ -352,9 +352,24 @@ class RoleCompositionIntegrationTests
             code: String,
         ) = withRequestContext {
             roleManagementService.removePermissionFromRole(
-                RemovePermissionFromRole(organisationId, roleId, code, actorId, null),
+                RemovePermissionFromRole(organisationId, roleId, grantRowId(roleId, code), actorId),
             )
         }
+
+        /** The role-permission row granting [code] on [roleId], or a fresh id when it is absent. */
+        private fun grantRowId(
+            roleId: UUID,
+            code: String,
+        ): UUID =
+            dsl
+                .select(ROLE_PERMISSION.ID)
+                .from(ROLE_PERMISSION)
+                .join(PERMISSION)
+                .on(PERMISSION.ID.eq(ROLE_PERMISSION.PERMISSION_ID))
+                .where(ROLE_PERMISSION.ROLE_ID.eq(roleId))
+                .and(PERMISSION.PERMISSION_CODE.eq(code))
+                .fetchOne(ROLE_PERMISSION.ID)
+                ?: uuidV7()
 
         private fun createRole(): UUID =
             withRequestContext {

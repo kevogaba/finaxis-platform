@@ -290,14 +290,14 @@ it, at the same scope**: the tenant, the target branch, or the PLATFORM organisa
   nothing: no state change, transition log, audit success row, outbox row or idempotency row (the
   refusal precedes every write and the idempotent transaction rolls back). Replay is unchanged: an
   idempotent replay returns the stored response of the caller's own completed write after
-  `@PreAuthorize` only. **Until the assignment families move to the gated read-back (ADR 0030
-  rollout step 6c)**, two routes still read the resource before they check the mutation:
-  branch-assignment revoke and role-assignment revoke. On them a caller without the view is
-  refused by that target-aware read (an unnamed 403) and the mutation code is not named first.
-  Role-permission remove is named like the rest: its caller without `role.view` is refused with
-  `Missing permission: role.view.`. Tenant settings resolve the setting key (400) and
-  the organisation state (409) before the permission check. The refusal of a target-aware read
-  stays unnamed everywhere.
+  `@PreAuthorize` only. Role-permission remove, branch-assignment revoke and role-assignment
+  revoke follow the same order since ADR 0030 rollout step 6c: role-permission remove names the
+  role it works on, so its mutation and view check is the first thing the service does, before the
+  role or the grant is read (a caller without `role.view` is refused with `Missing permission:
+  role.view.`, not by an unnamed read and not with a 404). The two revoke routes name only an
+  assignment id, so see "Assignment revoke: the authorised combined lookup" below. Tenant settings
+  resolve the setting key (400) and the organisation state (409) before the permission check. The
+  refusal of a target-aware read stays unnamed everywhere.
 - **Memberships and invitations authorise in the service.** `UserProvisioningService` makes
   the check itself, inside the mutation transaction and first: `user.invite` (with
   `membership.view` and `user.view`) for `inviteUser`, `user.approve` with `membership.view` for
@@ -312,6 +312,26 @@ it, at the same scope**: the tenant, the target branch, or the PLATFORM organisa
   route, bound to the path tenant (another tenant's id is a 404). Two system entry points,
   `inviteAsSystem` and `approveAsSystem`, serve only the initial-administrator bootstrap, whose
   actors hold no tenant permission yet; they keep the maker-checker exclusions.
+- **Assignment revoke: the authorised combined lookup.** Branch-assignment revoke and
+  role-assignment revoke take only `assignment_id`, and the target-scoped check needs the target
+  branch (or the scope type) that only the assignment row holds. The service therefore resolves it
+  through an internal lookup that is never returned to the caller. First it asks
+  `PermissionGuard.mutationBranchVisibility` for the branches where the caller holds the mutation
+  and every view paired with it (a tenant-wide grant means all of them), read from grants alone and
+  memoised per request; a code held nowhere is a named 403. Then it reads the row. A tenant-wide
+  caller gets 404 for an unknown id. Any other caller gets the **same 403** (`Missing permission:
+  <mutation code>.`: same status and body, apart from the per-request `request_id` and the
+  `instance` path the caller itself requested) for an unknown id, for an assignment on a branch it
+  may not act on and, for a role assignment, for a tenant-scope row, so the lookup is not an
+  existence oracle and no unrestricted existence read is restored. A caller with no grant at all
+  gets the named 403 of the first code it lacks, whatever id it asks for. The refusal names the
+  **mutation** code whenever the row's branch lies outside the intersection of the mutation's and
+  the views' branches, even to a caller who holds the mutation (for example `user.revoke_branch` at
+  A and `branch_assignment.view` only at B: its own row at A is refused with `Missing permission:
+  user.revoke_branch.`, as an unknown id is, and reveals nothing). A view is named only when it is
+  held nowhere at all. Because the lookup resolves the same visibility the gated read-back asks for,
+  the read-back cannot be refused by a grant revoked in between (the branch assignment assign route
+  primes the same memo for the same reason).
 - **A direct `DENY` of a view** removes it from the resolved set, so the operator who holds a
   mutation and a `DENY` of its view cannot mutate either, by design.
 - **Hand SQL on the catalogue fails open.** The pairing is reference data changed only by forward
@@ -390,8 +410,10 @@ restricts the store query to the visible ids (`restrictToBranchIds`), so pages a
 exact; an explicit `branch_id` outside the set is `403`, and no grant is `403`. With no explicit
 `branch_id`, the branch-assignment list defaults to the selected branch when the caller may view
 it (the same rule for a tenant-wide and a branch-scoped holder), else to every viewable branch.
-`visibility` is memoised per request in `RequestPermissionCache`, so the pre-read and the
-read-back of one request cannot disagree. These read
+`visibility` is memoised per request in `RequestPermissionCache`, so the pre-check and the
+read-back of one request cannot disagree. `PermissionGuard.mutationBranchVisibility` is the same
+projection for a mutation code and every view paired with it, intersected: the branches where a
+target-branch mutation check passes (used by the assignment revoke lookup below). These read
 endpoints carry **no** `@PreAuthorize` coarse gate, since it would evaluate the selected branch's
 authority set and refuse a caller pinned to A whose only grant is scoped to B; the application
 layer is their only authorisation and a route is never open (authentication is still required,

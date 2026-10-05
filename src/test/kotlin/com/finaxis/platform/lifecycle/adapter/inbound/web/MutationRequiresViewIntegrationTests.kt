@@ -63,10 +63,9 @@ import kotlin.test.assertFailsWith
  * created resource, no idempotency row). The read-back of a request that passed the pre-check is
  * decided from the same per-request permission memo and cannot be refused by a later change.
  *
- * Two families are the stated exceptions: branch-assignment revoke and role-assignment revoke still
- * read the resource first (until the assignment change), so their refusal is the target-aware
- * read's unnamed 403, and tenant settings resolve the setting key and organisation state before
- * the permission check. Role-permission remove is named like the rest.
+ * One family is the stated exception: tenant settings resolve the setting key and organisation
+ * state before the permission check. Role-permission remove and the two assignment revokes are
+ * named like the rest.
  */
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -418,17 +417,21 @@ class MutationRequiresViewIntegrationTests
             val tenantBefore = footprint(tenantRevoker)
             val branchBefore = footprint(branchRevoker)
 
-            // The route still reads the assignment first (until the assignment families move
-            // to the gated read-back), so the refusal here is the target-aware read's own,
-            // unnamed 403. What matters is that it is a 403 and that nothing is revoked.
+            // The service authorises before it reads the assignment (the authorised combined
+            // lookup resolves the caller's visibility from grants alone), so the refusal names
+            // the missing view whichever row is asked for, and an unknown id is refused alike.
             delete(
                 "${ApiPaths.ROLE_ASSIGNMENTS}/$tenantRow",
                 tenantToken(tenantRevoker, "user.revoke_role"),
-            ).andExpect { forbiddenGeneric() }
+            ).andExpect { forbiddenNaming("role_assignment.view") }
             delete(
                 "${ApiPaths.ROLE_ASSIGNMENTS}/$branchRow",
                 tenantToken(branchRevoker, "user.revoke_role", branchId),
-            ).andExpect { forbiddenGeneric() }
+            ).andExpect { forbiddenNaming("role_assignment.view") }
+            delete(
+                "${ApiPaths.ROLE_ASSIGNMENTS}/${uuidV7()}",
+                tenantToken(tenantRevoker, "user.revoke_role"),
+            ).andExpect { forbiddenNaming("role_assignment.view") }
 
             assertEquals(tenantBefore, footprint(tenantRevoker))
             assertEquals(branchBefore, footprint(branchRevoker))
@@ -471,10 +474,14 @@ class MutationRequiresViewIntegrationTests
                     .get(0, UUID::class.java)
             val before = footprint(actor)
 
-            // The role-permission read this route performs is not target-aware: the refusal is
-            // the named 403 for the view the removal pairs with (role.view).
+            // The permission check is the first thing the service does, before the grant is read,
+            // so the refusal names the missing view (and an unknown grant id is refused alike).
             delete(
                 "${ApiPaths.ROLES}/$roleId/permissions/$grantId",
+                tenantToken(actor, "role.remove_permission"),
+            ).andExpect { forbiddenNaming("role.view") }
+            delete(
+                "${ApiPaths.ROLES}/$roleId/permissions/${uuidV7()}",
                 tenantToken(actor, "role.remove_permission"),
             ).andExpect { forbiddenNaming("role.view") }
 

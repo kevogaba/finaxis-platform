@@ -467,10 +467,15 @@ class IamQueryService(
         return roleQueries.listRolePermissions(organisationId, roleId, filter)
     }
 
-    /** Retrieves detailed role permission metadata, validating caller context and permissions. */
-    fun getRolePermission(
+    /**
+     * Retrieves the grant of [permissionCode] on [roleId] by its key, validating caller context
+     * and `role.view`: the read-back of a grant, asking for exactly the row the mutation wrote
+     * (never "the first page of the role's grants", which a role with many grants could miss).
+     */
+    fun getRolePermissionByCode(
         organisationId: UUID,
-        id: UUID,
+        roleId: UUID,
+        permissionCode: String,
         caller: FoundationCaller,
     ): RolePermissionDetail {
         verifyTenantScope(organisationId, caller)
@@ -490,9 +495,9 @@ class IamQueryService(
                 )
             }
         }
-        return roleQueries.findRolePermissionById(organisationId, id)
+        return roleQueries.findRolePermissionByRoleAndCode(organisationId, roleId, permissionCode)
             ?: throw ResourceNotFoundException(
-                safeDetail = "Role permission not found: $id",
+                safeDetail = "Role permission not found: $permissionCode",
             )
     }
 

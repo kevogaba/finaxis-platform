@@ -1631,8 +1631,20 @@ private class UserProvisioningFake :
         )
     }
 
-    override fun assign(command: AssignUserToBranchCommand): Boolean =
-        branchAssignments.add(BranchAssignmentKey(command.organisationId, command.userId))
+    override fun assign(command: AssignUserToBranchCommand): BranchAssignmentWrite {
+        val key = BranchAssignmentKey(command.organisationId, command.userId)
+        return BranchAssignmentWrite(
+            assignmentIds.getOrPut(key) { uuidV7() },
+            branchAssignments.add(key),
+        )
+    }
+
+    private val assignmentIds = mutableMapOf<BranchAssignmentKey, UUID>()
+
+    override fun findAssignment(
+        organisationId: UUID,
+        assignmentId: UUID,
+    ): BranchAssignmentTarget? = null
 
     override fun isActive(command: RevokeUserBranchAssignmentCommand): Boolean =
         branchAssignments.contains(BranchAssignmentKey(command.organisationId, command.userId))
