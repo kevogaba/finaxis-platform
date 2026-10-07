@@ -35,7 +35,7 @@ jobs:
           java-version-file: '.sdkmanrc'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6.3.0
+        uses: gradle/actions/setup-gradle@v6.4.0
 
       - name: 'Qodana Scan'
         uses: JetBrains/qodana-action@v2026.2
@@ -71,7 +71,7 @@ jobs:
           java-version-file: '.sdkmanrc'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6.3.0
+        uses: gradle/actions/setup-gradle@v6.4.0
 
       - name: Run quality gate
         run: ./gradlew --no-daemon qualityGate
