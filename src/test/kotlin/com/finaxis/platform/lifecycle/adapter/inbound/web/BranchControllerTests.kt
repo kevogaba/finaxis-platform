@@ -4,6 +4,7 @@ import com.finaxis.platform.common.application.ApplicationException
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
@@ -18,7 +19,6 @@ import com.finaxis.platform.common.web.idempotency.IdempotencyProperties
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
-import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.TenantCaller
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ActivateBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CloseBranchRequest
@@ -123,9 +123,6 @@ class BranchControllerTests
 
         @MockitoBean
         private lateinit var foundationQueryService: FoundationQueryService
-
-        @MockitoBean
-        private lateinit var permissionGuard: PermissionGuard
 
         @Test
         fun `createDraft succeeds with active tenant context`() {
@@ -319,12 +316,6 @@ class BranchControllerTests
                 }
 
             verify(branchProvisioningService).activate(any())
-            verify(permissionGuard).requireBranchPermission(
-                org.mockito.kotlin.any(),
-                eq(tenantId),
-                eq(branchId),
-                eq("branch.approve"),
-            )
         }
 
         @Test
@@ -840,10 +831,8 @@ class BranchControllerTests
             assertEquals("Valid reason", captor.firstValue.reason.value)
             assertEquals(ActingScope.TENANT, captor.firstValue.scope)
             // The permission depends on who the actor is, so the service decides it; the
-            // controller must not pin a single one. The response is the gated read of the target
-            // branch (ADR 0030 step 6a).
-            verify(permissionGuard, org.mockito.kotlin.never())
-                .requireBranchPermission(any(), any(), any(), any())
+            // controller checks nothing. The response is the gated read of the target branch
+            // (ADR 0030 step 6a).
             verify(foundationQueryService)
                 .getBranch(
                     eq(tenantId),
@@ -1046,6 +1035,79 @@ class BranchControllerTests
             assertNull(reactivate.firstValue.reason)
         }
 
+        @Test
+        fun `lifecycle routes surface the service's named refusal and pre-check nothing`() {
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            refuseEveryLifecycleUseCase()
+
+            // The controller holds no permission guard: the service's refusal, naming the code,
+            // is the whole answer, and nothing is read back.
+            listOf(
+                "submit" to "branch.create",
+                "activate" to "branch.approve",
+                "suspend" to "branch.suspend",
+                "reactivate" to "branch.reactivate",
+                "close" to "branch.close",
+            ).forEach { (action, code) ->
+                mockMvc
+                    .post("${ApiPaths.BRANCHES}/$branchId/$action") {
+                        header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())
+                        contentType = MediaType.APPLICATION_JSON
+                        content = REASON_BODY
+                        with(authentication(tenantToken(setOf(code), tenantId, branchId)))
+                    }.andExpect {
+                        status { isForbidden() }
+                        jsonPath("$.detail") { value("Missing permission: $code.") }
+                    }
+            }
+            createDraftAs(tenantId).andExpect {
+                status { isForbidden() }
+                jsonPath("$.detail") { value("Missing permission: branch.create.") }
+            }
+            verify(
+                foundationQueryService,
+                org.mockito.kotlin.never(),
+            ).getBranch(any(), any(), any())
+        }
+
+        private fun refuseEveryLifecycleUseCase() {
+            doThrow(MissingPermissionException("branch.create"))
+                .whenever(branchProvisioningService)
+                .submitForApproval(any())
+            doThrow(MissingPermissionException("branch.approve"))
+                .whenever(branchProvisioningService)
+                .activate(any())
+            doThrow(MissingPermissionException("branch.suspend"))
+                .whenever(branchProvisioningService)
+                .suspend(any())
+            doThrow(MissingPermissionException("branch.reactivate"))
+                .whenever(branchProvisioningService)
+                .reactivate(any())
+            doThrow(MissingPermissionException("branch.close"))
+                .whenever(branchProvisioningService)
+                .close(any())
+            doThrow(MissingPermissionException("branch.create"))
+                .whenever(branchProvisioningService)
+                .createDraft(any())
+        }
+
+        private fun createDraftAs(tenantId: UUID) =
+            mockMvc.post(ApiPaths.BRANCHES) {
+                header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())
+                contentType = MediaType.APPLICATION_JSON
+                content =
+                    apiJsonCodec.mapper.writeValueAsString(
+                        CreateBranchRequest(
+                            branchCode = "HQ-01",
+                            branchName = "Headquarters",
+                            branchType = "HEAD_OFFICE",
+                            timezone = "Africa/Nairobi",
+                        ),
+                    )
+                with(authentication(tenantToken(setOf("branch.create"), tenantId)))
+            }
+
         private val optionalReasonRoutes =
             listOf(
                 "submit" to "branch.create",
@@ -1131,9 +1193,8 @@ class BranchControllerTests
                 }
 
             verifyCommand(targetBranchId)
-            // The permission must be evaluated against the target branch, not the selected one.
-            verify(permissionGuard)
-                .requireBranchPermission(any(), eq(tenantId), eq(targetBranchId), eq(permission))
+            // The command names the target branch, not the selected one, and the service checks
+            // the permission there (OrganisationBranchProvisioningServiceTests).
         }
 
         private fun stubBranchDetail(

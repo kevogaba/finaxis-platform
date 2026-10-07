@@ -1,5 +1,6 @@
 package com.finaxis.platform.common.audit
 
+import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.web.api.requireValidPage
@@ -19,6 +20,7 @@ class AuditQueryService(
     private val permissionGuard: AuditPermissionGuard,
 ) {
     /** Gets an individual detailed audit event by id, verifying tenant scope and permissions. */
+    @GatedRead
     fun get(
         eventId: UUID,
         organisationId: UUID,
@@ -32,6 +34,7 @@ class AuditQueryService(
      * Gets one detailed audit event of [organisationId] (a tenant, or the PLATFORM organisation
      * itself) for a platform operator, who must hold `audit.view` in the PLATFORM organisation.
      */
+    @GatedRead
     fun getForPlatform(
         eventId: UUID,
         organisationId: UUID,
@@ -42,6 +45,7 @@ class AuditQueryService(
     }
 
     /** Lists audit events for a tenant, most recent first. */
+    @GatedRead
     fun listByTenant(
         organisationId: UUID,
         actorId: UUID,
@@ -54,6 +58,7 @@ class AuditQueryService(
         )
 
     /** Lists audit events recorded against one entity within a tenant. */
+    @GatedRead
     fun listByEntity(
         organisationId: UUID,
         actorId: UUID,
@@ -75,6 +80,7 @@ class AuditQueryService(
         )
 
     /** Lists audit events recorded by one actor within a tenant. */
+    @GatedRead
     fun listByActor(
         organisationId: UUID,
         actorId: UUID,
@@ -94,6 +100,7 @@ class AuditQueryService(
         )
 
     /** Lists audit events by action and/or occurrence date range within a tenant. */
+    @GatedRead
     fun listByActionAndDateRange(
         organisationId: UUID,
         actorId: UUID,
@@ -117,6 +124,7 @@ class AuditQueryService(
         )
 
     /** Returns a bounded page of audit events matching an arbitrary [filter]. */
+    @GatedRead
     fun search(
         filter: AuditEventFilter,
         actorId: UUID,
@@ -130,6 +138,7 @@ class AuditQueryService(
      * PLATFORM organisation itself) for a platform operator, who must hold `audit.view` in the
      * PLATFORM organisation. Tenant users never reach this path.
      */
+    @GatedRead
     fun searchForPlatform(
         filter: AuditEventFilter,
         actorId: UUID,

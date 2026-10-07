@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.application
 
 import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditService
@@ -251,6 +252,7 @@ class BusinessDateService(
 
     /** Reads the current business date after verifying tenant-scoped view permission. */
     @Transactional(readOnly = true)
+    @GatedRead
     fun get(query: GetBusinessDateQuery): BusinessDateView {
         requirePermission(query.actorId, query.organisationId, BUSINESS_DATE_VIEW_PERMISSION)
         val current = requireCurrent(query.organisationId)
@@ -259,6 +261,7 @@ class BusinessDateService(
 
     /** Lists bounded business-date history after verifying tenant-scoped view permission. */
     @Transactional(readOnly = true)
+    @GatedRead
     fun listHistory(query: ListBusinessDateHistoryQuery): BusinessDateHistoryPage {
         requireValidPage(query.page, query.size)
         requirePermission(query.actorId, query.organisationId, BUSINESS_DATE_VIEW_PERMISSION)

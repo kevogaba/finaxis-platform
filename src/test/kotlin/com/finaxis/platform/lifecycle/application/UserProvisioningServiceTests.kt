@@ -1083,6 +1083,17 @@ class UserProvisioningServiceTests {
     }
 
     @Test
+    fun `a system invitation made on behalf of a user is refused before it writes`() {
+        val context = activeInvitationContext()
+
+        assertFailsWith<IllegalArgumentException> {
+            service.inviteAsSystem(inviteCommand(context).copy(invitedBy = context.actor))
+        }
+
+        assertNothingWritten()
+    }
+
+    @Test
     fun `a system approval cannot act in the platform scope`() {
         val context = activeInvitationContext()
 

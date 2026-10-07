@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.application.query
 
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.requireValidPage
@@ -26,6 +27,7 @@ class IamQueryService(
     private val permissionGuard: PermissionGuard,
 ) {
     /** Searches user summaries, validating caller context and permissions. */
+    @GatedRead
     fun searchUsers(
         organisationId: UUID,
         filter: UserInTenantFilter,
@@ -53,6 +55,7 @@ class IamQueryService(
     }
 
     /** Retrieves user metadata within an organisation, validating caller scope and permission. */
+    @GatedRead
     fun getUserInTenant(
         organisationId: UUID,
         userId: UUID,
@@ -86,6 +89,7 @@ class IamQueryService(
      * organisation. It does not need a platform membership: the platform user lifecycle routes
      * act on any user account, so they read their result back here.
      */
+    @GatedRead
     fun getGlobalUser(
         userId: UUID,
         caller: PlatformCaller,
@@ -98,6 +102,7 @@ class IamQueryService(
     }
 
     /** Retrieves detailed user membership metadata, validating caller context and permissions. */
+    @GatedRead
     fun getMembership(
         organisationId: UUID,
         membershipId: UUID,
@@ -133,6 +138,7 @@ class IamQueryService(
             )
 
     /** Searches membership summaries, validating caller context and permissions. */
+    @GatedRead
     fun searchMemberships(
         organisationId: UUID,
         filter: MembershipFilter,
@@ -166,6 +172,7 @@ class IamQueryService(
      * or no grant at all, is 403. Without an explicit branch the list defaults to the selected
      * branch if the caller may view it, for every tenant caller alike.
      */
+    @GatedRead
     fun searchBranchAssignments(
         organisationId: UUID,
         filter: BranchAssignmentFilter,
@@ -208,6 +215,7 @@ class IamQueryService(
      * tenant-wide holder gets 404 for an unknown id; a branch-scoped holder gets 403 for an unknown
      * id and for an assignment on a branch it holds nothing on, so existence is no oracle.
      */
+    @GatedRead
     fun getBranchAssignment(
         organisationId: UUID,
         id: UUID,
@@ -251,6 +259,7 @@ class IamQueryService(
         permissionGuard.branchVisibility(caller.actorId, organisationId, "branch_assignment.view")
 
     /** Searches roles within an organisation, validating caller context and permissions. */
+    @GatedRead
     fun searchRoles(
         organisationId: UUID,
         filter: RoleFilter,
@@ -279,6 +288,7 @@ class IamQueryService(
     }
 
     /** Retrieves detailed role metadata by id, validating caller context and permissions. */
+    @GatedRead
     fun getRole(
         organisationId: UUID,
         id: UUID,
@@ -314,6 +324,7 @@ class IamQueryService(
      * BRANCH (like every enum-like filter, matched exactly) is an empty page. A `branch_id`
      * outside that set, or no grant at all, is 403.
      */
+    @GatedRead
     fun searchRoleAssignments(
         organisationId: UUID,
         filter: RoleAssignmentFilter,
@@ -349,6 +360,7 @@ class IamQueryService(
      * tenant-wide view. A branch-scoped holder gets 403 for an unknown id and for any row it may
      * not see, a tenant-wide holder gets 404 for an unknown id.
      */
+    @GatedRead
     fun getRoleAssignment(
         organisationId: UUID,
         id: UUID,
@@ -399,6 +411,7 @@ class IamQueryService(
         permissionGuard.branchVisibility(caller.actorId, organisationId, "role_assignment.view")
 
     /** Searches system permissions catalog, validating caller context and permissions. */
+    @GatedRead
     fun searchPermissions(
         organisationId: UUID,
         filter: PermissionFilter,
@@ -427,6 +440,7 @@ class IamQueryService(
     }
 
     /** Retrieves detailed permission metadata, validating caller context and permissions. */
+    @GatedRead
     fun getPermission(
         organisationId: UUID,
         id: UUID,
@@ -456,6 +470,7 @@ class IamQueryService(
     }
 
     /** Lists role permissions in a role, validating caller context and permissions. */
+    @GatedRead
     fun listRolePermissions(
         organisationId: UUID,
         roleId: UUID,
@@ -488,6 +503,7 @@ class IamQueryService(
      * and `role.view`: the read-back of a grant, asking for exactly the row the mutation wrote
      * (never "the first page of the role's grants", which a role with many grants could miss).
      */
+    @GatedRead
     fun getRolePermissionByCode(
         organisationId: UUID,
         roleId: UUID,

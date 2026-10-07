@@ -7,6 +7,7 @@ import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.context.PlatformOrganisation
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionCommand
@@ -62,9 +63,16 @@ class UserProvisioningService(
      * one route that reaches it, `POST /platform/tenants/{id}/bootstrap/retry` through
      * `retryBootstrap` and the bootstrap service, needs `tenant.bootstrap_retry` in the platform
      * organisation and a FAILED bootstrap record, and takes every input from that stored record.
+     * The inviter must be the system actor, so a caller cannot borrow this permission-free entry
+     * point for a user identity, and an architecture rule limits its callers to the bootstrap.
      */
     @Transactional
-    fun inviteAsSystem(command: InviteUserCommand): UserInvitationResult = invite(command)
+    fun inviteAsSystem(command: InviteUserCommand): UserInvitationResult {
+        require(
+            command.invitedBy == SystemActor.ID,
+        ) { "A system invitation is made by the system." }
+        return invite(command)
+    }
 
     private fun invite(command: InviteUserCommand): UserInvitationResult {
         store.validateInvitation(command)
@@ -157,6 +165,10 @@ class UserProvisioningService(
      * the platform actor that approved the tenant. The maker-checker exclusions still apply. No
      * web adapter calls it directly; it is reached only through the bootstrap service, so also
      * from the bootstrap retry route (see [inviteAsSystem]).
+     * Unlike [inviteAsSystem] it cannot pin its actor: the approver is the platform user who
+     * approved the tenant (the stored `approvedBy`), a real identity the maker-checker rules
+     * must see, so its only guard is the architecture rule that limits its callers to the
+     * bootstrap service.
      */
     @Transactional
     fun approveAsSystem(command: ApproveUserCommand): UserApprovalResult {

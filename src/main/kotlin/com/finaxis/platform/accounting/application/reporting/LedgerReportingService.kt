@@ -10,6 +10,7 @@ import com.finaxis.platform.accounting.application.reconciliation.LedgerBalanceQ
 import com.finaxis.platform.accounting.domain.AccountingPermissions
 import com.finaxis.platform.accounting.domain.FiscalPeriodKey
 import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.web.pagination.PaginationProperties
@@ -77,6 +78,7 @@ class LedgerReportingService(
      * is the most direct way to produce a trial balance that cannot balance.
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    @GatedRead
     fun trialBalance(query: TrialBalanceQuery): TrialBalance {
         permissions.requireTenantPermission(
             query.actorId,
@@ -151,6 +153,7 @@ class LedgerReportingService(
      * [AccountLedgerQuery.carriedBalance] on the next page.
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    @GatedRead
     fun accountLedger(query: AccountLedgerQuery): AccountLedgerPage {
         permissions.requireTenantPermission(
             query.actorId,
@@ -213,6 +216,7 @@ class LedgerReportingService(
 
     /** One journal and its lines, by the gapless entry number an accountant quotes. */
     @Transactional(readOnly = true)
+    @GatedRead
     fun journalByEntryNumber(query: JournalLookupQuery): JournalDetail {
         requireJournalView(query.actorId, query.organisationId)
         return ledger.journalByEntryNumber(query.organisationId, query.entryNumber)
@@ -224,6 +228,7 @@ class LedgerReportingService(
 
     /** The same journal by identity, for a drill-down that already holds one. */
     @Transactional(readOnly = true)
+    @GatedRead
     fun journalById(
         organisationId: UUID,
         journalEntryId: UUID,
@@ -245,6 +250,7 @@ class LedgerReportingService(
      * deepest-first, which is what [ChartReportingQueries.hierarchy] returns the depth for.
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    @GatedRead
     fun rollup(query: AccountRollupQuery): List<AccountRollupNode> {
         permissions.requireTenantPermission(
             query.actorId,

@@ -1,6 +1,8 @@
 package com.finaxis.platform.lifecycle
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.lifecycle.application.CreateOrUpdateTenantSettingCommand
 import com.finaxis.platform.lifecycle.application.GetTenantSettingQuery
 import com.finaxis.platform.lifecycle.application.ListTenantSettingsQuery
@@ -14,6 +16,7 @@ import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestConstructor
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 
@@ -72,7 +75,29 @@ class TenantSettingQueryIntegrationTests(
         assertEquals("false", makerChecker.value)
     }
 
+    @Test
+    fun `an unknown setting key is forbidden without the permission and invalid with it`() {
+        val organisationId = fixture.createActiveOrganisation("setting-unknown-key", LOCAL_USER_ID)
+
+        // Same refusal for every key, known or not, so the 403 reveals nothing about the key.
+        assertFailsWith<ForbiddenOperationException> {
+            withRequestContext {
+                tenantSettingsService.get(
+                    GetTenantSettingQuery(organisationId, "no_such_key", STRANGER_ID),
+                )
+            }
+        }
+        assertFailsWith<InvalidOperationException> {
+            withRequestContext {
+                tenantSettingsService.get(
+                    GetTenantSettingQuery(organisationId, "no_such_key", LOCAL_USER_ID),
+                )
+            }
+        }
+    }
+
     private companion object {
         val LOCAL_USER_ID: UUID = UUID.fromString("11111111-1111-1111-1111-111111111111")
+        val STRANGER_ID: UUID = UUID.fromString("99999999-9999-9999-9999-999999999999")
     }
 }

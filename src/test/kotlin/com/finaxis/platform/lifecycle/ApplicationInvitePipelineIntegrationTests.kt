@@ -178,7 +178,7 @@ class ApplicationInvitePipelineIntegrationTests(
                         listOf(BranchAssignmentRequest(branchId, BranchAssignmentType.HOME)),
                     roleAssignments =
                         listOf(RoleAssignmentRequest(roleId, RoleAssignmentScopeType.TENANT)),
-                    invitedBy = ACTOR_ID,
+                    invitedBy = SystemActor.ID,
                     sendKeycloakInvite = false,
                     sendApplicationInvite = true,
                 ),
@@ -189,7 +189,7 @@ class ApplicationInvitePipelineIntegrationTests(
         }
 
         userProvisioningService.approveAsSystem(
-            ApproveUserCommand(organisationId, invitation.membershipId, SystemActor.ID),
+            ApproveUserCommand(organisationId, invitation.membershipId, CHECKER_ID),
         )
 
         return TriggeredInvite(

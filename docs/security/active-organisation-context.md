@@ -95,16 +95,18 @@ The selected branch **narrows operational authority; it does not scope tenant ad
   `@PreAuthorize` is only a coarse gate on the selected-branch authority set. The application
   layer then decides, per target: branch lifecycle transitions and BRANCH-scope role assignment
   check the permission against the **target** branch (`PermissionGuard.requireBranchPermission`:
-  tenant-scope grants plus branch-scope grants on that branch); branch assignment follows the same
-  rule (`user.assign_branch` and `branch_assignment.view` at the target branch). Branch-assignment
-  revocation names only an assignment id, so the service resolves where the caller may revoke
-  (`PermissionGuard.mutationBranchVisibility`: `user.revoke_branch` and its view, tenant-wide or per
-  branch) before it reads the row, and an unknown id and a row on a branch the caller may not act on
-  are refused alike (ADR 0030, decision 6). **Behaviour change (6c):** a branch-scoped holder of
-  `user.assign_branch` or `user.revoke_branch` previously needed the tenant-scope code and was
-  refused at its own branch; it now assigns and revokes at its own branch. A caller whose only grant
-  is a BRANCH-scope role on branch A therefore passes the coarse gate while pinned to A, but is
-  denied with `403` when targeting branch B (covered by `BranchPinningIntegrationTests`).
+  tenant-scope grants plus branch-scope grants on that branch), in the service and only there
+  (`BranchController` carries the coarse gate and the gated read-back, not a second check); branch
+  assignment follows the same rule (`user.assign_branch` and `branch_assignment.view` at the
+  target branch). Branch-assignment revocation names only an assignment id, so the service
+  resolves where the caller may revoke (`PermissionGuard.mutationBranchVisibility`:
+  `user.revoke_branch` and its view, tenant-wide or per branch) before it reads the row, and an
+  unknown id and a row on a branch the caller may not act on are refused alike (ADR 0030, decision
+  6). **Behaviour change (6c):** a branch-scoped holder of `user.assign_branch` or
+  `user.revoke_branch` previously needed the tenant-scope code and was refused at its own branch;
+  it now assigns and revokes at its own branch. A caller whose only grant is a BRANCH-scope role
+  on branch A therefore passes the coarse gate while pinned to A, but is denied with `403` when
+  targeting branch B (covered by `BranchPinningIntegrationTests`).
 - *Branch-resource reads are target-aware and ungated at the endpoint (ADR 0030, decision 5).*
   `GET /branches`, `GET /branches/{id}`, the `/tenant/branch-assignments` reads and the
   `/tenant/role-assignments` reads (rows with `scope_type = BRANCH`; `TENANT`-scope rows need the

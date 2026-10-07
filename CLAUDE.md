@@ -211,8 +211,9 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   required code is a `VIEW`, and an `ACTIVE` mutation requires only `ACTIVE` views. A kind cannot
   be a cross-table `CHECK` and no trigger is allowed (ADR 0024), so the migration and that test
   are the enforcement. **No data backfill**: no `role_permission` or `membership_permission` row
-  is touched, nothing about who can do what changes, and the rule itself (role composition,
-  `missing_view_permissions`, then the named 403) lands in later changes that read these rows. The
+  is touched, nothing about who can do what changes; the rule itself (role composition,
+  `missing_view_permissions`, then the named 403) is enforced by the changes that read these rows,
+  see "Authorization" and ADR 0030. The
   catalogue API (`GET /api/v1/tenant/permissions`) publishes `kind`, `grant_scope` and
   `required_view_permissions`. Re-runnable, with pre- and post-condition asserts in-file; it
   raises, naming the codes, if the catalogue holds a permission it cannot classify — see
@@ -315,6 +316,33 @@ outside those documents.
   `@PreAuthorize`. A test fixture that grants one mutation code
   adds its views through `ViewCoupledGrants`/the fixture's `...WithViews` methods; use the
   `...Exactly` variants to prove a refusal.
+- **Reads go through a gated query, and the build checks it** (ADR 0030 decision 6,
+  `PermissionFreeReadRuleTests`, rules in `ReadGateRules`). A web adapter calls a query service (a
+  `..application.query..` or `..application.reporting..` `*Service`, or `*QueryService`) only
+  through a method marked `@GatedRead` (`common.application`), and every GET handler
+  (`@GetMapping` or a GET `@RequestMapping`) calls any application-package service or bean only
+  through a marked method or an entry of `ReadGateRules.UNMARKED_GET_ALLOWLIST` (by fully
+  qualified name; each says where that read authorises; a new entry needs a reason). A web adapter
+  depends on a platform type outside the web layer only if it is a `*Service` that depends on a
+  `*PermissionGuard` or declares a `@GatedRead` method, or neither a Spring bean (a stereotype, or
+  the return type of a `@Bean` method) nor an interface (a command, result, DTO, enum or
+  annotation), or is on the commented `ReadGateRules.WEB_DEPENDENCY_ALLOWLIST` (`ApiJsonCodec`,
+  `IdempotencyReplayHandler`, `IdempotencyReplayResponse` and the `/auth` services
+  `ActiveOrganisationContextService`, `AuthSelectionService`, `UserProfileService`): a store,
+  reader class, `@Component`, resolver or port of any name, in a domain package too, is refused. A
+  limit of that rule: a bean registered some other way (`registerBean`, a factory bean) is not
+  seen. A marked method asks a `*PermissionGuard` (or a marked delegate) before its first store
+  call, every implementation of a marked method carries the marker (erased parameter types are
+  compared), and a marked lifecycle or IAM query method takes the caller. It is structural, not
+  path-complete; the reads a non-GET handler makes outside a query service are covered by the
+  mutation service's own check and the named-403 tests, not by this rule. No
+  `get...AfterAuthorizedMutation` helper exists or may be added; web adapters never name
+  `SystemActor`, build or copy no caller outside `CallerContextResolver`, and never start
+  `InitialAdministratorBootstrapService`; only that service may call or reference
+  `UserProvisioningService.inviteAsSystem`/`approveAsSystem` (`inviteAsSystem` also requires
+  `SystemActor.ID`). A new read needs the marker and its own authorisation. Do not add a
+  controller-side check that repeats the service's (`RoleController`, `RoleAssignmentController`
+  and `PermissionController` still do: an open item of ADR 0030).
 - Maker-checker: a platform-context actor holding the permission in the platform organisation may
   be the audited checker of a pending membership only while the tenant has no ACTIVE member beyond
   its bootstrap administrator, and of a pending branch only while it has no ACTIVE branch beyond
@@ -388,8 +416,10 @@ outside those documents.
 - Keep adapters thin and module-owned; inbound web adapters validate and delegate to application
   services instead of bypassing domain/application boundaries.
 - Every endpoint must have an explicit application-layer permission check. The intentional
-  exceptions are auth organisation/branch selection, checked inside `AuthSelectionService`, and
-  tenant settings, checked per setting key inside `TenantSettingsService.authorize()`.
+  exceptions are auth organisation/branch selection, checked inside `AuthSelectionService`, tenant
+  settings, checked per setting key inside `TenantSettingsService.authorize()`, and `GET
+  /api/v1/auth/me`, gated only by `@PreAuthorize("hasAuthority('iam.profile.read')")` and served
+  from the authenticated principal (`UserProfileService` makes no check of its own).
 - Every collection endpoint is paginated, and every query must stay bounded and tenant-filtered.
 - Every mutation is idempotent with optional/generated UUID `Idempotency-Key` handling.
 - Tenant and branch context must be enforced before returning or mutating tenant data.

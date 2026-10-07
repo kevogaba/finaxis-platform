@@ -26,7 +26,9 @@ sentence "Each route works with its one permission alone" and the permission-fre
 justifies (under "Routes and permissions") no longer hold: each route needs its permission **and
 that permission's view** in the platform organisation, and reads its result back through the gated
 query. The platform checker roles must hold the view codes too. Everything else in this ADR
-stands. The change takes effect as the ADR 0030 pull requests land.
+stands. The change is in effect: the ADR 0030 rollout is implemented (steps 1 to 7), so the
+platform checker routes check the permission and its view in the service and read back through the
+gated query.
 
 ## Context
 

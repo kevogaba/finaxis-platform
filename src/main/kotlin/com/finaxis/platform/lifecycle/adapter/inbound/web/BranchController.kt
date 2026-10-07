@@ -8,7 +8,6 @@ import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
-import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ActivateBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BranchDetailResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BranchDraftResultResponse
@@ -75,7 +74,6 @@ class BranchController(
     private val branchProvisioningService: BranchProvisioningService,
     private val foundationQueryService: FoundationQueryService,
     private val apiJsonCodec: ApiJsonCodec,
-    private val permissionGuard: PermissionGuard,
 ) {
     /**
      * Searches branches in the active tenant organisation.
@@ -234,12 +232,6 @@ class BranchController(
         @RequestBody @Valid request: CreateBranchRequest,
     ): ResponseEntity<BranchDraftResultResponse> {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            "branch.create",
-        )
-
         val command =
             CreateBranchCommand(
                 organisationId = caller.activeOrganisationId,
@@ -522,13 +514,6 @@ class BranchController(
         @RequestBody(required = false) @Valid request: SubmitBranchRequest?,
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireBranchPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            branchId,
-            "branch.create",
-        )
-
         val command =
             SubmitBranchForApprovalCommand(
                 organisationId = caller.activeOrganisationId,
@@ -627,13 +612,6 @@ class BranchController(
         @RequestBody(required = false) @Valid request: ActivateBranchRequest?,
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireBranchPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            branchId,
-            "branch.approve",
-        )
-
         val command =
             ActivateBranchCommand(
                 organisationId = caller.activeOrganisationId,
@@ -835,13 +813,6 @@ class BranchController(
         @RequestBody @Valid request: SuspendBranchRequest,
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireBranchPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            branchId,
-            "branch.suspend",
-        )
-
         val command =
             SuspendBranchCommand(
                 organisationId = caller.activeOrganisationId,
@@ -939,13 +910,6 @@ class BranchController(
         @RequestBody(required = false) @Valid request: ReactivateBranchRequest?,
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireBranchPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            branchId,
-            "branch.reactivate",
-        )
-
         val command =
             ReactivateBranchCommand(
                 organisationId = caller.activeOrganisationId,
@@ -1043,13 +1007,6 @@ class BranchController(
         @RequestBody @Valid request: CloseBranchRequest,
     ): BranchDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireBranchPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            branchId,
-            "branch.close",
-        )
-
         val command =
             CloseBranchCommand(
                 organisationId = caller.activeOrganisationId,

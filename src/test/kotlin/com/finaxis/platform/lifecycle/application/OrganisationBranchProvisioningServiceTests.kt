@@ -1748,6 +1748,86 @@ class BranchTargetResolutionTests {
     }
 
     @Test
+    fun `tenant branch lifecycle use cases authorise first at the target branch`() {
+        val organisationId = uuidV7()
+        val branchId = uuidV7()
+        val actorId = uuidV7()
+        // No branch is seeded: an unknown branch would answer 404 if anything but the permission
+        // check ran first, so a named 403 proves the check is the first thing the service does.
+        val uses =
+            listOf<Pair<String, () -> Unit>>(
+                "branch.create" to {
+                    branches.submitForApproval(
+                        SubmitBranchForApprovalCommand(
+                            organisationId,
+                            branchId,
+                            null,
+                            actorId,
+                            uuidV7(),
+                        ),
+                    )
+                },
+                "branch.approve" to {
+                    branches.activate(
+                        ActivateBranchCommand(organisationId, branchId, null, actorId, uuidV7()),
+                    )
+                },
+                "branch.suspend" to {
+                    branches.suspend(
+                        SuspendBranchCommand(organisationId, branchId, req("reason"), actorId),
+                    )
+                },
+                "branch.reactivate" to {
+                    branches.reactivate(
+                        ReactivateBranchCommand(organisationId, branchId, null, actorId),
+                    )
+                },
+                "branch.close" to {
+                    branches.close(
+                        CloseBranchCommand(organisationId, branchId, req("reason"), actorId),
+                    )
+                },
+            )
+
+        uses.forEach { (code, use) ->
+            doThrow(MissingPermissionException(code))
+                .whenever(permissionGuard)
+                .requireBranchPermission(actorId, organisationId, branchId, code)
+
+            val refusal = assertFailsWith<MissingPermissionException> { use() }
+
+            assertEquals(code, refusal.permissionCode)
+        }
+        assertTrue(audits.events.isEmpty())
+        assertTrue(lifecyclePersistence.branches.isEmpty())
+    }
+
+    @Test
+    fun `tenant branch creation authorises tenant wide first and writes no draft`() {
+        val organisationId = uuidV7()
+        val actorId = uuidV7()
+        doThrow(MissingPermissionException("branch.create"))
+            .whenever(permissionGuard)
+            .requireTenantPermission(actorId, organisationId, "branch.create")
+        val draftRefusal =
+            assertFailsWith<MissingPermissionException> {
+                branches.createDraft(
+                    CreateBranchCommand(
+                        organisationId = organisationId,
+                        branchCode = "HQ-01",
+                        branchName = "Headquarters",
+                        branchType = "HEAD_OFFICE",
+                        timezone = "Africa/Nairobi",
+                        requestedBy = actorId,
+                    ),
+                )
+            }
+        assertEquals("branch.create", draftRefusal.permissionCode)
+        assertTrue(audits.events.isEmpty())
+        assertTrue(lifecyclePersistence.branches.isEmpty())
+    }
+
+    @Test
     fun `branch operations ask the permission guard about the target branch`() {
         val organisationId = uuidV7()
         val branchId = uuidV7()

@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.application
 
 import com.finaxis.platform.accounting.AccountingLedgerActivity
 import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.audit.Redacted
 import com.finaxis.platform.common.context.PlatformOrganisation
@@ -99,15 +100,15 @@ class TenantSettingsService(
      * Reads one tenant setting, redacting sensitive values. When the key is in the catalog its
      * declared metadata drives the view; otherwise the metadata falls back to the stored row so a
      * setting persisted before a catalog change (or under a legacy key) is still readable. An
-     * unknown key with no stored row is rejected via [TenantSettingCatalog.require].
+     * unknown key with no stored row is rejected via [TenantSettingCatalog.require], after
+     * the permission check.
      */
+    @GatedRead
     @Transactional(readOnly = true)
     fun get(query: GetTenantSettingQuery): TenantSettingView {
+        // Authorise per key before the stored row is read, so a caller without the permission
+        // learns nothing about whether a key exists (403, never 400 or 404 first).
         val definition = TenantSettingCatalog.definition(query.key)
-        val stored = settingsStore.currentSetting(query.organisationId, query.key)
-        if (definition == null && stored == null) {
-            TenantSettingCatalog.require(query.key)
-        }
         if (definition != null) {
             authorize(definition, query.organisationId, query.actorId, isMutation = false)
         } else {
@@ -117,6 +118,10 @@ class TenantSettingsService(
                 SETTING_READ_PERMISSION,
             )
         }
+        val stored = settingsStore.currentSetting(query.organisationId, query.key)
+        if (definition == null && stored == null) {
+            TenantSettingCatalog.require(query.key)
+        }
         return view(query.key, definition, stored, rawValue = stored?.value)
     }
 
@@ -125,6 +130,7 @@ class TenantSettingsService(
      * redacting sensitive values. Catalog metadata is preferred; stored-only keys fall back to
      * their own persisted [StoredSetting] metadata.
      */
+    @GatedRead
     @Transactional(readOnly = true)
     fun list(query: ListTenantSettingsQuery): TenantSettingPage {
         permissionGuard.requirePermission(
