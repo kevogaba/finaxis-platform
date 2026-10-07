@@ -39,7 +39,7 @@ jobs:
           java-version-file: '.sdkmanrc'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6.3.0
+        uses: gradle/actions/setup-gradle@v6.4.0
 
       - name: Build the JVM image
         env:
@@ -137,7 +137,7 @@ jobs:
           java-version-file: '.sdkmanrc'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6.3.0
+        uses: gradle/actions/setup-gradle@v6.4.0
 
       - name: Reclaim runner disk
         # The native build pulls the Paketo builder, downloads the Liberica NIK toolchain inside
