@@ -234,6 +234,35 @@ Framework-level errors include `authentication_required`, `access_denied`,
 `invalid_active_tenant_context`, `rate_limit_exceeded`, `rate_limit_policy_unavailable`, and
 `rate_limiter_unavailable`. Bean Validation failures return 400 with up to 100 violations.
 
+`code` is always a stable machine value and never a sentence; the human text is in `detail`.
+Two `403` codes name a route that was called from the wrong organisation context:
+
+- `platform_context_required` (403): a platform route (`/api/v1/platform/**`) was called with no
+  context or with a tenant context. Idempotent platform mutations answer it too: the idempotency
+  scope check runs before the controller and refuses with the same code and detail.
+- `tenant_context_required` (403): a tenant route (roles, permissions, users, memberships,
+  branches, settings, audit, business date, ...) was called with no active tenant context, or with
+  the reserved platform organisation as context (`detail`: `This route is restricted to
+  non-platform tenant context.`; it used to say `Branch operations ...` on every such route).
+
+Both codes are returned only where the request reaches the context check: the idempotency scope
+check or the controller. Method security runs first, so a request that lacks the route's
+`@PreAuthorize` authority is refused before either, with the generic `forbidden` (detail `You are
+not permitted to perform this action.`). A request with no active-organisation context carries no
+permission authority, so on a gated tenant mutation (`POST /api/v1/branches`, for example) it gets
+`forbidden`, not `tenant_context_required`; the ungated tenant mutations (`POST
+/api/v1/auth/select-branch`, `PUT` and `DELETE /api/v1/tenant/settings/{key}`) and a platform
+context that holds the route's code do reach the check and get the context code.
+
+Before this change both put the sentence in `code` (for example `Active tenant context is
+required for this route.`); clients that matched on it must match the codes above. Statuses and
+the `forbidden` code with its `Missing permission: <code>.` detail are unchanged.
+
+A bearer token the resource server rejects (malformed, expired, bad signature) answers `401` with
+the same `application/problem+json` body (`code` `authentication_required`) and `X-Request-Id`
+header as a missing token, plus the RFC 6750 `WWW-Authenticate: Bearer ...` challenge. It used to
+carry only the challenge, with an empty body and no request id.
+
 ### Idempotency
 
 Every mutation endpoint, meaning every `POST`, `PUT`, `PATCH`, and `DELETE`, accepts an optional

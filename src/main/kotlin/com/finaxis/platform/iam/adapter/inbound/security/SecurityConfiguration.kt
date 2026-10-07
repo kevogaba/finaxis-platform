@@ -32,6 +32,7 @@ import org.springframework.security.config.http.SessionCreationPolicy
 import org.springframework.security.core.AuthenticationException
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken
+import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter
 import org.springframework.security.web.AuthenticationEntryPoint
 import org.springframework.security.web.SecurityFilterChain
@@ -110,8 +111,13 @@ class SecurityConfiguration(
                     .permitAll()
                     .anyRequest()
                     .authenticated()
-            }.oauth2ResourceServer { resourceServer -> resourceServer.jwt { } }
-            .exceptionHandling { exceptions ->
+            }.oauth2ResourceServer { resourceServer ->
+                // The bearer filter calls this entry point itself when a presented JWT is invalid
+                // or expired, bypassing exceptionHandling's one below, so it needs its own.
+                resourceServer
+                    .authenticationEntryPoint(ApiBearerTokenEntryPoint(problemWriter))
+                    .jwt { }
+            }.exceptionHandling { exceptions ->
                 exceptions
                     .authenticationEntryPoint(ApiAuthenticationEntryPoint(problemWriter))
                     .accessDeniedHandler(ApiAccessDeniedHandler(problemWriter))
@@ -182,6 +188,39 @@ class ApiAuthenticationEntryPoint(
             "authentication_required",
             "Authentication is required.",
         )
+    }
+}
+
+/**
+ * Writes a rejected bearer token (malformed, expired, bad signature) as the public problem
+ * contract. Keeps Spring's RFC 6750 `WWW-Authenticate` challenge, then adds the same
+ * `application/problem+json` body and `X-Request-Id` as every other `401`.
+ */
+class ApiBearerTokenEntryPoint(
+    private val problemWriter: ApiProblemWriter,
+) : AuthenticationEntryPoint {
+    private val challenge = BearerTokenAuthenticationEntryPoint()
+
+    override fun commence(
+        request: HttpServletRequest,
+        response: HttpServletResponse,
+        authException: AuthenticationException,
+    ) {
+        challenge.commence(request, response, authException)
+        // The challenge chose its own status (401 for an invalid token, 400 for an
+        // `invalid_request` such as a token sent in a disabled place); the body follows it.
+        val status = HttpStatus.resolve(response.status) ?: HttpStatus.UNAUTHORIZED
+        if (status == HttpStatus.UNAUTHORIZED) {
+            problemWriter.write(
+                request,
+                response,
+                status,
+                "authentication_required",
+                "Authentication is required.",
+            )
+        } else {
+            problemWriter.write(request, response, status, "invalid_request", "Malformed request.")
+        }
     }
 }
 

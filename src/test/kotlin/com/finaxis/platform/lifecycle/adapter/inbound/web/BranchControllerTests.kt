@@ -188,12 +188,9 @@ class BranchControllerTests
                         with(authentication(platformToken(setOf("branch.create"))))
                     }.andExpect {
                         status { isForbidden() }
-                        jsonPath(
-                            "$.code",
-                        ) {
-                            value(
-                                "Branch operations are restricted to non-platform tenant context.",
-                            )
+                        jsonPath("$.code") { value("tenant_context_required") }
+                        jsonPath("$.detail") {
+                            value("This route is restricted to non-platform tenant context.")
                         }
                     }
             }

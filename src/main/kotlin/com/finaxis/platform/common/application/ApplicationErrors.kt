@@ -36,6 +36,40 @@ class MissingPermissionException(
     val permissionCode: String,
 ) : ForbiddenOperationException(safeDetail = "Missing permission: $permissionCode.")
 
+/**
+ * The `403` refusals of a route called from the wrong organisation context. The [code] is the
+ * stable machine value and the sentence is the `detail`, so the idempotency scope check and the
+ * controller-level caller resolution answer identically.
+ */
+object WrongContext {
+    /** Stable code of a route that needs the reserved platform organisation context. */
+    const val PLATFORM_CONTEXT_REQUIRED = "platform_context_required"
+
+    /** Stable code of a route that needs an active non-platform tenant context. */
+    const val TENANT_CONTEXT_REQUIRED = "tenant_context_required"
+
+    /** A platform route was called with no context or with a tenant context. */
+    fun platformRequired() =
+        ForbiddenOperationException(
+            code = PLATFORM_CONTEXT_REQUIRED,
+            safeDetail = "Reserved platform organisation context is required for this route.",
+        )
+
+    /** A tenant route was called with no active tenant context. */
+    fun tenantRequired() =
+        ForbiddenOperationException(
+            code = TENANT_CONTEXT_REQUIRED,
+            safeDetail = "Active tenant context is required for this route.",
+        )
+
+    /** A tenant route was called with the reserved platform organisation as context. */
+    fun tenantNotPlatform() =
+        ForbiddenOperationException(
+            code = TENANT_CONTEXT_REQUIRED,
+            safeDetail = "This route is restricted to non-platform tenant context.",
+        )
+}
+
 /** Raised when syntactically valid input is rejected by an application rule. */
 class InvalidOperationException(
     code: String = "invalid_operation",

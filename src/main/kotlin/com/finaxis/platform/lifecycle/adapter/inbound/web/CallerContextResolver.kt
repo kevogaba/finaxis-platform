@@ -1,6 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
-import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.WrongContext
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.lifecycle.PlatformCaller
@@ -58,13 +58,9 @@ internal object CallerContextResolver {
     fun getPlatformCaller(): PlatformCaller {
         val context =
             resolveCallerContext()
-                ?: throw ForbiddenOperationException(
-                    "Reserved platform organisation context is required for this route.",
-                )
+                ?: throw WrongContext.platformRequired()
         if (context.organisationId != PlatformOrganisation.ID) {
-            throw ForbiddenOperationException(
-                "Reserved platform organisation context is required for this route.",
-            )
+            throw WrongContext.platformRequired()
         }
         return PlatformCaller(
             actorId = context.userId,
@@ -78,13 +74,9 @@ internal object CallerContextResolver {
     fun getTenantCaller(): TenantCaller {
         val context =
             resolveCallerContext()
-                ?: throw ForbiddenOperationException(
-                    "Active tenant context is required for this route.",
-                )
+                ?: throw WrongContext.tenantRequired()
         if (context.organisationId == PlatformOrganisation.ID) {
-            throw ForbiddenOperationException(
-                "Branch operations are restricted to non-platform tenant context.",
-            )
+            throw WrongContext.tenantNotPlatform()
         }
         return TenantCaller(
             actorId = context.userId,

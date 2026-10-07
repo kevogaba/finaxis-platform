@@ -33,11 +33,17 @@ class MutationScopeResolverTests {
         val tenantId = UUID.randomUUID()
         val request = request("/api/v1/platform/tenants", tenantId)
 
-        assertFailsWith<ForbiddenOperationException> {
-            RequestContexts.with(RequestContext(tenant = TenantContext(tenantId))) {
-                resolver.resolve(request, IdempotencyScopeKind.PLATFORM)
+        val refusal =
+            assertFailsWith<ForbiddenOperationException> {
+                RequestContexts.with(RequestContext(tenant = TenantContext(tenantId))) {
+                    resolver.resolve(request, IdempotencyScopeKind.PLATFORM)
+                }
             }
-        }
+        assertEquals("platform_context_required", refusal.code)
+        assertEquals(
+            "Reserved platform organisation context is required for this route.",
+            refusal.safeDetail,
+        )
         val scope =
             RequestContexts.with(
                 RequestContext(tenant = TenantContext(PlatformOrganisation.ID)),
@@ -45,6 +51,19 @@ class MutationScopeResolverTests {
                 resolver.resolve(request, IdempotencyScopeKind.PLATFORM)
             }
         assertEquals(PlatformOrganisation.ID, scope.organisationId)
+    }
+
+    @Test
+    fun `tenant scope without any context is refused with the tenant context code`() {
+        val request = request("/api/v1/branches", UUID.randomUUID())
+
+        val refusal =
+            assertFailsWith<ForbiddenOperationException> {
+                resolver.resolve(request, IdempotencyScopeKind.TENANT)
+            }
+
+        assertEquals("tenant_context_required", refusal.code)
+        assertEquals("Active tenant context is required for this route.", refusal.safeDetail)
     }
 
     @Test
