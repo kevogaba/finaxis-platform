@@ -67,6 +67,52 @@ class UserProfileServiceTests {
     }
 
     @Test
+    fun `profile lists each branch and role once and only the active ones`() {
+        val organisationId = uuidV7()
+        val membershipId = uuidV7()
+        val hq = ProfileBranch(uuidV7(), "HQ", "Head Office", "ACTIVE")
+        val suspended = ProfileBranch(uuidV7(), "OLD", "Old Branch", "SUSPENDED")
+        val closed = ProfileBranch(uuidV7(), "GONE", "Closed Branch", "CLOSED")
+        val admin = ProfileRole(uuidV7(), "admin", "Administrator", RoleStatus.ACTIVE)
+        val disabled = ProfileRole(uuidV7(), "old", "Old Role", RoleStatus.DISABLED)
+        val principal =
+            principal(
+                organisationId = organisationId,
+                membershipId = membershipId,
+                branchId = hq.id,
+            )
+        val lookup =
+            FakeUserProfileLookup(
+                organisation = ProfileOrganisation(organisationId),
+                membership = ProfileMembership(membershipId),
+                branches = listOf(hq, suspended, hq, closed),
+                roles = listOf(admin, disabled, admin),
+            )
+
+        val profile = UserProfileService(lookup).profile(principal)
+
+        assertEquals(listOf(hq), profile.branches)
+        assertEquals(hq, profile.selectedBranch)
+        assertEquals(listOf(admin), profile.roles)
+    }
+
+    @Test
+    fun `profile service itself also refuses a pinned branch that is not active`() {
+        val suspended = ProfileBranch(uuidV7(), "OLD", "Old Branch", "SUSPENDED")
+        val principal = principal(branchId = suspended.id)
+        val lookup =
+            FakeUserProfileLookup(
+                organisation = ProfileOrganisation(principal.organisationId),
+                membership = ProfileMembership(principal.membershipId),
+                branches = listOf(suspended),
+            )
+
+        assertThrows<AccessDeniedException> {
+            UserProfileService(lookup).profile(principal)
+        }
+    }
+
+    @Test
     fun `profile rejects missing selected organisation`() {
         val principal = principal()
         val lookup = FakeUserProfileLookup(membership = ProfileMembership(principal.membershipId))

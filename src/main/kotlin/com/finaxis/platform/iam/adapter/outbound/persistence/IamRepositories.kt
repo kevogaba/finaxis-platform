@@ -28,6 +28,7 @@ import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
 import org.jooq.Condition
 import org.jooq.DSLContext
+import org.jooq.impl.DSL.countDistinct
 import org.jooq.impl.DSL.exists
 import org.jooq.impl.DSL.notExists
 import org.springframework.stereotype.Component
@@ -60,12 +61,18 @@ class JooqMembershipSelectionLookup(
                 .join(BRANCH)
                 .on(BRANCH.ORGANISATION_ID.eq(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID))
                 .and(BRANCH.ID.eq(USER_BRANCH_ASSIGNMENT.BRANCH_ID))
-        val total = dsl.fetchCount(joinedTables, condition).toLong()
+        // A branch held through two assignment rows (HOME and OPERATE, say) is one choice.
+        val total =
+            dsl
+                .select(countDistinct(BRANCH.ID))
+                .from(joinedTables)
+                .where(condition)
+                .fetchOne(0, Long::class.java) ?: 0L
         val offset = page.toLong() * size.toLong()
         if (offset >= total) return BranchSelectionPage(emptyList(), total)
         val items =
             dsl
-                .select(BRANCH.ID, BRANCH.BRANCH_CODE, BRANCH.BRANCH_NAME, BRANCH.STATUS)
+                .selectDistinct(BRANCH.ID, BRANCH.BRANCH_CODE, BRANCH.BRANCH_NAME, BRANCH.STATUS)
                 .from(joinedTables)
                 .where(condition)
                 .orderBy(BRANCH.BRANCH_CODE.asc(), BRANCH.ID.asc())
@@ -247,7 +254,7 @@ class JooqMembershipSelectionLookup(
 
     override fun findAssignedBranchIds(membershipId: UUID): List<UUID> =
         dsl
-            .select(USER_BRANCH_ASSIGNMENT.BRANCH_ID)
+            .selectDistinct(USER_BRANCH_ASSIGNMENT.BRANCH_ID)
             .from(USER_BRANCH_ASSIGNMENT)
             .join(USER_ORGANISATION_MEMBERSHIP)
             .on(

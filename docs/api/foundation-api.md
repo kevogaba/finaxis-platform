@@ -377,7 +377,9 @@ X-Active-Organisation-Context: <context-token>
 ```
 
 This endpoint requires the active organisation context and `auth.select_branch` permission. Its
-paginated items contain `branch_id`, `branch_code`, `branch_name`, and `branch_status`.
+paginated items contain `branch_id`, `branch_code`, `branch_name`, and `branch_status`. Each
+branch is listed (and counted in `page.total_items`) once, however many ACTIVE assignment rows
+(`HOME`, `OPERATE`, ...) the user holds on it, and only while the branch itself is `ACTIVE`.
 
 Selection request and response:
 
@@ -400,6 +402,12 @@ Selection request and response:
   ]
 }
 ```
+
+`assigned_branch_ids` holds each ACTIVE assigned branch once. A user with exactly one distinct
+ACTIVE branch is auto-selected (`branch_id` set, `requires_branch_selection` false) even when
+that branch is held through several assignment rows, and a suspended or closed branch is not a
+choice: with one ACTIVE and one SUSPENDED branch the ACTIVE one is auto-selected. With two or
+more distinct ACTIVE branches `branch_id` is `null` and `requires_branch_selection` is true.
 
 `POST /select-branch` takes an optional `branch_id`. A UUID selects that assigned branch. Omitting
 it (`{}`) or sending `null` clears the selection (a blank or malformed `branch_id` is a `400`, it
@@ -464,6 +472,13 @@ Profile response example:
   ]
 }
 ```
+
+`branches` and `roles` list each entry once and only while it is current: a branch appears only
+while it is `ACTIVE` (a `SUSPENDED` or `CLOSED` branch is omitted, as it is from the selection
+lists), and a role only while it is `ACTIVE` (a `DISABLED` or `ARCHIVED` role is omitted), however
+many assignment rows (several branch assignment types, or the same role at tenant and branch
+scope) connect them to the membership. `permissions` is unchanged: it is the effective set
+the runtime authorises with, which already counts only ACTIVE roles and permissions.
 
 ### Branches
 
