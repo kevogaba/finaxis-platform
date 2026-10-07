@@ -400,7 +400,7 @@ class TenantApprovalReturnRaceIntegrationTests(
     private inline fun <reified T : Throwable> assertIs(value: Throwable?): T {
         assertNotNull(value, "the decision succeeded; it should have been refused")
         assertTrue(value is T, "expected ${T::class.simpleName} but was $value")
-        return value as T
+        return value
     }
 
     private companion object {

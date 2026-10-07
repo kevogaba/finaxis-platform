@@ -22,7 +22,6 @@ import org.springframework.aop.support.AopUtils
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.dao.CannotAcquireLockException
-import org.springframework.dao.CannotSerializeTransactionException
 import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.test.context.TestConstructor
 import org.springframework.transaction.PlatformTransactionManager
@@ -543,9 +542,10 @@ class FiscalPeriodConcurrencyIntegrationTests(
                 "${observed.get()?.let { it::class.qualifiedName }}",
         )
         assertTrue(
-            observed.get() !is CannotSerializeTransactionException,
-            "a lock timeout is not a serialization failure; translating it as one would make the " +
-                "retry boundary re-run a close that has no chance of succeeding sooner",
+            observed.get()?.javaClass == CannotAcquireLockException::class.java,
+            "a lock timeout is exactly a CannotAcquireLockException, not a sibling pessimistic " +
+                "failure such as Spring's serialization-failure translation; the latter would " +
+                "make the retry boundary re-run a close that has no chance of succeeding sooner",
         )
         assertEquals(
             LOCK_NOT_AVAILABLE,

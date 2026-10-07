@@ -15,7 +15,7 @@ import com.finaxis.platform.lifecycle.BranchVisibility
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import org.springframework.dao.CannotAcquireLockException
-import org.springframework.dao.CannotSerializeTransactionException
+import org.springframework.dao.PessimisticLockingFailureException
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -25,6 +25,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 
 /** Deliberately not [BusinessDateProperties.DEFAULT_BUSINESS_DATE_LOCK_TIMEOUT]. */
@@ -418,9 +419,14 @@ class BusinessDateServiceTests {
             BusinessDateSnapshot(LocalDate.parse("2026-07-15"), "OPEN", 0)
         businessDateStore.serializationFails = true
 
-        assertFailsWith<CannotSerializeTransactionException> {
-            service.startCob(StartCobCommand(organisationId, uuidV7()))
-        }
+        val failure =
+            assertFailsWith<PessimisticLockingFailureException> {
+                service.startCob(StartCobCommand(organisationId, uuidV7()))
+            }
+        assertFalse(
+            failure is CannotAcquireLockException,
+            "a serialization abort must not be the lock-wait type this method names",
+        )
     }
 
     private fun activeOrganisation(): UUID =
@@ -542,7 +548,7 @@ private class FakeBusinessDateStore : BusinessDateStore {
         actorId: UUID,
     ): Boolean {
         if (lockWaitExpires) throw CannotAcquireLockException("lock_timeout expired")
-        if (serializationFails) throw CannotSerializeTransactionException("could not serialize")
+        if (serializationFails) throw PessimisticLockingFailureException("could not serialize")
         val current = snapshots[organisationId] ?: return false
         if (current.rowVersion != expectedRowVersion) return false
         snapshots[organisationId] =

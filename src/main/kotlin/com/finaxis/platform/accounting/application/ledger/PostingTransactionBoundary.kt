@@ -98,20 +98,20 @@ class PostingTransactionBoundary(
      * retry, where re-running the work only produces `25P02` against a connection the failure has
      * already doomed. Failing loudly on a wiring defect beats degrading quietly into one.
      *
-     * **[ConcurrencyFailureException], not `CannotSerializeTransactionException`.** One SQLSTATE
-     * arrives here as two unrelated Spring classes. A statement-level `40001` is translated by
-     * jOOQ's execute listener through `SQLErrorCodeSQLExceptionTranslator("PostgreSQL")` into
-     * `CannotSerializeTransactionException`; a `40001` raised by `COMMIT` never reaches jOOQ at
-     * all and is translated by `JdbcTransactionManager`, which in Spring 7 defaults to
-     * `SQLExceptionSubclassTranslator` absent a user `sql-error-codes.xml` - this repository has
-     * none - whose `instanceof` chain misses pgjdbc's `PSQLException` and falls through to
-     * `SQLStateSQLExceptionTranslator`, yielding `CannotAcquireLockException`. Naming the jOOQ
-     * class alone would silently never retry an SSI pivot, the case the design exists for.
-     * [ConcurrencyFailureException] is their only common supertype, and it also covers `40P01`
-     * deadlocks. [OptimisticLockingFailureException] extends it too and is excluded: retrying a
-     * row-version conflict is a different decision, taken by whoever owns that row. Accounting's
-     * own [ConflictException] is outside this hierarchy, so `accounting.fiscal_period_closed`
-     * propagates un-retried on the first attempt, as it should.
+     * **[ConcurrencyFailureException], not either concrete class.** One SQLSTATE arrives here as
+     * two unrelated Spring classes. A statement-level `40001` is translated by jOOQ's execute
+     * listener through `SQLErrorCodeSQLExceptionTranslator("PostgreSQL")` into Spring's
+     * serialization-failure class (deprecated in Spring 7, still what that translator yields); a
+     * `40001` raised by `COMMIT` never reaches jOOQ at all and is translated by
+     * `JdbcTransactionManager`, which in Spring 7 defaults to `SQLExceptionSubclassTranslator`
+     * absent a user `sql-error-codes.xml` - this repository has none - whose `instanceof` chain
+     * misses pgjdbc's `PSQLException` and falls through to `SQLStateSQLExceptionTranslator`,
+     * yielding `CannotAcquireLockException`. Naming the jOOQ class alone would silently never
+     * retry an SSI pivot, the case the design exists for. [ConcurrencyFailureException] covers
+     * both, and `40P01` deadlocks too. [OptimisticLockingFailureException] extends it too and is
+     * excluded: retrying a row-version conflict is a different decision, taken by whoever owns
+     * that row. Accounting's own [ConflictException] is outside this hierarchy, so
+     * `accounting.fiscal_period_closed` propagates un-retried on the first attempt, as it should.
      *
      * The backoff is deliberately uniform-random rather than exponential; [PostingRetryPolicy]
      * carries the reasoning and the numbers.
