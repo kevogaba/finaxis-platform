@@ -127,12 +127,15 @@ abstract class FoundationIamControllerTestSupport(
             else -> "role.assign_permission"
         }
 
-    protected fun roleSummary(roleId: UUID) =
-        RoleSummary(roleId, "OPS", "Operations", false, "ACTIVE")
+    protected fun roleSummary(
+        roleId: UUID,
+        missingViewPermissions: List<String> = emptyList(),
+    ) = RoleSummary(roleId, "OPS", "Operations", false, "ACTIVE", missingViewPermissions)
 
     protected fun roleDetail(
         tenantId: UUID,
         roleId: UUID,
+        missingViewPermissions: List<String> = emptyList(),
     ) = RoleDetail(
         roleId,
         tenantId,
@@ -141,6 +144,7 @@ abstract class FoundationIamControllerTestSupport(
         null,
         false,
         "ACTIVE",
+        missingViewPermissions,
         NOW,
         NOW,
     )

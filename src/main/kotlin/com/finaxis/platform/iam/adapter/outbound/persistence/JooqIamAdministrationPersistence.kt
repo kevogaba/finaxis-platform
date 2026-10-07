@@ -2,21 +2,21 @@ package com.finaxis.platform.iam.adapter.outbound.persistence
 
 import com.finaxis.platform.iam.application.port.outbound.IamAdministrationPersistence
 import com.finaxis.platform.iam.application.port.outbound.MembershipSnapshot
+import com.finaxis.platform.iam.application.port.outbound.RolePermissionPersistence
 import com.finaxis.platform.iam.application.port.outbound.RoleSnapshot
 import com.finaxis.platform.iam.application.role.RoleScopeType
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
 import com.finaxis.platform.iam.domain.RoleStatus
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
-import com.finaxis.platform.jooq.tables.references.PERMISSION
 import com.finaxis.platform.jooq.tables.references.ROLE
-import com.finaxis.platform.jooq.tables.references.ROLE_PERMISSION
 import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
 import org.jooq.DSLContext
 import org.springframework.dao.OptimisticLockingFailureException
 import org.springframework.stereotype.Component
+import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.Clock
 import java.time.ZoneOffset
 import java.util.UUID
@@ -26,7 +26,8 @@ import java.util.UUID
 class JooqIamAdministrationPersistence(
     private val dsl: DSLContext,
     private val clock: Clock,
-) : IamAdministrationPersistence {
+) : IamAdministrationPersistence,
+    RolePermissionPersistence by JooqRolePermissionPersistence(dsl, clock) {
     override fun roleCodeExists(
         organisationId: UUID,
         roleCode: String,
@@ -42,21 +43,19 @@ class JooqIamAdministrationPersistence(
     override fun findRole(
         organisationId: UUID,
         roleId: UUID,
-    ): RoleSnapshot? =
-        dsl
-            .select(ROLE.ID, ROLE.ROLE_CODE, ROLE.SYSTEM_ROLE, ROLE.STATUS, ROLE.ROW_VERSION)
-            .from(ROLE)
-            .where(ROLE.ORGANISATION_ID.eq(organisationId))
-            .and(ROLE.ID.eq(roleId))
-            .fetchOne { record ->
-                RoleSnapshot(
-                    requireNotNull(record[ROLE.ID]),
-                    requireNotNull(record[ROLE.ROLE_CODE]),
-                    requireNotNull(record[ROLE.SYSTEM_ROLE]),
-                    RoleStatus.valueOf(requireNotNull(record[ROLE.STATUS])),
-                    requireNotNull(record[ROLE.ROW_VERSION]),
-                )
-            }
+    ): RoleSnapshot? = roleQuery(organisationId, roleId).fetchOne(::roleSnapshot)
+
+    override fun lockRole(
+        organisationId: UUID,
+        roleId: UUID,
+    ): RoleSnapshot? {
+        check(TransactionSynchronizationManager.isActualTransactionActive()) {
+            "A role lock is held until the caller's transaction ends, so it needs one."
+        }
+        // NO KEY UPDATE conflicts with itself, which serialises compositions of one role, but not
+        // with the FOR KEY SHARE that foreign-key inserts (role_permission, assignments) take.
+        return roleQuery(organisationId, roleId).forNoKeyUpdate().fetchOne(::roleSnapshot)
+    }
 
     override fun createRole(
         organisationId: UUID,
@@ -129,59 +128,6 @@ class JooqIamAdministrationPersistence(
                 .execute()
         requireUpdated(updated, roleId)
     }
-
-    override fun permissionIdByCode(permissionCode: String): UUID? =
-        dsl
-            .select(PERMISSION.ID)
-            .from(PERMISSION)
-            .where(PERMISSION.PERMISSION_CODE.eq(permissionCode))
-            .fetchOne(PERMISSION.ID)
-
-    override fun permissionRiskLevel(permissionCode: String): String? =
-        dsl
-            .select(PERMISSION.RISK_LEVEL)
-            .from(PERMISSION)
-            .where(PERMISSION.PERMISSION_CODE.eq(permissionCode))
-            .fetchOne(PERMISSION.RISK_LEVEL)
-
-    override fun grantPermission(
-        organisationId: UUID,
-        roleId: UUID,
-        permissionId: UUID,
-        actorId: UUID,
-    ): Boolean {
-        val now = now()
-        return dsl
-            .insertInto(ROLE_PERMISSION)
-            .set(ROLE_PERMISSION.ORGANISATION_ID, organisationId)
-            .set(ROLE_PERMISSION.ROLE_ID, roleId)
-            .set(ROLE_PERMISSION.PERMISSION_ID, permissionId)
-            .set(ROLE_PERMISSION.GRANTED_AT, now)
-            .set(ROLE_PERMISSION.GRANTED_BY, actorId)
-            .set(ROLE_PERMISSION.CREATED_AT, now)
-            .set(ROLE_PERMISSION.CREATED_BY, actorId)
-            .set(ROLE_PERMISSION.UPDATED_AT, now)
-            .set(ROLE_PERMISSION.UPDATED_BY, actorId)
-            .onConflict(
-                ROLE_PERMISSION.ORGANISATION_ID,
-                ROLE_PERMISSION.ROLE_ID,
-                ROLE_PERMISSION.PERMISSION_ID,
-            ).doNothing()
-            .execute() > 0
-    }
-
-    override fun removePermission(
-        organisationId: UUID,
-        roleId: UUID,
-        permissionId: UUID,
-        actorId: UUID,
-    ): Boolean =
-        dsl
-            .deleteFrom(ROLE_PERMISSION)
-            .where(ROLE_PERMISSION.ORGANISATION_ID.eq(organisationId))
-            .and(ROLE_PERMISSION.ROLE_ID.eq(roleId))
-            .and(ROLE_PERMISSION.PERMISSION_ID.eq(permissionId))
-            .execute() > 0
 
     override fun membership(
         organisationId: UUID,
@@ -328,6 +274,24 @@ class JooqIamAdministrationPersistence(
             .and(USER_ROLE_ASSIGNMENT.STATUS.eq(ACTIVE))
             .fetch(USER_ORGANISATION_MEMBERSHIP.ID)
             .filterNotNull()
+
+    private fun roleQuery(
+        organisationId: UUID,
+        roleId: UUID,
+    ) = dsl
+        .select(ROLE.ID, ROLE.ROLE_CODE, ROLE.SYSTEM_ROLE, ROLE.STATUS, ROLE.ROW_VERSION)
+        .from(ROLE)
+        .where(ROLE.ORGANISATION_ID.eq(organisationId))
+        .and(ROLE.ID.eq(roleId))
+
+    private fun roleSnapshot(record: org.jooq.Record) =
+        RoleSnapshot(
+            requireNotNull(record[ROLE.ID]),
+            requireNotNull(record[ROLE.ROLE_CODE]),
+            requireNotNull(record[ROLE.SYSTEM_ROLE]),
+            RoleStatus.valueOf(requireNotNull(record[ROLE.STATUS])),
+            requireNotNull(record[ROLE.ROW_VERSION]),
+        )
 
     private fun requireUpdated(
         updated: Int,

@@ -71,7 +71,12 @@ class RoleController(
     /** Searches roles in the active tenant organisation. */
     @GetMapping
     @PreAuthorize("hasAuthority('role.view')")
-    @Operation(summary = "Search roles", description = "Searches roles in the active tenant.")
+    @Operation(
+        summary = "Search roles",
+        description =
+            "Searches roles in the active tenant. Each role reports missing_view_permissions, " +
+                "the view permissions its held mutation permissions need and it lacks.",
+    )
     @ApiResponses(
         ApiResponse(
             responseCode = "200",
@@ -200,7 +205,12 @@ class RoleController(
     /** Retrieves role metadata within the active tenant. */
     @GetMapping("/{role_id}")
     @PreAuthorize("hasAuthority('role.view')")
-    @Operation(summary = "Get role", description = "Retrieves role metadata in the active tenant.")
+    @Operation(
+        summary = "Get role",
+        description =
+            "Retrieves role metadata in the active tenant, including missing_view_permissions, " +
+                "the view permissions its held mutation permissions need and it lacks.",
+    )
     @ApiResponses(
         ApiResponse(
             responseCode = "200",
@@ -450,7 +460,12 @@ class RoleController(
     @PreAuthorize("hasAuthority('role.assign_permission')")
     @Operation(
         summary = "Grant role permission",
-        description = "Grants a catalogue permission to a role.",
+        description =
+            "Grants a catalogue permission to a role. A mutation permission is granted only " +
+                "together with, or after, every view permission the catalogue requires for it " +
+                "(required_view_permissions): otherwise 400 validation_failed lists each " +
+                "missing view and the permission that needs it, and nothing is written. " +
+                "The role row is locked first, so concurrent compositions run one at a time.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -539,7 +554,11 @@ class RoleController(
     @PreAuthorize("hasAuthority('role.remove_permission')")
     @Operation(
         summary = "Remove role permission",
-        description = "Removes a role permission grant.",
+        description =
+            "Removes a role permission grant. Removing a view permission that a held mutation " +
+                "permission requires answers 400 validation_failed naming the dependants. " +
+                "Removing a mutation or context permission never fails. The role row is " +
+                "locked first, so concurrent compositions run one at a time.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -668,7 +687,7 @@ class RoleController(
     }
 
     private fun RoleSummary.toResponse() =
-        RoleSummaryResponse(id, roleCode, roleName, systemRole, status)
+        RoleSummaryResponse(id, roleCode, roleName, systemRole, status, missingViewPermissions)
 
     private fun RoleDetail.toResponse() =
         RoleDetailResponse(
@@ -679,6 +698,7 @@ class RoleController(
             description,
             systemRole,
             status,
+            missingViewPermissions,
             createdAt,
             updatedAt,
         )

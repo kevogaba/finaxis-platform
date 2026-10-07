@@ -431,6 +431,11 @@ the documents the supersessions below name (`authorization-model.md`, `foundatio
   the operator query, covering roles **and effective membership overrides**; the reporting of
   violating memberships (membership-level `missing_view_permissions` or an operator report); role
   section of the API docs. **Ships one release before 5.**
+
+  *Status: implemented by this change (role lock, the assign and remove 400s,
+  `missing_view_permissions` on role list and detail, and the operator SQL of
+  `docs/operations/permission-view-gap-report.md`, which covers memberships and platform roles).
+  The form decided for memberships is the operator report, not an API field.*
 - **4.** `feat(lifecycle): authorise branch and assignment reads at the target branch`
   The branch visibility port and its IAM implementation; branch, branch-assignment and
   role-assignment reads and lists; the store id restriction; `active-organisation-context.md`.

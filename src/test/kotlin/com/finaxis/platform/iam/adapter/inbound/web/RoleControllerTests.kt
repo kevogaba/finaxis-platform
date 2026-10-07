@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
 import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.InvalidRequestException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiExceptionHandler
 import com.finaxis.platform.common.web.api.ApiJsonCodec
@@ -104,6 +105,95 @@ class RoleControllerTests
                 .post("${ApiPaths.ROLES}/$roleId/deactivate") {
                     with(authentication(tenantToken(setOf("role.deactivate"), tenantId)))
                 }.andExpect { status { isOk() } }
+        }
+
+        @Test
+        fun `role list and detail publish the missing view permissions`() {
+            val tenantId = uuidV7()
+            val roleId = uuidV7()
+            val compliantId = uuidV7()
+            whenever(iamQueryService.searchRoles(eq(tenantId), any(), any())).thenReturn(
+                apiPageOf(
+                    listOf(
+                        roleSummary(roleId, listOf("branch.view", "membership.view")),
+                        roleSummary(compliantId),
+                    ),
+                    number = 0,
+                    size = 25,
+                    totalItems = 2,
+                ),
+            )
+            whenever(iamQueryService.getRole(eq(tenantId), eq(roleId), any())).thenReturn(
+                roleDetail(tenantId, roleId, listOf("branch.view")),
+            )
+
+            mockMvc
+                .get(ApiPaths.ROLES) {
+                    with(authentication(tenantToken(setOf("role.view"), tenantId)))
+                }.andExpect {
+                    status { isOk() }
+                    jsonPath("$.items[0].missing_view_permissions[0]") { value("branch.view") }
+                    jsonPath("$.items[0].missing_view_permissions[1]") { value("membership.view") }
+                    jsonPath("$.items[1].missing_view_permissions") { isEmpty() }
+                }
+            mockMvc
+                .get("${ApiPaths.ROLES}/$roleId") {
+                    with(authentication(tenantToken(setOf("role.view"), tenantId)))
+                }.andExpect {
+                    status { isOk() }
+                    jsonPath("$.missing_view_permissions[0]") { value("branch.view") }
+                    jsonPath("$.missing_view_permissions.length()") { value(1) }
+                }
+        }
+
+        @Test
+        fun `a refused role composition answers validation failed naming the views`() {
+            val tenantId = uuidV7()
+            val roleId = uuidV7()
+            val grantId = uuidV7()
+            whenever(roleManagementService.assignPermissionToRole(any())).thenThrow(
+                InvalidRequestException(
+                    "validation_failed",
+                    "Missing view permissions: branch.view (required by branch.suspend).",
+                ),
+            )
+            whenever(roleManagementService.removePermissionFromRole(any())).thenThrow(
+                InvalidRequestException(
+                    "validation_failed",
+                    "Permission branch.view is required by held permissions: branch.suspend.",
+                ),
+            )
+            whenever(iamQueryService.getRolePermission(eq(tenantId), eq(grantId), any()))
+                .thenReturn(rolePermissionDetail(tenantId, grantId, roleId, "branch.view"))
+
+            mockMvc
+                .post("${ApiPaths.ROLES}/$roleId/permissions") {
+                    contentType = MediaType.APPLICATION_JSON
+                    content =
+                        apiJsonCodec.mapper.writeValueAsString(
+                            AssignPermissionRequest("branch.suspend"),
+                        )
+                    with(authentication(tenantToken(setOf("role.assign_permission"), tenantId)))
+                }.andExpect {
+                    status { isBadRequest() }
+                    jsonPath("$.code") { value("validation_failed") }
+                    jsonPath("$.detail") {
+                        value("Missing view permissions: branch.view (required by branch.suspend).")
+                    }
+                }
+            mockMvc
+                .delete("${ApiPaths.ROLES}/$roleId/permissions/$grantId") {
+                    with(authentication(tenantToken(setOf("role.remove_permission"), tenantId)))
+                }.andExpect {
+                    status { isBadRequest() }
+                    jsonPath("$.code") { value("validation_failed") }
+                    jsonPath("$.detail") {
+                        value(
+                            "Permission branch.view is required by held permissions: " +
+                                "branch.suspend.",
+                        )
+                    }
+                }
         }
 
         @Test

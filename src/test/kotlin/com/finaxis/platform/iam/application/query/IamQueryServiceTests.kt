@@ -478,12 +478,12 @@ class IamQueryServiceTests {
         assertEquals(b2, b2.copy())
         assertEquals(b2.hashCode(), b2.copy().hashCode())
 
-        val r1 = RoleSummary(id, "c", "n", true, "a")
+        val r1 = RoleSummary(id, "c", "n", true, "a", listOf("branch.view"))
         assertNotNull(r1.toString())
         assertEquals(r1, r1.copy())
         assertEquals(r1.hashCode(), r1.copy().hashCode())
 
-        val r2 = RoleDetail(id, orgId, "c", "n", "d", true, "a", now, now)
+        val r2 = RoleDetail(id, orgId, "c", "n", "d", true, "a", listOf("branch.view"), now, now)
         assertNotNull(r2.toString())
         assertEquals(r2, r2.copy())
         assertEquals(r2.hashCode(), r2.copy().hashCode())
@@ -691,6 +691,7 @@ private class FakeIamAdministrationQueries :
                     "Admin Role",
                     false,
                     "ACTIVE",
+                    emptyList(),
                 ),
             ),
             filter.page,
@@ -711,6 +712,7 @@ private class FakeIamAdministrationQueries :
             description = "Admin Description",
             systemRole = false,
             status = "ACTIVE",
+            missingViewPermissions = emptyList(),
             createdAt = Instant.now(),
             updatedAt = Instant.now(),
         )

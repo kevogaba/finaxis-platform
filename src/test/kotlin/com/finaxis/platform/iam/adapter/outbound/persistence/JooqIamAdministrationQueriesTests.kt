@@ -6,7 +6,9 @@ import com.finaxis.platform.iam.application.query.MembershipFilter
 import com.finaxis.platform.iam.application.query.RoleFilter
 import com.finaxis.platform.iam.application.query.UserInTenantFilter
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
+import com.finaxis.platform.jooq.tables.references.PERMISSION
 import com.finaxis.platform.jooq.tables.references.ROLE
+import com.finaxis.platform.jooq.tables.references.ROLE_PERMISSION
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import org.jooq.DSLContext
@@ -78,6 +80,60 @@ class JooqIamAdministrationQueriesTests(
     }
 
     @Test
+    fun `roles report the views their held mutations need and lack, per page`() {
+        val orgId = insertOrganisation()
+        val violating = insertRole(orgId, "RC_BAD", "Violating")
+        val compliant = insertRole(orgId, "RC_OK", "Compliant")
+        val viewsOnly = insertRole(orgId, "RC_VIEWS", "Views only")
+        grant(orgId, violating, "branch.suspend", "user.invite", "user.view")
+        grant(orgId, compliant, "branch.suspend", "branch.view")
+        grant(orgId, viewsOnly, "branch.view", "auth.select_branch")
+
+        val page = queries.searchRoles(orgId, RoleFilter(q = "RC_", size = 50))
+        val byCode = page.items.associate { it.roleCode to it.missingViewPermissions }
+
+        assertEquals(
+            mapOf(
+                "RC_BAD" to listOf("branch.view", "membership.view"),
+                "RC_OK" to emptyList(),
+                "RC_VIEWS" to emptyList(),
+            ),
+            byCode,
+        )
+        // A page that holds one role reports for that role only.
+        assertEquals(
+            listOf(emptyList<String>()),
+            queries
+                .searchRoles(orgId, RoleFilter(q = "RC_OK"))
+                .items
+                .map { it.missingViewPermissions },
+        )
+        assertEquals(
+            listOf("branch.view", "membership.view"),
+            queries.findRoleById(orgId, violating)?.missingViewPermissions,
+        )
+        assertEquals(emptyList(), queries.findRoleById(orgId, compliant)?.missingViewPermissions)
+    }
+
+    @Test
+    fun `an inactive view counts as missing and an inactive mutation needs none`() {
+        val orgId = insertOrganisation()
+        val roleId = insertRole(orgId, "RC_DEPR", "Deprecated codes")
+        grant(orgId, roleId, "branch.suspend", "branch.view")
+        assertEquals(emptyList(), queries.findRoleById(orgId, roleId)?.missingViewPermissions)
+
+        // Runtime honours only ACTIVE codes: a deprecated view grants nothing...
+        setStatus("branch.view", "DEPRECATED")
+        assertEquals(
+            listOf("branch.view"),
+            queries.findRoleById(orgId, roleId)?.missingViewPermissions,
+        )
+        // ...and a deprecated mutation needs nothing.
+        setStatus("branch.suspend", "DEPRECATED")
+        assertEquals(emptyList(), queries.findRoleById(orgId, roleId)?.missingViewPermissions)
+    }
+
+    @Test
     fun `searchMemberships scopes filters ordering and pages to the selected tenant`() {
         val orgId = insertOrganisation()
         val otherOrgId = insertOrganisation()
@@ -105,6 +161,43 @@ class JooqIamAdministrationQueriesTests(
         val membershipId = insertMembership(otherOrgId, userId, "ACTIVE", "STAFF")
 
         assertNull(queries.findMembershipById(orgId, membershipId))
+    }
+
+    private fun grant(
+        orgId: UUID,
+        roleId: UUID,
+        vararg codes: String,
+    ) {
+        val now = OffsetDateTime.now()
+        codes.forEach { code ->
+            dsl
+                .insertInto(ROLE_PERMISSION)
+                .set(ROLE_PERMISSION.ORGANISATION_ID, orgId)
+                .set(ROLE_PERMISSION.ROLE_ID, roleId)
+                .set(
+                    ROLE_PERMISSION.PERMISSION_ID,
+                    dsl
+                        .select(PERMISSION.ID)
+                        .from(PERMISSION)
+                        .where(PERMISSION.PERMISSION_CODE.eq(code))
+                        .fetchSingle(PERMISSION.ID),
+                ).set(ROLE_PERMISSION.GRANTED_AT, now)
+                .set(ROLE_PERMISSION.CREATED_AT, now)
+                .set(ROLE_PERMISSION.UPDATED_AT, now)
+                .execute()
+        }
+    }
+
+    /** Rolled back with the test transaction, so the shared catalogue is never left changed. */
+    private fun setStatus(
+        code: String,
+        status: String,
+    ) {
+        dsl
+            .update(PERMISSION)
+            .set(PERMISSION.STATUS, status)
+            .where(PERMISSION.PERMISSION_CODE.eq(code))
+            .execute()
     }
 
     private fun insertOrganisation(): UUID {

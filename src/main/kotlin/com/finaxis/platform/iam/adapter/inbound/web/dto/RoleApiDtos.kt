@@ -52,6 +52,13 @@ data class RoleSummaryResponse(
     val roleName: String,
     val systemRole: Boolean,
     val status: String,
+    @field:Schema(
+        description =
+            "Sorted view permission codes the role's held ACTIVE mutation permissions need and " +
+                "the role lacks (ADR 0030); empty when the role complies. Reported only: " +
+                "activating a role that violates the rule stays allowed.",
+    )
+    val missingViewPermissions: List<String>,
 )
 
 /** Detailed response for a tenant role. */
@@ -63,6 +70,13 @@ data class RoleDetailResponse(
     val description: String?,
     val systemRole: Boolean,
     val status: String,
+    @field:Schema(
+        description =
+            "Sorted view permission codes the role's held ACTIVE mutation permissions need and " +
+                "the role lacks (ADR 0030); empty when the role complies. Reported only: " +
+                "activating a role that violates the rule stays allowed.",
+    )
+    val missingViewPermissions: List<String>,
     val createdAt: Instant,
     val updatedAt: Instant,
 )
