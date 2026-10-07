@@ -21,9 +21,12 @@ import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisio
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoInteractions
+import org.mockito.kotlin.whenever
 import org.slf4j.LoggerFactory
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.transaction.support.TransactionSynchronization
@@ -48,6 +51,7 @@ class InitialAdministratorBootstrapFailureCodeTests {
 
     @BeforeEach
     fun attachAppender() {
+        whenever(store.updateStatus(any(), any(), anyOrNull(), any())).thenReturn(1)
         appender.start()
         recorderLogger.addAppender(appender)
     }
@@ -140,6 +144,22 @@ class InitialAdministratorBootstrapFailureCodeTests {
         assertTrue(logged.contains("rootCauseClass=<unavailable>"))
         assertTrue(logged.contains("<stack unavailable: java.lang.IllegalStateException>"))
         assertFalse(logged.contains("jane.doe@acme.test"))
+    }
+
+    @Test
+    fun `a failure the store refuses is warned about without the throwable`() {
+        whenever(store.updateStatus(any(), any(), anyOrNull(), any())).thenReturn(0)
+        val organisationId = uuidV7()
+
+        recorder.recordFailure(organisationId, IllegalStateException(leaky))
+
+        val event = appender.list.single()
+        assertEquals(Level.WARN, event.level)
+        assertTrue(event.formattedMessage.contains(organisationId.toString()))
+        assertTrue(event.formattedMessage.contains("INVALID_STATE"))
+        assertTrue(event.formattedMessage.contains("already COMPLETED"))
+        assertNull(event.throwableProxy)
+        assertTrue(!event.formattedMessage.contains("jane.doe"))
     }
 
     @Test

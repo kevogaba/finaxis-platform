@@ -104,6 +104,9 @@ When the bootstrap fails, the record moves to `FAILED` and `bootstrap_failure_co
 the exception's type: `IDENTITY_PROVIDER_FAILED`, `CONFLICT`, `NOT_FOUND`, `INVALID_STATE`,
 `DATABASE_ERROR` or `UNEXPECTED`. It never holds the exception message, because tenant members can
 read it and the message can carry SQL, identity-provider output or an email address.
+Only the administrator's own failure sets it, and a `COMPLETED` record is never moved to `FAILED`;
+older records that an unrelated invitee's failure wrongly marked `FAILED` are found with the
+[false-FAILED report](bootstrap-false-failed-report.md).
 
 Where to look for the cause, in order:
 
@@ -113,8 +116,11 @@ Where to look for the cause, in order:
    `Caused by:`, bounded, with a marker when the cause chain is cut). **This recorder's line holds
    no exception message**, neither the exception's nor a cause's, because a message can carry an
    email address, SQL parameters or identity-provider output; the throwable is not passed to the
-   logger. Search the log for the organisation id, then read the classes and frames. What else
-   writes about the same failure:
+   logger. The line is written after the status write and only when it changed a row: when the
+   record is already `COMPLETED` (a `FAILED` write never overwrites it) or missing, a `WARN`
+   "... failure with code `<CODE>` for organisation `<id>` was not recorded" with those two
+   values only is written instead. Search the log for the organisation id, then read the classes
+   and frames. What else writes about the same failure:
    - **JobRunr.** The bootstrap, Keycloak-provisioning and application-invite job handlers rethrow a
      `SanitisedJobFailureException` to JobRunr (message = the closed code, or the exception class
      name for the invite; no cause, except a message-free `InterruptedException` when the original
@@ -124,7 +130,8 @@ Where to look for the cause, in order:
      the invite handler. JobRunr's own `processing failed` log lines and the failed state in
      `jobrunr_jobs` (exception message, cause message, stack text) then carry no message of the
      original and only the handler's frames. The bootstrap and invite handlers always, and the
-     Keycloak handler for a failure it does not record, log a `WARN` "<job> failed:
+     Keycloak handler for a failure it does not record (another invitee's, which never touches
+     the bootstrap record), log a `WARN` "<job> failed:
      exceptionClass=... rootCauseClass=..." with the message-free frames (after the recorder's
      `ERROR` line when it wrote one), so the location is never lost. Retry counts and backoff are
      unchanged. The synchronous `bootstrap/retry` route calls the service directly and still raises

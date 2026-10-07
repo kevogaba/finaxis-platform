@@ -13,6 +13,7 @@ import com.finaxis.platform.common.transitions.TransitionExecutor
 import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogRepository
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityDispatchType
+import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningException
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningGateway
 import com.finaxis.platform.lifecycle.application.port.outbound.KeycloakUserProvisioningRequest
 import com.finaxis.platform.lifecycle.application.port.outbound.KeycloakUserRef
@@ -70,6 +71,7 @@ class KeycloakUserProvisioningHandlerTests {
     private val fakeBootstrapStore =
         object : InitialAdministratorBootstrapStore {
             val records = mutableMapOf<UUID, InitialAdministratorBootstrapRecord>()
+            val failedWrites = mutableListOf<UUID>()
 
             override fun createDraft(
                 organisationId: UUID,
@@ -102,8 +104,13 @@ class KeycloakUserProvisioningHandlerTests {
                 status: InitialAdministratorBootstrapStatus,
                 lastFailureCode: InitialAdministratorBootstrapFailureCode?,
                 incrementAttempts: Boolean,
-            ) {
-                val record = records[organisationId] ?: return
+            ): Int {
+                val record = records[organisationId] ?: return 0
+                if (status == InitialAdministratorBootstrapStatus.FAILED) {
+                    failedWrites += organisationId
+                    // The store guard: a FAILED write never overwrites COMPLETED.
+                    if (record.status == InitialAdministratorBootstrapStatus.COMPLETED) return 0
+                }
                 records[organisationId] =
                     record.copy(
                         status = status,
@@ -115,6 +122,7 @@ class KeycloakUserProvisioningHandlerTests {
                                 record.attempts
                             },
                     )
+                return 1
             }
 
             override fun existingAdministratorUserId(organisationId: UUID): UUID? = null
@@ -245,6 +253,107 @@ class KeycloakUserProvisioningHandlerTests {
         val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
         assertEquals("IllegalStateException", dispatchAudit.reason)
+    }
+
+    @Test
+    fun `an unrelated invitee's failure leaves a completed bootstrap completed`() {
+        val context = store.activePendingProvisioningContext()
+        fakeBootstrapStore.records[context.organisationId] =
+            bootstrapRecord(context, InitialAdministratorBootstrapStatus.COMPLETED)
+                .copy(userId = uuidV7(), lastFailureCode = null)
+        gateway.failure = IllegalStateException("keycloak unavailable for jane.doe@acme.test")
+        val appender = captureSanitisedLog()
+
+        val failure =
+            assertFailsWith<SanitisedJobFailureException> {
+                handler.run(keycloakRequest(context, "member@example.test", "member"))
+            }
+
+        assertEquals("INVALID_STATE", failure.message)
+        assertNull(failure.cause)
+        val record = fakeBootstrapStore.records.getValue(context.organisationId)
+        assertEquals(InitialAdministratorBootstrapStatus.COMPLETED, record.status)
+        assertEquals(null, record.lastFailureCode)
+        assertTrue(fakeBootstrapStore.failedWrites.isEmpty(), "the recorder is not called")
+        assertEquals("FAILED", store.dispatches.getValue(context.dispatchKey).status)
+        val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
+        assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
+        val warn = appender.list.single()
+        assertEquals(ch.qos.logback.classic.Level.WARN, warn.level)
+        assertTrue(warn.formattedMessage.contains(context.dispatchKey))
+        assertTrue(warn.formattedMessage.contains("exceptionClass=java.lang.IllegalStateException"))
+        assertFalse(warn.formattedMessage.contains("jane.doe@acme.test"))
+        assertNull(warn.throwableProxy)
+    }
+
+    @Test
+    fun `an unrelated invitee's failure leaves an unfinished bootstrap unchanged`() {
+        listOf(
+            InitialAdministratorBootstrapStatus.QUEUED,
+            InitialAdministratorBootstrapStatus.PROVISIONING_IDENTITY,
+        ).forEach { status ->
+            val context = store.activePendingProvisioningContext()
+            fakeBootstrapStore.records[context.organisationId] =
+                bootstrapRecord(context, status).copy(userId = uuidV7())
+            gateway.failure = IllegalStateException("keycloak unavailable")
+
+            assertFailsWith<SanitisedJobFailureException> {
+                handler.run(keycloakRequest(context, "member@example.test", "member"))
+            }
+
+            val record = fakeBootstrapStore.records.getValue(context.organisationId)
+            assertEquals(status, record.status)
+            assertEquals(null, record.lastFailureCode)
+            assertTrue(context.organisationId !in fakeBootstrapStore.failedWrites)
+            assertEquals("FAILED", store.dispatches.getValue(context.dispatchKey).status)
+        }
+    }
+
+    @Test
+    fun `the administrator's own failure marks the bootstrap failed without a handler WARN`() {
+        val context = store.activePendingProvisioningContext()
+        fakeBootstrapStore.records[context.organisationId] =
+            bootstrapRecord(context, InitialAdministratorBootstrapStatus.QUEUED)
+        gateway.failure = IdentityProvisioningException("keycloak unavailable")
+        val appender = captureSanitisedLog()
+
+        val failure =
+            assertFailsWith<SanitisedJobFailureException> {
+                handler.run(keycloakRequest(context, "admin@example.test", "admin"))
+            }
+
+        assertEquals("IDENTITY_PROVIDER_FAILED", failure.message)
+        assertNull(failure.cause)
+        val record = fakeBootstrapStore.records.getValue(context.organisationId)
+        assertEquals(InitialAdministratorBootstrapStatus.FAILED, record.status)
+        assertEquals(
+            InitialAdministratorBootstrapFailureCode.IDENTITY_PROVIDER_FAILED,
+            record.lastFailureCode,
+        )
+        assertTrue(appender.list.isEmpty(), "the recorder's own line is the only log")
+    }
+
+    @Test
+    fun `the administrator's failure after completion is refused by the store and warned about`() {
+        val context = store.activePendingProvisioningContext()
+        fakeBootstrapStore.records[context.organisationId] =
+            bootstrapRecord(context, InitialAdministratorBootstrapStatus.COMPLETED)
+                .copy(lastFailureCode = null)
+        gateway.failure = IdentityProvisioningException("keycloak unavailable")
+        val recorderLog = captureRecorderLog()
+
+        assertFailsWith<SanitisedJobFailureException> {
+            handler.run(keycloakRequest(context, "admin@example.test", "admin"))
+        }
+
+        val record = fakeBootstrapStore.records.getValue(context.organisationId)
+        assertEquals(InitialAdministratorBootstrapStatus.COMPLETED, record.status)
+        assertNull(record.lastFailureCode)
+        assertEquals(listOf(context.organisationId), fakeBootstrapStore.failedWrites)
+        val warn = recorderLog.list.single()
+        assertEquals(ch.qos.logback.classic.Level.WARN, warn.level)
+        assertTrue(warn.formattedMessage.contains(context.organisationId.toString()))
+        assertTrue(warn.formattedMessage.contains("IDENTITY_PROVIDER_FAILED"))
     }
 
     @Test
@@ -384,6 +493,21 @@ class KeycloakUserProvisioningHandlerTests {
         return appender
     }
 
+    private fun captureRecorderLog(): ch.qos.logback.core.read.ListAppender<
+        ch.qos.logback.classic.spi.ILoggingEvent,
+    > {
+        val appender =
+            ch.qos.logback.core.read
+                .ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>()
+                .also { it.start() }
+        (
+            org.slf4j.LoggerFactory.getLogger(
+                InitialAdministratorBootstrapFailureRecorder::class.java,
+            ) as ch.qos.logback.classic.Logger
+        ).addAppender(appender)
+        return appender
+    }
+
     private fun keycloakRequest(
         context: ProvisioningWorkerContext,
         email: String,
@@ -401,30 +525,33 @@ class KeycloakUserProvisioningHandlerTests {
             dispatchKey = context.dispatchKey,
         )
 
-    private fun bootstrapRecord(context: ProvisioningWorkerContext) =
-        InitialAdministratorBootstrapRecord(
-            organisationId = context.organisationId,
-            adminEmail = "admin@example.test",
-            adminUsername = "admin",
-            adminDisplayName = "Admin",
-            adminPhoneE164 = null,
-            sendApplicationInvite = false,
-            status = InitialAdministratorBootstrapStatus.PROVISIONING_IDENTITY,
-            attempts = 1,
-            requestedBy = uuidV7(),
-            submittedBy = uuidV7(),
-            approvedBy = uuidV7(),
-            userId = context.userId,
-            membershipId = context.membershipId,
-            headOfficeId = uuidV7(),
-            roleId = uuidV7(),
-            lastFailureCode = null,
-            createdAt = clock.instant(),
-            submittedAt = clock.instant(),
-            approvedAt = clock.instant(),
-            updatedAt = clock.instant(),
-            rowVersion = 1,
-        )
+    private fun bootstrapRecord(
+        context: ProvisioningWorkerContext,
+        status: InitialAdministratorBootstrapStatus =
+            InitialAdministratorBootstrapStatus.PROVISIONING_IDENTITY,
+    ) = InitialAdministratorBootstrapRecord(
+        organisationId = context.organisationId,
+        adminEmail = "admin@example.test",
+        adminUsername = "admin",
+        adminDisplayName = "Admin",
+        adminPhoneE164 = null,
+        sendApplicationInvite = false,
+        status = status,
+        attempts = 1,
+        requestedBy = uuidV7(),
+        submittedBy = uuidV7(),
+        approvedBy = uuidV7(),
+        userId = context.userId,
+        membershipId = context.membershipId,
+        headOfficeId = uuidV7(),
+        roleId = uuidV7(),
+        lastFailureCode = null,
+        createdAt = clock.instant(),
+        submittedAt = clock.instant(),
+        approvedAt = clock.instant(),
+        updatedAt = clock.instant(),
+        rowVersion = 1,
+    )
 }
 
 private class IdentityProvisioningGatewayFake : IdentityProvisioningGateway {

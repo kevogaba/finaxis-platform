@@ -130,10 +130,21 @@ class KeycloakUserProvisioningJobRequestHandler(
             detail = ex.message ?: ex.javaClass.name,
             metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
         )
-        failureRecorder.recordFailure(jobRequest.organisationId, ex)
-        // JobRunr logs and stores what it is given with its message and causes; give it only the
-        // closed code, so retries and backoff are unchanged but no email or SQL text reaches it.
-        throw SanitisedJobFailureException.forFailure(ex)
+        // Only the bootstrap administrator's own job can fail the bootstrap, as only its success
+        // can complete it: another invitee's failure belongs to that user's dispatch alone.
+        if (bootstrapService.isInitialAdministrator(jobRequest.organisationId, jobRequest.userId)) {
+            failureRecorder.recordFailure(jobRequest.organisationId, ex)
+            // JobRunr logs and stores what it is given with its message and causes; give it only
+            // the closed code, so retries and backoff are unchanged but no email or SQL text
+            // reaches it. The recorder has logged the failure (message-free).
+            throw SanitisedJobFailureException.forFailure(ex)
+        }
+        // Nothing is recorded for another invitee, so no recorder line exists: log a
+        // message-free WARN here so an operator still finds the class names and frames.
+        throw SanitisedJobFailureException.logged(
+            ex,
+            "Keycloak provisioning job ${jobRequest.dispatchKey}",
+        )
     }
 
     private fun inviteUserIfNeeded(jobRequest: KeycloakUserProvisioningJobRequest) {
