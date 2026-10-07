@@ -2,6 +2,7 @@ package com.finaxis.platform.iam.adapter.outbound.authorization
 
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.iam.application.authorization.AuthorizationService
+import com.finaxis.platform.lifecycle.BranchVisibility
 import com.finaxis.platform.lifecycle.PermissionGuard
 import org.springframework.stereotype.Component
 import java.util.UUID
@@ -45,4 +46,11 @@ class LifecyclePermissionGuardAdapter(
     ) {
         authorizationService.requirePermission(actorId, PlatformOrganisation.ID, permissionCode)
     }
+
+    override fun branchVisibility(
+        actorId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ): BranchVisibility =
+        authorizationService.branchVisibility(actorId, organisationId, permissionCode)
 }

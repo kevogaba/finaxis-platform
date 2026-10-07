@@ -6,7 +6,10 @@ import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
 import com.finaxis.platform.iam.application.security.RequestPermissionCache
+import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
+import com.finaxis.platform.iam.domain.PermissionEffect
+import com.finaxis.platform.lifecycle.BranchVisibility
 import org.springframework.stereotype.Service
 import java.util.UUID
 
@@ -126,6 +129,76 @@ class AuthorizationService(
             ) ?: return emptySet()
         return requestPermissionCache.effectivePermissions(membership.membershipId, branchId)
     }
+
+    /**
+     * Answers where [userId] holds the view permission [permissionCode] in [organisationId], the
+     * check a branch-resource read makes in place of the pinned branch's authority set.
+     *
+     * A tenant-wide grant (the code is in the tenant set, which includes a direct allow) means
+     * every branch. Otherwise the visible branches are those carrying a branch-scope grant, read
+     * by [PermissionResolutionQueries.branchIdsGranting] under the same ACTIVE rules as runtime
+     * resolution. A direct deny settles the question for every branch, exactly as it removes the
+     * code from the effective set. An inactive organisation or membership sees nothing. The
+     * answer is memoised per request, so every read of one request decides from the same answer.
+     */
+    fun branchVisibility(
+        userId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ): BranchVisibility {
+        if (SystemActor.isSystemActor(userId)) {
+            return BranchVisibility.AllBranches
+        }
+        return requestPermissionCache.branchVisibility(userId, organisationId, permissionCode) {
+            resolveBranchVisibility(userId, organisationId, permissionCode)
+        }
+    }
+
+    private fun resolveBranchVisibility(
+        userId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ): BranchVisibility {
+        val membershipId = activeMembershipId(userId, organisationId) ?: return NO_BRANCHES
+        return when {
+            permissionCode in requestPermissionCache.effectivePermissions(membershipId, null) -> {
+                BranchVisibility.AllBranches
+            }
+
+            isDirectlyDenied(membershipId, permissionCode) -> {
+                NO_BRANCHES
+            }
+
+            else -> {
+                BranchVisibility.Branches(
+                    permissionResolutionQueries.branchIdsGranting(membershipId, permissionCode),
+                )
+            }
+        }
+    }
+
+    private fun activeMembershipId(
+        userId: UUID,
+        organisationId: UUID,
+    ): UUID? =
+        if (isOrganisationActive(organisationId)) {
+            membershipSelectionLookup
+                .findMembership(userId = userId, organisationId = organisationId)
+                ?.membershipId
+                ?.takeIf {
+                    permissionResolutionQueries.membershipStatus(it) == MembershipStatus.ACTIVE
+                }
+        } else {
+            null
+        }
+
+    private fun isDirectlyDenied(
+        membershipId: UUID,
+        permissionCode: String,
+    ): Boolean =
+        permissionResolutionQueries.directPermissionEffects(membershipId).any {
+            it.code == permissionCode && it.effect == PermissionEffect.DENY
+        }
 
     /**
      * Requires [userId] to hold a break-glass [permissionCode] in [organisationId], with **no**
@@ -258,4 +331,8 @@ class AuthorizationService(
 
     private fun isOrganisationActive(organisationId: UUID): Boolean =
         membershipSelectionLookup.organisationStatus(organisationId) == OrganisationStatus.ACTIVE
+
+    private companion object {
+        val NO_BRANCHES = BranchVisibility.Branches(emptySet())
+    }
 }

@@ -192,6 +192,11 @@ private class FakePermissionQueries(
     override fun directPermissionEffects(membershipId: UUID): List<PermissionEffectAssignment> =
         directPermissions[membershipId].orEmpty()
 
+    override fun branchIdsGranting(
+        membershipId: UUID,
+        permissionCode: String,
+    ): Set<UUID> = emptySet()
+
     /** Unused here: the resolver under test is the cached one, which never takes a lock. */
     override fun lockedBreakGlassGrant(
         membershipId: UUID,

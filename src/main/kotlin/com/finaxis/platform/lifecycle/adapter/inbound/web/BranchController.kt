@@ -81,10 +81,13 @@ class BranchController(
      * Searches branches in the active tenant organisation.
      */
     @GetMapping
-    @PreAuthorize("hasAuthority('branch.view')")
     @Operation(
         summary = "Search branches",
-        description = "Searches branches in the active tenant organisation.",
+        description =
+            "Searches the branches in the active tenant organisation that the caller holds " +
+                "branch.view on: every branch for a tenant-wide grant, otherwise the branches " +
+                "carrying a branch-scope grant. The selected branch does not narrow the list. " +
+                "403 when the caller holds branch.view nowhere.",
     )
     @ApiResponses(
         ApiResponse(
@@ -259,10 +262,13 @@ class BranchController(
      * Retrieves detailed metadata for a specific branch under the active tenant.
      */
     @GetMapping("/{branch_id}")
-    @PreAuthorize("hasAuthority('branch.view')")
     @Operation(
         summary = "Get branch details",
-        description = "Retrieves detailed metadata for a specific branch under the active tenant.",
+        description =
+            "Retrieves detailed metadata for a specific branch under the active tenant. " +
+                "Requires branch.view tenant-wide or on this branch. An unknown id is 404 to a " +
+                "tenant-wide holder and 403 to a branch-scoped holder, like any other branch " +
+                "the caller cannot view.",
     )
     @ApiResponses(
         ApiResponse(
@@ -292,7 +298,7 @@ class BranchController(
         ),
         ApiResponse(
             responseCode = "404",
-            description = "Branch not found",
+            description = "Branch not found (a branch-scoped holder gets 403 instead)",
             content = [
                 Content(
                     mediaType = "application/problem+json",

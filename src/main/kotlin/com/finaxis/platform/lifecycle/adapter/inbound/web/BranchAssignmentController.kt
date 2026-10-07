@@ -67,10 +67,13 @@ class BranchAssignmentController(
      */
     @GetMapping
     @Suppress("UnusedParameter")
-    @PreAuthorize("hasAuthority('branch_assignment.view')")
     @Operation(
         summary = "Search branch assignments",
-        description = "Searches user branch assignments in the active tenant organisation.",
+        description =
+            "Searches user branch assignments in the active tenant organisation, limited to " +
+                "the branches the caller holds branch_assignment.view on (all of them for a " +
+                "tenant-wide grant). An explicit branch_id outside that set is 403. Without " +
+                "branch_id the list defaults to the selected branch when the caller may view it.",
     )
     @ApiResponses(
         ApiResponse(
@@ -124,7 +127,8 @@ class BranchAssignmentController(
             lifecycleIamReadService.searchBranchAssignments(
                 caller.activeOrganisationId,
                 LifecycleBranchAssignmentFilter(
-                    branchId = branchId ?: caller.activeBranchId,
+                    branchId = branchId,
+                    pinnedBranchId = caller.activeBranchId,
                     assignmentType = assignmentType,
                     status = status,
                     page = page,
@@ -137,12 +141,12 @@ class BranchAssignmentController(
 
     /** Retrieves a user branch assignment in the active tenant. */
     @GetMapping("/{assignment_id}")
-    @PreAuthorize("hasAuthority('branch_assignment.view')")
     @Operation(
         summary = "Get branch assignment details",
         description =
-            "Retrieves user branch-assignment metadata in the active tenant " +
-                "organisation.",
+            "Retrieves user branch-assignment metadata in the active tenant organisation. " +
+                "Requires branch_assignment.view tenant-wide or on the assignment's branch. An " +
+                "unknown id is 404 to a tenant-wide holder and 403 to a branch-scoped holder.",
     )
     @ApiResponses(
         ApiResponse(
@@ -174,7 +178,7 @@ class BranchAssignmentController(
         ),
         ApiResponse(
             responseCode = "404",
-            description = "Branch assignment not found",
+            description = "Branch assignment not found (a branch-scoped holder gets 403 instead)",
             content = [
                 Content(
                     mediaType = "application/problem+json",

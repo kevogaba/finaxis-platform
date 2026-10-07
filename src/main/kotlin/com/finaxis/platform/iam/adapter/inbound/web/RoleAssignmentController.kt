@@ -61,8 +61,14 @@ class RoleAssignmentController(
 ) {
     /** Searches user role assignments in the active tenant. */
     @GetMapping
-    @PreAuthorize("hasAuthority('role_assignment.view')")
-    @Operation(summary = "Search role assignments", description = "Searches user role assignments.")
+    @Operation(
+        summary = "Search role assignments",
+        description =
+            "Searches user role assignments. A tenant-wide role_assignment.view sees every " +
+                "row; a branch-scoped holder sees only BRANCH-scope rows on the branches it " +
+                "holds the view on (any other scope_type filter is an empty page). A branch_id " +
+                "outside that set, or no grant at all, is 403.",
+    )
     @ApiResponses(
         ApiResponse(
             responseCode = "200",
@@ -94,11 +100,6 @@ class RoleAssignmentController(
         @RequestParam(defaultValue = "25") @Min(1) @Max(MAXIMUM_PAGE_SIZE) size: Int,
     ): ApiPage<RoleAssignmentSummaryResponse> {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            "role_assignment.view",
-        )
         val result =
             iamQueryService.searchRoleAssignments(
                 caller.activeOrganisationId,
@@ -110,8 +111,14 @@ class RoleAssignmentController(
 
     /** Retrieves a user role assignment within the active tenant. */
     @GetMapping("/{assignment_id}")
-    @PreAuthorize("hasAuthority('role_assignment.view')")
-    @Operation(summary = "Get role assignment", description = "Retrieves a user role assignment.")
+    @Operation(
+        summary = "Get role assignment",
+        description =
+            "Retrieves a user role assignment. BRANCH-scope rows need role_assignment.view " +
+                "tenant-wide or on the row's branch; TENANT-scope rows need the tenant-wide " +
+                "view. An unknown id is 404 to a tenant-wide holder and 403 to a branch-scoped " +
+                "holder.",
+    )
     @ApiResponses(
         ApiResponse(
             responseCode = "200",
@@ -134,7 +141,7 @@ class RoleAssignmentController(
         ),
         ApiResponse(
             responseCode = "404",
-            description = "Role assignment not found",
+            description = "Role assignment not found (a branch-scoped holder gets 403 instead)",
             content = [Content(schema = Schema(implementation = ApiProblem::class))],
         ),
     )
@@ -142,11 +149,6 @@ class RoleAssignmentController(
         @PathVariable("assignment_id") assignmentId: UUID,
     ): RoleAssignmentDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            "role_assignment.view",
-        )
         return iamQueryService
             .getRoleAssignment(
                 caller.activeOrganisationId,

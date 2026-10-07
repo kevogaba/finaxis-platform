@@ -182,7 +182,12 @@ a tenant-wide holder gets 404 for an unknown id. This is identical to the mutati
 is no existence oracle. **Lists show what the caller may see**: `GET /branches` and the
 assignment lists return every branch the caller holds the view on (a tenant-wide grant means all),
 with the restriction applied in the query, so pages and totals stay correct, and an explicit
-`branch_id` filter outside the visible set is 403. A caller with no grant at all gets 403.
+`branch_id` filter outside the visible set is 403. A caller with no grant at all gets 403. One
+rule for every tenant caller, tenant-wide or branch-scoped, covers the selected branch: with no
+explicit `branch_id`, the branch-assignment list defaults to the selected branch **when the caller
+may view it**, and is every viewable branch otherwise. It only ever narrows, so visibility alone
+decides what may be seen. `scope_type` on the role-assignment list is matched like every
+enum-like filter (exact value, otherwise an empty page).
 Platform callers are unchanged: the platform view is checked in the platform organisation.
 
 The read endpoints for branches, branch assignments and role assignments (list and by id) carry
@@ -196,7 +201,9 @@ route is never open). Mutation routes keep their coarse gates (point 4).
 
 This closes the BRANCH-scope case of the defect: a `BRANCH_MANAGER` assigned to A can read A,
 suspend A and read it back, and still gets 403 on B. The branch pin keeps its meaning for what the
-caller *does*; it no longer narrows what the target-aware reads may *see*.
+caller *does*; it no longer narrows what the target-aware reads may *see* (it is only the
+default for an unfiltered list when the caller may view that branch, for every tenant caller
+alike).
 
 ### 6. The permission-free read-backs go away
 
@@ -447,6 +454,10 @@ the documents the supersessions below name (`authorization-model.md`, `foundatio
   `branch.view`, `branch_assignment.view` or `role_assignment.view` only through a role scoped to
   branch B can list and get B's resources (and sees none of A's unless granted), while a caller
   with no grant at all still gets 403.
+
+  *Status: implemented by this step's change.* `PermissionGuard.branchVisibility` is the port, the
+  endpoint gates on the six read routes are removed, and `TargetAwareReadsIntegrationTests` is the
+  full-stack proof.
 - **5.** `feat(iam): require the view permission with every mutation permission`
   The pre-check in the lifecycle **and accounting** guard adapters; `MissingPermissionException`;
   fixture adaptation including the accounting fixtures; named-403 tests; the route tables listing

@@ -1,9 +1,11 @@
 package com.finaxis.platform.iam.application.query
 
+import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.requireValidPage
 import com.finaxis.platform.common.web.api.requireValidSort
+import com.finaxis.platform.lifecycle.BranchVisibility
 import com.finaxis.platform.lifecycle.FoundationCaller
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.PlatformCaller
@@ -152,7 +154,13 @@ class IamQueryService(
         return userQueries.searchMemberships(organisationId, filter)
     }
 
-    /** Searches branch assignment summaries, validating caller context and permissions. */
+    /**
+     * Searches branch assignment summaries, validating caller context and permissions. A tenant
+     * caller sees the assignments of the branches it holds `branch_assignment.view` on (all of
+     * them for a tenant-wide grant), restricted in the query; an explicit branch outside that set,
+     * or no grant at all, is 403. Without an explicit branch the list defaults to the selected
+     * branch if the caller may view it, for every tenant caller alike.
+     */
     fun searchBranchAssignments(
         organisationId: UUID,
         filter: BranchAssignmentFilter,
@@ -160,13 +168,19 @@ class IamQueryService(
     ): ApiPage<BranchAssignmentSummary> {
         verifyTenantScope(organisationId, caller)
         requireValidPage(filter.page, filter.size)
+        var restriction: Set<UUID>? = null
+        var branchId = filter.branchId
         when (caller) {
             is TenantCaller -> {
-                permissionGuard.requireTenantPermission(
-                    caller.actorId,
-                    organisationId,
-                    "branch_assignment.view",
-                )
+                val visibility = branchAssignmentVisibility(caller, organisationId)
+                restriction = visibility.requireListRestriction()
+                if (branchId != null && !visibility.canSee(branchId)) {
+                    throw ForbiddenOperationException()
+                }
+                // One rule for every tenant caller: with no explicit branch the list defaults to
+                // the selected branch when the caller may view it, and is every viewable branch
+                // otherwise. It only ever narrows; visibility alone decides what may be seen.
+                branchId = branchId ?: filter.pinnedBranchId?.takeIf(visibility::canSee)
             }
 
             is PlatformCaller -> {
@@ -174,39 +188,62 @@ class IamQueryService(
                     caller.actorId,
                     "branch_assignment.view",
                 )
+                branchId = branchId ?: filter.pinnedBranchId
             }
         }
-        return assignmentQueries.searchBranchAssignments(organisationId, filter)
+        return assignmentQueries.searchBranchAssignments(
+            organisationId,
+            filter.copy(branchId = branchId),
+            restriction,
+        )
     }
 
-    /** Retrieves detailed branch assignment metadata, validating caller context and permissions. */
+    /**
+     * Retrieves detailed branch assignment metadata, validating caller context and permissions. A
+     * tenant-wide holder gets 404 for an unknown id; a branch-scoped holder gets 403 for an unknown
+     * id and for an assignment on a branch it holds nothing on, so existence is no oracle.
+     */
     fun getBranchAssignment(
         organisationId: UUID,
         id: UUID,
         caller: FoundationCaller,
     ): BranchAssignmentDetail {
         verifyTenantScope(organisationId, caller)
-        when (caller) {
-            is TenantCaller -> {
-                permissionGuard.requireTenantPermission(
-                    caller.actorId,
-                    organisationId,
-                    "branch_assignment.view",
-                )
+        val visibility =
+            when (caller) {
+                is TenantCaller -> {
+                    branchAssignmentVisibility(caller, organisationId)
+                }
+
+                is PlatformCaller -> {
+                    permissionGuard.requirePlatformPermission(
+                        caller.actorId,
+                        "branch_assignment.view",
+                    )
+                    BranchVisibility.AllBranches
+                }
+            }
+        val detail = assignmentQueries.findBranchAssignmentById(organisationId, id)
+        return when {
+            detail == null && visibility == BranchVisibility.AllBranches -> {
+                throw ResourceNotFoundException(safeDetail = "Branch assignment not found: $id")
             }
 
-            is PlatformCaller -> {
-                permissionGuard.requirePlatformPermission(
-                    caller.actorId,
-                    "branch_assignment.view",
-                )
+            detail == null || !visibility.canSee(detail.branchId) -> {
+                throw ForbiddenOperationException()
+            }
+
+            else -> {
+                detail
             }
         }
-        return assignmentQueries.findBranchAssignmentById(organisationId, id)
-            ?: throw ResourceNotFoundException(
-                safeDetail = "Branch assignment not found: $id",
-            )
     }
+
+    private fun branchAssignmentVisibility(
+        caller: TenantCaller,
+        organisationId: UUID,
+    ): BranchVisibility =
+        permissionGuard.branchVisibility(caller.actorId, organisationId, "branch_assignment.view")
 
     /** Searches roles within an organisation, validating caller context and permissions. */
     fun searchRoles(
@@ -265,7 +302,13 @@ class IamQueryService(
             )
     }
 
-    /** Searches role assignment summaries, validating caller context and permissions. */
+    /**
+     * Searches role assignment summaries, validating caller context and permissions. A tenant-wide
+     * `role_assignment.view` sees every row; a branch-scoped holder sees only BRANCH-scope rows on
+     * the branches it holds the view on, restricted in the query, so any `scope_type` other than
+     * BRANCH (like every enum-like filter, matched exactly) is an empty page. A `branch_id`
+     * outside that set, or no grant at all, is 403.
+     */
     fun searchRoleAssignments(
         organisationId: UUID,
         filter: RoleAssignmentFilter,
@@ -273,53 +316,82 @@ class IamQueryService(
     ): ApiPage<RoleAssignmentSummary> {
         verifyTenantScope(organisationId, caller)
         requireValidPage(filter.page, filter.size)
-        when (caller) {
-            is TenantCaller -> {
-                permissionGuard.requireTenantPermission(
-                    caller.actorId,
-                    organisationId,
-                    "role_assignment.view",
-                )
-            }
+        val restriction =
+            when (caller) {
+                is TenantCaller -> {
+                    val visibility = roleAssignmentVisibility(caller, organisationId)
+                    val restriction = visibility.requireListRestriction()
+                    if (filter.branchId?.let { !visibility.canSee(it) } == true) {
+                        throw ForbiddenOperationException()
+                    }
+                    restriction
+                }
 
-            is PlatformCaller -> {
-                permissionGuard.requirePlatformPermission(
-                    caller.actorId,
-                    "role_assignment.view",
-                )
+                is PlatformCaller -> {
+                    permissionGuard.requirePlatformPermission(
+                        caller.actorId,
+                        "role_assignment.view",
+                    )
+                    null
+                }
             }
-        }
-        return assignmentQueries.searchRoleAssignments(organisationId, filter)
+        return assignmentQueries.searchRoleAssignments(organisationId, filter, restriction)
     }
 
-    /** Retrieves detailed role assignment metadata, validating caller context and permissions. */
+    /**
+     * Retrieves detailed role assignment metadata, validating caller context and permissions. A
+     * BRANCH-scope row is read with the view at that branch; a TENANT-scope row needs the
+     * tenant-wide view. A branch-scoped holder gets 403 for an unknown id and for any row it may
+     * not see, a tenant-wide holder gets 404 for an unknown id.
+     */
     fun getRoleAssignment(
         organisationId: UUID,
         id: UUID,
         caller: FoundationCaller,
     ): RoleAssignmentDetail {
         verifyTenantScope(organisationId, caller)
-        when (caller) {
-            is TenantCaller -> {
-                permissionGuard.requireTenantPermission(
-                    caller.actorId,
-                    organisationId,
-                    "role_assignment.view",
-                )
+        val visibility =
+            when (caller) {
+                is TenantCaller -> {
+                    roleAssignmentVisibility(caller, organisationId)
+                }
+
+                is PlatformCaller -> {
+                    permissionGuard.requirePlatformPermission(
+                        caller.actorId,
+                        "role_assignment.view",
+                    )
+                    BranchVisibility.AllBranches
+                }
+            }
+        val detail = assignmentQueries.findRoleAssignmentById(organisationId, id)
+        return when {
+            detail == null && visibility == BranchVisibility.AllBranches -> {
+                throw ResourceNotFoundException(safeDetail = "Role assignment not found: $id")
             }
 
-            is PlatformCaller -> {
-                permissionGuard.requirePlatformPermission(
-                    caller.actorId,
-                    "role_assignment.view",
-                )
+            detail == null || !canSeeRoleAssignment(visibility, detail) -> {
+                throw ForbiddenOperationException()
+            }
+
+            else -> {
+                detail
             }
         }
-        return assignmentQueries.findRoleAssignmentById(organisationId, id)
-            ?: throw ResourceNotFoundException(
-                safeDetail = "Role assignment not found: $id",
-            )
     }
+
+    private fun canSeeRoleAssignment(
+        visibility: BranchVisibility,
+        detail: RoleAssignmentDetail,
+    ): Boolean =
+        visibility == BranchVisibility.AllBranches ||
+            (detail.scopeType == BRANCH_SCOPE && detail.branchId?.let(visibility::canSee) == true)
+
+    private fun roleAssignmentVisibility(
+        caller: TenantCaller,
+        organisationId: UUID,
+    ): BranchVisibility =
+        permissionGuard.branchVisibility(caller.actorId, organisationId, "role_assignment.view")
 
     /** Searches system permissions catalog, validating caller context and permissions. */
     fun searchPermissions(
@@ -447,6 +519,7 @@ class IamQueryService(
     }
 
     private companion object {
+        const val BRANCH_SCOPE = "BRANCH"
         val allowedRoleSorts = setOf("roleCode", "roleName", "status", "createdAt")
         val allowedPermissionSorts =
             setOf(

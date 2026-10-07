@@ -311,6 +311,12 @@ outside those documents.
   (every request authenticates via the bearer JWT).
 - Controllers use permission authorities for coarse gates; application services enforce
   resource-specific authorization.
+- Reads of branch resources (`GET /branches[/{id}]`, the branch-assignment and role-assignment
+  reads) are **target-aware** (ADR 0030 point 5): a tenant-wide grant OR a grant on that branch,
+  answered by `PermissionGuard.branchVisibility` and applied in the store query, with 403 (never
+  404) for a branch-scoped caller's unknown id. These routes deliberately carry **no**
+  `@PreAuthorize` view gate (it would test the pinned branch's authorities); the application-layer
+  check is their only authorisation, so never add an endpoint gate back or drop that check.
 
 ## FSM / events / async
 

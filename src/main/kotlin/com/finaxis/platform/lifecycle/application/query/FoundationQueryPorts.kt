@@ -45,10 +45,14 @@ interface FoundationQueryStore {
     /** Finds detailed tenant metadata by id. */
     fun findTenantById(id: UUID): TenantDetail?
 
-    /** Searches branches within an organisation. */
+    /**
+     * Searches branches within an organisation. A non-null [restrictToBranchIds] limits the
+     * result, its total and its paging to those branch ids, in the query itself.
+     */
     fun searchBranches(
         organisationId: UUID,
         filter: BranchFilter,
+        restrictToBranchIds: Set<UUID>? = null,
     ): ApiPage<BranchSummary>
 
     /** Finds detailed branch metadata by id. */

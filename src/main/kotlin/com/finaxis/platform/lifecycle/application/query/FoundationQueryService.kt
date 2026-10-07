@@ -77,7 +77,12 @@ class FoundationQueryService(
         return store.searchTenants(scopedFilter, orgId)
     }
 
-    /** Retrieves detailed branch metadata by id, validating caller context and permissions. */
+    /**
+     * Retrieves detailed branch metadata by id, validating caller context and permissions. A
+     * tenant caller needs `branch.view` tenant-wide or on that branch (ADR 0030, decision 5), so a
+     * branch-scoped holder asking for another branch or an unknown id gets 403, while a
+     * tenant-wide holder gets 404 for an unknown id: there is no existence oracle.
+     */
     fun getBranch(
         organisationId: UUID,
         id: UUID,
@@ -86,9 +91,10 @@ class FoundationQueryService(
         verifyTenantScope(organisationId, caller)
         when (caller) {
             is TenantCaller -> {
-                permissionGuard.requireTenantPermission(
+                permissionGuard.requireBranchPermission(
                     caller.actorId,
                     organisationId,
+                    id,
                     "branch.view",
                 )
             }
@@ -114,7 +120,12 @@ class FoundationQueryService(
         store.findBranchById(organisationId, id)
             ?: throw ResourceNotFoundException(safeDetail = "Branch not found: $id")
 
-    /** Searches branches within an organisation, validating caller context and permissions. */
+    /**
+     * Searches branches within an organisation, validating caller context and permissions. A
+     * tenant caller sees the branches it holds `branch.view` on (every branch for a tenant-wide
+     * grant), restricted in the store query so pages and totals are exact; a caller holding it
+     * nowhere gets 403.
+     */
     fun searchBranches(
         organisationId: UUID,
         filter: BranchFilter,
@@ -123,20 +134,20 @@ class FoundationQueryService(
         verifyTenantScope(organisationId, caller)
         requireValidPage(filter.page, filter.size)
         requireValidSort(filter.sortBy, filter.sortDir, allowedBranchSorts)
-        when (caller) {
-            is TenantCaller -> {
-                permissionGuard.requireTenantPermission(
-                    caller.actorId,
-                    organisationId,
-                    "branch.view",
-                )
-            }
+        val visibleBranchIds =
+            when (caller) {
+                is TenantCaller -> {
+                    permissionGuard
+                        .branchVisibility(caller.actorId, organisationId, "branch.view")
+                        .requireListRestriction()
+                }
 
-            is PlatformCaller -> {
-                permissionGuard.requirePlatformPermission(caller.actorId, "branch.view")
+                is PlatformCaller -> {
+                    permissionGuard.requirePlatformPermission(caller.actorId, "branch.view")
+                    null
+                }
             }
-        }
-        return store.searchBranches(organisationId, filter)
+        return store.searchBranches(organisationId, filter, visibleBranchIds)
     }
 
     /** Retrieves detailed business date history metadata by id, validating caller context. */

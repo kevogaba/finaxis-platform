@@ -78,6 +78,83 @@ class JooqPermissionResolutionQueriesTests(
     }
 
     @Test
+    fun `branchIdsGranting returns the branches of active branch scoped grants of that code`() {
+        val organisationId = insertOrganisation()
+        val userId = insertUser()
+        val membershipId = insertMembership(organisationId, userId)
+        val branchA = insertBranch(organisationId)
+        val branchB = insertBranch(organisationId)
+        val branchC = insertBranch(organisationId)
+        val code = "branch.report.view"
+        val permissionId = insertPermission(code)
+        val otherPermissionId = insertPermission("branch.other.view")
+        val role = insertRole(organisationId)
+        insertRolePermission(organisationId, role, permissionId)
+        insertUserRoleAssignment(organisationId, userId, role, branchA)
+        insertUserRoleAssignment(organisationId, userId, role, branchB)
+        // An inactive assignment, another code and a tenant scope grant contribute nothing.
+        insertUserRoleAssignment(organisationId, userId, role, branchC, status = "INACTIVE")
+        val otherRole = insertRole(organisationId)
+        insertRolePermission(organisationId, otherRole, otherPermissionId)
+        insertUserRoleAssignment(organisationId, userId, otherRole, branchC)
+        val tenantRole = insertRole(organisationId)
+        insertRolePermission(organisationId, tenantRole, permissionId)
+        insertUserRoleAssignment(organisationId, userId, tenantRole, branchId = null)
+
+        assertEquals(setOf(branchA, branchB), queries.branchIdsGranting(membershipId, code))
+        assertEquals(emptySet(), queries.branchIdsGranting(membershipId, "no.such.code"))
+    }
+
+    @Test
+    fun `branchIdsGranting ignores inactive roles and inactive permissions and other members`() {
+        val organisationId = insertOrganisation()
+        val userId = insertUser()
+        val membershipId = insertMembership(organisationId, userId)
+        val otherUserId = insertUser()
+        insertMembership(organisationId, otherUserId)
+        val branchId = insertBranch(organisationId)
+        val activeCode = "branch.report.view"
+        val inactiveCode = "branch.dormant.view"
+        val activePermissionId = insertPermission(activeCode)
+        val inactivePermissionId = insertPermission(inactiveCode, status = "DEPRECATED")
+        val inactiveRole = insertRole(organisationId, status = "DISABLED")
+        insertRolePermission(organisationId, inactiveRole, activePermissionId)
+        insertUserRoleAssignment(organisationId, userId, inactiveRole, branchId)
+        val role = insertRole(organisationId)
+        insertRolePermission(organisationId, role, inactivePermissionId)
+        insertUserRoleAssignment(organisationId, userId, role, branchId)
+        val othersRole = insertRole(organisationId)
+        insertRolePermission(organisationId, othersRole, activePermissionId)
+        insertUserRoleAssignment(organisationId, otherUserId, othersRole, branchId)
+
+        assertEquals(emptySet(), queries.branchIdsGranting(membershipId, activeCode))
+        assertEquals(emptySet(), queries.branchIdsGranting(membershipId, inactiveCode))
+    }
+
+    @Test
+    fun `branchIdsGranting is bound to the membership's organisation`() {
+        val organisationId = insertOrganisation()
+        val otherOrganisationId = insertOrganisation()
+        val userId = insertUser()
+        val membershipId = insertMembership(organisationId, userId)
+        // The same user is also a member of another organisation, where it holds the same code
+        // through a role on that organisation's branch. That grant is not this membership's.
+        insertMembership(otherOrganisationId, userId)
+        val ownBranch = insertBranch(organisationId)
+        val otherBranch = insertBranch(otherOrganisationId)
+        val code = "branch.report.view"
+        val permissionId = insertPermission(code)
+        val ownRole = insertRole(organisationId)
+        insertRolePermission(organisationId, ownRole, permissionId)
+        insertUserRoleAssignment(organisationId, userId, ownRole, ownBranch)
+        val otherRole = insertRole(otherOrganisationId)
+        insertRolePermission(otherOrganisationId, otherRole, permissionId)
+        insertUserRoleAssignment(otherOrganisationId, userId, otherRole, otherBranch)
+
+        assertEquals(setOf(ownBranch), queries.branchIdsGranting(membershipId, code))
+    }
+
+    @Test
     fun `directPermissionEffects returns allow and deny overrides for the membership`() {
         val organisationId = insertOrganisation()
         val userId = insertUser()

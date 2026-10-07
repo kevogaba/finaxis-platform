@@ -285,6 +285,40 @@ Effective permissions are resolved for one active membership and optional select
 The schema supports direct membership overrides in `membership_permission` with `ALLOW` and
 `DENY`. The resolver returns permission codes only.
 
+### Target-aware reads of branch resources
+
+The set above is resolved for the *selected* branch, which is the right scope for what a caller
+does. Reads of branch resources are instead authorised **at the branch they concern** (ADR 0030,
+decision 5): `branch.view` for `GET /branches` and `GET /branches/{id}`, `branch_assignment.view`
+for the assignment reads, and `role_assignment.view` for role-assignment rows with
+`scope_type = BRANCH` (`TENANT`-scope rows need the tenant-wide view). The rule is **a tenant-wide
+grant OR a grant on that branch**.
+
+`PermissionGuard.branchVisibility(actor, organisation, viewCode)` answers it as a
+`BranchVisibility`:
+
+- `AllBranches` when the code is in the tenant-wide effective set (a tenant-scope role or a direct
+  `ALLOW`);
+- otherwise `Branches(ids)`, the branches carrying an ACTIVE branch-scope role assignment to an
+  ACTIVE role granting an ACTIVE catalogue code (`PermissionResolutionQueries.branchIdsGranting`),
+  empty when there is none;
+- empty as well for an inactive organisation or membership and for a direct `DENY` of the code,
+  exactly as the effective set is.
+
+A by-id read is `404` for an unknown id to an `AllBranches` holder, and `403` to a branch-scoped
+holder for an unknown id and for another branch alike, so there is no existence oracle. A list
+restricts the store query to the visible ids (`restrictToBranchIds`), so pages and totals stay
+exact; an explicit `branch_id` outside the set is `403`, and no grant is `403`. With no explicit
+`branch_id`, the branch-assignment list defaults to the selected branch when the caller may view
+it (the same rule for a tenant-wide and a branch-scoped holder), else to every viewable branch.
+`visibility` is memoised per request in `RequestPermissionCache`, so the pre-read and the
+read-back of one request cannot disagree. These read
+endpoints carry **no** `@PreAuthorize` coarse gate, since it would evaluate the selected branch's
+authority set and refuse a caller pinned to A whose only grant is scoped to B; the application
+layer is their only authorisation and a route is never open (authentication is still required,
+and a caller with no grant gets `403`). Mutation routes keep their coarse gates. See
+[Active Organisation Context](active-organisation-context.md).
+
 ```mermaid
 flowchart LR
     U[User account] --> M[Organisation membership]
