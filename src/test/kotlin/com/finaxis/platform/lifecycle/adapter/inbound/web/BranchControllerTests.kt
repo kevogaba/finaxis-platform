@@ -603,7 +603,7 @@ class BranchControllerTests
         fun `update changes the name only and leaves the parent alone`() {
             val tenantId = uuidV7()
             val branchId = uuidV7()
-            stubUpdateResponse(tenantId, branchId, "ACTIVE")
+            stubBranchDetail(tenantId, branchId, "ACTIVE")
 
             patch(branchId, tenantId, "{\"branch_name\":\"Riverside\"}").andExpect {
                 status { isOk() }
@@ -624,7 +624,7 @@ class BranchControllerTests
             val tenantId = uuidV7()
             val branchId = uuidV7()
             val parentId = uuidV7()
-            stubUpdateResponse(tenantId, branchId, "DRAFT")
+            stubBranchDetail(tenantId, branchId, "DRAFT")
 
             patch(
                 branchId,
@@ -645,7 +645,7 @@ class BranchControllerTests
         fun `update treats an explicit null parent as detaching the branch`() {
             val tenantId = uuidV7()
             val branchId = uuidV7()
-            stubUpdateResponse(tenantId, branchId, "ACTIVE")
+            stubBranchDetail(tenantId, branchId, "ACTIVE")
 
             patch(branchId, tenantId, "{\"parent_branch_id\":null}").andExpect {
                 status { isOk() }
@@ -660,7 +660,7 @@ class BranchControllerTests
         fun `update returns the stored address and dates in the response`() {
             val tenantId = uuidV7()
             val branchId = uuidV7()
-            stubUpdateResponse(tenantId, branchId, "ACTIVE")
+            stubBranchDetail(tenantId, branchId, "ACTIVE")
 
             patch(branchId, tenantId, "{\"branch_name\":\"Riverside\"}").andExpect {
                 jsonPath("$.status") { value("ACTIVE") }
@@ -723,7 +723,7 @@ class BranchControllerTests
         fun `update accepts a name with a line break as create does and rejects a blank one`() {
             val tenantId = uuidV7()
             val branchId = uuidV7()
-            stubUpdateResponse(tenantId, branchId, "ACTIVE")
+            stubBranchDetail(tenantId, branchId, "ACTIVE")
 
             patch(branchId, tenantId, "{\"branch_name\":\"North\\nWing\"}")
                 .andExpect { status { isOk() } }
@@ -787,31 +787,47 @@ class BranchControllerTests
             val tenantId = uuidV7()
             val targetBranchId = uuidV7()
             val selectedBranchId = uuidV7()
-            stubUpdateResponse(tenantId, targetBranchId, "ACTIVE")
+            val callerId = uuidV7()
+            stubBranchDetail(tenantId, targetBranchId, "ACTIVE")
 
             patch(
                 targetBranchId,
                 tenantId,
                 "{\"branch_name\":\"Riverside\"}",
                 selectedBranchId = selectedBranchId,
+                userId = callerId,
             ).andExpect {
                 status { isOk() }
                 jsonPath("$.id") { value(targetBranchId.toString()) }
             }
 
             assertEquals(targetBranchId, captureUpdate().branchId)
-            verify(foundationQueryService, org.mockito.kotlin.never())
-                .getBranch(any(), any(), any())
+            // The response is the gated query at the scope the service authorised: the caller's
+            // tenant and the target branch, never the selected one, for this very caller.
+            verify(foundationQueryService)
+                .getBranch(
+                    eq(tenantId),
+                    eq(targetBranchId),
+                    argThat<TenantCaller> {
+                        actorId == callerId && activeOrganisationId == tenantId
+                    },
+                )
         }
 
         @Test
-        fun `return passes the target branch and reason and answers the ungated detail`() {
+        fun `return passes the target branch and reason and answers the gated detail`() {
             val tenantId = uuidV7()
             val targetBranchId = uuidV7()
             val selectedBranchId = uuidV7()
-            stubUpdateResponse(tenantId, targetBranchId, "DRAFT")
+            val callerId = uuidV7()
+            stubBranchDetail(tenantId, targetBranchId, "DRAFT")
 
-            returnBranch(targetBranchId, tenantId, selectedBranchId = selectedBranchId).andExpect {
+            returnBranch(
+                targetBranchId,
+                tenantId,
+                selectedBranchId = selectedBranchId,
+                userId = callerId,
+            ).andExpect {
                 status { isOk() }
                 jsonPath("$.id") { value(targetBranchId.toString()) }
                 jsonPath("$.status") { value("DRAFT") }
@@ -824,18 +840,25 @@ class BranchControllerTests
             assertEquals("Valid reason", captor.firstValue.reason.value)
             assertEquals(ActingScope.TENANT, captor.firstValue.scope)
             // The permission depends on who the actor is, so the service decides it; the
-            // controller must not pin a single one, and the response must not need branch.view.
+            // controller must not pin a single one. The response is the gated read of the target
+            // branch (ADR 0030 step 6a).
             verify(permissionGuard, org.mockito.kotlin.never())
                 .requireBranchPermission(any(), any(), any(), any())
-            verify(foundationQueryService, org.mockito.kotlin.never())
-                .getBranch(any(), any(), any())
+            verify(foundationQueryService)
+                .getBranch(
+                    eq(tenantId),
+                    eq(targetBranchId),
+                    argThat<TenantCaller> {
+                        actorId == callerId && activeOrganisationId == tenantId
+                    },
+                )
         }
 
         @Test
         fun `return is open to either the maker or the checker authority and to nobody else`() {
             val tenantId = uuidV7()
             val branchId = uuidV7()
-            stubUpdateResponse(tenantId, branchId, "DRAFT")
+            stubBranchDetail(tenantId, branchId, "DRAFT")
 
             listOf("branch.create", "branch.approve").forEach { authority ->
                 returnBranch(branchId, tenantId, permissions = setOf(authority))
@@ -897,7 +920,7 @@ class BranchControllerTests
         fun `return accepts reasons of exactly three and 500 characters`() {
             val tenantId = uuidV7()
             val branchId = uuidV7()
-            stubUpdateResponse(tenantId, branchId, "DRAFT")
+            stubBranchDetail(tenantId, branchId, "DRAFT")
 
             listOf("abc", "x".repeat(500)).forEach { reason ->
                 returnBranch(
@@ -1054,13 +1077,14 @@ class BranchControllerTests
             permissions: Set<String> = setOf("branch.approve"),
             selectedBranchId: UUID? = branchId,
             body: String? = REASON_BODY,
+            userId: UUID = uuidV7(),
         ) = mockMvc.post("${ApiPaths.BRANCHES}/$branchId/return") {
             header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())
             if (body != null) {
                 contentType = MediaType.APPLICATION_JSON
                 content = body
             }
-            with(authentication(tenantToken(permissions, tenantId, selectedBranchId)))
+            with(authentication(tenantToken(permissions, tenantId, selectedBranchId, userId)))
         }
 
         private fun patch(
@@ -1069,13 +1093,14 @@ class BranchControllerTests
             body: String?,
             permissions: Set<String> = setOf("branch.update"),
             selectedBranchId: UUID? = branchId,
+            userId: UUID = uuidV7(),
         ) = mockMvc.patch("${ApiPaths.BRANCHES}/$branchId") {
             header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())
             if (body != null) {
                 contentType = MediaType.APPLICATION_JSON
                 content = body
             }
-            with(authentication(tenantToken(permissions, tenantId, selectedBranchId)))
+            with(authentication(tenantToken(permissions, tenantId, selectedBranchId, userId)))
         }
 
         private fun captureUpdate(): UpdateBranchCommand {
@@ -1118,24 +1143,6 @@ class BranchControllerTests
         ) {
             whenever(
                 foundationQueryService.getBranch(eq(tenantId), eq(branchId), any()),
-            ).thenReturn(branchDetail(tenantId, branchId, lifecycleStatus))
-        }
-
-        /**
-         * The update response comes from the permission-free read: the service has already
-         * authorised the target branch, and a branch-scoped maker holds no tenant-wide
-         * branch.view. The gated read is deliberately left unstubbed so a regression fails.
-         */
-        private fun stubUpdateResponse(
-            tenantId: UUID,
-            branchId: UUID,
-            lifecycleStatus: String,
-        ) {
-            whenever(
-                foundationQueryService.getBranchAfterAuthorizedMutation(
-                    eq(tenantId),
-                    eq(branchId),
-                ),
             ).thenReturn(branchDetail(tenantId, branchId, lifecycleStatus))
         }
 

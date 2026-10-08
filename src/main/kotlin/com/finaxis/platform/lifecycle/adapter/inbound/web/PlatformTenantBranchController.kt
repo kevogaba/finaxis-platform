@@ -412,11 +412,9 @@ class PlatformTenantBranchController(
                 scope = ActingScope.PLATFORM,
             ),
         )
-        return foundationQueryService
-            .getBranchAfterAuthorizedMutation(
-                tenantId,
-                branchId,
-            ).toResponse()
+        // The service has checked the mutation and branch.view in the platform organisation, so
+        // this gated read, still bound to the path tenant, cannot fail on grants (ADR 0030).
+        return foundationQueryService.getBranch(tenantId, branchId, caller).toResponse()
     }
 
     /**
@@ -519,11 +517,9 @@ class PlatformTenantBranchController(
                 scope = ActingScope.PLATFORM,
             ),
         )
-        return foundationQueryService
-            .getBranchAfterAuthorizedMutation(
-                tenantId,
-                branchId,
-            ).toResponse()
+        // The service has checked the mutation and branch.view in the platform organisation, so
+        // this gated read, still bound to the path tenant, cannot fail on grants (ADR 0030).
+        return foundationQueryService.getBranch(tenantId, branchId, caller).toResponse()
     }
 
     /**
@@ -628,11 +624,9 @@ class PlatformTenantBranchController(
                 scope = ActingScope.PLATFORM,
             ),
         )
-        return foundationQueryService
-            .getBranchAfterAuthorizedMutation(
-                tenantId,
-                branchId,
-            ).toResponse()
+        // The service has checked the mutation and branch.view in the platform organisation, so
+        // this gated read, still bound to the path tenant, cannot fail on grants (ADR 0030).
+        return foundationQueryService.getBranch(tenantId, branchId, caller).toResponse()
     }
 
     private fun BranchSummary.toResponse() =

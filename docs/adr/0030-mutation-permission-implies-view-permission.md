@@ -212,11 +212,11 @@ of ADR 0028, come under the same rule. They read back through the gated query li
 platform branch submit, activate and return; platform tenant return; platform membership activate;
 tenant branch `PATCH` and return.
 
-- The `get...AfterAuthorizedMutation` helpers (five declarations) are **deleted**, and an
-  **ArchUnit** guard forbids them from coming back: no method of that name may exist; web adapters
-  may call only query methods that take a caller and are gated by the `PermissionGuard`; a gated
-  method must actually call the guard; and web adapters do not reach query or store ports
-  directly (the platform tenant controllers read the initial-administrator bootstrap store
+- The remaining `get...AfterAuthorizedMutation` helpers (four declarations once 6a has deleted
+  the branch one) are **deleted**, and an **ArchUnit** guard forbids them from coming back: no
+  method of that name may exist; web adapters may call only query methods that take a caller and
+  are gated by the `PermissionGuard`; a gated method must actually call the guard; and web adapters
+  do not reach query or store ports directly (the platform tenant controllers read the initial-administrator bootstrap store
   directly today; that data folds into the gated tenant detail).
 - The two "by first page of 100" read-backs (role permission grant, branch assignment assign)
   become by-key reads, which also removes a latent 404-after-mutation for a branch with more than
@@ -478,6 +478,11 @@ the documents the supersessions below name (`authorization-model.md`, `foundatio
   caller the pre-check refused.
 - **6a.** `refactor(lifecycle): read back branches through the gated query`
   Branch `PATCH`, return, and the platform branch routes.
+
+  *Status: implemented by this step's change.* Branch `PATCH`, return and the platform branch
+  submit, activate and return answer through `FoundationQueryService.getBranch` at the scope the
+  service checked (target branch, or the platform organisation bound to the path tenant), and
+  `getBranchAfterAuthorizedMutation` is deleted.
 - **6b.** `refactor(lifecycle): authorise memberships in the service and read them back gated`
   Tenant and platform membership routes; the controller-only checks and the invite check move into
   `UserProvisioningService`.
@@ -505,7 +510,7 @@ the documents the supersessions below name (`authorization-model.md`, `foundatio
   and `user.view` check moves into the application service, inside the mutation transaction, with
   a gated read-back, mirroring 6d.
 - **7.** `test(architecture): forbid permission-free reads from web adapters`
-  Delete the five helper declarations; the ArchUnit rules of point 6; the final documentation sweep
+  Delete the remaining helper declarations; the ArchUnit rules of point 6; the final documentation sweep
   turning "planned" into current.
 
 Pull request 5 is safe before 6a to 6e (the old permission-free read-backs still answer, and the

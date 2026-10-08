@@ -435,10 +435,10 @@ class BranchController(
                 address = request.address,
             ),
         )
-        // The service has authorised branch.update on this very branch; a branch-scoped maker holds
-        // no tenant-wide branch.view, and a gated read here would roll the update back with a 403.
+        // The service has checked branch.update and its branch.view on this very branch, so the
+        // gated read at that scope cannot fail on grants (ADR 0030).
         return foundationQueryService
-            .getBranchAfterAuthorizedMutation(caller.activeOrganisationId, branchId)
+            .getBranch(caller.activeOrganisationId, branchId, caller)
             .toResponse()
     }
 
@@ -748,11 +748,10 @@ class BranchController(
                 actorId = caller.actorId,
             ),
         )
-        // The service has authorised the permission its intent needs on this very branch; a role
-        // holding only that permission has no tenant-wide branch.view, and a gated read here would
-        // roll the return back with a 403.
+        // The service has checked the permission its intent needs and its branch.view on this very
+        // branch, so the gated read at that scope cannot fail on grants (ADR 0030).
         return foundationQueryService
-            .getBranchAfterAuthorizedMutation(caller.activeOrganisationId, branchId)
+            .getBranch(caller.activeOrganisationId, branchId, caller)
             .toResponse()
     }
 

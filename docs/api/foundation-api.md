@@ -567,6 +567,10 @@ and answers `200` with the branch detail above, so the response carries the stor
   update once. The row version is incremented by each update, and a status change that commits
   first makes the update `409` rather than overwriting it.
 
+The response is the branch detail produced by the same gated read as `GET /branches/{branch_id}`
+at the branch the update was checked against (so a branch-scoped editor sees the branch it
+edited).
+
 The platform route has no equivalent: a platform administrator creates, submits and activates a
 tenant's branch but does not edit it.
 
@@ -888,6 +892,10 @@ is not bounded, because taking back one's own request grants nothing. A platform
 the permission, then `404` for the platform organisation as `tenant_id`, then `404` for a branch
 outside the path tenant, then (checker only) the window, then the tenant state (`ACTIVE` or
 `PROVISIONING`, else `409`), then the branch state (`409`).
+
+Platform branch submit, activate and return answer with the branch detail produced by the same
+gated read as `GET /platform/tenants/{tenant_id}/branches/{branch_id}` (`branch.view` in the
+platform organisation, bound to the path tenant), so there is no permission-free read-back.
 
 ### Platform Tenant Memberships
 

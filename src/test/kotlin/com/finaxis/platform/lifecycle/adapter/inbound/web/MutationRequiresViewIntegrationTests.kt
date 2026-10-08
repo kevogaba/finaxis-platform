@@ -17,11 +17,15 @@ import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.PlatformCaller
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.TenantCaller
+import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
 import com.finaxis.platform.lifecycle.withRequestContext
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
+import org.mockito.Mockito.doAnswer
+import org.mockito.kotlin.any
+import org.mockito.kotlin.whenever
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
@@ -29,10 +33,13 @@ import org.springframework.cache.CacheManager
 import org.springframework.context.annotation.Import
 import org.springframework.http.MediaType
 import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.MockMvcResultMatchersDsl
 import org.springframework.test.web.servlet.ResultActionsDsl
 import org.springframework.test.web.servlet.delete
+import org.springframework.test.web.servlet.get
+import org.springframework.test.web.servlet.patch
 import org.springframework.test.web.servlet.post
 import org.springframework.test.web.servlet.put
 import java.time.OffsetDateTime
@@ -68,6 +75,9 @@ class MutationRequiresViewIntegrationTests
         private val iamQueryService: IamQueryService,
         private val cacheManager: CacheManager,
     ) {
+        @MockitoSpyBean
+        private lateinit var branchProvisioningService: BranchProvisioningService
+
         private val fixture = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
         private val admin = seedUser("admin")
         private val organisationId = fixture.createActiveOrganisation("mrv", admin)
@@ -569,6 +579,107 @@ class MutationRequiresViewIntegrationTests
             )
         }
 
+        /**
+         * Calls the guard and `getBranch` directly, as the controller does in sequence, so it
+         * proves the memo property (the read-back decides from the pre-check's answer); it would
+         * also pass before the read-back moved to the gated query. The MockMvc case below is the
+         * end-to-end proof. The mutations are the ones a branch return can ask for: `branch.create`
+         * for the maker's withdrawal, `branch.approve` for a checker's return, and `branch.update`.
+         */
+        @Test
+        fun `the update and return read-backs decide from the pre-check's answer at the branch`() {
+            val branchId = activeBranch()
+            listOf("branch.update", "branch.create", "branch.approve").forEach { mutation ->
+                val actor = seedUser("memo-$mutation")
+                val caller = TenantCaller(actor, organisationId)
+                fixture.grantBranchPermissionsWithViews(organisationId, branchId, actor, mutation)
+
+                assertReadBackUsesPreCheck(
+                    actor,
+                    "branch.view",
+                    preCheck = {
+                        permissionGuard.requireBranchPermission(
+                            actor,
+                            organisationId,
+                            branchId,
+                            mutation,
+                        )
+                    },
+                    readBack = {
+                        foundationQueryService.getBranch(organisationId, branchId, caller)
+                    },
+                    afterwards = {
+                        foundationQueryService.getBranch(organisationId, branchId, caller)
+                    },
+                )
+            }
+        }
+
+        /**
+         * Direct guard and `getBranch` calls, like the tenant case above (memo property only).
+         * There is no platform branch update route, so the platform codes are those of the
+         * platform submit, activate and return routes.
+         */
+        @Test
+        fun `the platform checker branch read-back decides from the pre-check's answer`() {
+            val branchId = activeBranch()
+            listOf("branch.create", "branch.approve").forEach { mutation ->
+                val actor = seedUser("memo-platform-$mutation")
+                val caller: FoundationCaller = PlatformCaller(actor, PlatformOrganisation.ID)
+                fixture.grantPlatformPermissionsWithViews(actor, mutation)
+
+                assertReadBackUsesPreCheck(
+                    actor,
+                    "branch.view",
+                    preCheck = { permissionGuard.requirePlatformPermission(actor, mutation) },
+                    readBack = {
+                        foundationQueryService.getBranch(organisationId, branchId, caller)
+                    },
+                    afterwards = {
+                        foundationQueryService.getBranch(organisationId, branchId, caller)
+                    },
+                    organisation = PlatformOrganisation.ID,
+                )
+            }
+        }
+
+        @Test
+        fun `a branch update whose view is revoked mid-request still answers and commits`() {
+            val branchId = activeBranch()
+            val actor = seedUser("branch-updater-revoked")
+            fixture.grantBranchPermissionsWithViews(
+                organisationId,
+                branchId,
+                actor,
+                "branch.update",
+            )
+            // Revoke the view after the service has checked it and changed the branch, and before
+            // the controller's gated read-back: only the per-request memo lets the read-back pass.
+            doAnswer { invocation ->
+                invocation.callRealMethod().also {
+                    revokeFromNarrowRole(actor, organisationId, "branch.view")
+                }
+            }.whenever(branchProvisioningService).update(any())
+
+            mockMvc
+                .patch("${ApiPaths.BRANCHES}/$branchId") {
+                    header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())
+                    contentType = MediaType.APPLICATION_JSON
+                    content = """{"branch_name":"Renamed Branch"}"""
+                    with(authentication(tenantToken(actor, "branch.update", branchId)))
+                }.andExpect {
+                    status { isOk() }
+                    jsonPath("$.branch_name") { value("Renamed Branch") }
+                }
+
+            assertEquals("Renamed Branch", branchName(branchId))
+            // The revocation was real: a new request is refused the read.
+            mockMvc
+                .get("${ApiPaths.BRANCHES}/$branchId") {
+                    with(authentication(tenantToken(actor, "branch.update", branchId)))
+                }.andExpect { forbiddenGeneric() }
+        }
+
         @Test
         fun `the platform tenant read-back decides from the pre-check's answer`() {
             val actor = seedUser("memo-platform")
@@ -844,6 +955,11 @@ class MutationRequiresViewIntegrationTests
                     key,
                 )!!
                 .get(0, Int::class.java)
+
+        private fun branchName(branchId: UUID): String =
+            dsl
+                .fetchOne("SELECT branch_name FROM branch WHERE id = ?", branchId)!!
+                .get(0, String::class.java)
 
         private fun branchStatus(branchId: UUID): String =
             dsl
