@@ -643,6 +643,8 @@ private class ProvisioningWorkerStoreFake :
     override fun organisationState(organisationId: UUID): OrganisationLifecycleState? =
         organisationStates[organisationId]
 
+    override fun lockOrganisation(organisationId: UUID) = Unit
+
     override fun findUserIdByEmail(email: String): UUID? = null
 
     override fun usernameInUse(username: String): Boolean = false

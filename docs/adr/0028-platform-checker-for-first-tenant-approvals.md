@@ -21,6 +21,12 @@ with tenant-named codes `lifecycle.approver_is_tenant_maker` and
 from returning) and a `DENIED` audit row per refusal. A tenant is not a platform-checker item, so
 decision 7's window does not apply to it; see ADR 0029's matching amendment.
 
+Amended by #223: the window count of decision 7 now runs under the tenant's organisation row
+lock, so two platform checkers can no longer both pass it in the same instant when the first
+activates its item at once (decision 8, first bullet). An approval that waits for its identity
+(the 202 path, decision 8, second bullet) still leaves the window open until the Keycloak job
+activates it. The bound itself, and every other rule, is unchanged.
+
 Resolves GitHub issue #153. Relaxes, in one named place, the maker-checker rule that
 `UserProvisioningService.approveUser` and `BranchProvisioningService.activate` enforce. Does not
 amend [ADR 0004](0004-membership-activation-notification-pipeline.md): the notification pipeline
@@ -154,9 +160,28 @@ checker step:
    tenant's own approver. Only `ACTIVE` rows count, so the bound is **not monotonic**: if the
    tenant suspends or revokes its own non-bootstrap members, or suspends or closes its own
    branches, the count falls and the platform checker **reopens** for it.
-8. **Windows the bound does not close.** The count is one read inside the approving transaction and
-   is not locked, and a membership is not `ACTIVE` the moment it is approved:
-   - two platform administrators acting in the same instant can both pass the count;
+8. **Windows the bound does not close.** The count is one read inside the approving transaction,
+   taken under the tenant's organisation row lock (`FOR NO KEY UPDATE`, #223), and a membership is
+   not `ACTIVE` the moment it is approved:
+   - two platform administrators acting in the same instant **no longer** both pass the count: each
+     platform checker step (membership activate; branch submit, activate and checker return) locks
+     the organisation row before it counts, so the second waits for the first to commit and then
+     counts what it committed. That closes the window for the second only when the first's item
+     became `ACTIVE` in that commit: a membership approved on the 202 path (next bullet) is still
+     `PENDING_APPROVAL`, so the second checker passes too, as before. The lock is the one every
+     tenant provisioning decision already takes first (ADR 0029, "Locking rule"), and a checker step
+     locks none of the tenant's rows before it, so the order is the same everywhere. Holding it, a
+     checker step also waits for, and is waited on by, every organisation provisioning decision
+     (`lockOrganisation`: amend, submit, approve, reject, return), every other organisation
+     transition (its `UPDATE` of the row takes the same lock), a tenant branch re-parenting
+     (`lockBranchHierarchy`, the same row and mode) and an accounting
+     posting's `FOR SHARE` read of the base currency (`lockBaseCurrencyCode`). None of them takes a
+     lock a checker step then needs, so the waits cannot form a cycle, and inserts of rows that
+     reference the organisation (`FOR KEY SHARE` through their foreign keys) are not blocked. Among
+     approvals it serialises platform checkers only: the **tenant's own** approval does not take
+     it, so a tenant member activating someone in the same instant as a platform checker can still
+     leave both committed (each is individually maker-checked and audited, and the tenant-side
+     approver is exactly what the bound is waiting for);
    - approving a membership for a user with no Keycloak identity (the normal new invitee) returns
      202 and leaves it `PENDING_APPROVAL` until the Keycloak job activates it, and the bound stays
      open meanwhile, so a tenant administrator can invite N such people and the platform can

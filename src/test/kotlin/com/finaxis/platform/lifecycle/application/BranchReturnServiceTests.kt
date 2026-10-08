@@ -16,6 +16,7 @@ import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.EnumSource
+import org.mockito.Mockito.inOrder
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
@@ -283,6 +284,11 @@ class BranchReturnServiceTests {
         assertEquals(branchId.toString(), row.resourceId)
         assertEquals(REASON, row.reason)
         assertEquals("PLATFORM", row.metadata["checkerScope"])
+        // The window count runs under the tenant's row lock (#223, ADR 0028 point 8).
+        inOrder(store).apply {
+            verify(store).lockOrganisation(organisationId)
+            verify(store).hasActiveBranchBeyondBootstrap(organisationId)
+        }
     }
 
     @Test
@@ -312,6 +318,7 @@ class BranchReturnServiceTests {
         verify(guard).requirePlatformPermission(submitter, "branch.create")
         verify(guard, never()).requirePlatformPermission(any(), eq("branch.approve"))
         verify(store, never()).hasActiveBranchBeyondBootstrap(any())
+        verify(store, never()).lockOrganisation(any())
         val rows = auditRows()
         assertEquals(listOf("branch.withdraw", "branch.withdraw"), rows.map { it.action })
         rows.forEach { assertNull(it.metadata["checkerScope"], "a withdrawal carries no marker") }

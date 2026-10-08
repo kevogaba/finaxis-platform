@@ -633,8 +633,12 @@ private fun membershipRevocationTransition(
 /**
  * A platform checker acts only on an ACTIVE tenant that has no ACTIVE member beyond its bootstrap
  * administrator, so it is the way out of the first-approval deadlock and not a standing approver.
+ * The tenant's organisation row is locked before the count, so two platform checkers approving
+ * two memberships of one tenant at once are serialised and the second counts the first's commit
+ * (ADR 0028 point 8).
  */
 private fun UserProvisioningStore.requirePlatformCheckerOpen(command: ApproveUserCommand) {
+    lockOrganisation(command.organisationId)
     if (organisationState(command.organisationId) != OrganisationLifecycleState.ACTIVE) {
         throw ConflictException()
     }

@@ -691,7 +691,11 @@ no tenant membership is needed. Two separate bounds apply (409 `lifecycle.platfo
 otherwise): a pending membership can be checked by the platform only while the tenant has no
 `ACTIVE` membership beyond its bootstrap administrator, and a pending branch only while it has no
 `ACTIVE` branch beyond the bootstrap head office (the ones the system actor created). Only `ACTIVE`
-rows count, so suspending or revoking them reopens the route. A tenant draft that names the
+rows count, so suspending or revoking them reopens the route. The count is taken under the
+tenant's organisation row lock, so two platform checkers acting at once are serialised and the
+second sees the first's approval once it has made the item `ACTIVE`; an approval still waiting on
+the Keycloak job (202) leaves the window open until the job activates it (#223, ADR 0028 point 8).
+A tenant draft that names the
 approving platform user's own account as its initial administrator cannot be approved by that user
 (403 `lifecycle.approver_is_initial_administrator`).
 

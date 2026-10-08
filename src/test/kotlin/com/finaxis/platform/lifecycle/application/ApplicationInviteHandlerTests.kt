@@ -279,6 +279,8 @@ private class ApplicationInviteStoreFake : UserProvisioningStore {
 
     override fun organisationState(organisationId: UUID): OrganisationLifecycleState? = null
 
+    override fun lockOrganisation(organisationId: UUID) = Unit
+
     override fun findUserIdByEmail(email: String): UUID? = null
 
     override fun usernameInUse(username: String): Boolean = false

@@ -6,6 +6,8 @@ import com.finaxis.platform.iam.adapter.inbound.web.dto.AssignRoleRequest
 import com.finaxis.platform.iam.adapter.inbound.web.dto.CreateRoleRequest
 import com.finaxis.platform.iam.adapter.inbound.web.dto.InviteUserRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateBranchRequest
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateOrUpdateTenantSettingRequest
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.UpdateBranchRequest
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -326,6 +328,11 @@ class OpenApiWireNamingContractTests
                     "AssignRoleRequest" to AssignRoleRequest::class.java,
                     "InviteUserRequest" to InviteUserRequest::class.java,
                     "CreateBranchRequest" to CreateBranchRequest::class.java,
+                    // Update bodies too (#151): a PATCH or PUT is where a generated client
+                    // drifts unseen, since nothing is created for a reader to notice.
+                    "UpdateBranchRequest" to UpdateBranchRequest::class.java,
+                    "CreateOrUpdateTenantSettingRequest" to
+                        CreateOrUpdateTenantSettingRequest::class.java,
                 )
         }
     }

@@ -70,7 +70,7 @@ class BranchPinningIntegrationTests {
         dsl
             .update(USER_ACCOUNT)
             .set(USER_ACCOUNT.STATUS, "ACTIVE")
-            .where(USER_ACCOUNT.ID.eq(USER_ID))
+            .where(USER_ACCOUNT.ID.`in`(USER_ID, CHECKER_ID))
             .execute()
         dsl
             .update(ORGANISATION)
@@ -114,6 +114,10 @@ class BranchPinningIntegrationTests {
         createdRoleIds.clear()
         restoreLocalAdminGrants()
         createdBranchIds.forEach { branchId ->
+            dsl
+                .deleteFrom(USER_BRANCH_ASSIGNMENT)
+                .where(USER_BRANCH_ASSIGNMENT.BRANCH_ID.eq(branchId))
+                .execute()
             dsl
                 .deleteFrom(BRANCH_TRANSITION_LOG)
                 .where(BRANCH_TRANSITION_LOG.BRANCH_ID.eq(branchId))
@@ -181,6 +185,90 @@ class BranchPinningIntegrationTests {
                     value(everyItem(equalTo(HEAD_OFFICE_BRANCH_ID.toString())))
                 }
             }
+    }
+
+    @Test
+    fun `a pinned administrator approves another branch`() {
+        val branchId = branchApprovedWhilePinned()
+
+        org.assertj.core.api.Assertions
+            .assertThat(dsl.fetchValue(BRANCH.STATUS, BRANCH.ID.eq(branchId)))
+            .isEqualTo("ACTIVE")
+    }
+
+    @Test
+    fun `a pinned administrator assigns a branch scoped role on the branch it approved`() {
+        val branchId = branchApprovedWhilePinned()
+        val roleId = createRole("pin-branch-role")
+        // A branch-scope role needs a branch assignment there; also made while pinned to HQ.
+        mockMvc
+            .post(ApiPaths.BRANCH_ASSIGNMENTS) {
+                with(localJwt())
+                header(ActiveOrganisationContextService.HEADER, contextToken(HEAD_OFFICE_BRANCH_ID))
+                contentType = MediaType.APPLICATION_JSON
+                content =
+                    """{"user_id":"$USER_ID","branch_id":"$branchId","assignment_type":"OPERATE"}"""
+            }.andExpect { status { isCreated() } }
+
+        val body =
+            mockMvc
+                .post(ApiPaths.ROLE_ASSIGNMENTS) {
+                    with(localJwt())
+                    header(
+                        ActiveOrganisationContextService.HEADER,
+                        contextToken(HEAD_OFFICE_BRANCH_ID),
+                    )
+                    contentType = MediaType.APPLICATION_JSON
+                    content =
+                        """{"user_id":"$USER_ID","role_id":"$roleId","scope_type":"BRANCH",""" +
+                        """"branch_id":"$branchId"}"""
+                }.andExpect {
+                    status { isCreated() }
+                    jsonPath("$.scope_type") { value("BRANCH") }
+                    jsonPath("$.branch_id") { value(branchId.toString()) }
+                    jsonPath("$.status") { value("ACTIVE") }
+                }.andReturn()
+                .response.contentAsString
+
+        val assignmentId = UUID.fromString(JsonPath.read<String>(body, "$.id"))
+        val stored =
+            requireNotNull(
+                dsl
+                    .selectFrom(USER_ROLE_ASSIGNMENT)
+                    .where(USER_ROLE_ASSIGNMENT.ID.eq(assignmentId))
+                    .fetchOne(),
+            )
+        org.assertj.core.api.Assertions
+            .assertThat(listOf(stored.scopeType, stored.branchId, stored.roleId, stored.status))
+            .containsExactly("BRANCH", branchId, roleId, "ACTIVE")
+    }
+
+    /**
+     * local.admin, pinned to the head office, drafts and submits a new branch; local.checker, also
+     * pinned to the head office, approves it (200 ACTIVE). Returns the approved branch.
+     */
+    private fun branchApprovedWhilePinned(): UUID {
+        val draftId = createDraftBranch(contextToken(HEAD_OFFICE_BRANCH_ID))
+        mockMvc
+            .post("/api/v1/branches/$draftId/submit") {
+                with(localJwt())
+                header(ActiveOrganisationContextService.HEADER, contextToken(HEAD_OFFICE_BRANCH_ID))
+                contentType = MediaType.APPLICATION_JSON
+                content = "{}"
+            }.andExpect { status { isOk() } }
+
+        mockMvc
+            .post("/api/v1/branches/$draftId/activate") {
+                with(checkerJwt())
+                header(ActiveOrganisationContextService.HEADER, checkerToken(HEAD_OFFICE_BRANCH_ID))
+                contentType = MediaType.APPLICATION_JSON
+                content = "{}"
+            }.andExpect {
+                status { isOk() }
+                jsonPath("$.id") { value(draftId.toString()) }
+                jsonPath("$.status") { value("ACTIVE") }
+            }
+        return draftId
     }
 
     private fun createDraftBranch(contextToken: String): UUID {
@@ -513,12 +601,38 @@ class BranchPinningIntegrationTests {
         cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.invalidate()
     }
 
+    /** An ACTIVE tenant role with no grants, so assigning it widens nobody's authority. */
+    private fun createRole(code: String): UUID {
+        val now = OffsetDateTime.now()
+        return requireNotNull(
+            dsl
+                .insertInto(ROLE)
+                .set(ROLE.ORGANISATION_ID, ORGANISATION_ID)
+                .set(ROLE.ROLE_CODE, "$code-${shortId()}")
+                .set(ROLE.ROLE_NAME, code)
+                .set(ROLE.STATUS, "ACTIVE")
+                .set(ROLE.CREATED_AT, now)
+                .set(ROLE.UPDATED_AT, now)
+                .returning(ROLE.ID)
+                .fetchOne()
+                ?.id,
+        ).also { createdRoleIds += it }
+    }
+
     private fun contextToken(branchId: UUID?): String =
         contextService.issue(
             ActiveOrganisationContext(USER_ID, ORGANISATION_ID, MEMBERSHIP_ID, branchId),
         )
 
+    /** local.checker (V4), a second administrator: an approver who is not the branch's maker. */
+    private fun checkerToken(branchId: UUID?): String =
+        contextService.issue(
+            ActiveOrganisationContext(CHECKER_ID, ORGANISATION_ID, CHECKER_MEMBERSHIP_ID, branchId),
+        )
+
     private fun localJwt() = jwt().jwt { token -> token.subject(USER_ID.toString()) }
+
+    private fun checkerJwt() = jwt().jwt { token -> token.subject(CHECKER_ID.toString()) }
 
     private fun shortId(): String = uuidV7().toString().takeLast(SHORT_ID_LENGTH).uppercase()
 
@@ -533,6 +647,9 @@ class BranchPinningIntegrationTests {
         val HEAD_OFFICE_BRANCH_ID: UUID = UUID.fromString("33333333-3333-3333-3333-333333333333")
         val OPERATIONS_BRANCH_ID: UUID = UUID.fromString("44444444-4444-4444-4444-444444444444")
         val MEMBERSHIP_ID: UUID = UUID.fromString("55555555-5555-5555-5555-555555555555")
+        val CHECKER_ID: UUID = UUID.fromString("dddddddd-dddd-dddd-dddd-dddddddddd01")
+        val CHECKER_MEMBERSHIP_ID: UUID =
+            UUID.fromString("dddddddd-dddd-dddd-dddd-dddddddddd03")
         val LOCAL_ADMIN_ROLE_ID: UUID = UUID.fromString("77777777-7777-7777-7777-777777777777")
         val PROFILE_PERMISSION_ID: UUID = UUID.fromString("66666666-6666-6666-6666-666666666601")
         val PROFILE_ROLE_PERMISSION_ID: UUID =

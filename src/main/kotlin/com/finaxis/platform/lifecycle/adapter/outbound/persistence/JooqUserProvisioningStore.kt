@@ -26,6 +26,7 @@ import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import org.jooq.DSLContext
 import org.jooq.impl.DSL
 import org.springframework.stereotype.Component
+import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.Clock
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
@@ -53,6 +54,19 @@ private class JooqUserProvisioningAccountStore(
             .where(ORGANISATION.ID.eq(organisationId))
             .fetchOne(ORGANISATION.STATUS)
             ?.let(OrganisationLifecycleState::valueOf)
+
+    override fun lockOrganisation(organisationId: UUID) {
+        // Outside a transaction the lock is released by the statement that took it.
+        check(TransactionSynchronizationManager.isActualTransactionActive()) {
+            "Locking an organisation for a platform checker decision requires a transaction."
+        }
+        dsl
+            .select(ORGANISATION.ID)
+            .from(ORGANISATION)
+            .where(ORGANISATION.ID.eq(organisationId))
+            .forNoKeyUpdate()
+            .fetch()
+    }
 
     override fun organisationDisplayName(organisationId: UUID): String? =
         dsl
