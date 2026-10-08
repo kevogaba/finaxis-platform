@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
+import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapRecord
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStatus
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStore
@@ -136,7 +137,7 @@ class JooqInitialAdministratorBootstrapStore(
     override fun updateStatus(
         organisationId: UUID,
         status: InitialAdministratorBootstrapStatus,
-        lastFailureCode: String?,
+        lastFailureCode: InitialAdministratorBootstrapFailureCode?,
         incrementAttempts: Boolean,
     ) {
         val now = now()
@@ -145,7 +146,7 @@ class JooqInitialAdministratorBootstrapStore(
             dsl
                 .update(t)
                 .set(t.STATUS, status.name)
-                .set(t.LAST_FAILURE_CODE, lastFailureCode)
+                .set(t.LAST_FAILURE_CODE, lastFailureCode?.name)
                 .set(t.UPDATED_AT, now)
                 .set(t.ROW_VERSION, t.ROW_VERSION.plus(1))
 
@@ -201,7 +202,10 @@ class JooqInitialAdministratorBootstrapStore(
             membershipId = record.get(t.MEMBERSHIP_ID),
             headOfficeId = record.get(t.HEAD_OFFICE_ID),
             roleId = record.get(t.ROLE_ID),
-            lastFailureCode = record.get(t.LAST_FAILURE_CODE),
+            lastFailureCode =
+                InitialAdministratorBootstrapFailureCode.fromStored(
+                    record.get(t.LAST_FAILURE_CODE),
+                ),
             createdAt = requireNotNull(record.get(t.CREATED_AT)).toInstant(),
             submittedAt = record.get(t.SUBMITTED_AT)?.toInstant(),
             approvedAt = record.get(t.APPROVED_AT)?.toInstant(),

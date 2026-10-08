@@ -8,6 +8,7 @@ import com.finaxis.platform.common.web.api.WebJsonConfiguration
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
+import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
 import com.finaxis.platform.lifecycle.application.query.TenantDetail
 import org.hamcrest.Matchers.containsString
@@ -104,7 +105,13 @@ class TenantControllerTests
         @Test
         fun `the bootstrap status comes from the gated tenant detail`() {
             val tenantId = uuidV7()
-            stubTenant(tenantId, "PENDING_APPROVAL", null, "FAILED", "keycloak_unavailable")
+            stubTenant(
+                tenantId,
+                "PENDING_APPROVAL",
+                null,
+                "FAILED",
+                InitialAdministratorBootstrapFailureCode.IDENTITY_PROVIDER_FAILED,
+            )
 
             mockMvc
                 .get(ApiPaths.TENANT) {
@@ -112,7 +119,7 @@ class TenantControllerTests
                 }.andExpect {
                     status { isOk() }
                     jsonPath("$.bootstrap_status") { value("FAILED") }
-                    jsonPath("$.bootstrap_failure_code") { value("keycloak_unavailable") }
+                    jsonPath("$.bootstrap_failure_code") { value("IDENTITY_PROVIDER_FAILED") }
                 }
         }
 
@@ -121,7 +128,7 @@ class TenantControllerTests
             status: String,
             statusReason: String?,
             bootstrapStatus: String? = null,
-            bootstrapFailureCode: String? = null,
+            bootstrapFailureCode: InitialAdministratorBootstrapFailureCode? = null,
         ) {
             whenever(foundationQueryService.getTenant(eq(tenantId), any()))
                 .thenReturn(

@@ -1,15 +1,21 @@
 package com.finaxis.platform.lifecycle
 
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
+import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureRecorder
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStatus
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStore
 import com.finaxis.platform.lifecycle.application.InitialAdministratorDraft
+import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningException
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
+import org.slf4j.LoggerFactory
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestConstructor
@@ -19,7 +25,10 @@ import java.time.OffsetDateTime
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /** Verifies failure recording survives the bootstrap transaction rolling back. */
 @Import(PostgresTestConfiguration::class)
@@ -47,24 +56,48 @@ class InitialAdministratorBootstrapFailureRecorderIntegrationTests(
             uuidV7(),
         )
 
-        assertFailsWith<IllegalStateException> {
-            transaction.executeWithoutResult {
-                adminBootstrapStore.updateStatus(
-                    organisationId,
-                    InitialAdministratorBootstrapStatus.PROVISIONING_IDENTITY,
-                    incrementAttempts = true,
-                )
-                failureRecorder.recordFailure(
-                    organisationId,
-                    IllegalStateException("Keycloak unavailable"),
-                )
-                error("Simulated bootstrap failure")
+        val appender = ListAppender<ILoggingEvent>().also { it.start() }
+        val recorderLogger =
+            LoggerFactory.getLogger(InitialAdministratorBootstrapFailureRecorder::class.java)
+                as Logger
+        recorderLogger.addAppender(appender)
+
+        try {
+            assertFailsWith<IllegalStateException> {
+                transaction.executeWithoutResult {
+                    adminBootstrapStore.updateStatus(
+                        organisationId,
+                        InitialAdministratorBootstrapStatus.PROVISIONING_IDENTITY,
+                        incrementAttempts = true,
+                    )
+                    failureRecorder.recordFailure(
+                        organisationId,
+                        IdentityProvisioningException(
+                            "insert into user_account: jane.doe@acme.test",
+                            IllegalStateException("cause jane.doe@acme.test"),
+                        ),
+                    )
+                    error("Simulated bootstrap failure")
+                }
             }
+        } finally {
+            recorderLogger.detachAppender(appender)
         }
+
+        assertNull(appender.list.single().throwableProxy)
+        val logged = appender.list.single().formattedMessage
+        assertTrue(logged.contains(organisationId.toString()))
+        assertTrue(logged.contains("IDENTITY_PROVIDER_FAILED"))
+        assertTrue(logged.contains(IdentityProvisioningException::class.java.name))
+        assertFalse(logged.contains("jane.doe@acme.test"))
+        assertFalse(logged.contains("insert into"))
 
         val record = assertNotNull(adminBootstrapStore.find(organisationId))
         assertEquals(InitialAdministratorBootstrapStatus.FAILED, record.status)
-        assertEquals("Keycloak unavailable", record.lastFailureCode)
+        assertEquals(
+            InitialAdministratorBootstrapFailureCode.IDENTITY_PROVIDER_FAILED,
+            record.lastFailureCode,
+        )
         assertEquals(0, record.attempts)
     }
 

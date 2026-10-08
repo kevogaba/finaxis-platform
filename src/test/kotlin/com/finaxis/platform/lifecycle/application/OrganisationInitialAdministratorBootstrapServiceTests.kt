@@ -335,7 +335,7 @@ class OrganisationInitialAdministratorBootstrapServiceTests {
         adminBootstrapStore.updateStatus(
             organisationId,
             InitialAdministratorBootstrapStatus.FAILED,
-            lastFailureCode = "Keycloak unavailable",
+            lastFailureCode = InitialAdministratorBootstrapFailureCode.IDENTITY_PROVIDER_FAILED,
         )
 
         organisations.retryBootstrap(
@@ -356,7 +356,7 @@ class OrganisationInitialAdministratorBootstrapServiceTests {
         adminBootstrapStore.updateStatus(
             organisationId,
             InitialAdministratorBootstrapStatus.FAILED,
-            lastFailureCode = "Keycloak unavailable",
+            lastFailureCode = InitialAdministratorBootstrapFailureCode.IDENTITY_PROVIDER_FAILED,
         )
         val failure = IllegalStateException("Keycloak unavailable")
         org.mockito.Mockito
@@ -875,7 +875,7 @@ internal class FakeInitialAdminBootstrapStore : InitialAdministratorBootstrapSto
     override fun updateStatus(
         organisationId: UUID,
         status: InitialAdministratorBootstrapStatus,
-        lastFailureCode: String?,
+        lastFailureCode: InitialAdministratorBootstrapFailureCode?,
         incrementAttempts: Boolean,
     ) {
         val record = records[organisationId] ?: error("Not found")

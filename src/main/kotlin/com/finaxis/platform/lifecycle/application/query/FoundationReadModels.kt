@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application.query
 
+import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
 import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
@@ -29,8 +30,8 @@ data class TenantDetail(
     val updatedAt: Instant,
     /** The initial-administrator bootstrap status, or null when the tenant has no record. */
     val bootstrapStatus: String? = null,
-    /** The failure code of the last bootstrap attempt, or null when none failed. */
-    val bootstrapFailureCode: String? = null,
+    /** The closed-set failure code of the last bootstrap attempt, or null when none failed. */
+    val bootstrapFailureCode: InitialAdministratorBootstrapFailureCode? = null,
 )
 
 /** Summary projection of an operating branch. */

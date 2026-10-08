@@ -48,13 +48,13 @@ interface InitialAdministratorBootstrapStore {
     fun find(organisationId: UUID): InitialAdministratorBootstrapRecord?
 
     /**
-     * Updates the bootstrap status and optionally records a safe failure code.
+     * Updates the bootstrap status and optionally records a failure code from the closed set.
      * When [incrementAttempts] is true, the attempt counter is incremented atomically.
      */
     fun updateStatus(
         organisationId: UUID,
         status: InitialAdministratorBootstrapStatus,
-        lastFailureCode: String? = null,
+        lastFailureCode: InitialAdministratorBootstrapFailureCode? = null,
         incrementAttempts: Boolean = false,
     )
 

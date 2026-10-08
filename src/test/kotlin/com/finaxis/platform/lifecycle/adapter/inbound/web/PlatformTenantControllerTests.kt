@@ -24,6 +24,7 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.RejectTenantReques
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SuspendTenantRequest
 import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
 import com.finaxis.platform.lifecycle.application.DeprovisionOrganisationCommand
+import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
 import com.finaxis.platform.lifecycle.application.OrganisationDraftResult
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.application.ReactivateOrganisationCommand
@@ -588,7 +589,8 @@ class PlatformTenantControllerTests
                     createdAt = Instant.parse("2026-07-18T10:00:00Z"),
                     updatedAt = Instant.parse("2026-07-18T10:00:00Z"),
                     bootstrapStatus = "FAILED",
-                    bootstrapFailureCode = "keycloak_unavailable",
+                    bootstrapFailureCode =
+                        InitialAdministratorBootstrapFailureCode.IDENTITY_PROVIDER_FAILED,
                 ),
             )
 
@@ -599,7 +601,7 @@ class PlatformTenantControllerTests
                     }.andExpect {
                         status { isOk() }
                         jsonPath("$.bootstrap_status") { value("FAILED") }
-                        jsonPath("$.bootstrap_failure_code") { value("keycloak_unavailable") }
+                        jsonPath("$.bootstrap_failure_code") { value("IDENTITY_PROVIDER_FAILED") }
                     }
             }
         }

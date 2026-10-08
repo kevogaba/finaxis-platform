@@ -11,6 +11,7 @@ import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleTransition
+import org.jobrunr.JobRunrException
 import org.jobrunr.jobs.lambdas.JobRequestHandler
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.dao.DataAccessException
@@ -27,8 +28,36 @@ class KeycloakUserProvisioningJobRequestHandler(
     private val failureRecorder: InitialAdministratorBootstrapFailureRecorder,
     @Value($$"""${finaxis.keycloak.admin.realm:finaxis}""") private val realm: String = "finaxis",
 ) : JobRequestHandler<KeycloakUserProvisioningJobRequest> {
-    /** Runs Keycloak provisioning idempotently and advances the local user and membership FSMs. */
+    /**
+     * Runs Keycloak provisioning idempotently and advances the local user and membership FSMs.
+     * A failure the handler records leaves as a [SanitisedJobFailureException] carrying the closed
+     * code; any other failure (a type not caught below, or one on the already-succeeded branch) is
+     * logged without its message and sanitised the same way, without being recorded, so JobRunr
+     * never receives an original message.
+     */
+    @Suppress("TooGenericExceptionCaught") // every failure, whatever its type, is sanitised
     override fun run(jobRequest: KeycloakUserProvisioningJobRequest) {
+        try {
+            provision(jobRequest)
+        } catch (ex: Exception) {
+            // Already sanitised, or a do-not-retry JobRunrException (wrapping it would make it
+            // retryable): propagate unchanged; anything else is logged and sanitised.
+            throw when (ex) {
+                is SanitisedJobFailureException, is JobRunrException -> {
+                    ex
+                }
+
+                else -> {
+                    SanitisedJobFailureException.logged(
+                        ex,
+                        "Keycloak provisioning job ${jobRequest.dispatchKey}",
+                    )
+                }
+            }
+        }
+    }
+
+    private fun provision(jobRequest: KeycloakUserProvisioningJobRequest) {
         if (store.dispatchStatus(jobRequest.dispatchKey) == SUCCEEDED) {
             bootstrapService.completeBootstrapIfCorrelated(
                 jobRequest.organisationId,
@@ -102,7 +131,9 @@ class KeycloakUserProvisioningJobRequestHandler(
             metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
         )
         failureRecorder.recordFailure(jobRequest.organisationId, ex)
-        throw ex
+        // JobRunr logs and stores what it is given with its message and causes; give it only the
+        // closed code, so retries and backoff are unchanged but no email or SQL text reaches it.
+        throw SanitisedJobFailureException.forFailure(ex)
     }
 
     private fun inviteUserIfNeeded(jobRequest: KeycloakUserProvisioningJobRequest) {

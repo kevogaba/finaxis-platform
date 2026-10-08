@@ -34,6 +34,7 @@ import com.finaxis.platform.lifecycle.application.CreateBranchCommand
 import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.DeprovisionedAssignment
 import com.finaxis.platform.lifecycle.application.HeadOfficeDraftResult
+import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStatus
 import com.finaxis.platform.lifecycle.application.MembershipLifecycleSnapshot
 import com.finaxis.platform.lifecycle.application.MembershipSnapshot
@@ -843,7 +844,8 @@ private fun organisationSummary(record: org.jooq.Record): OrganisationSummary {
         bootstrapAttempts = record.get(b.ATTEMPTS),
         bootstrapUserId = record.get(b.USER_ID),
         bootstrapMembershipId = record.get(b.MEMBERSHIP_ID),
-        lastBootstrapFailureCode = record.get(b.LAST_FAILURE_CODE),
+        lastBootstrapFailureCode =
+            InitialAdministratorBootstrapFailureCode.fromStored(record.get(b.LAST_FAILURE_CODE)),
     )
 }
 

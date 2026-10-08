@@ -7,6 +7,7 @@ import com.finaxis.platform.jooq.tables.references.ORGANISATION
 import com.finaxis.platform.jooq.tables.references.ROLE
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
+import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStatus
 import com.finaxis.platform.lifecycle.application.InitialAdministratorDraft
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
@@ -253,12 +254,15 @@ class JooqInitialAdministratorBootstrapStoreTests(
         store.updateStatus(
             organisationId,
             InitialAdministratorBootstrapStatus.FAILED,
-            "KEYCLOAK_TIMEOUT",
+            InitialAdministratorBootstrapFailureCode.IDENTITY_PROVIDER_FAILED,
         )
 
         val record = assertNotNull(store.find(organisationId))
         assertEquals(InitialAdministratorBootstrapStatus.FAILED, record.status)
-        assertEquals("KEYCLOAK_TIMEOUT", record.lastFailureCode)
+        assertEquals(
+            InitialAdministratorBootstrapFailureCode.IDENTITY_PROVIDER_FAILED,
+            record.lastFailureCode,
+        )
     }
 
     @Test
@@ -267,7 +271,11 @@ class JooqInitialAdministratorBootstrapStoreTests(
         store.createDraft(organisationId, defaultAdmin(), uuidV7())
         store.submit(organisationId, uuidV7())
         store.approve(organisationId, uuidV7())
-        store.updateStatus(organisationId, InitialAdministratorBootstrapStatus.FAILED, "ERR")
+        store.updateStatus(
+            organisationId,
+            InitialAdministratorBootstrapStatus.FAILED,
+            InitialAdministratorBootstrapFailureCode.UNEXPECTED,
+        )
 
         store.updateStatus(organisationId, InitialAdministratorBootstrapStatus.COMPLETED, null)
 
@@ -286,19 +294,19 @@ class JooqInitialAdministratorBootstrapStoreTests(
         store.updateStatus(
             organisationId = organisationId,
             status = InitialAdministratorBootstrapStatus.FAILED,
-            lastFailureCode = "ERR1",
+            lastFailureCode = InitialAdministratorBootstrapFailureCode.CONFLICT,
             incrementAttempts = true,
         )
         store.updateStatus(
             organisationId = organisationId,
             status = InitialAdministratorBootstrapStatus.FAILED,
-            lastFailureCode = "ERR2",
+            lastFailureCode = InitialAdministratorBootstrapFailureCode.UNEXPECTED,
             incrementAttempts = true,
         )
 
         val record = assertNotNull(store.find(organisationId))
         assertEquals(2, record.attempts)
-        assertEquals("ERR2", record.lastFailureCode)
+        assertEquals(InitialAdministratorBootstrapFailureCode.UNEXPECTED, record.lastFailureCode)
     }
 
     // ── linkResolvedEntities ──────────────────────────────────────────────────

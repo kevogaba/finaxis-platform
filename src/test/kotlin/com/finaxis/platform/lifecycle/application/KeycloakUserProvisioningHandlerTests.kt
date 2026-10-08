@@ -33,6 +33,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class KeycloakUserProvisioningHandlerTests {
@@ -98,7 +100,7 @@ class KeycloakUserProvisioningHandlerTests {
             override fun updateStatus(
                 organisationId: UUID,
                 status: InitialAdministratorBootstrapStatus,
-                lastFailureCode: String?,
+                lastFailureCode: InitialAdministratorBootstrapFailureCode?,
                 incrementAttempts: Boolean,
             ) {
                 val record = records[organisationId] ?: return
@@ -226,11 +228,12 @@ class KeycloakUserProvisioningHandlerTests {
         gateway.failure = IllegalStateException("keycloak unavailable")
 
         val failure =
-            assertFailsWith<IllegalStateException> {
+            assertFailsWith<SanitisedJobFailureException> {
                 handler.run(keycloakRequest(context, "member@example.test", "member"))
             }
 
-        assertEquals("keycloak unavailable", failure.message)
+        assertEquals("INVALID_STATE", failure.message)
+        assertNull(failure.cause)
         val dispatch = store.dispatches.getValue(context.dispatchKey)
         assertEquals("FAILED", dispatch.status)
         assertEquals(1, dispatch.attempts)
@@ -250,11 +253,12 @@ class KeycloakUserProvisioningHandlerTests {
         store.branchAssignments.remove(context.organisationId to context.userId)
 
         val failure =
-            assertFailsWith<ConflictException> {
+            assertFailsWith<SanitisedJobFailureException> {
                 handler.run(keycloakRequest(context, "member@example.test", "member"))
             }
 
-        assertEquals("Membership requires an active branch assignment.", failure.message)
+        assertEquals("CONFLICT", failure.message)
+        assertNull(failure.cause)
         assertEquals(
             UserLifecycleState.INVITED,
             store.users.getValue(context.userId).state,
@@ -280,9 +284,11 @@ class KeycloakUserProvisioningHandlerTests {
         val context = store.activePendingProvisioningContext()
         gateway.failure = ResourceNotFoundException()
 
-        assertFailsWith<ResourceNotFoundException> {
-            handler.run(keycloakRequest(context, "member@example.test", "member"))
-        }
+        val failure =
+            assertFailsWith<SanitisedJobFailureException> {
+                handler.run(keycloakRequest(context, "member@example.test", "member"))
+            }
+        assertEquals("NOT_FOUND", failure.message)
 
         val dispatch = store.dispatches.getValue(context.dispatchKey)
         assertEquals("FAILED", dispatch.status)
@@ -290,6 +296,92 @@ class KeycloakUserProvisioningHandlerTests {
         val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
         assertEquals("ResourceNotFoundException", dispatchAudit.reason)
+    }
+
+    @Test
+    fun `an uncaught failure type is logged without its message and sanitised without recording`() {
+        val context = store.activePendingProvisioningContext()
+        gateway.failure = UnsupportedOperationException("provider said jane.doe@acme.test")
+        val appender = captureSanitisedLog()
+
+        val failure =
+            assertFailsWith<SanitisedJobFailureException> {
+                handler.run(keycloakRequest(context, "member@example.test", "member"))
+            }
+
+        assertEquals("UNEXPECTED", failure.message)
+        assertNull(failure.cause)
+        assertTrue(store.dispatches[context.dispatchKey]?.status != "FAILED")
+        val logged = appender.list.single().formattedMessage
+        assertTrue(logged.contains(context.dispatchKey))
+        assertTrue(logged.contains("exceptionClass=java.lang.UnsupportedOperationException"))
+        assertFalse(logged.contains("jane.doe@acme.test"))
+    }
+
+    @Test
+    fun `a do-not-retry JobRunrException propagates unchanged`() {
+        val context = store.activePendingProvisioningContext()
+        val doNotRetry = org.jobrunr.JobRunrException("stop", true)
+        gateway.failure = doNotRetry
+
+        val thrown =
+            assertFailsWith<org.jobrunr.JobRunrException> {
+                handler.run(keycloakRequest(context, "member@example.test", "member"))
+            }
+
+        assertSame(doNotRetry, thrown)
+        assertTrue(thrown.isProblematicAndDoNotRetry())
+    }
+
+    @Test
+    fun `a failure on the already succeeded branch is sanitised too`() {
+        val context = store.activePendingProvisioningContext()
+        store.dispatches[context.dispatchKey] =
+            DispatchState("SUCCEEDED", attempts = 1, externalRef = context.subject)
+        val throwingBootstrap = mock(InitialAdministratorBootstrapService::class.java)
+        org.mockito.Mockito
+            .doThrow(
+                org.springframework.dao.DataIntegrityViolationException("Key (email)=(a@b.test)"),
+            ).`when`(throwingBootstrap)
+            .completeBootstrapIfCorrelated(context.organisationId, context.userId)
+        val sameHandler =
+            KeycloakUserProvisioningJobRequestHandler(
+                gateway,
+                store,
+                lifecycle,
+                dispatchOutcomeAuditor,
+                throwingBootstrap,
+                failureRecorder,
+            )
+        val appender = captureSanitisedLog()
+
+        val failure =
+            assertFailsWith<SanitisedJobFailureException> {
+                sameHandler.run(keycloakRequest(context, "member@example.test", "member"))
+            }
+
+        assertEquals("DATABASE_ERROR", failure.message)
+        assertNull(failure.cause)
+        assertFalse(
+            appender.list
+                .single()
+                .formattedMessage
+                .contains("a@b.test"),
+        )
+    }
+
+    private fun captureSanitisedLog(): ch.qos.logback.core.read.ListAppender<
+        ch.qos.logback.classic.spi.ILoggingEvent,
+    > {
+        val appender =
+            ch.qos.logback.core.read
+                .ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>()
+                .also { it.start() }
+        (
+            org.slf4j.LoggerFactory.getLogger(SanitisedJobFailureException::class.java)
+                as ch.qos.logback.classic.Logger
+        ).addAppender(appender)
+        return appender
     }
 
     private fun keycloakRequest(

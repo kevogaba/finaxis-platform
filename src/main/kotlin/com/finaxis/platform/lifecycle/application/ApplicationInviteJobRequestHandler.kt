@@ -77,7 +77,11 @@ class ApplicationInviteJobRequestHandler(
         ex: RuntimeException,
     ): Nothing {
         auditFailure(jobRequest, ex)
-        throw ex
+        throw SanitisedJobFailureException.logged(
+            ex,
+            "Application invite job ${jobRequest.dispatchKey}",
+            ex.toAuditFailureReason(),
+        )
     }
 
     private fun recordFailureAndFailPermanently(
@@ -85,7 +89,11 @@ class ApplicationInviteJobRequestHandler(
         ex: RuntimeException,
     ): Nothing {
         auditFailure(jobRequest, ex)
-        throw JobRunrException(ex.toAuditFailureReason(), true, ex)
+        SanitisedJobFailureException.logFailure(
+            ex,
+            "Application invite job ${jobRequest.dispatchKey}",
+        )
+        throw JobRunrException(ex.toAuditFailureReason(), true)
     }
 
     private fun auditFailure(

@@ -27,6 +27,9 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class ApplicationInviteHandlerTests {
     private val store = ApplicationInviteStoreFake()
@@ -73,10 +76,30 @@ class ApplicationInviteHandlerTests {
         store.dispatches[dispatchKey] = InviteDispatchState("PENDING")
         store.failure = IllegalStateException("provider unavailable")
 
-        assertFailsWith<IllegalStateException> {
-            handler.run(applicationInviteRequest(dispatchKey))
-        }
+        val appender =
+            ch.qos.logback.core.read
+                .ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>()
+        appender.start()
+        val sanitisedLogger =
+            org.slf4j.LoggerFactory.getLogger(SanitisedJobFailureException::class.java)
+                as ch.qos.logback.classic.Logger
+        sanitisedLogger.addAppender(appender)
+        val failure =
+            try {
+                assertFailsWith<SanitisedJobFailureException> {
+                    handler.run(applicationInviteRequest(dispatchKey))
+                }
+            } finally {
+                sanitisedLogger.detachAppender(appender)
+            }
 
+        assertEquals("IllegalStateException", failure.message)
+        assertNull(failure.cause)
+        val logged = appender.list.single().formattedMessage
+        assertTrue(logged.contains(dispatchKey))
+        assertTrue(logged.contains("exceptionClass=java.lang.IllegalStateException"))
+        assertTrue(logged.contains("\tat "))
+        assertFalse(logged.contains("provider unavailable"))
         val dispatch = store.dispatches.getValue(dispatchKey)
         assertEquals("FAILED", dispatch.status)
         val dispatchAudit = audits.items.single { it.action == "user.application_invite" }
@@ -130,6 +153,8 @@ class ApplicationInviteHandlerTests {
             assertFailsWith<JobRunrException> { handler.run(applicationInviteRequest(dispatchKey)) }
 
         assertEquals(true, exception.isProblematicAndDoNotRetry())
+        assertEquals("PermanentEmailDeliveryException", exception.message)
+        assertNull(exception.cause)
         assertEquals("FAILED", store.dispatches.getValue(dispatchKey).status)
     }
 
@@ -146,9 +171,13 @@ class ApplicationInviteHandlerTests {
                 DispatchOutcomeAuditor(store, auditService),
             )
 
-        assertFailsWith<RetryableEmailDeliveryException> {
-            handler.run(applicationInviteRequest(dispatchKey))
-        }
+        val failure =
+            assertFailsWith<SanitisedJobFailureException> {
+                handler.run(applicationInviteRequest(dispatchKey))
+            }
+
+        assertEquals("RetryableEmailDeliveryException", failure.message)
+        assertNull(failure.cause)
 
         assertEquals("FAILED", store.dispatches.getValue(dispatchKey).status)
     }
@@ -174,7 +203,7 @@ class ApplicationInviteHandlerTests {
                 DispatchOutcomeAuditor(store, auditService),
             )
         store.failure = IllegalStateException("boom")
-        assertFailsWith<IllegalStateException> {
+        assertFailsWith<SanitisedJobFailureException> {
             handler.run(
                 applicationInviteRequest(dispatchKey),
             )

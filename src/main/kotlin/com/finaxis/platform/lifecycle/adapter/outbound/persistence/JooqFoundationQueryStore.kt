@@ -7,6 +7,7 @@ import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE_HISTORY
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
+import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
 import com.finaxis.platform.lifecycle.application.query.BranchDetail
 import com.finaxis.platform.lifecycle.application.query.BranchFilter
 import com.finaxis.platform.lifecycle.application.query.BranchSummary
@@ -125,7 +126,10 @@ class JooqFoundationQueryStore(
                     createdAt = requireNotNull(record.get(ORGANISATION.CREATED_AT)).toInstant(),
                     updatedAt = requireNotNull(record.get(ORGANISATION.UPDATED_AT)).toInstant(),
                     bootstrapStatus = record.get(bootstrap.STATUS),
-                    bootstrapFailureCode = record.get(bootstrap.LAST_FAILURE_CODE),
+                    bootstrapFailureCode =
+                        InitialAdministratorBootstrapFailureCode.fromStored(
+                            record.get(bootstrap.LAST_FAILURE_CODE),
+                        ),
                 )
             }
     }
