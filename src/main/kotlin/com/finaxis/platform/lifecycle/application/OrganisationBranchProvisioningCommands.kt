@@ -272,6 +272,29 @@ data class RevokeUserBranchAssignmentCommand(
     val revokedBy: UUID,
 )
 
+/**
+ * Revokes the branch assignment [assignmentId]. The assignment's branch is found by the service
+ * itself, in an authorised combined lookup, because the permission check depends on it.
+ */
+data class RevokeBranchAssignmentCommand(
+    val organisationId: UUID,
+    val assignmentId: UUID,
+    val revokedBy: UUID,
+)
+
+/** The ACTIVE assignment an assign wrote or found, and whether it changed any state. */
+data class BranchAssignmentWrite(
+    val id: UUID,
+    val changed: Boolean,
+)
+
+/** The tuple of a branch-assignment row, resolved by the service and never returned to a caller. */
+data class BranchAssignmentTarget(
+    val userId: UUID,
+    val branchId: UUID,
+    val assignmentType: BranchAssignmentType,
+)
+
 /** Membership categories that influence branch-assignment requirements. */
 enum class MembershipType {
     STAFF,

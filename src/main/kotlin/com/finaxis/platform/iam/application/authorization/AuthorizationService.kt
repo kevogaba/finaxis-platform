@@ -38,6 +38,7 @@ data class ResourceRef(
  * Central authorization facade used by application services.
  */
 @Service
+@Suppress("TooManyFunctions") // One cohesive facade over a request's effective-permission checks.
 class AuthorizationService(
     private val membershipSelectionLookup: MembershipSelectionLookup,
     private val requestPermissionCache: RequestPermissionCache,
@@ -154,6 +155,34 @@ class AuthorizationService(
         }
         return requestPermissionCache.branchVisibility(userId, organisationId, permissionCode) {
             resolveBranchVisibility(userId, organisationId, permissionCode)
+        }
+    }
+
+    /**
+     * Answers where [userId] may perform the mutation [permissionCode]: the visibility of the
+     * mutation code and of every view the catalogue pairs with it, intersected, so the answer is
+     * exactly the set of branches at which [requirePermissionWithViews] passes (a tenant-wide
+     * grant or a grant on that branch, for the mutation and for each view). A code held nowhere
+     * is refused with a [MissingPermissionException] naming it, the mutation code first, so the
+     * refusal depends on the caller's grants alone. Every visibility comes from the per-request
+     * memo, so a read-back decides from the same data.
+     */
+    fun mutationBranchVisibility(
+        userId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ): BranchVisibility {
+        if (SystemActor.isSystemActor(userId)) {
+            return BranchVisibility.AllBranches
+        }
+        val codes =
+            listOf(permissionCode) + requestPermissionCache.requiredViewCodes(permissionCode)
+        return codes.fold<String, BranchVisibility>(BranchVisibility.AllBranches) { merged, code ->
+            val visibility = branchVisibility(userId, organisationId, code)
+            if (visibility == NO_BRANCHES) {
+                throw MissingPermissionException(code)
+            }
+            merged.intersect(visibility)
         }
     }
 

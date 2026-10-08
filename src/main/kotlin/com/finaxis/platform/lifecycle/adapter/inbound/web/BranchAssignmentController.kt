@@ -1,20 +1,16 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
-import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
-import com.finaxis.platform.lifecycle.PermissionGuard
-import com.finaxis.platform.lifecycle.TenantCaller
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.AssignBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BranchAssignmentDetailResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BranchAssignmentSummaryResponse
 import com.finaxis.platform.lifecycle.application.AssignUserToBranchCommand
-import com.finaxis.platform.lifecycle.application.BranchAssignmentType
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
-import com.finaxis.platform.lifecycle.application.RevokeUserBranchAssignmentCommand
+import com.finaxis.platform.lifecycle.application.RevokeBranchAssignmentCommand
 import com.finaxis.platform.lifecycle.application.query.LifecycleBranchAssignmentDetail
 import com.finaxis.platform.lifecycle.application.query.LifecycleBranchAssignmentFilter
 import com.finaxis.platform.lifecycle.application.query.LifecycleBranchAssignmentSummary
@@ -57,7 +53,6 @@ import java.util.UUID
 class BranchAssignmentController(
     private val branchProvisioningService: BranchProvisioningService,
     private val lifecycleIamReadService: LifecycleIamReadService,
-    private val permissionGuard: PermissionGuard,
 ) {
     /**
      * Searches branch assignments in the active tenant organisation.
@@ -254,24 +249,25 @@ class BranchAssignmentController(
         @RequestBody @Valid request: AssignBranchRequest,
     ): ResponseEntity<BranchAssignmentSummaryResponse> {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            "user.assign_branch",
-        )
-        branchProvisioningService.assignUser(
-            AssignUserToBranchCommand(
-                organisationId = caller.activeOrganisationId,
-                userId = request.userId,
-                branchId = request.branchId,
-                assignmentType = request.assignmentType,
-                assignedBy = caller.actorId,
-            ),
-        )
-        val assignment = findAssignment(caller, request)
+        val assignmentId =
+            branchProvisioningService.assignUser(
+                AssignUserToBranchCommand(
+                    organisationId = caller.activeOrganisationId,
+                    userId = request.userId,
+                    branchId = request.branchId,
+                    assignmentType = request.assignmentType,
+                    assignedBy = caller.actorId,
+                ),
+            )
+        val assignment =
+            lifecycleIamReadService.getBranchAssignment(
+                caller.activeOrganisationId,
+                assignmentId,
+                caller,
+            )
         return ResponseEntity
             .created(URI.create("${ApiPaths.BRANCH_ASSIGNMENTS}/${assignment.id}"))
-            .body(assignment.toResponse())
+            .body(assignment.toSummaryResponse())
     }
 
     /** Revokes a user branch assignment resolved safely by assignment identifier. */
@@ -280,7 +276,11 @@ class BranchAssignmentController(
     @PreAuthorize("hasAuthority('user.revoke_branch')")
     @Operation(
         summary = "Revoke branch assignment",
-        description = "Revokes the assignment identified in the active tenant organisation.",
+        description =
+            "Revokes the assignment identified in the active tenant organisation. The " +
+                "service resolves the assignment's branch itself and authorises at that " +
+                "branch. A tenant-wide holder gets 404 for an unknown id; a branch-scoped " +
+                "caller gets the same 403 for an unknown id and for a branch it may not act on.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -328,23 +328,10 @@ class BranchAssignmentController(
         @PathVariable("assignment_id") assignmentId: UUID,
     ): BranchAssignmentDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        val assignment =
-            lifecycleIamReadService.getBranchAssignment(
-                caller.activeOrganisationId,
-                assignmentId,
-                caller,
-            )
-        permissionGuard.requireTenantPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            "user.revoke_branch",
-        )
-        branchProvisioningService.revokeUserAssignment(
-            RevokeUserBranchAssignmentCommand(
+        branchProvisioningService.revokeAssignment(
+            RevokeBranchAssignmentCommand(
                 organisationId = caller.activeOrganisationId,
-                userId = assignment.userId,
-                branchId = assignment.branchId,
-                assignmentType = BranchAssignmentType.valueOf(assignment.assignmentType),
+                assignmentId = assignmentId,
                 revokedBy = caller.actorId,
             ),
         )
@@ -353,28 +340,16 @@ class BranchAssignmentController(
             .toResponse()
     }
 
-    private fun findAssignment(
-        caller: TenantCaller,
-        request: AssignBranchRequest,
-    ): LifecycleBranchAssignmentSummary {
-        val assignments =
-            lifecycleIamReadService.searchBranchAssignments(
-                caller.activeOrganisationId,
-                LifecycleBranchAssignmentFilter(
-                    branchId = request.branchId,
-                    assignmentType = request.assignmentType.name,
-                    status = "ACTIVE",
-                    size = MAXIMUM_PAGE_SIZE.toInt(),
-                ),
-                caller,
-            )
-        return assignments.items.firstOrNull { it.userId == request.userId }
-            ?: throw ResourceNotFoundException(
-                safeDetail = "Branch assignment not found after assignment",
-            )
-    }
-
     private fun LifecycleBranchAssignmentSummary.toResponse() =
+        BranchAssignmentSummaryResponse(
+            id = id,
+            userId = userId,
+            branchId = branchId,
+            assignmentType = assignmentType,
+            status = status,
+        )
+
+    private fun LifecycleBranchAssignmentDetail.toSummaryResponse() =
         BranchAssignmentSummaryResponse(
             id = id,
             userId = userId,

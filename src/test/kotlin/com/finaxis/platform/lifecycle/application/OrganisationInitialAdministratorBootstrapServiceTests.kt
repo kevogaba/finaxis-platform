@@ -609,15 +609,23 @@ internal class BootstrapProvisioningFake(
             userId,
     ]
 
-    override fun assign(command: AssignUserToBranchCommand): Boolean =
-        assignments.add(
+    override fun assign(command: AssignUserToBranchCommand): BranchAssignmentWrite {
+        val key =
             BootstrapAssignmentKey(
                 command.organisationId,
                 command.userId,
                 command.branchId,
                 command.assignmentType,
-            ),
-        )
+            )
+        return BranchAssignmentWrite(assignmentIds.getOrPut(key) { uuidV7() }, assignments.add(key))
+    }
+
+    private val assignmentIds = mutableMapOf<BootstrapAssignmentKey, UUID>()
+
+    override fun findAssignment(
+        organisationId: UUID,
+        assignmentId: UUID,
+    ): BranchAssignmentTarget? = null
 
     override fun isActive(command: RevokeUserBranchAssignmentCommand) =
         BootstrapAssignmentKey(

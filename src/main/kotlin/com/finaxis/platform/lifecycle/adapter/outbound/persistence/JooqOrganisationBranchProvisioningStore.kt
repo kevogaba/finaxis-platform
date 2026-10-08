@@ -25,6 +25,9 @@ import com.finaxis.platform.lifecycle.application.AssignUserToBranchCommand
 import com.finaxis.platform.lifecycle.application.BRANCH_AUDIT_ENTITY_TYPE
 import com.finaxis.platform.lifecycle.application.BRANCH_UPDATE_AUDIT_ACTION
 import com.finaxis.platform.lifecycle.application.BranchAssignmentStore
+import com.finaxis.platform.lifecycle.application.BranchAssignmentTarget
+import com.finaxis.platform.lifecycle.application.BranchAssignmentType
+import com.finaxis.platform.lifecycle.application.BranchAssignmentWrite
 import com.finaxis.platform.lifecycle.application.BranchLifecycleSnapshot
 import com.finaxis.platform.lifecycle.application.BranchLifecycleStore
 import com.finaxis.platform.lifecycle.application.CreateBranchCommand
@@ -916,8 +919,8 @@ class JooqBranchAssignmentStore(
                 )
             }
 
-    override fun assign(command: AssignUserToBranchCommand): Boolean {
-        if (activeAssignmentExists(command)) return false
+    override fun assign(command: AssignUserToBranchCommand): BranchAssignmentWrite {
+        activeAssignmentId(command)?.let { return BranchAssignmentWrite(it, changed = false) }
         val inactiveAssignmentId =
             dsl
                 .select(USER_BRANCH_ASSIGNMENT.ID)
@@ -943,7 +946,7 @@ class JooqBranchAssignmentStore(
                     USER_BRANCH_ASSIGNMENT.ROW_VERSION.plus(1),
                 ).where(USER_BRANCH_ASSIGNMENT.ID.eq(inactiveAssignmentId))
                 .execute()
-            return true
+            return BranchAssignmentWrite(inactiveAssignmentId, changed = true)
         }
         val now = clock.instant().atOffset(ZoneOffset.UTC)
         dsl
@@ -959,9 +962,45 @@ class JooqBranchAssignmentStore(
             .set(USER_BRANCH_ASSIGNMENT.CREATED_BY, command.assignedBy)
             .set(USER_BRANCH_ASSIGNMENT.UPDATED_AT, now)
             .set(USER_BRANCH_ASSIGNMENT.UPDATED_BY, command.assignedBy)
-            .execute()
-        return true
+            .returning(USER_BRANCH_ASSIGNMENT.ID)
+            .fetchOne()
+            ?.id
+            ?.let { return BranchAssignmentWrite(it, changed = true) }
+        error("Insert into user_branch_assignment returned no generated identifier.")
     }
+
+    private fun activeAssignmentId(command: AssignUserToBranchCommand): UUID? =
+        dsl
+            .select(USER_BRANCH_ASSIGNMENT.ID)
+            .from(USER_BRANCH_ASSIGNMENT)
+            .where(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID.eq(command.organisationId))
+            .and(USER_BRANCH_ASSIGNMENT.USER_ID.eq(command.userId))
+            .and(USER_BRANCH_ASSIGNMENT.BRANCH_ID.eq(command.branchId))
+            .and(USER_BRANCH_ASSIGNMENT.ASSIGNMENT_TYPE.eq(command.assignmentType.name))
+            .and(USER_BRANCH_ASSIGNMENT.STATUS.eq("ACTIVE"))
+            .fetchOne(USER_BRANCH_ASSIGNMENT.ID)
+
+    override fun findAssignment(
+        organisationId: UUID,
+        assignmentId: UUID,
+    ): BranchAssignmentTarget? =
+        dsl
+            .select(
+                USER_BRANCH_ASSIGNMENT.USER_ID,
+                USER_BRANCH_ASSIGNMENT.BRANCH_ID,
+                USER_BRANCH_ASSIGNMENT.ASSIGNMENT_TYPE,
+            ).from(USER_BRANCH_ASSIGNMENT)
+            .where(USER_BRANCH_ASSIGNMENT.ID.eq(assignmentId))
+            .and(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID.eq(organisationId))
+            .fetchOne { record ->
+                BranchAssignmentTarget(
+                    requireNotNull(record[USER_BRANCH_ASSIGNMENT.USER_ID]),
+                    requireNotNull(record[USER_BRANCH_ASSIGNMENT.BRANCH_ID]),
+                    BranchAssignmentType.valueOf(
+                        requireNotNull(record[USER_BRANCH_ASSIGNMENT.ASSIGNMENT_TYPE]),
+                    ),
+                )
+            }
 
     override fun activeAssignments(
         organisationId: UUID,
@@ -999,18 +1038,6 @@ class JooqBranchAssignmentStore(
             .and(USER_BRANCH_ASSIGNMENT.ASSIGNMENT_TYPE.eq(command.assignmentType.name))
             .and(USER_BRANCH_ASSIGNMENT.STATUS.eq("ACTIVE"))
             .execute() > 0
-
-    private fun activeAssignmentExists(command: AssignUserToBranchCommand): Boolean =
-        dsl.fetchExists(
-            dsl
-                .selectOne()
-                .from(USER_BRANCH_ASSIGNMENT)
-                .where(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID.eq(command.organisationId))
-                .and(USER_BRANCH_ASSIGNMENT.USER_ID.eq(command.userId))
-                .and(USER_BRANCH_ASSIGNMENT.BRANCH_ID.eq(command.branchId))
-                .and(USER_BRANCH_ASSIGNMENT.ASSIGNMENT_TYPE.eq(command.assignmentType.name))
-                .and(USER_BRANCH_ASSIGNMENT.STATUS.eq("ACTIVE")),
-        )
 }
 
 /** Adapter exposing controlled deprovisioning cleanup without widening the lifecycle store port. */

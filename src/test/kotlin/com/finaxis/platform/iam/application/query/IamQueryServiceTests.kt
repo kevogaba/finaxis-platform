@@ -322,18 +322,32 @@ class IamQueryServiceTests {
     }
 
     @Test
-    fun `getRolePermission happy path`() {
+    fun `getRolePermissionByCode reads the one grant by role and code`() {
         val caller = TenantCaller(actorId, tenantId)
-        val result = service.getRolePermission(tenantId, itemId, caller)
-        assertEquals("user.view", result.permissionCode)
+
+        val result = service.getRolePermissionByCode(tenantId, itemId, "branch.view", caller)
+
+        assertEquals(itemId, result.roleId)
+        assertEquals("branch.view", result.permissionCode)
     }
 
     @Test
-    fun `getRolePermission throws when not found`() {
+    fun `getRolePermissionByCode is gated by role view`() {
+        val caller = TenantCaller(actorId, tenantId)
+        permissionGuard.deny(tenantId, "role.view")
+
+        assertFailsWith<SecurityException> {
+            service.getRolePermissionByCode(tenantId, itemId, "branch.view", caller)
+        }
+    }
+
+    @Test
+    fun `getRolePermissionByCode throws when the grant is not found`() {
         val caller = TenantCaller(actorId, tenantId)
         queries.shouldReturnNull = true
+
         assertFailsWith<ResourceNotFoundException> {
-            service.getRolePermission(tenantId, itemId, caller)
+            service.getRolePermissionByCode(tenantId, itemId, "branch.view", caller)
         }
     }
 
@@ -434,9 +448,9 @@ class IamQueryServiceTests {
     }
 
     @Test
-    fun `getRolePermission happy path with PlatformCaller`() {
+    fun `getRolePermissionByCode happy path with PlatformCaller`() {
         val caller = PlatformCaller(actorId, UUID.randomUUID())
-        val result = service.getRolePermission(tenantId, itemId, caller)
+        val result = service.getRolePermissionByCode(tenantId, itemId, "user.view", caller)
         assertEquals("user.view", result.permissionCode)
     }
 
@@ -834,17 +848,18 @@ internal class FakeIamAdministrationQueries :
             1L,
         )
 
-    override fun findRolePermissionById(
+    override fun findRolePermissionByRoleAndCode(
         organisationId: UUID,
-        id: UUID,
+        roleId: UUID,
+        permissionCode: String,
     ): RolePermissionDetail? {
         if (shouldReturnNull) return null
         return RolePermissionDetail(
-            id = id,
+            id = UUID.randomUUID(),
             organisationId = organisationId,
-            roleId = UUID.randomUUID(),
+            roleId = roleId,
             permissionId = UUID.randomUUID(),
-            permissionCode = "user.view",
+            permissionCode = permissionCode,
             grantedAt = Instant.now(),
             grantedBy = null,
             createdAt = Instant.now(),
@@ -926,4 +941,10 @@ internal class FakePermissionGuard : PermissionGuard {
             } else {
                 BranchVisibility.AllBranches
             }
+
+    override fun mutationBranchVisibility(
+        actorId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ): BranchVisibility = branchVisibility(actorId, organisationId, permissionCode)
 }

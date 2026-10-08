@@ -4,6 +4,7 @@ import com.finaxis.platform.accounting.domain.MoneyPolicy
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
@@ -17,6 +18,7 @@ import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.common.transitions.TransitionExecutor
 import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogRepository
+import com.finaxis.platform.lifecycle.BranchVisibility
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.LifecycleAggregate
@@ -567,6 +569,112 @@ class OrganisationBranchProvisioningServiceTests {
     }
 
     @Test
+    fun `assigning a user returns the id of the active assignment it wrote or found`() {
+        val organisationId = uuidV7()
+        val branchId = uuidV7()
+        val userId = uuidV7()
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
+        store.memberships[organisationId to userId] =
+            MembershipSnapshot(MembershipLifecycleState.ACTIVE, MembershipType.STAFF)
+        val command =
+            AssignUserToBranchCommand(
+                organisationId,
+                userId,
+                branchId,
+                BranchAssignmentType.OPERATE,
+                uuidV7(),
+            )
+
+        val written = branches.assignUser(command)
+        val found = branches.assignUser(command)
+
+        assertEquals(written, found)
+        assertEquals(written, store.assignmentIds.values.single())
+        assertEquals(1, store.assignmentCount(organisationId, userId))
+    }
+
+    @Test
+    fun `revoking an assignment by id is refused before the row is read when nothing is granted`() {
+        val organisationId = uuidV7()
+        val revoker = uuidV7()
+        val assignmentId = store.activeAssignmentOn(organisationId, uuidV7())
+        doThrow(MissingPermissionException("branch_assignment.view"))
+            .whenever(permissionGuard)
+            .mutationBranchVisibility(revoker, organisationId, "user.revoke_branch")
+
+        val refusal =
+            assertFailsWith<MissingPermissionException> {
+                branches.revokeAssignment(
+                    RevokeBranchAssignmentCommand(organisationId, assignmentId, revoker),
+                )
+            }
+
+        assertEquals("branch_assignment.view", refusal.permissionCode)
+        assertEquals(0, store.assignmentLookups)
+        assertTrue(audits.events.isEmpty())
+        assertEquals(1, store.assignments.size)
+    }
+
+    @Test
+    fun `a branch scoped revoker gets one identical refusal for an unknown and a foreign row`() {
+        val organisationId = uuidV7()
+        val revoker = uuidV7()
+        val ownBranch = uuidV7()
+        val foreignBranch = uuidV7()
+        val foreign = store.activeAssignmentOn(organisationId, foreignBranch)
+        val own = store.activeAssignmentOn(organisationId, ownBranch)
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        store.branchStates[organisationId to ownBranch] = BranchLifecycleState.ACTIVE
+        whenever(
+            permissionGuard.mutationBranchVisibility(revoker, organisationId, "user.revoke_branch"),
+        ).thenReturn(BranchVisibility.Branches(setOf(ownBranch)))
+
+        val refusals =
+            listOf(foreign, uuidV7()).map { assignmentId ->
+                assertFailsWith<MissingPermissionException> {
+                    branches.revokeAssignment(
+                        RevokeBranchAssignmentCommand(organisationId, assignmentId, revoker),
+                    )
+                }
+            }
+
+        assertEquals("Missing permission: user.revoke_branch.", refusals[0].safeDetail)
+        assertEquals(refusals[0].safeDetail, refusals[1].safeDetail)
+        assertEquals(refusals[0].code, refusals[1].code)
+        assertEquals(2, store.assignments.size)
+        assertTrue(audits.events.isEmpty())
+
+        branches.revokeAssignment(RevokeBranchAssignmentCommand(organisationId, own, revoker))
+        assertEquals(1, store.assignments.size)
+        verify(permissionGuard)
+            .requireBranchPermission(revoker, organisationId, ownBranch, "user.revoke_branch")
+    }
+
+    @Test
+    fun `a tenant wide revoker keeps the 404 for an unknown assignment id`() {
+        val organisationId = uuidV7()
+        val revoker = uuidV7()
+        val branchId = uuidV7()
+        val known = store.activeAssignmentOn(organisationId, branchId)
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
+        whenever(
+            permissionGuard.mutationBranchVisibility(revoker, organisationId, "user.revoke_branch"),
+        ).thenReturn(BranchVisibility.AllBranches)
+
+        assertFailsWith<ResourceNotFoundException> {
+            branches.revokeAssignment(
+                RevokeBranchAssignmentCommand(organisationId, uuidV7(), revoker),
+            )
+        }
+        assertEquals(1, store.assignments.size)
+
+        branches.revokeAssignment(RevokeBranchAssignmentCommand(organisationId, known, revoker))
+        assertEquals(0, store.assignments.size)
+    }
+
+    @Test
     fun `branch lifecycle emits externalized events for each operational transition`() {
         val organisationId = uuidV7()
         val branchId = uuidV7()
@@ -1008,6 +1116,22 @@ private class ProvisioningFake(
     val branchAmenders = mutableSetOf<Triple<UUID, UUID, UUID>>()
     val memberships = mutableMapOf<Pair<UUID, UUID>, MembershipSnapshot>()
     val assignments = mutableSetOf<AssignmentKey>()
+    val assignmentIds = mutableMapOf<AssignmentKey, UUID>()
+    var assignmentLookups = 0
+
+    /** An ACTIVE assignment of a fresh user on [branchId]; returns its id. */
+    fun activeAssignmentOn(
+        organisationId: UUID,
+        branchId: UUID,
+    ): UUID {
+        val userId = uuidV7()
+        memberships[organisationId to userId] =
+            MembershipSnapshot(MembershipLifecycleState.ACTIVE, MembershipType.AUDITOR)
+        val key = AssignmentKey(organisationId, userId, branchId, BranchAssignmentType.VIEW)
+        assignments.add(key)
+        return assignmentIds.getOrPut(key) { uuidV7() }
+    }
+
     var listResult = OrganisationPage(emptyList(), 0)
     var lastListFilter: OrganisationListFilter? = null
     val tenantCodes = mutableMapOf<UUID, String>()
@@ -1199,15 +1323,27 @@ private class ProvisioningFake(
             userId,
     ]
 
-    override fun assign(command: AssignUserToBranchCommand): Boolean =
-        assignments.add(
+    override fun assign(command: AssignUserToBranchCommand): BranchAssignmentWrite {
+        val key =
             AssignmentKey(
                 command.organisationId,
                 command.userId,
                 command.branchId,
                 command.assignmentType,
-            ),
-        )
+            )
+        return BranchAssignmentWrite(assignmentIds.getOrPut(key) { uuidV7() }, assignments.add(key))
+    }
+
+    override fun findAssignment(
+        organisationId: UUID,
+        assignmentId: UUID,
+    ): BranchAssignmentTarget? {
+        assignmentLookups++
+        return assignmentIds.entries
+            .firstOrNull { it.value == assignmentId && it.key.organisationId == organisationId }
+            ?.key
+            ?.let { BranchAssignmentTarget(it.userId, it.branchId, it.type) }
+    }
 
     override fun isActive(command: RevokeUserBranchAssignmentCommand) =
         AssignmentKey(

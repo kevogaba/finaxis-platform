@@ -69,4 +69,11 @@ class LifecyclePermissionGuardAdapter(
         permissionCode: String,
     ): BranchVisibility =
         authorizationService.branchVisibility(actorId, organisationId, permissionCode)
+
+    override fun mutationBranchVisibility(
+        actorId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ): BranchVisibility =
+        authorizationService.mutationBranchVisibility(actorId, organisationId, permissionCode)
 }

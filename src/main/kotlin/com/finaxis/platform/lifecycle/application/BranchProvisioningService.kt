@@ -3,6 +3,7 @@ package com.finaxis.platform.lifecycle.application
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
@@ -13,6 +14,7 @@ import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionCommand
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
+import com.finaxis.platform.lifecycle.BranchVisibility
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleTransition
@@ -22,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional
 import java.time.DateTimeException
 import java.time.Instant
 import java.time.ZoneId
+import java.util.UUID
 
 /**
  * Organisation-scoped branch lifecycle and user-assignment use cases. Every status change uses
@@ -356,13 +359,26 @@ class BranchProvisioningService(
         )
     }
 
-    /** Creates or reactivates a user assignment only inside an active organisation and branch. */
+    /**
+     * Creates or reactivates a user assignment only inside an active organisation and branch, and
+     * returns the id of the ACTIVE assignment it wrote or found, the key the gated read-back asks
+     * for (never "the first page of the branch's assignments").
+     */
     @Transactional
-    fun assignUser(command: AssignUserToBranchCommand) {
+    fun assignUser(command: AssignUserToBranchCommand): UUID {
         requireBranchPermission(
             command.assignedBy,
             command.organisationId,
             command.branchId,
+            "user.assign_branch",
+        )
+        // The gated read-back asks for `branch_assignment.view` through the caller's branch
+        // visibility. Resolving it here, with the mutation, memoises it for this request, so the
+        // read-back decides from the answer this check made and cannot be refused by a grant
+        // revoked in between (ADR 0030, decision 4). It never refuses: the check above passed.
+        permissionGuard.mutationBranchVisibility(
+            command.assignedBy,
+            command.organisationId,
             "user.assign_branch",
         )
         resourceNotFoundUnless(assignmentStore.userExists(command.userId))
@@ -380,14 +396,17 @@ class BranchProvisioningService(
             membership.status !=
                 com.finaxis.platform.lifecycle.domain.MembershipLifecycleState.REVOKED,
         )
-        if (!assignmentStore.assign(command)) return
-        audit(
-            command.organisationId,
-            command.branchId.toString(),
-            "branch.assign_user",
-            command.assignedBy.toString(),
-        )
-        publishAssignment(command)
+        val written = assignmentStore.assign(command)
+        if (written.changed) {
+            audit(
+                command.organisationId,
+                command.branchId.toString(),
+                "branch.assign_user",
+                command.assignedBy.toString(),
+            )
+            publishAssignment(command)
+        }
+        return written.id
     }
 
     /** Revokes an assignment while preserving required operational access for ordinary members. */
@@ -397,7 +416,7 @@ class BranchProvisioningService(
             command.revokedBy,
             command.organisationId,
             command.branchId,
-            "user.revoke_branch",
+            REVOKE_BRANCH,
         )
         if (!assignmentStore.isActive(command)) return
         val membership =
@@ -424,6 +443,47 @@ class BranchProvisioningService(
                 actor = TransitionActor("USER", command.revokedBy.toString()),
                 occurredAt = Instant.now(),
                 metadata = mapOf("organisationId" to command.organisationId.toString()),
+            ),
+        )
+    }
+
+    /**
+     * Revokes the assignment [RevokeBranchAssignmentCommand.assignmentId] through an **authorised
+     * combined lookup** (ADR 0030, decision 6): the permission check depends on the assignment's
+     * branch, which only the row knows, so the row is read here, never returned, and the caller
+     * is refused before and after the read alike.
+     *
+     * First the caller's visibility for `user.revoke_branch` and its view is resolved from grants
+     * alone (403, naming the code held nowhere). A caller whose grants are tenant-wide gets 404
+     * for an unknown id. Any other caller gets the **same** 403 `Missing permission:
+     * user.revoke_branch.` for an unknown id and for an assignment on a branch it may not act on,
+     * so existence is no oracle. An assignment it may act on is revoked exactly as
+     * [revokeUserAssignment] does, which re-checks the branch through the same per-request memo.
+     */
+    @Transactional
+    fun revokeAssignment(command: RevokeBranchAssignmentCommand) {
+        val visibility =
+            permissionGuard.mutationBranchVisibility(
+                command.revokedBy,
+                command.organisationId,
+                REVOKE_BRANCH,
+            )
+        val target = assignmentStore.findAssignment(command.organisationId, command.assignmentId)
+        if (target == null && visibility == BranchVisibility.AllBranches) {
+            throw ResourceNotFoundException(
+                safeDetail = "Branch assignment not found: ${command.assignmentId}",
+            )
+        }
+        if (target == null || !visibility.canSee(target.branchId)) {
+            throw MissingPermissionException(REVOKE_BRANCH)
+        }
+        revokeUserAssignment(
+            RevokeUserBranchAssignmentCommand(
+                organisationId = command.organisationId,
+                userId = target.userId,
+                branchId = target.branchId,
+                assignmentType = target.assignmentType,
+                revokedBy = command.revokedBy,
             ),
         )
     }
@@ -573,6 +633,7 @@ class BranchProvisioningService(
             setOf(BranchLifecycleState.DRAFT, BranchLifecycleState.ACTIVE)
         val ALLOWED_BRANCH_CREATION_STATES =
             setOf(OrganisationLifecycleState.ACTIVE, OrganisationLifecycleState.PROVISIONING)
+        const val REVOKE_BRANCH = "user.revoke_branch"
         const val CHECKER_SCOPE = "checkerScope"
         const val BRANCH_ASSIGNED_TARGET = "finaxis.lifecycle.branch.user-assigned"
         const val BRANCH_ASSIGNMENT_REVOKED_TARGET = "finaxis.lifecycle.branch.user-revoked"

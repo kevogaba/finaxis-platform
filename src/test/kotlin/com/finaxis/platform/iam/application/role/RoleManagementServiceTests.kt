@@ -3,6 +3,7 @@ package com.finaxis.platform.iam.application.role
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.application.InvalidRequestException
+import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
@@ -17,13 +18,17 @@ import com.finaxis.platform.iam.application.port.outbound.IamAdministrationPersi
 import com.finaxis.platform.iam.application.port.outbound.MembershipSnapshot
 import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
+import com.finaxis.platform.iam.application.port.outbound.RoleAssignmentTarget
 import com.finaxis.platform.iam.application.port.outbound.RoleSnapshot
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
 import com.finaxis.platform.iam.domain.RoleStatus
+import com.finaxis.platform.lifecycle.BranchVisibility
 import com.finaxis.platform.lifecycle.PermissionGuard
+import org.mockito.Mockito.doThrow
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.verify
+import org.mockito.kotlin.whenever
 import org.springframework.cache.concurrent.ConcurrentMapCacheManager
 import java.time.Clock
 import java.time.Instant
@@ -37,6 +42,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** Exercises organisation-scoped role administration rules without infrastructure dependencies. */
+@Suppress("LargeClass") // One fixture class holds the scenarios of the service under test.
 class RoleManagementServiceTests {
     private val fixture = Fixture()
 
@@ -452,7 +458,7 @@ class RoleManagementServiceTests {
 
         fixture.persistence.calls.clear()
         fixture.service.removePermissionFromRole(fixture.removePermission())
-        assertEquals(listOf("lock", "held", "remove"), fixture.persistence.calls)
+        assertEquals(listOf("lock", "grant-row", "held", "remove"), fixture.persistence.calls)
     }
 
     /** Refuses removing a view that a held mutation needs, naming the dependants. */
@@ -466,14 +472,7 @@ class RoleManagementServiceTests {
 
         val exception =
             assertFailsWith<InvalidRequestException> {
-                fixture.service.removePermissionFromRole(
-                    RemovePermissionFromRole(
-                        fixture.organisationId,
-                        fixture.roleId,
-                        "branch.view",
-                        fixture.actorId,
-                    ),
-                )
+                fixture.service.removePermissionFromRole(fixture.removePermission("branch.view"))
             }
 
         assertEquals("validation_failed", exception.code)
@@ -495,22 +494,8 @@ class RoleManagementServiceTests {
         fixture.persistence.requirements["branch.suspend"] = setOf("branch.view")
         fixture.persistence.heldCodes += setOf("branch.view", "branch.suspend", "user.view")
 
-        fixture.service.removePermissionFromRole(
-            RemovePermissionFromRole(
-                fixture.organisationId,
-                fixture.roleId,
-                "branch.suspend",
-                fixture.actorId,
-            ),
-        )
-        fixture.service.removePermissionFromRole(
-            RemovePermissionFromRole(
-                fixture.organisationId,
-                fixture.roleId,
-                "user.view",
-                fixture.actorId,
-            ),
-        )
+        fixture.service.removePermissionFromRole(fixture.removePermission("branch.suspend"))
+        fixture.service.removePermissionFromRole(fixture.removePermission("user.view"))
 
         assertEquals(2, fixture.persistence.removedPermissions.size)
     }
@@ -711,6 +696,122 @@ class RoleManagementServiceTests {
         assertEquals(0, fixture.persistence.revokeCalls)
     }
 
+    /** The permission check precedes the grant lookup, so a refused caller learns nothing of it. */
+    @Test
+    fun `removing a permission is authorised before the grant is read`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.permissions["tenant.approve"] = fixture.permissionId
+        val command = fixture.removePermission()
+        doThrow(MissingPermissionException("role.view"))
+            .`when`(fixture.permissionGuard)
+            .requireTenantPermission(
+                fixture.actorId,
+                fixture.organisationId,
+                "role.remove_permission",
+            )
+
+        val refusal =
+            assertFailsWith<MissingPermissionException> {
+                fixture.service.removePermissionFromRole(command)
+            }
+
+        assertEquals("role.view", refusal.permissionCode)
+        // Neither the role lock nor the grant row was touched, and nothing was written.
+        assertTrue(fixture.persistence.calls.isEmpty())
+        assertTrue(fixture.persistence.removedPermissions.isEmpty())
+        assertTrue(fixture.audits.events.isEmpty())
+    }
+
+    /** A grant row of another role, or none at all, is the same 404 once the caller is cleared. */
+    @Test
+    fun `removing a grant the role does not own is not found`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.permissions["tenant.approve"] = fixture.permissionId
+        val foreign = uuidV7()
+        fixture.persistence.grantRows[foreign] = uuidV7() to "tenant.approve"
+
+        listOf(foreign, uuidV7()).forEach { rolePermissionId ->
+            val missing =
+                assertFailsWith<ResourceNotFoundException> {
+                    fixture.service.removePermissionFromRole(
+                        RemovePermissionFromRole(
+                            fixture.organisationId,
+                            fixture.roleId,
+                            rolePermissionId,
+                            fixture.actorId,
+                        ),
+                    )
+                }
+            assertEquals("Role permission not found", missing.safeDetail)
+        }
+        assertTrue(fixture.persistence.removedPermissions.isEmpty())
+    }
+
+    /** No grant at all: refused from the grants alone, before the assignment row is read. */
+    @Test
+    fun `revoking a role assignment is refused before the row is read without any grant`() {
+        val target = fixture.branchRoleAssignment(fixture.branchId)
+        doThrow(MissingPermissionException("user.revoke_role"))
+            .`when`(fixture.permissionGuard)
+            .mutationBranchVisibility(fixture.actorId, fixture.organisationId, "user.revoke_role")
+
+        assertFailsWith<MissingPermissionException> {
+            fixture.service.revokeRoleAssignment(fixture.revokeAssignment(target))
+        }
+
+        assertTrue(fixture.persistence.calls.isEmpty())
+        assertEquals(0, fixture.persistence.revokeCalls)
+    }
+
+    /** Unknown, foreign-branch and tenant-scope rows give a branch-scoped caller one 403. */
+    @Test
+    fun `a branch scoped revoker gets the identical refusal for unknown foreign and tenant rows`() {
+        val own = fixture.branchRoleAssignment(fixture.branchId)
+        val foreign = fixture.branchRoleAssignment(uuidV7())
+        val tenantRow = fixture.tenantRoleAssignment()
+        fixture.visibleOnlyAt(fixture.branchId)
+
+        val refusals =
+            listOf(foreign, tenantRow, uuidV7()).map { assignmentId ->
+                assertFailsWith<MissingPermissionException> {
+                    fixture.service.revokeRoleAssignment(fixture.revokeAssignment(assignmentId))
+                }
+            }
+
+        assertEquals(1, refusals.map { it.safeDetail }.toSet().size)
+        assertEquals("Missing permission: user.revoke_role.", refusals.first().safeDetail)
+        assertEquals(1, refusals.map { it.code }.toSet().size)
+        assertEquals(0, fixture.persistence.revokeCalls)
+        assertTrue(fixture.audits.events.isEmpty())
+
+        fixture.persistence.activeAssignments += own
+        fixture.service.revokeRoleAssignment(fixture.revokeAssignment(own))
+        assertEquals(1, fixture.persistence.revokeCalls)
+    }
+
+    /** A tenant-wide holder keeps the 404 for an unknown id and may revoke either scope. */
+    @Test
+    fun `a tenant wide revoker gets not found for an unknown id and revokes either scope`() {
+        val tenantRow = fixture.tenantRoleAssignment()
+        val branchRow = fixture.branchRoleAssignment(uuidV7())
+        fixture.visibleEverywhere()
+
+        val missing =
+            assertFailsWith<ResourceNotFoundException> {
+                fixture.service.revokeRoleAssignment(fixture.revokeAssignment(uuidV7()))
+            }
+        assertEquals("resource_not_found", missing.code)
+        assertEquals(0, fixture.persistence.revokeCalls)
+
+        fixture.persistence.activeAssignments += tenantRow
+        fixture.service.revokeRoleAssignment(fixture.revokeAssignment(tenantRow))
+        fixture.service.revokeRoleAssignment(fixture.revokeAssignment(branchRow))
+        assertEquals(2, fixture.persistence.revokeCalls)
+        // The revocation itself re-checks the scope the row names, at that scope.
+        verify(fixture.permissionGuard)
+            .requireTenantPermission(fixture.actorId, fixture.organisationId, "user.revoke_role")
+    }
+
     /** Builds deterministic dependencies for role service tests. */
     private class Fixture {
         val organisationId: UUID = uuidV7()
@@ -758,8 +859,21 @@ class RoleManagementServiceTests {
         fun deactivateRole(requestId: String? = null) =
             DeactivateRole(organisationId, roleId, actorId, requestId)
 
-        fun removePermission(requestId: String? = null) =
-            RemovePermissionFromRole(organisationId, roleId, "tenant.approve", actorId, requestId)
+        /** A command removing a registered grant row of [code] on the role. */
+        fun removePermission(
+            code: String = "tenant.approve",
+            requestId: String? = null,
+        ): RemovePermissionFromRole {
+            val rolePermissionId = uuidV7()
+            persistence.grantRows[rolePermissionId] = roleId to code
+            return RemovePermissionFromRole(
+                organisationId,
+                roleId,
+                rolePermissionId,
+                actorId,
+                requestId,
+            )
+        }
 
         fun assignPermission(requestId: String? = null) =
             AssignPermissionToRole(organisationId, roleId, "tenant.approve", actorId, requestId)
@@ -778,6 +892,31 @@ class RoleManagementServiceTests {
             requestId,
         )
 
+        fun revokeAssignment(assignmentId: UUID) =
+            RevokeRoleAssignment(organisationId, assignmentId, actorId)
+
+        fun branchRoleAssignment(onBranch: UUID): UUID =
+            uuidV7().also {
+                persistence.roleAssignmentRows[it] =
+                    RoleAssignmentTarget(userId, roleId, RoleScopeType.BRANCH, onBranch)
+            }
+
+        fun tenantRoleAssignment(): UUID =
+            uuidV7().also {
+                persistence.roleAssignmentRows[it] =
+                    RoleAssignmentTarget(userId, roleId, RoleScopeType.TENANT, null)
+            }
+
+        fun visibleOnlyAt(vararg branchIds: UUID) {
+            whenever(permissionGuard.mutationBranchVisibility(actorId, organisationId, REVOKE_ROLE))
+                .thenReturn(BranchVisibility.Branches(branchIds.toSet()))
+        }
+
+        fun visibleEverywhere() {
+            whenever(permissionGuard.mutationBranchVisibility(actorId, organisationId, REVOKE_ROLE))
+                .thenReturn(BranchVisibility.AllBranches)
+        }
+
         fun revokeRole(scopeType: RoleScopeType = RoleScopeType.TENANT) =
             RevokeRoleFromUser(organisationId, userId, roleId, scopeType, null, actorId)
 
@@ -790,6 +929,10 @@ class RoleManagementServiceTests {
         fun primePermissionCache(membershipId: UUID) {
             resolver.effectivePermissions(membershipId)
         }
+    }
+
+    private companion object {
+        const val REVOKE_ROLE = "user.revoke_role"
     }
 
     /** Captures published transition events. */
@@ -852,6 +995,8 @@ class RoleManagementServiceTests {
         val removedPermissions = mutableListOf<UUID>()
         val heldCodes = mutableSetOf<String>()
         val requirements = mutableMapOf<String, Set<String>>()
+        val grantRows = mutableMapOf<UUID, Pair<UUID, String>>()
+        val roleAssignmentRows = mutableMapOf<UUID, RoleAssignmentTarget>()
         val calls = mutableListOf<String>()
         val inactiveCodes = mutableSetOf<String>()
         val assignedScopes = mutableListOf<Pair<RoleScopeType, UUID?>>()
@@ -937,6 +1082,15 @@ class RoleManagementServiceTests {
             return true
         }
 
+        override fun grantedPermissionCode(
+            organisationId: UUID,
+            roleId: UUID,
+            rolePermissionId: UUID,
+        ): String? {
+            calls += "grant-row"
+            return grantRows[rolePermissionId]?.takeIf { it.first == roleId }?.second
+        }
+
         override fun removePermission(
             organisationId: UUID,
             roleId: UUID,
@@ -961,6 +1115,14 @@ class RoleManagementServiceTests {
             userId: UUID,
             branchId: UUID,
         ) = branchId in activeBranchAssignments
+
+        override fun findRoleAssignment(
+            organisationId: UUID,
+            assignmentId: UUID,
+        ): RoleAssignmentTarget? {
+            calls += "assignment-row"
+            return roleAssignmentRows[assignmentId]
+        }
 
         override fun activeRoleAssignment(
             organisationId: UUID,

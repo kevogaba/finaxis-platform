@@ -70,6 +70,27 @@ interface PermissionGuard {
         organisationId: UUID,
         permissionCode: String,
     ): BranchVisibility
+
+    /**
+     * Answers where [actorId] may perform the mutation [permissionCode] in [organisationId]:
+     * the mutation code **and every view the catalogue pairs with it**, each read as
+     * [branchVisibility] reads it, intersected. [BranchVisibility.AllBranches] means the mutation
+     * and its views are held tenant-wide; otherwise exactly the returned branches pass the
+     * target-branch check [requireBranchPermission] makes, and an empty set means no branch does.
+     *
+     * This is the first half of the authorised combined lookup of a route that names only an
+     * assignment id (ADR 0030, decision 6): the caller learns where it may act **before** the
+     * row that names the target branch is read, so an unknown id and a row the caller may not
+     * touch can be refused alike. It refuses with a
+     * [com.finaxis.platform.common.application.MissingPermissionException] naming the first code
+     * (the mutation code first, then each view) the actor holds nowhere at all, which depends on
+     * the caller's grants and never on any row.
+     */
+    fun mutationBranchVisibility(
+        actorId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ): BranchVisibility
 }
 
 /**
@@ -87,11 +108,16 @@ sealed interface BranchVisibility {
      */
     fun requireListRestriction(): Set<UUID>?
 
+    /** The branches visible under both this and [other]: a view and its mutation together. */
+    fun intersect(other: BranchVisibility): BranchVisibility
+
     /** A tenant-wide grant: every branch of the organisation is visible. */
     data object AllBranches : BranchVisibility {
         override fun canSee(branchId: UUID): Boolean = true
 
         override fun requireListRestriction(): Set<UUID>? = null
+
+        override fun intersect(other: BranchVisibility): BranchVisibility = other
     }
 
     /** Branch-scope grants only: exactly [branchIds] are visible, none when it is empty. */
@@ -102,5 +128,11 @@ sealed interface BranchVisibility {
 
         override fun requireListRestriction(): Set<UUID>? =
             branchIds.takeUnless { it.isEmpty() } ?: throw ForbiddenOperationException()
+
+        override fun intersect(other: BranchVisibility): BranchVisibility =
+            when (other) {
+                is AllBranches -> this
+                is Branches -> Branches(branchIds intersect other.branchIds)
+            }
     }
 }

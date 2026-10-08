@@ -626,6 +626,12 @@ private class FakePermissionGuardForBusinessDate : PermissionGuard {
         } else {
             BranchVisibility.AllBranches
         }
+
+    override fun mutationBranchVisibility(
+        actorId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ): BranchVisibility = branchVisibility(actorId, organisationId, permissionCode)
 }
 
 private class CapturingTransitionPublisherForBusinessDate : TransitionEventPublisher {

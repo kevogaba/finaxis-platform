@@ -2,6 +2,7 @@ package com.finaxis.platform.iam.adapter.inbound.web
 
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.InvalidRequestException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiExceptionHandler
 import com.finaxis.platform.common.web.api.ApiJsonCodec
@@ -163,8 +164,6 @@ class RoleControllerTests
                     "Permission branch.view is required by held permissions: branch.suspend.",
                 ),
             )
-            whenever(iamQueryService.getRolePermission(eq(tenantId), eq(grantId), any()))
-                .thenReturn(rolePermissionDetail(tenantId, grantId, roleId, "branch.view"))
 
             mockMvc
                 .post("${ApiPaths.ROLES}/$roleId/permissions") {
@@ -208,9 +207,6 @@ class RoleControllerTests
             whenever(
                 roleManagementService.removePermissionFromRole(any()),
             ).thenThrow(ConflictException())
-            whenever(iamQueryService.getRolePermission(eq(tenantId), any(), any())).thenReturn(
-                rolePermissionDetail(tenantId, roleId = roleId),
-            )
 
             listOf(
                 HttpMethod.PATCH to "${ApiPaths.ROLES}/$roleId",
@@ -242,8 +238,14 @@ class RoleControllerTests
             whenever(
                 iamQueryService.listRolePermissions(eq(tenantId), eq(roleId), any(), any()),
             ).thenReturn(apiPageOf(listOf(grant), number = 0, size = 20, totalItems = 1))
+            // The grant is read back by its key (role and permission), not out of a page.
             whenever(
-                iamQueryService.getRolePermission(eq(tenantId), eq(grantId), any()),
+                iamQueryService.getRolePermissionByCode(
+                    eq(tenantId),
+                    eq(roleId),
+                    eq("permission.view"),
+                    any(),
+                ),
             ).thenReturn(rolePermissionDetail(tenantId, grantId, roleId, "permission.view"))
 
             mockMvc
@@ -267,7 +269,10 @@ class RoleControllerTests
             val commandCaptor =
                 argumentCaptor<com.finaxis.platform.iam.application.role.RemovePermissionFromRole>()
             verify(roleManagementService).removePermissionFromRole(commandCaptor.capture())
-            kotlin.test.assertEquals("permission.view", commandCaptor.firstValue.permissionCode)
+            // The route passes the grant's id and role; the service resolves its permission code
+            // after authorising, so a client-supplied code is never trusted.
+            kotlin.test.assertEquals(grantId, commandCaptor.firstValue.rolePermissionId)
+            kotlin.test.assertEquals(roleId, commandCaptor.firstValue.roleId)
         }
 
         @Test
@@ -301,8 +306,13 @@ class RoleControllerTests
             val tenantId = uuidV7()
             val roleId = uuidV7()
             whenever(
-                iamQueryService.listRolePermissions(eq(tenantId), eq(roleId), any(), any()),
-            ).thenReturn(apiPageOf(emptyList(), number = 0, size = 100, totalItems = 0))
+                iamQueryService.getRolePermissionByCode(
+                    eq(tenantId),
+                    eq(roleId),
+                    eq("permission.view"),
+                    any(),
+                ),
+            ).thenThrow(ResourceNotFoundException(safeDetail = "Role permission not found"))
 
             mockMvc
                 .post("${ApiPaths.ROLES}/$roleId/permissions") {
@@ -319,13 +329,13 @@ class RoleControllerTests
         }
 
         @Test
-        fun `removePermission rejects a grant id owned by a different role`() {
+        fun `removePermission answers not found for a grant id the role does not own`() {
             val tenantId = uuidV7()
             val roleId = uuidV7()
-            val otherRoleId = uuidV7()
             val grantId = uuidV7()
-            whenever(iamQueryService.getRolePermission(eq(tenantId), eq(grantId), any()))
-                .thenReturn(rolePermissionDetail(tenantId, grantId, otherRoleId, "permission.view"))
+            // Ownership is the service's rule, applied after it authorises the caller.
+            whenever(roleManagementService.removePermissionFromRole(any()))
+                .thenThrow(ResourceNotFoundException(safeDetail = "Role permission not found"))
 
             mockMvc
                 .delete("${ApiPaths.ROLES}/$roleId/permissions/$grantId") {
@@ -335,7 +345,10 @@ class RoleControllerTests
                     jsonPath("$.code") { value("resource_not_found") }
                 }
 
-            verify(roleManagementService, org.mockito.kotlin.never())
-                .removePermissionFromRole(any())
+            val commandCaptor =
+                argumentCaptor<com.finaxis.platform.iam.application.role.RemovePermissionFromRole>()
+            verify(roleManagementService).removePermissionFromRole(commandCaptor.capture())
+            kotlin.test.assertEquals(roleId, commandCaptor.firstValue.roleId)
+            kotlin.test.assertEquals(grantId, commandCaptor.firstValue.rolePermissionId)
         }
     }

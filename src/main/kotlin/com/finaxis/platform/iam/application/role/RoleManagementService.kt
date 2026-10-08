@@ -2,6 +2,7 @@ package com.finaxis.platform.iam.application.role
 
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
@@ -11,10 +12,12 @@ import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.iam.application.authorization.PermissionCacheInvalidator
 import com.finaxis.platform.iam.application.port.outbound.IamAdministrationPersistence
+import com.finaxis.platform.iam.application.port.outbound.RoleAssignmentTarget
 import com.finaxis.platform.iam.application.port.outbound.RoleSnapshot
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
 import com.finaxis.platform.iam.domain.RoleStatus
+import com.finaxis.platform.lifecycle.BranchVisibility
 import com.finaxis.platform.lifecycle.PermissionGuard
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -23,6 +26,7 @@ import java.util.UUID
 
 /** Coordinates organisation-scoped role, permission, and user-role assignment administration. */
 @Service
+@Suppress("TooManyFunctions") // One cohesive role-administration service.
 class RoleManagementService(
     private val persistence: IamAdministrationPersistence,
     private val auditService: AuditService,
@@ -139,21 +143,28 @@ class RoleManagementService(
         )
     }
 
-    /** Removes a permission from a mutable role and evicts affected permission caches. */
+    /**
+     * Removes a permission grant from a mutable role and evicts affected permission caches. The
+     * caller is authorised first (the mutation and its views), and only then is the grant read to
+     * learn its permission code, so a refused caller learns nothing about the grant.
+     */
     @Transactional
     fun removePermissionFromRole(command: RemovePermissionFromRole) {
         requireTenantPermission(command.actorId, command.organisationId, "role.remove_permission")
         val role = persistence.lockRole(command.organisationId, command.roleId).orResourceNotFound()
-        requireMutable(role)
-        val permissionId =
+        val permissionCode =
             persistence
-                .permissionIdByCode(
-                    command.permissionCode,
-                ).orResourceNotFound()
+                .grantedPermissionCode(
+                    command.organisationId,
+                    command.roleId,
+                    command.rolePermissionId,
+                ).orResourceNotFound(safeDetail = "Role permission not found")
+        requireMutable(role)
+        val permissionId = persistence.permissionIdByCode(permissionCode).orResourceNotFound()
         compositionGuard.requireNoDependants(
             command.organisationId,
             command.roleId,
-            command.permissionCode,
+            permissionCode,
         )
         persistence.removePermission(
             command.organisationId,
@@ -168,7 +179,7 @@ class RoleManagementService(
             "role.remove_permission",
             command.actorId,
             command.requestId,
-            mapOf("permissionCode" to command.permissionCode),
+            mapOf("permissionCode" to permissionCode),
         )
     }
 
@@ -238,7 +249,7 @@ class RoleManagementService(
             command.organisationId,
             command.scopeType,
             command.branchId,
-            "user.revoke_role",
+            REVOKE_ROLE,
         )
         val assignmentId =
             persistence.activeRoleAssignment(
@@ -277,6 +288,50 @@ class RoleManagementService(
             "USER_ROLE_ASSIGNMENT",
         )
         publishRevocation(command)
+    }
+
+    /**
+     * Revokes the role assignment [RevokeRoleAssignment.assignmentId] through an **authorised
+     * combined lookup** (ADR 0030, decision 6): the permission check depends on the assignment's
+     * scope, which only the row knows, so the row is read here, never returned, and the caller
+     * is refused before and after the read alike.
+     *
+     * First the caller's visibility for `user.revoke_role` and its view is resolved from grants
+     * alone (403, naming the code held nowhere). A caller whose grants are tenant-wide gets 404
+     * for an unknown id. Any other caller gets the **same** 403 `Missing permission:
+     * user.revoke_role.` for an unknown id, for a `TENANT`-scope row (which needs a tenant-wide
+     * grant) and for a row on a branch it may not act on, so existence is no oracle. A row it
+     * may act on is revoked exactly as [revokeRoleFromUser] does, which re-checks the same scope
+     * through the same per-request memo.
+     */
+    @Transactional
+    fun revokeRoleAssignment(command: RevokeRoleAssignment) {
+        val visibility =
+            permissionGuard.mutationBranchVisibility(
+                command.actorId,
+                command.organisationId,
+                REVOKE_ROLE,
+            )
+        val target = persistence.findRoleAssignment(command.organisationId, command.assignmentId)
+        if (target == null && visibility == BranchVisibility.AllBranches) {
+            throw ResourceNotFoundException(
+                safeDetail = "Role assignment not found: ${command.assignmentId}",
+            )
+        }
+        if (target == null || !mayRevoke(visibility, target)) {
+            throw MissingPermissionException(REVOKE_ROLE)
+        }
+        revokeRoleFromUser(
+            RevokeRoleFromUser(
+                command.organisationId,
+                target.userId,
+                target.roleId,
+                target.scopeType,
+                target.branchId,
+                command.actorId,
+                command.requestId,
+            ),
+        )
     }
 
     private fun setStatus(
@@ -479,6 +534,7 @@ class RoleManagementService(
     }
 
     private companion object {
+        const val REVOKE_ROLE = "user.revoke_role"
         const val ACTIVE = "ACTIVE"
         const val INACTIVE = "INACTIVE"
         const val REVOKED = "REVOKED"
@@ -497,4 +553,17 @@ private fun conflictUnless(condition: Boolean) {
     if (!condition) throw ConflictException()
 }
 
-private fun <T : Any> T?.orResourceNotFound(): T = this ?: throw ResourceNotFoundException()
+/** A `TENANT` row needs a tenant-wide grant; a `BRANCH` row, a grant on that branch. */
+private fun mayRevoke(
+    visibility: BranchVisibility,
+    target: RoleAssignmentTarget,
+): Boolean =
+    visibility == BranchVisibility.AllBranches ||
+        (
+            target.scopeType == RoleScopeType.BRANCH &&
+                target.branchId?.let(visibility::canSee) == true
+        )
+
+private fun <T : Any> T?.orResourceNotFound(
+    safeDetail: String = "The requested resource was not found.",
+): T = this ?: throw ResourceNotFoundException(safeDetail = safeDetail)

@@ -2,6 +2,7 @@ package com.finaxis.platform.iam.adapter.outbound.persistence
 
 import com.finaxis.platform.iam.application.port.outbound.IamAdministrationPersistence
 import com.finaxis.platform.iam.application.port.outbound.MembershipSnapshot
+import com.finaxis.platform.iam.application.port.outbound.RoleAssignmentTarget
 import com.finaxis.platform.iam.application.port.outbound.RolePermissionPersistence
 import com.finaxis.platform.iam.application.port.outbound.RoleSnapshot
 import com.finaxis.platform.iam.application.role.RoleScopeType
@@ -173,6 +174,28 @@ class JooqIamAdministrationPersistence(
                 .and(USER_BRANCH_ASSIGNMENT.BRANCH_ID.eq(branchId))
                 .and(USER_BRANCH_ASSIGNMENT.STATUS.eq(ACTIVE)),
         )
+
+    override fun findRoleAssignment(
+        organisationId: UUID,
+        assignmentId: UUID,
+    ): RoleAssignmentTarget? =
+        dsl
+            .select(
+                USER_ROLE_ASSIGNMENT.USER_ID,
+                USER_ROLE_ASSIGNMENT.ROLE_ID,
+                USER_ROLE_ASSIGNMENT.SCOPE_TYPE,
+                USER_ROLE_ASSIGNMENT.BRANCH_ID,
+            ).from(USER_ROLE_ASSIGNMENT)
+            .where(USER_ROLE_ASSIGNMENT.ID.eq(assignmentId))
+            .and(USER_ROLE_ASSIGNMENT.ORGANISATION_ID.eq(organisationId))
+            .fetchOne { record ->
+                RoleAssignmentTarget(
+                    requireNotNull(record[USER_ROLE_ASSIGNMENT.USER_ID]),
+                    requireNotNull(record[USER_ROLE_ASSIGNMENT.ROLE_ID]),
+                    RoleScopeType.valueOf(requireNotNull(record[USER_ROLE_ASSIGNMENT.SCOPE_TYPE])),
+                    record[USER_ROLE_ASSIGNMENT.BRANCH_ID],
+                )
+            }
 
     override fun activeRoleAssignment(
         organisationId: UUID,

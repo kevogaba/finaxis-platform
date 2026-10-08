@@ -508,6 +508,15 @@ the documents the supersessions below name (`authorization-model.md`, `foundatio
   decided in the implementing pull request). It must not restore an unrestricted existence read:
   no response, status or timing difference may distinguish the two cases for a caller without the
   permission.
+
+  *Status: implemented by this step's change.* The two by-key read-backs are
+  `IamQueryService.getRolePermissionByCode` and the assignment id that `assignUser` returns;
+  role-permission remove authorises first in `RoleManagementService`; the two revokes go through
+  `PermissionGuard.mutationBranchVisibility` (the mutation and its views, per branch) and then the
+  internal row lookup. The owner's decision: the same 403 (`Missing permission: <mutation
+  code>.`, identical status and body) for an unknown id and for a row the caller may not touch;
+  404 for an unknown id only to a tenant-wide holder; a caller with no grant at all gets the named
+  403 of the first code it lacks.
 - **6d.** `refactor(lifecycle): authorise platform tenant decisions in the service and read back
   gated`
   The platform tenant routes; an `actorId` on the three commands that lack one; the bootstrap status

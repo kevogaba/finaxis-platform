@@ -455,8 +455,20 @@ interface BranchAssignmentStore {
         userId: UUID,
     ): MembershipSnapshot?
 
-    /** Creates or reactivates a user-to-branch assignment; returns true only if state changed. */
-    fun assign(command: AssignUserToBranchCommand): Boolean
+    /**
+     * Creates or reactivates a user-to-branch assignment, or finds the ACTIVE one already there,
+     * and returns its id with whether state changed.
+     */
+    fun assign(command: AssignUserToBranchCommand): BranchAssignmentWrite
+
+    /**
+     * The tuple of the assignment [assignmentId] of [organisationId], whatever its status. For
+     * the service's own authorised lookup: it is never returned to a caller.
+     */
+    fun findAssignment(
+        organisationId: UUID,
+        assignmentId: UUID,
+    ): BranchAssignmentTarget?
 
     /** Returns whether the exact assignment is currently active. */
     fun isActive(command: RevokeUserBranchAssignmentCommand): Boolean

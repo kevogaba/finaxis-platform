@@ -122,10 +122,11 @@ interface IamRoleQueries {
         filter: RolePermissionFilter,
     ): ApiPage<RolePermissionSummary>
 
-    /** Finds detailed role permission grant by id. */
-    fun findRolePermissionById(
+    /** Finds the grant of [permissionCode] on [roleId], the one row a grant just wrote. */
+    fun findRolePermissionByRoleAndCode(
         organisationId: UUID,
-        id: UUID,
+        roleId: UUID,
+        permissionCode: String,
     ): RolePermissionDetail?
 }
 
