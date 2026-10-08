@@ -11,6 +11,7 @@ import com.finaxis.platform.iam.application.authorization.EffectivePermissionRes
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
 import com.finaxis.platform.iam.application.query.IamQueryService
+import com.finaxis.platform.jooq.tables.references.KEYCLOAK_IDENTITY_LINK
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.lifecycle.FoundationCaller
 import com.finaxis.platform.lifecycle.PermissionGuard
@@ -19,13 +20,16 @@ import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.TenantCaller
 import com.finaxis.platform.lifecycle.application.ApproveUserCommand
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
+import com.finaxis.platform.lifecycle.application.DeactivateUserCommand
 import com.finaxis.platform.lifecycle.application.InviteUserCommand
 import com.finaxis.platform.lifecycle.application.MembershipType
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
+import com.finaxis.platform.lifecycle.application.ReactivateUserCommand
 import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.RoleAssignmentRequest
 import com.finaxis.platform.lifecycle.application.RoleAssignmentScopeType
 import com.finaxis.platform.lifecycle.application.SuspendMembershipCommand
+import com.finaxis.platform.lifecycle.application.SuspendUserCommand
 import com.finaxis.platform.lifecycle.application.UserProvisioningService
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
 import com.finaxis.platform.lifecycle.withRequestContext
@@ -530,22 +534,132 @@ class MutationRequiresViewIntegrationTests
 
         @Test
         fun `a platform user lifecycle mutation without user view changes nothing`() {
-            val target = seedUser("lifecycle-target")
-            val actor = seedUser("platform-user-suspender")
-            fixture.grantPlatformPermissionsExactly(actor, "user.suspend")
-            val key = uuidV7()
+            val routes =
+                mapOf(
+                    "user.suspend" to ("suspend" to "ACTIVE"),
+                    "user.activate" to ("reactivate" to "SUSPENDED"),
+                    "user.deactivate" to ("deactivate" to "ACTIVE"),
+                )
+
+            routes.forEach { (code, route) ->
+                val (action, status) = route
+                val target = seedUser("lifecycle-target", status)
+                val actor = seedUser("platform-user-$action")
+                fixture.grantPlatformPermissionsExactly(actor, code)
+                val key = uuidV7()
+                val before = footprint(actor)
+                val transitionsBefore = userTransitions(target)
+
+                // A known and an unknown user are refused alike: the check precedes the lookup.
+                listOf(target, uuidV7()).forEach { userId ->
+                    post(
+                        "${ApiPaths.PLATFORM_USERS}/$userId/$action",
+                        platformToken(actor, setOf(code)),
+                        """{"reason":"Regulatory review"}""",
+                        key,
+                    ).andExpect { forbiddenNaming("user.view") }
+                }
+
+                assertEquals(before, footprint(actor), code)
+                assertEquals(0, idempotencyRows(key), code)
+                assertEquals(status, userStatus(target), code)
+                assertEquals(transitionsBefore, userTransitions(target), code)
+            }
+        }
+
+        @Test
+        fun `a platform user lifecycle route acts on a user with no platform membership`() {
+            val actor = seedUser("platform-user-admin")
+            fixture.grantPlatformPermissionsWithViews(
+                actor,
+                "user.suspend",
+                "user.activate",
+                "user.deactivate",
+            )
+            val target = seedUser("tenant-member-target")
+            linkKeycloakIdentity(target)
+            // An ACTIVE tenant membership with a role assignment, so deactivating the user runs
+            // the assignment revoker before the route reads the user back.
+            fixture.grantTenantAdmin(organisationId, target)
+            val assignment = roleAssignmentOf(target)
+            val body = """{"reason":"Regulatory review"}"""
+
+            listOf(
+                Triple("suspend", "user.suspend", "SUSPENDED"),
+                Triple("reactivate", "user.activate", "ACTIVE"),
+                Triple("deactivate", "user.deactivate", "DEACTIVATED"),
+            ).forEach { (action, code, status) ->
+                post(
+                    "${ApiPaths.PLATFORM_USERS}/$target/$action",
+                    platformToken(actor, setOf(code)),
+                    body,
+                ).andExpect {
+                    status { isOk() }
+                    jsonPath("$.user_id") { value(target.toString()) }
+                    jsonPath("$.status") { value(status) }
+                }
+                assertEquals(status, userStatus(target))
+            }
+            assertEquals("REVOKED", roleAssignmentStatus(assignment))
+        }
+
+        @Test
+        fun `the user lifecycle service authorises its own callers and not only the controller`() {
+            val target = seedUser("service-lifecycle-target")
+            val actor = seedUser("service-lifecycle-viewless")
+            fixture.grantPlatformPermissionsExactly(
+                actor,
+                "user.suspend",
+                "user.activate",
+                "user.deactivate",
+            )
             val before = footprint(actor)
+            val reason = Reason.required("Regulatory review")
 
-            post(
-                "${ApiPaths.PLATFORM_USERS}/$target/suspend",
-                platformToken(actor, setOf("user.suspend")),
-                """{"reason":"Regulatory review"}""",
-                key,
-            ).andExpect { forbiddenNaming("user.view") }
+            val refusals =
+                listOf(
+                    {
+                        userProvisioningService.suspendUser(
+                            SuspendUserCommand(PlatformOrganisation.ID, target, actor, reason),
+                        )
+                    },
+                    {
+                        userProvisioningService.reactivateUser(
+                            ReactivateUserCommand(PlatformOrganisation.ID, target, actor),
+                        )
+                    },
+                    {
+                        userProvisioningService.deactivateUser(
+                            DeactivateUserCommand(PlatformOrganisation.ID, target, actor, reason),
+                        )
+                    },
+                ).map { call ->
+                    assertFailsWith<MissingPermissionException> { withRequestContext { call() } }
+                }
 
+            assertEquals(
+                listOf("user.view", "user.view", "user.view"),
+                refusals.map { it.permissionCode },
+            )
             assertEquals(before, footprint(actor))
-            assertEquals(0, idempotencyRows(key))
             assertEquals("ACTIVE", userStatus(target))
+        }
+
+        @Test
+        fun `the user lifecycle read-back decides from the pre-check's answer`() {
+            val actor = seedUser("memo-platform-user")
+            val caller = PlatformCaller(actor, PlatformOrganisation.ID)
+            fixture.grantPlatformPermissionsWithViews(actor, "user.suspend")
+            val target = seedUser("memo-user-target")
+
+            assertReadBackUsesPreCheck(
+                actor,
+                "user.view",
+                preCheck = { permissionGuard.requirePlatformPermission(actor, "user.suspend") },
+                readBack = { iamQueryService.getGlobalUser(target, caller) },
+                afterwards = { iamQueryService.getGlobalUser(target, caller) },
+                organisation = PlatformOrganisation.ID,
+            )
         }
 
         @Test
@@ -1149,6 +1263,14 @@ class MutationRequiresViewIntegrationTests
                 )!!
                 .get(0, UUID::class.java)
 
+        private fun userTransitions(userId: UUID): Int =
+            dsl
+                .fetchOne(
+                    "SELECT count(*) FROM user_account_transition_log WHERE entity_id = ?",
+                    userId,
+                )!!
+                .get(0, Int::class.java)
+
         private fun roleAssignmentStatus(assignmentId: UUID): String =
             dsl
                 .fetchOne("SELECT status FROM user_role_assignment WHERE id = ?", assignmentId)!!
@@ -1207,7 +1329,23 @@ class MutationRequiresViewIntegrationTests
             ),
         )
 
-        private fun seedUser(label: String): UUID {
+        // Reactivation is guarded: only a user whose Keycloak identity is linked may be activated.
+        private fun linkKeycloakIdentity(userId: UUID) {
+            val now = OffsetDateTime.now()
+            dsl
+                .insertInto(KEYCLOAK_IDENTITY_LINK)
+                .set(KEYCLOAK_IDENTITY_LINK.USER_ID, userId)
+                .set(KEYCLOAK_IDENTITY_LINK.SUBJECT, "subject-$userId")
+                .set(KEYCLOAK_IDENTITY_LINK.LINKED_AT, now)
+                .set(KEYCLOAK_IDENTITY_LINK.CREATED_AT, now)
+                .set(KEYCLOAK_IDENTITY_LINK.UPDATED_AT, now)
+                .execute()
+        }
+
+        private fun seedUser(
+            label: String,
+            status: String = "ACTIVE",
+        ): UUID {
             val id = uuidV7()
             val now = OffsetDateTime.now()
             dsl
@@ -1216,7 +1354,7 @@ class MutationRequiresViewIntegrationTests
                 .set(USER_ACCOUNT.USERNAME, "$label-$id")
                 .set(USER_ACCOUNT.EMAIL, "$label-$id@seed.test")
                 .set(USER_ACCOUNT.DISPLAY_NAME, label)
-                .set(USER_ACCOUNT.STATUS, "ACTIVE")
+                .set(USER_ACCOUNT.STATUS, status)
                 .set(USER_ACCOUNT.CREATED_AT, now)
                 .set(USER_ACCOUNT.CREATED_BY, SystemActor.ID)
                 .set(USER_ACCOUNT.UPDATED_AT, now)

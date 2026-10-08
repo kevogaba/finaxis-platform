@@ -81,6 +81,22 @@ class IamQueryService(
             )
     }
 
+    /**
+     * Retrieves a global user account for a platform caller holding `user.view` in the platform
+     * organisation. It does not need a platform membership: the platform user lifecycle routes
+     * act on any user account, so they read their result back here.
+     */
+    fun getGlobalUser(
+        userId: UUID,
+        caller: PlatformCaller,
+    ): GlobalUserDetail {
+        permissionGuard.requirePlatformPermission(caller.actorId, "user.view")
+        return userQueries.findUserById(userId)
+            ?: throw ResourceNotFoundException(
+                safeDetail = "User account was not found.",
+            )
+    }
+
     /** Retrieves detailed user membership metadata, validating caller context and permissions. */
     fun getMembership(
         organisationId: UUID,

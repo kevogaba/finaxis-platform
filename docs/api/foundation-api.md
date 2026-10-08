@@ -984,8 +984,13 @@ succeed, and a `reason` over 500 characters is `400 validation_failed` (#207; a 
 used to be `400 invalid_json`).
 
 An unknown `user_id` is `404 resource_not_found` on all three routes (#207; it used to be a
-`500`). The permission check runs first: a caller without the route's permission gets `403` for
-any id, known or not.
+`500`). The permission check runs first, inside the application service. A caller whose token
+lacks the route's permission is refused by the endpoint's `@PreAuthorize` gate with the unnamed
+`403`; a caller who holds the route's permission but not `user.view` in the platform organisation
+gets `403` naming it (`Missing permission: user.view.`) for any id, known or not, and nothing is
+written. The `status` in the response is read back from the user account through the same gated
+query (`user.view`, platform organisation), so it is the stored status, and it needs no platform
+membership of the target.
 
 ### Current Tenant
 

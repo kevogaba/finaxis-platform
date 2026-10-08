@@ -105,6 +105,28 @@ class IamQueryServiceTests {
     }
 
     @Test
+    fun `getGlobalUser needs user view in the platform and needs no membership there`() {
+        val platformId = UUID.fromString("00000000-0000-0000-0000-000000000000")
+        val caller = PlatformCaller(actorId, platformId)
+
+        val result = service.getGlobalUser(itemId, caller)
+
+        assertEquals(itemId, result.id)
+        assertEquals("ACTIVE", result.userStatus)
+        permissionGuard.deny(platformId, "user.view")
+        assertFailsWith<SecurityException> { service.getGlobalUser(itemId, caller) }
+    }
+
+    @Test
+    fun `getGlobalUser is a safe not found for an unknown user`() {
+        val caller =
+            PlatformCaller(actorId, UUID.fromString("00000000-0000-0000-0000-000000000000"))
+        queries.shouldReturnNull = true
+
+        assertFailsWith<ResourceNotFoundException> { service.getGlobalUser(itemId, caller) }
+    }
+
+    @Test
     fun `getMembership throws when not found`() {
         val caller = TenantCaller(actorId, tenantId)
         queries.shouldReturnNull = true
@@ -619,6 +641,11 @@ internal class FakeIamAdministrationQueries :
             userStatus = "ACTIVE",
             membershipStatus = "ACTIVE",
         )
+    }
+
+    override fun findUserById(userId: UUID): GlobalUserDetail? {
+        if (shouldReturnNull) return null
+        return GlobalUserDetail(userId, "ACTIVE")
     }
 
     override fun findMembershipById(
