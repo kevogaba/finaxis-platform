@@ -15,6 +15,7 @@ import com.finaxis.platform.common.web.idempotency.IdempotencyProperties
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
+import com.finaxis.platform.lifecycle.FoundationCaller
 import com.finaxis.platform.lifecycle.PlatformCaller
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateBranchRequest
 import com.finaxis.platform.lifecycle.application.ActingScope
@@ -262,7 +263,16 @@ class PlatformTenantCheckerControllerTests
                     jsonPath("$.membership_status") { value("ACTIVE") }
                 }
 
-            verify(lifecycleIamReadService, never()).getMembership(any(), any(), any())
+            // The response is the gated read of the path tenant's membership, as the platform
+            // caller: the same query `GET` uses, never a permission-free read-back.
+            verify(lifecycleIamReadService).getMembership(
+                eq(tenantId),
+                eq(membershipId),
+                argThat<FoundationCaller> {
+                    this is PlatformCaller &&
+                        actorId == this@PlatformTenantCheckerControllerTests.actorId
+                },
+            )
             verify(userProvisioningService).approveUser(
                 argThat<ApproveUserCommand> {
                     organisationId == tenantId &&
@@ -599,9 +609,10 @@ class PlatformTenantCheckerControllerTests
 
         private fun stubMembershipDetail(status: String) {
             whenever(
-                lifecycleIamReadService.getMembershipAfterAuthorizedMutation(
+                lifecycleIamReadService.getMembership(
                     eq(tenantId),
                     eq(membershipId),
+                    any(),
                 ),
             ).thenReturn(
                 LifecycleMembershipDetail(

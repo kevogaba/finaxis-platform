@@ -298,6 +298,20 @@ it, at the same scope**: the tenant, the target branch, or the PLATFORM organisa
   `Missing permission: role.view.`. Tenant settings resolve the setting key (400) and
   the organisation state (409) before the permission check. The refusal of a target-aware read
   stays unnamed everywhere.
+- **Memberships and invitations authorise in the service.** `UserProvisioningService` makes
+  the check itself, inside the mutation transaction and first: `user.invite` (with
+  `membership.view` and `user.view`) for `inviteUser`, `user.approve` with `membership.view` for
+  `approveUser` (in the tenant, or in the platform organisation for the platform checker, which
+  then refuses the platform organisation as a tenant with a 404), and `membership.suspend`,
+  `membership.reactivate` and `membership.revoke`, each with `membership.view`. The web adapters
+  carry only the coarse `@PreAuthorize` gate (its 403 stays generic and unnamed, like every
+  `@PreAuthorize` denial: its message holds the request's resource ids, not a permission code to
+  name) and read the result back through the
+  gated membership query at the scope the mutation was checked at: `membership.view` in the tenant
+  for the tenant routes, `membership.view` in the platform organisation for the platform checker
+  route, bound to the path tenant (another tenant's id is a 404). Two system entry points,
+  `inviteAsSystem` and `approveAsSystem`, serve only the initial-administrator bootstrap, whose
+  actors hold no tenant permission yet; they keep the maker-checker exclusions.
 - **A direct `DENY` of a view** removes it from the resolved set, so the operator who holds a
   mutation and a `DENY` of its view cannot mutate either, by design.
 - **Hand SQL on the catalogue fails open.** The pairing is reference data changed only by forward

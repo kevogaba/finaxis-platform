@@ -20,7 +20,6 @@ import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationTo
 import com.finaxis.platform.iam.application.query.IamQueryService
 import com.finaxis.platform.iam.application.query.UserInTenantDetail
 import com.finaxis.platform.iam.application.query.UserInTenantSummary
-import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.application.MembershipType
 import com.finaxis.platform.lifecycle.application.UserInvitationResult
 import com.finaxis.platform.lifecycle.application.UserProvisioningService
@@ -28,6 +27,7 @@ import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.argThat
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
@@ -111,9 +111,6 @@ class TenantUserControllerTests
         @MockitoBean
         private lateinit var iamQueryService: IamQueryService
 
-        @MockitoBean
-        private lateinit var permissionGuard: PermissionGuard
-
         @Test
         fun `read routes enforce authentication and permission`() {
             val tenantId = uuidV7()
@@ -170,6 +167,7 @@ class TenantUserControllerTests
             val tenantId = uuidV7()
             val userId = uuidV7()
             val membershipId = uuidV7()
+            val callerId = uuidV7()
             whenever(userProvisioningService.inviteUser(any())).thenReturn(
                 UserInvitationResult(
                     userId,
@@ -183,14 +181,16 @@ class TenantUserControllerTests
                 .post(ApiPaths.TENANT_USERS) {
                     contentType = MediaType.APPLICATION_JSON
                     content = apiJsonCodec.mapper.writeValueAsString(inviteRequest())
-                    with(authentication(tenantToken(setOf("user.invite"), tenantId)))
+                    with(authentication(tenantToken(setOf("user.invite"), tenantId, callerId)))
                 }.andExpect {
                     status { isCreated() }
                     header { string("Location", "${ApiPaths.TENANT_USERS}/$userId") }
                     jsonPath("$.membership_id") { value(membershipId.toString()) }
                 }
 
-            verify(userProvisioningService).inviteUser(any())
+            verify(userProvisioningService).inviteUser(
+                argThat { organisationId == tenantId && invitedBy == callerId },
+            )
         }
 
         @Test
@@ -389,9 +389,10 @@ class TenantUserControllerTests
         private fun tenantToken(
             permissions: Set<String>,
             tenantId: UUID,
+            userId: UUID = uuidV7(),
         ) = AppPrincipalAuthenticationToken(
             AppPrincipal(
-                userId = uuidV7(),
+                userId = userId,
                 keycloakSubject = "tenant-user",
                 organisationId = tenantId,
                 membershipId = uuidV7(),

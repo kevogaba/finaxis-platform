@@ -50,14 +50,6 @@ class IamLifecycleReadAdapter(
     ): LifecycleMembershipDetail =
         iamQueryService.getMembership(organisationId, membershipId, caller).toLifecycle()
 
-    override fun getMembershipAfterAuthorizedMutation(
-        organisationId: UUID,
-        membershipId: UUID,
-    ): LifecycleMembershipDetail =
-        iamQueryService
-            .getMembershipAfterAuthorizedMutation(organisationId, membershipId)
-            .toLifecycle()
-
     override fun searchBranchAssignments(
         organisationId: UUID,
         filter: LifecycleBranchAssignmentFilter,

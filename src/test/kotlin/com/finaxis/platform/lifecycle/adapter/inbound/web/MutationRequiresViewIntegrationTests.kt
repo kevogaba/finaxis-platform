@@ -17,8 +17,16 @@ import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.PlatformCaller
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.TenantCaller
+import com.finaxis.platform.lifecycle.application.ApproveUserCommand
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
+import com.finaxis.platform.lifecycle.application.InviteUserCommand
+import com.finaxis.platform.lifecycle.application.MembershipType
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
+import com.finaxis.platform.lifecycle.application.Reason
+import com.finaxis.platform.lifecycle.application.RoleAssignmentRequest
+import com.finaxis.platform.lifecycle.application.RoleAssignmentScopeType
+import com.finaxis.platform.lifecycle.application.SuspendMembershipCommand
+import com.finaxis.platform.lifecycle.application.UserProvisioningService
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
 import com.finaxis.platform.lifecycle.withRequestContext
 import org.jooq.DSLContext
@@ -71,6 +79,7 @@ class MutationRequiresViewIntegrationTests
         private val dsl: DSLContext,
         private val organisationProvisioningService: OrganisationProvisioningService,
         private val permissionGuard: PermissionGuard,
+        private val userProvisioningService: UserProvisioningService,
         private val foundationQueryService: FoundationQueryService,
         private val iamQueryService: IamQueryService,
         private val cacheManager: CacheManager,
@@ -268,6 +277,9 @@ class MutationRequiresViewIntegrationTests
             assertEquals(0, idempotencyRows(key))
         }
 
+        // The HTTP route test below is a regression test of the route's behaviour, not proof that
+        // the check moved into the service: its invalid role and branch ids would be refused by a
+        // controller-side check just the same. The direct-service test after it is the proof.
         @Test
         fun `an invitation names each missing view in turn and writes nothing`() {
             val actor = seedUser("inviter")
@@ -552,6 +564,138 @@ class MutationRequiresViewIntegrationTests
 
             assertEquals(tenantBefore, footprint(tenantActor))
             assertEquals(platformBefore, footprint(platformActor))
+        }
+
+        @Test
+        fun `each membership route without its view leaves a real membership untouched`() {
+            val membershipId = membershipOf(admin)
+            val routes =
+                mapOf(
+                    "membership.suspend" to "suspend",
+                    "membership.reactivate" to "reactivate",
+                    "membership.revoke" to "revoke",
+                )
+
+            routes.forEach { (code, action) ->
+                val actor = seedUser("viewless-$action")
+                fixture.grantTenantPermissionsExactly(organisationId, actor, code)
+                val key = uuidV7()
+                val before = footprint(actor)
+
+                post(
+                    "${ApiPaths.MEMBERSHIPS}/$membershipId/$action",
+                    tenantToken(actor, code),
+                    """{"reason":"Audit hold"}""",
+                    key,
+                ).andExpect { forbiddenNaming("membership.view") }
+
+                assertEquals(before, footprint(actor), code)
+                assertEquals(0, idempotencyRows(key), code)
+                assertEquals("ACTIVE", membershipStatus(membershipId), code)
+            }
+        }
+
+        @Test
+        fun `the membership service authorises its own callers and not only the controller`() {
+            val membershipId = membershipOf(admin)
+            val actor = seedUser("service-viewless")
+            fixture.grantTenantPermissionsExactly(organisationId, actor, "membership.suspend")
+            val before = footprint(actor)
+
+            val suspension =
+                assertFailsWith<MissingPermissionException> {
+                    withRequestContext {
+                        userProvisioningService.suspendMembership(
+                            SuspendMembershipCommand(
+                                organisationId,
+                                membershipId,
+                                actor,
+                                Reason.required("Audit hold"),
+                            ),
+                        )
+                    }
+                }
+            val approval =
+                assertFailsWith<MissingPermissionException> {
+                    withRequestContext {
+                        userProvisioningService.approveUser(
+                            ApproveUserCommand(organisationId, membershipId, actor),
+                        )
+                    }
+                }
+
+            assertEquals("membership.view", suspension.permissionCode)
+            assertEquals("user.approve", approval.permissionCode)
+            assertEquals(before, footprint(actor))
+            assertEquals("ACTIVE", membershipStatus(membershipId))
+        }
+
+        @Test
+        fun `the invitation service authorises its own callers and creates no user`() {
+            val actor = seedUser("service-inviter")
+            fixture.grantTenantPermissionsExactly(organisationId, actor, "user.invite")
+            val partial = seedUser("service-inviter-membership-view")
+            fixture.grantTenantPermissionsExactly(
+                organisationId,
+                partial,
+                "user.invite",
+                "membership.view",
+            )
+            val suffix = uuidV7().toString().takeLast(12)
+            val email = "svc-$suffix@mrv.test"
+            val before = footprint(actor)
+
+            fun inviteAs(inviter: UUID) =
+                assertFailsWith<MissingPermissionException> {
+                    withRequestContext {
+                        userProvisioningService.inviteUser(
+                            InviteUserCommand(
+                                organisationId = organisationId,
+                                email = email,
+                                username = "svc-$suffix",
+                                displayName = "Invitee",
+                                membershipType = MembershipType.STAFF,
+                                branchAssignments = emptyList(),
+                                roleAssignments =
+                                    listOf(
+                                        RoleAssignmentRequest(
+                                            roleIdOf("TENANT_ADMIN"),
+                                            RoleAssignmentScopeType.TENANT,
+                                        ),
+                                    ),
+                                invitedBy = inviter,
+                                sendKeycloakInvite = false,
+                                sendApplicationInvite = false,
+                            ),
+                        )
+                    }
+                }
+
+            assertEquals("membership.view", inviteAs(actor).permissionCode)
+            assertEquals("user.view", inviteAs(partial).permissionCode)
+            assertEquals(before, footprint(actor))
+            // An invitation creates the user (and the membership) first: neither may exist.
+            assertEquals(
+                0,
+                dsl.fetchCount(USER_ACCOUNT, USER_ACCOUNT.EMAIL.eq(email)),
+            )
+        }
+
+        @Test
+        fun `the platform membership read-back decides from the pre-check's answer`() {
+            val actor = seedUser("memo-platform-membership")
+            val caller: FoundationCaller = PlatformCaller(actor, PlatformOrganisation.ID)
+            fixture.grantPlatformPermissionsWithViews(actor, "user.approve")
+            val membershipId = membershipOf(admin)
+
+            assertReadBackUsesPreCheck(
+                actor,
+                "membership.view",
+                preCheck = { permissionGuard.requirePlatformPermission(actor, "user.approve") },
+                readBack = { membership(membershipId, caller) },
+                afterwards = { membership(membershipId, caller) },
+                organisation = PlatformOrganisation.ID,
+            )
         }
 
         // ---- the read-back never re-resolves ---------------------------------------------------
@@ -972,6 +1116,14 @@ class MutationRequiresViewIntegrationTests
                     "SELECT status || ' ' || current_business_date FROM business_date " +
                         "WHERE organisation_id = ?",
                     organisationId,
+                )!!
+                .get(0, String::class.java)
+
+        private fun membershipStatus(membershipId: UUID): String =
+            dsl
+                .fetchOne(
+                    "SELECT membership_status FROM user_organisation_membership WHERE id = ?",
+                    membershipId,
                 )!!
                 .get(0, String::class.java)
 

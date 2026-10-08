@@ -161,12 +161,10 @@ class PlatformTenantMembershipController(
                     reason = DecisionRemark.optional(request?.reason),
                 ),
             )
-        // The approval above authorised the caller on this membership; the response echoes it
-        // without a second permission gate (`membership.view`), which would roll the approval back.
+        // The approval checked `user.approve` and `membership.view` in the platform organisation
+        // first, so the gated read of the path tenant's membership cannot fail on grants.
         val response =
-            lifecycleIamReadService
-                .getMembershipAfterAuthorizedMutation(tenantId, membershipId)
-                .toResponse()
+            lifecycleIamReadService.getMembership(tenantId, membershipId, caller).toResponse()
         return if (result.keycloakProvisioningRequested) {
             ResponseEntity.accepted().body(response)
         } else {

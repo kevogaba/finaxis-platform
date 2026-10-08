@@ -2,8 +2,6 @@ package com.finaxis.platform.lifecycle.application
 
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
-import com.finaxis.platform.common.application.InvalidOperationException
-import com.finaxis.platform.common.application.InvalidRequestException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
@@ -17,7 +15,6 @@ import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityDispatchType
 import com.finaxis.platform.lifecycle.application.port.outbound.MembershipProvisioningSnapshot
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
-import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
@@ -43,10 +40,34 @@ class UserProvisioningService(
     private val clock: Clock,
     private val permissionGuard: PermissionGuard,
 ) {
-    /** Persists a local user invitation with branch and role prerequisites. */
+    /**
+     * Persists a local user invitation with branch and role prerequisites. The inviter must hold
+     * `user.invite` (and the views it implies) in the tenant, checked first, before the
+     * organisation state or any lookup (ADR 0030 decision 4).
+     */
     @Transactional
     fun inviteUser(command: InviteUserCommand): UserInvitationResult {
-        validateInvitation(command)
+        permissionGuard.requireTenantPermission(
+            command.invitedBy,
+            command.organisationId,
+            "user.invite",
+        )
+        return invite(command)
+    }
+
+    /**
+     * The same invitation as [inviteUser] for a system-run workflow that has no actor holding the
+     * permission: only the initial-administrator bootstrap of a freshly approved tenant, which
+     * invites its first administrator as the system actor. No web adapter calls it directly; the
+     * one route that reaches it, `POST /platform/tenants/{id}/bootstrap/retry` through
+     * `retryBootstrap` and the bootstrap service, needs `tenant.bootstrap_retry` in the platform
+     * organisation and a FAILED bootstrap record, and takes every input from that stored record.
+     */
+    @Transactional
+    fun inviteAsSystem(command: InviteUserCommand): UserInvitationResult = invite(command)
+
+    private fun invite(command: InviteUserCommand): UserInvitationResult {
+        store.validateInvitation(command)
         val userId = store.findOrCreateInvitee(command)
         val membershipId =
             store.createMembership(
@@ -108,17 +129,47 @@ class UserProvisioningService(
      * Approves a pending local invitation and emits downstream provisioning requests as needed.
      * The checker is neither the maker nor the beneficiary, whatever the scope: the inviter and
      * the invited user can never approve, and a platform checker is held to the same rule as a
-     * tenant user (ADR 0028). A platform-scope approval authorises itself against the platform
-     * organisation here; a tenant-scope caller authorises in its adapter.
+     * tenant user (ADR 0028). The approver authorises here, first: a platform-scope approval
+     * against the platform organisation (then never the platform organisation itself, a 404), a
+     * tenant-scope approval against the tenant, each with `membership.view` (ADR 0030).
      */
     @Transactional
     fun approveUser(command: ApproveUserCommand): UserApprovalResult {
-        if (command.scope == ActingScope.PLATFORM) permissionGuard.requirePlatformChecker(command)
+        when (command.scope) {
+            ActingScope.PLATFORM -> {
+                permissionGuard.requirePlatformChecker(command)
+            }
+
+            ActingScope.TENANT -> {
+                permissionGuard.requireTenantPermission(
+                    command.approvedBy,
+                    command.organisationId,
+                    "user.approve",
+                )
+            }
+        }
+        return approve(command)
+    }
+
+    /**
+     * The same approval as [approveUser], tenant scope, for a system-run workflow whose approver
+     * holds no tenant permission yet: only the initial-administrator bootstrap, whose approver is
+     * the platform actor that approved the tenant. The maker-checker exclusions still apply. No
+     * web adapter calls it directly; it is reached only through the bootstrap service, so also
+     * from the bootstrap retry route (see [inviteAsSystem]).
+     */
+    @Transactional
+    fun approveAsSystem(command: ApproveUserCommand): UserApprovalResult {
+        require(command.scope == ActingScope.TENANT) { "A system approval acts in tenant scope." }
+        return approve(command)
+    }
+
+    private fun approve(command: ApproveUserCommand): UserApprovalResult {
         val snapshot = requireMembership(command.organisationId, command.membershipId)
         if (store.isMakerOrBeneficiary(command, snapshot)) throw ForbiddenOperationException()
         if (command.scope == ActingScope.PLATFORM) store.requirePlatformCheckerOpen(command)
         if (snapshot.status != MembershipLifecycleState.PENDING_APPROVAL) throw ConflictException()
-        requireActiveAccessPrerequisites(command.organisationId, snapshot)
+        store.requireActiveAccessPrerequisites(command.organisationId, snapshot)
 
         val keycloakRequested = requestKeycloakProvisioningIfNeeded(command, snapshot)
         val membershipActivated =
@@ -234,9 +285,17 @@ class UserProvisioningService(
         deactivationAssignmentRevoker.revoke(command)
     }
 
-    /** Revokes a tenant membership and all active local branch and role grants for it. */
+    /**
+     * Revokes a tenant membership and all active local branch and role grants for it. The actor
+     * needs `membership.revoke` and `membership.view` in the tenant, checked first.
+     */
     @Transactional
     fun revokeTenantMembership(command: RevokeTenantMembershipCommand) {
+        permissionGuard.requireTenantPermission(
+            command.actorId,
+            command.organisationId,
+            "membership.revoke",
+        )
         val snapshot = requireMembership(command.organisationId, command.membershipId)
         lifecycleService.transition(
             MembershipTransitionCommand(
@@ -275,9 +334,17 @@ class UserProvisioningService(
         )
     }
 
-    /** Suspends an organisation membership through the shared lifecycle FSM. */
+    /**
+     * Suspends an organisation membership through the shared lifecycle FSM. The actor needs
+     * `membership.suspend` and `membership.view` in the tenant, checked first.
+     */
     @Transactional
     fun suspendMembership(command: SuspendMembershipCommand) {
+        permissionGuard.requireTenantPermission(
+            command.actorId,
+            command.organisationId,
+            "membership.suspend",
+        )
         val snapshot = requireMembership(command.organisationId, command.membershipId)
         lifecycleService.transition(
             MembershipTransitionCommand(
@@ -298,9 +365,17 @@ class UserProvisioningService(
         )
     }
 
-    /** Reactivates a suspended organisation membership through the shared lifecycle FSM. */
+    /**
+     * Reactivates a suspended organisation membership through the shared lifecycle FSM. The actor
+     * needs `membership.reactivate` and `membership.view` in the tenant, checked first.
+     */
     @Transactional
     fun reactivateMembership(command: ReactivateMembershipCommand) {
+        permissionGuard.requireTenantPermission(
+            command.actorId,
+            command.organisationId,
+            "membership.reactivate",
+        )
         val snapshot = requireMembership(command.organisationId, command.membershipId)
         lifecycleService.transition(
             MembershipTransitionCommand(
@@ -319,73 +394,6 @@ class UserProvisioningService(
             command.reason?.value,
             command.requestId,
         )
-    }
-
-    private fun validateInvitation(command: InviteUserCommand) {
-        if (store.organisationState(command.organisationId) != OrganisationLifecycleState.ACTIVE) {
-            throw ConflictException(safeDetail = "User invitations require an active organisation.")
-        }
-        // The DTO's @Email is laxer than this (it accepts "user@localhost"), so a shape the
-        // service refuses is still the caller's mistake: 400, never a 500.
-        malformedUnless(
-            command.email.isNotBlank() && EMAIL_REGEX.matches(command.email),
-            "A valid email address is required.",
-        )
-        malformedUnless(command.username.isNotBlank(), "Username is required.")
-        malformedUnless(command.displayName.isNotBlank(), "Display name is required.")
-        command.primaryBranchId?.let { branchId ->
-            requireActiveBranch(command.organisationId, branchId)
-        }
-        command.branchAssignments.forEach { assignment ->
-            requireActiveBranch(command.organisationId, assignment.branchId)
-        }
-        command.roleAssignments.forEach { assignment ->
-            // One message for unknown, foreign-organisation and inactive alike: the request body
-            // referenced a role this tenant cannot grant, and nothing else is disclosed.
-            if (!store.roleExists(command.organisationId, assignment.roleId)) {
-                throw InvalidOperationException(safeDetail = ROLE_REFERENCE_DETAIL)
-            }
-            validateRoleScope(command.organisationId, assignment)
-        }
-        malformedUnless(
-            command.membershipType in BRANCH_EXEMPT_TYPES ||
-                command.branchAssignments.isNotEmpty(),
-            "At least one branch assignment is required.",
-        )
-        malformedUnless(
-            command.roleAssignments.isNotEmpty(),
-            "At least one role assignment is required.",
-        )
-    }
-
-    private fun requireActiveBranch(
-        organisationId: UUID,
-        branchId: UUID,
-    ) {
-        if (store.branchState(organisationId, branchId) != BranchLifecycleState.ACTIVE) {
-            throw InvalidOperationException(safeDetail = BRANCH_REFERENCE_DETAIL)
-        }
-    }
-
-    private fun validateRoleScope(
-        organisationId: UUID,
-        assignment: RoleAssignmentRequest,
-    ) {
-        when (assignment.scopeType) {
-            RoleAssignmentScopeType.TENANT -> {
-                if (assignment.branchId != null) throw InvalidOperationException()
-            }
-
-            RoleAssignmentScopeType.BRANCH -> {
-                val branchId =
-                    assignment.branchId
-                        ?: throw InvalidRequestException(
-                            "validation_failed",
-                            "A branch-scoped role assignment requires a branch.",
-                        )
-                requireActiveBranch(organisationId, branchId)
-            }
-        }
     }
 
     private fun requestKeycloakProvisioningIfNeeded(
@@ -443,27 +451,6 @@ class UserProvisioningService(
             ),
         )
         return true
-    }
-
-    private fun requireActiveAccessPrerequisites(
-        organisationId: UUID,
-        snapshot: MembershipProvisioningSnapshot,
-    ) {
-        val branchExempt = snapshot.type in BRANCH_EXEMPT_TYPES
-        if (!branchExempt && !store.hasActiveBranchAssignment(organisationId, snapshot.userId)) {
-            throw ConflictException(
-                safeDetail =
-                    "The membership cannot be approved until the user has an active branch " +
-                        "assignment.",
-            )
-        }
-        if (!store.hasActiveRoleAssignment(organisationId, snapshot.userId)) {
-            throw ConflictException(
-                safeDetail =
-                    "The membership cannot be approved until the user has an active role " +
-                        "assignment.",
-            )
-        }
     }
 
     private fun publishKeycloakProvisioning(
@@ -580,12 +567,6 @@ class UserProvisioningService(
     }
 
     private companion object {
-        val EMAIL_REGEX = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
-        val BRANCH_EXEMPT_TYPES = setOf(MembershipType.SYSTEM, MembershipType.AUDITOR)
-        const val ROLE_REFERENCE_DETAIL =
-            "A role in the request was not found or is not active in the organisation."
-        const val BRANCH_REFERENCE_DETAIL =
-            "A branch in the request was not found or is not active in the organisation."
         const val KEYCLOAK_USER_PROVISIONING_REQUESTED_TARGET =
             "finaxis.lifecycle.user.keycloak-provisioning-requested"
         const val APPLICATION_INVITE_REQUESTED_TARGET =
@@ -601,13 +582,6 @@ class UserProvisioningService(
         const val DISPLAY_NAME = "displayName"
         const val DISPATCH_KEY = "dispatchKey"
     }
-}
-
-private fun malformedUnless(
-    condition: Boolean,
-    detail: String,
-) {
-    if (!condition) throw InvalidRequestException("validation_failed", detail)
 }
 
 private fun membershipRevocationTransition(

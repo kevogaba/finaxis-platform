@@ -6,7 +6,6 @@ import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
-import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ActivateMembershipRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.MembershipDetailResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.MembershipSummaryResponse
@@ -60,7 +59,6 @@ import java.util.UUID
 class MembershipController(
     private val userProvisioningService: UserProvisioningService,
     private val lifecycleIamReadService: LifecycleIamReadService,
-    private val permissionGuard: PermissionGuard,
 ) {
     /**
      * Searches memberships in the active tenant organisation.
@@ -286,11 +284,6 @@ class MembershipController(
         @RequestBody(required = false) @Valid request: ActivateMembershipRequest?,
     ): ResponseEntity<MembershipDetailResponse> {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            "user.approve",
-        )
         val result =
             userProvisioningService.approveUser(
                 ApproveUserCommand(
@@ -393,11 +386,6 @@ class MembershipController(
         @RequestBody @Valid request: SuspendMembershipRequest,
     ): MembershipDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            "membership.suspend",
-        )
         userProvisioningService.suspendMembership(
             SuspendMembershipCommand(
                 organisationId = caller.activeOrganisationId,
@@ -493,11 +481,6 @@ class MembershipController(
         @RequestBody(required = false) @Valid request: ReactivateMembershipRequest?,
     ): MembershipDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            "membership.reactivate",
-        )
         userProvisioningService.reactivateMembership(
             ReactivateMembershipCommand(
                 organisationId = caller.activeOrganisationId,
@@ -593,11 +576,6 @@ class MembershipController(
         @RequestBody @Valid request: RevokeMembershipRequest,
     ): MembershipDetailResponse {
         val caller = CallerContextResolver.getTenantCaller()
-        permissionGuard.requireTenantPermission(
-            caller.actorId,
-            caller.activeOrganisationId,
-            "membership.revoke",
-        )
         userProvisioningService.revokeTenantMembership(
             RevokeTenantMembershipCommand(
                 organisationId = caller.activeOrganisationId,

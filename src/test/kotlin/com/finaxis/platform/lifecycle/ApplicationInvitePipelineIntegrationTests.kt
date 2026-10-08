@@ -166,7 +166,7 @@ class ApplicationInvitePipelineIntegrationTests(
         val roleId = tenantAdminRoleId(organisationId)
 
         val invitation =
-            userProvisioningService.inviteUser(
+            userProvisioningService.inviteAsSystem(
                 InviteUserCommand(
                     organisationId = organisationId,
                     email = email,
@@ -188,7 +188,7 @@ class ApplicationInvitePipelineIntegrationTests(
             flakyDispatchStore.dispatchKeyToFailOnce.set(dispatchKey)
         }
 
-        userProvisioningService.approveUser(
+        userProvisioningService.approveAsSystem(
             ApproveUserCommand(organisationId, invitation.membershipId, SystemActor.ID),
         )
 

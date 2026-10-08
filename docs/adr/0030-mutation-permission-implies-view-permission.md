@@ -486,6 +486,14 @@ the documents the supersessions below name (`authorization-model.md`, `foundatio
 - **6b.** `refactor(lifecycle): authorise memberships in the service and read them back gated`
   Tenant and platform membership routes; the controller-only checks and the invite check move into
   `UserProvisioningService`.
+
+  *Status: implemented by this step's change.* `inviteUser`, `approveUser`, `suspendMembership`,
+  `reactivateMembership` and `revokeTenantMembership` make the mutation and view check first, inside
+  the transaction. The platform checker route reads its membership back through the gated
+  `getMembership` (platform `membership.view`, bound to the path tenant), and
+  `getMembershipAfterAuthorizedMutation` is deleted from the port, the adapter and the query
+  service. The bootstrap runs through the explicit `inviteAsSystem` and `approveAsSystem` entry
+  points, because its actors hold no tenant permission.
 - **6c.** `fix(iam): look up grants and assignments by key after a mutation`
   The by-key reads; the three gated reads that precede a mutation stop being read-then-check.
   Role-permission remove already carries its role id, so its check simply moves first. Revoking a
