@@ -223,6 +223,22 @@ class FoundationOpenApiCustomizersTests {
     }
 
     @Test
+    fun `a sort_dir description the operation declares is kept and still gains the enum`() {
+        val parameter =
+            Parameter()
+                .name("sort_dir")
+                .`in`("query")
+                .description("Order by event time.")
+                .schema(StringSchema())
+        val operation = Operation().parameters(mutableListOf(parameter))
+
+        sortDirection.customize(operation, handlerMethod())
+
+        assertThat(parameter.description).isEqualTo("Order by event time.")
+        assertThat(parameter.schema.enum).containsExactly("ASC", "DESC")
+    }
+
+    @Test
     fun `sort_dir enum replaces whatever schema the parameter had`() {
         val parameter =
             Parameter().name("sort_dir").`in`("query").schema(StringSchema().example("down"))

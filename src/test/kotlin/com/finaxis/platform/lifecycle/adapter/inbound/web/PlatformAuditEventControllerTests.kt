@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
 import com.finaxis.platform.common.application.ResourceNotFoundException
+import com.finaxis.platform.common.audit.AuditActorType
 import com.finaxis.platform.common.audit.AuditEventDetail
 import com.finaxis.platform.common.audit.AuditEventFilter
 import com.finaxis.platform.common.audit.AuditEventPage
@@ -158,6 +159,76 @@ class PlatformAuditEventControllerTests
         }
 
         @Test
+        fun `both platform searches map the outcome, severity, branch, text and actor filters`() {
+            val callerId = uuidV7()
+            val tenantId = uuidV7()
+            val branchId = uuidV7()
+            val from = Instant.parse("2026-07-20T08:00:00Z")
+            val filterCaptor = argumentCaptor<AuditEventFilter>()
+            whenever(auditQueryService.searchForPlatform(filterCaptor.capture(), eq(callerId)))
+                .thenReturn(AuditEventPage(listOf(summary()), totalItems = 1))
+
+            listOf(
+                ApiPaths.PLATFORM_AUDIT_EVENTS,
+                "${ApiPaths.PLATFORM_TENANTS}/$tenantId/audit-events",
+            ).forEach { path ->
+                mockMvc
+                    .get(path) {
+                        param("outcome", "FAILURE")
+                        param("severity", "critical")
+                        param("branch_id", branchId.toString())
+                        param("action_prefix", "user.")
+                        param("q", "suspend")
+                        param("occurred_from", from.toString())
+                        param("actor_type", "user")
+                        param("actor_subject", "kc-subject")
+                        param("sort_dir", "DESC")
+                        with(authentication(platformToken(setOf("audit.view"), callerId)))
+                    }.andExpect { status { isOk() } }
+            }
+
+            val expected =
+                AuditEventFilter(
+                    organisationId = PlatformOrganisation.ID,
+                    occurredFrom = from,
+                    outcome = AuditOutcome.FAILURE,
+                    severity = AuditSeverity.CRITICAL,
+                    branchId = branchId,
+                    actionPrefix = "user.",
+                    q = "suspend",
+                    actorType = AuditActorType.USER,
+                    actorSubject = "kc-subject",
+                    ascending = false,
+                )
+            assertEquals(
+                listOf(expected, expected.copy(organisationId = tenantId)),
+                filterCaptor.allValues,
+            )
+        }
+
+        @Test
+        fun `platform searches reject a value outside its closed set with 400`() {
+            listOf(
+                ApiPaths.PLATFORM_AUDIT_EVENTS,
+                "${ApiPaths.PLATFORM_TENANTS}/${uuidV7()}/audit-events",
+            ).forEach { path ->
+                listOf("outcome", "severity", "min_severity", "actor_type", "sort_dir")
+                    .forEach { parameter ->
+                        mockMvc
+                            .get(path) {
+                                param(parameter, "sideways")
+                                with(authentication(platformToken(setOf("audit.view"))))
+                            }.andExpect {
+                                status { isBadRequest() }
+                                jsonPath("$.code") { value("invalid_parameter") }
+                                jsonPath("$.violations[0].field") { value(parameter) }
+                            }
+                    }
+            }
+            verify(auditQueryService, never()).searchForPlatform(any(), any())
+        }
+
+        @Test
         fun `get platform audit event reads from the platform organisation`() {
             val callerId = uuidV7()
             val eventId = uuidV7()
@@ -247,6 +318,22 @@ class PlatformAuditEventControllerTests
             }
             verify(auditQueryService, never()).searchForPlatform(any(), any())
             verify(auditQueryService, never()).getForPlatform(any(), any(), any())
+        }
+
+        @Test
+        fun `a tenant context is refused before a bad platform filter is parsed`() {
+            val tenantId = uuidV7()
+            listOf(
+                ApiPaths.PLATFORM_AUDIT_EVENTS,
+                "${ApiPaths.PLATFORM_TENANTS}/${uuidV7()}/audit-events",
+            ).forEach { path ->
+                mockMvc
+                    .get(path) {
+                        param("outcome", "MAYBE")
+                        with(authentication(tenantToken(setOf("audit.view"), tenantId)))
+                    }.andExpect { status { isForbidden() } }
+            }
+            verify(auditQueryService, never()).searchForPlatform(any(), any())
         }
 
         private fun summary() =

@@ -131,13 +131,17 @@ class PagingBadInputIntegrationTests
         }
 
         @Test
-        fun `audit events reject bad paging with 400 and still list valid requests`() {
-            family(Endpoint(ApiPaths.AUDIT_EVENTS), sortField = null)
-            family(Endpoint(ApiPaths.PLATFORM_AUDIT_EVENTS, platform = true), sortField = null)
-            family(
+        fun `audit events reject bad paging and sort direction with 400`() {
+            // The audit searches have no sort_by but do honour sort_dir (on event time, #183).
+            listOf(
+                Endpoint(ApiPaths.AUDIT_EVENTS),
+                Endpoint(ApiPaths.PLATFORM_AUDIT_EVENTS, platform = true),
                 Endpoint("${ApiPaths.PLATFORM_TENANTS}/$organisationId/audit-events", true),
-                sortField = null,
-            )
+            ).forEach { endpoint ->
+                family(endpoint, sortField = null)
+                assertBadRequest(endpoint, "sort_dir=sideways", "sort_dir")
+                get(endpoint, "sort_dir=asc&page=0&size=1").andExpect { status { isOk() } }
+            }
         }
 
         @Test

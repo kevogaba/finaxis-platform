@@ -1625,19 +1625,59 @@ extra bounded lookup. See
 ### Audit Events
 
 Base path: `/api/v1/tenant/audit-events`. List filters: `entity_type`, `entity_id`,
-`actor_id`, `action`, `occurred_from`, `occurred_to`, `page`, `size`.
+`actor_id`, `action`, `action_prefix`, `occurred_from`, `occurred_to`, `outcome`, `severity`,
+`min_severity`, `branch_id`, `q`, `actor_type`, `actor_subject`, `sort_dir`, `page`, `size`.
 
 | Method | Path          | Summary                    | Permission   | Shape |
 |--------|---------------|----------------------------|--------------|-------|
 | GET    | `/`           | Search tenant audit events | `audit.view` | page  |
 | GET    | `/{event_id}` | Get tenant audit event     | `audit.view` | item  |
 
+#### Audit search filters
+
+Every filter is optional, filters combine with AND, and every search stays inside one
+organisation's log (the caller's active tenant, or the organisation the platform route names)
+and is paginated (#183):
+
+- `action`: the action, exactly (`branch.update`).
+- `action_prefix`: a literal prefix of the action, 2 to 64 characters (`branch.`); `%` and `_`
+  match themselves. This is the event type filter: `event_type` is the action.
+- `outcome`: `SUCCESS`, `FAILURE` or `DENIED`, exactly.
+- `severity`: `INFO`, `LOW`, `MEDIUM`, `HIGH` or `CRITICAL`, exactly.
+- `min_severity`: that severity or above, in the order `INFO` < `LOW` < `MEDIUM` < `HIGH` <
+  `CRITICAL`. Not together with `severity`.
+- `branch_id`: the branch the row was recorded against (a UUID).
+- `q`: case-insensitive text, 3 to 64 characters, anywhere in the action, the entity type or the
+  reason; `%` and `_` match themselves.
+- `actor_type`: `USER` (a person) or `SYSTEM` (a job, a listener or the bootstrap).
+- `actor_subject`: the identity-provider subject (`actor_external_subject`), exactly, 1 to 255
+  characters. **Tenant route only.**
+- `sort_dir`: `DESC` (default, newest first) or `ASC`, on `occurred_at`, then the id.
+
+`outcome`, `severity`, `min_severity`, `actor_type` and `sort_dir` are case-insensitive; the
+upper-case form is canonical and is the enum the OpenAPI document publishes.
+
+- **`q` is bounded.** It needs `occurred_from`, at most 31 days before `occurred_to` (or now, when
+  `occurred_to` is absent): the substring match has no index, so the window is what bounds its cost.
+- **400, never 500.** A value outside its set or its length bounds, `severity` together with
+  `min_severity`, `q` without a window of at most 31 days, a malformed `branch_id`, or
+  `actor_subject` on a platform route answers `400 invalid_parameter` with one violation naming
+  the parameter. The message never repeats the rejected value.
+- **No side channel to withheld fields.** There is no filter over `before_json`, `after_json`,
+  `metadata_json`, `user_agent` or `ip_address`, and the platform searches refuse `actor_subject`
+  because they withhold `actor_external_subject`.
+- `branch_id` only narrows: `audit.view` is checked tenant-wide, as before, and the filter adds no
+  way to see rows the caller could not already read.
+- **Behaviour change:** the audit searches used to ignore `sort_dir`; a value other than `ASC` or
+  `DESC` is now a 400. `action` stays an exact match.
+
 #### Platform audit events
 
 Platform operators read audit logs through `/api/v1/platform/**`; the tenant routes above stay
 tenant-only and answer a platform context with 403. Both platform search routes accept the same
-filters and `page`/`size` bounds (`size` 1-100) as the tenant search and return the same page and
-item shapes; the detail route returns the audit event shape below.
+filters and `page`/`size` bounds (`size` 1-100) as the tenant search, except `actor_subject`
+(a 400 there), and return the same page and item shapes; the detail route returns the audit event
+shape below.
 
 | Method | Path                                                | Permission   | Shape |
 |--------|-----------------------------------------------------|--------------|-------|

@@ -3,8 +3,10 @@ package com.finaxis.platform.common.audit
 import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.context.PlatformOrganisation
+import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import com.finaxis.platform.common.web.api.requireValidPage
 import org.springframework.stereotype.Service
+import java.time.Clock
 import java.time.Instant
 import java.util.UUID
 
@@ -13,11 +15,15 @@ import java.util.UUID
  * to, and authorised in, one organisation; there is no cross-organisation lookup path. The two
  * `*ForPlatform` methods are the sole exception: they read one named organisation's log but
  * authorise the actor in the reserved PLATFORM organisation instead.
+ *
+ * Every search validates its filter ([requireValid]) after the permission check and before any
+ * read, so a bad filter is a 400 with no query run.
  */
 @Service
 class AuditQueryService(
     private val queries: AuditEventQueries,
     private val permissionGuard: AuditPermissionGuard,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
     /** Gets an individual detailed audit event by id, verifying tenant scope and permissions. */
     @GatedRead
@@ -137,6 +143,10 @@ class AuditQueryService(
      * Returns a bounded page of the log of [AuditEventFilter.organisationId] (a tenant, or the
      * PLATFORM organisation itself) for a platform operator, who must hold `audit.view` in the
      * PLATFORM organisation. Tenant users never reach this path.
+     *
+     * [AuditEventFilter.actorSubject] is refused with a 400: the platform pages withhold
+     * `actor_external_subject`, and a filter on it would reveal the withheld value one guess at
+     * a time.
      */
     @GatedRead
     fun searchForPlatform(
@@ -144,6 +154,12 @@ class AuditQueryService(
         actorId: UUID,
     ): AuditEventPage {
         requirePlatformAuditView(actorId)
+        if (filter.actorSubject != null) {
+            throw InvalidPageRequestException(
+                "actor_subject",
+                "Not available on platform audit searches, which withhold the actor subject.",
+            )
+        }
         return boundedSearch(filter)
     }
 
@@ -162,6 +178,7 @@ class AuditQueryService(
 
     private fun boundedSearch(filter: AuditEventFilter): AuditEventPage {
         requireValidPage(filter.page, filter.size)
+        filter.requireValid(clock.instant())
         return queries.search(filter)
     }
 

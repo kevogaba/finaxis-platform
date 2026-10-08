@@ -1,9 +1,13 @@
 package com.finaxis.platform.common.audit.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.common.audit.AuditActorType
 import com.finaxis.platform.common.audit.AuditEventFilter
+import com.finaxis.platform.common.audit.AuditOutcome
+import com.finaxis.platform.common.audit.AuditSeverity
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
+import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import org.jooq.DSLContext
@@ -129,6 +133,227 @@ class JooqAuditEventQueriesTests(
     }
 
     @Test
+    fun `search filters by outcome`() {
+        val organisationId = insertOrganisation()
+        val denied = insertAuditEvent(organisationId, null, "branch.approve", outcome = "DENIED")
+        insertAuditEvent(organisationId, null, "branch.approve", outcome = "FAILURE")
+        insertAuditEvent(organisationId, null, "branch.approve")
+        insertAuditEvent(insertOrganisation(), null, "branch.approve", outcome = "DENIED")
+
+        val page =
+            queries.search(AuditEventFilter(organisationId, outcome = AuditOutcome.DENIED))
+
+        assertEquals(listOf(denied), page.items.map { it.id })
+        assertEquals(1, page.totalItems)
+    }
+
+    @Test
+    fun `search filters by exact severity and by minimum severity`() {
+        val organisationId = insertOrganisation()
+        val time = Instant.parse("2026-07-13T10:00:00Z")
+        val bySeverity =
+            listOf("INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL")
+                .mapIndexed { index, severity ->
+                    severity to
+                        insertAuditEvent(
+                            organisationId,
+                            null,
+                            "x.y",
+                            severity = severity,
+                            eventTime = time.plusSeconds(index.toLong()),
+                        )
+                }.toMap()
+        insertAuditEvent(insertOrganisation(), null, "x.y", severity = "CRITICAL")
+
+        assertEquals(
+            listOf(bySeverity.getValue("MEDIUM")),
+            ids(AuditEventFilter(organisationId, severity = AuditSeverity.MEDIUM)),
+        )
+        assertEquals(
+            listOf(bySeverity.getValue("CRITICAL"), bySeverity.getValue("HIGH")),
+            ids(AuditEventFilter(organisationId, minSeverity = AuditSeverity.HIGH)),
+        )
+        assertEquals(
+            5,
+            ids(AuditEventFilter(organisationId, minSeverity = AuditSeverity.INFO)).size,
+        )
+    }
+
+    @Test
+    fun `search filters by branch`() {
+        val organisationId = insertOrganisation()
+        val branchId = insertBranch(organisationId)
+        val onBranch = insertAuditEvent(organisationId, null, "branch.update", branchId = branchId)
+        insertAuditEvent(
+            organisationId,
+            null,
+            "branch.update",
+            branchId = insertBranch(organisationId),
+        )
+        insertAuditEvent(organisationId, null, "branch.update")
+
+        assertEquals(listOf(onBranch), ids(AuditEventFilter(organisationId, branchId = branchId)))
+    }
+
+    @Test
+    fun `search filters by a literal action prefix with LIKE wildcards escaped`() {
+        val organisationId = insertOrganisation()
+        val branchUpdate = insertAuditEvent(organisationId, null, "branch.update")
+        val branchApprove = insertAuditEvent(organisationId, null, "branch.approve")
+        insertAuditEvent(organisationId, null, "branchXupdate")
+        insertAuditEvent(organisationId, null, "user.branch.update")
+        val literal = insertAuditEvent(organisationId, null, "a%_b.c")
+        insertAuditEvent(organisationId, null, "aXYb.c")
+
+        assertEquals(
+            setOf(branchUpdate, branchApprove),
+            ids(AuditEventFilter(organisationId, actionPrefix = "branch.")).toSet(),
+        )
+        assertEquals(
+            listOf(literal),
+            ids(AuditEventFilter(organisationId, actionPrefix = "a%_b")),
+        )
+        assertEquals(
+            emptyList(),
+            ids(AuditEventFilter(organisationId, actionPrefix = "%")),
+        )
+    }
+
+    @Test
+    fun `search keeps the action filter exact`() {
+        val organisationId = insertOrganisation()
+        val exact = insertAuditEvent(organisationId, null, "branch.update")
+        insertAuditEvent(organisationId, null, "branch.update.extra")
+
+        assertEquals(listOf(exact), ids(AuditEventFilter(organisationId, action = "branch.update")))
+    }
+
+    @Test
+    fun `search text matches action, entity type and reason case-insensitively`() {
+        val organisationId = insertOrganisation()
+        val byAction = insertAuditEvent(organisationId, null, "journal.APPROVE")
+        val byEntityType =
+            insertAuditEvent(organisationId, null, "x.y", entityType = "APPROVAL_POLICY")
+        val byReason = insertAuditEvent(organisationId, null, "x.y", reason = "Was approved")
+        insertAuditEvent(organisationId, null, "x.y", reason = "unrelated")
+        insertAuditEvent(insertOrganisation(), null, "journal.approve")
+
+        assertEquals(
+            setOf(byAction, byEntityType, byReason),
+            ids(AuditEventFilter(organisationId, q = "aPpRoV")).toSet(),
+        )
+    }
+
+    @Test
+    fun `search text treats LIKE wildcards literally`() {
+        val organisationId = insertOrganisation()
+        val literal = insertAuditEvent(organisationId, null, "x.y", reason = "rate 100% done")
+        insertAuditEvent(organisationId, null, "x.y", reason = "rate 1000 done")
+        val underscore = insertAuditEvent(organisationId, null, "x.y", reason = "a_b")
+        insertAuditEvent(organisationId, null, "x.y", reason = "aXb")
+
+        assertEquals(listOf(literal), ids(AuditEventFilter(organisationId, q = "00%")))
+        assertEquals(listOf(underscore), ids(AuditEventFilter(organisationId, q = "a_b")))
+    }
+
+    @Test
+    fun `the escape character and a backslash are literal in a prefix and a search text`() {
+        val organisationId = insertOrganisation()
+        val bang = insertAuditEvent(organisationId, null, "a!%b.c", reason = "x!_y")
+        insertAuditEvent(organisationId, null, "a!Xb.c", reason = "x!Zy")
+        insertAuditEvent(organisationId, null, "a%b.c", reason = "x_y")
+        val backslash = insertAuditEvent(organisationId, null, "a\\%b.c", reason = "p\\_q")
+        insertAuditEvent(organisationId, null, "a%b.d", reason = "p_q")
+
+        assertEquals(listOf(bang), ids(AuditEventFilter(organisationId, actionPrefix = "a!%")))
+        assertEquals(listOf(bang), ids(AuditEventFilter(organisationId, q = "x!_y")))
+        assertEquals(
+            listOf(backslash),
+            ids(AuditEventFilter(organisationId, actionPrefix = "a\\%")),
+        )
+        assertEquals(listOf(backslash), ids(AuditEventFilter(organisationId, q = "p\\_q")))
+    }
+
+    @Test
+    fun `search filters by actor type and actor subject`() {
+        val organisationId = insertOrganisation()
+        val user = insertUserAccount()
+        val userRow =
+            insertAuditEvent(organisationId, actorId = user, "user.invite", actorSubject = "kc-1")
+        insertAuditEvent(organisationId, actorId = user, "user.invite", actorSubject = "kc-2")
+        val systemRow = insertAuditEvent(organisationId, actorId = null, "user.invite")
+
+        assertEquals(
+            listOf(systemRow),
+            ids(AuditEventFilter(organisationId, actorType = AuditActorType.SYSTEM)),
+        )
+        assertEquals(
+            2,
+            ids(AuditEventFilter(organisationId, actorType = AuditActorType.USER)).size,
+        )
+        assertEquals(listOf(userRow), ids(AuditEventFilter(organisationId, actorSubject = "kc-1")))
+    }
+
+    @Test
+    fun `search sorts by event time ascending on request with the id as tie-break`() {
+        val organisationId = insertOrganisation()
+        val time = Instant.parse("2026-07-01T00:00:00Z")
+        val first = insertAuditEvent(organisationId, null, "x.y", eventTime = time)
+        // PostgreSQL orders uuid byte-wise, which is the order of the lower-case text form.
+        val (tieLow, tieHigh) =
+            List(2) { insertAuditEvent(organisationId, null, "x.y", time.plusSeconds(5)) }
+                .sortedBy { it.toString() }
+
+        assertEquals(
+            listOf(first, tieLow, tieHigh),
+            ids(AuditEventFilter(organisationId, ascending = true)),
+        )
+        assertEquals(listOf(tieHigh, tieLow, first), ids(AuditEventFilter(organisationId)))
+    }
+
+    @Test
+    fun `combined filters are AND-ed and never cross the tenant`() {
+        val organisationId = insertOrganisation()
+        val other = insertOrganisation()
+        val branchId = insertBranch(organisationId)
+        val otherBranch = insertBranch(other)
+        val match =
+            insertAuditEvent(
+                organisationId,
+                null,
+                "branch.approve",
+                outcome = "DENIED",
+                severity = "HIGH",
+                branchId = branchId,
+                reason = "Maker cannot approve",
+            )
+        insertAuditEvent(organisationId, null, "branch.approve", outcome = "DENIED")
+        insertAuditEvent(
+            other,
+            null,
+            "branch.approve",
+            outcome = "DENIED",
+            severity = "HIGH",
+            branchId = otherBranch,
+            reason = "Maker cannot approve",
+        )
+
+        val filter =
+            AuditEventFilter(
+                organisationId,
+                outcome = AuditOutcome.DENIED,
+                minSeverity = AuditSeverity.HIGH,
+                branchId = branchId,
+                actionPrefix = "branch.",
+                q = "maker",
+                actorType = AuditActorType.SYSTEM,
+            )
+        assertEquals(listOf(match), ids(filter))
+        assertEquals(emptyList(), ids(filter.copy(organisationId = other)))
+        assertEquals(emptyList(), ids(filter.copy(branchId = otherBranch)))
+    }
+
+    @Test
     fun `findById retrieves a detailed audit event within the organisation scope`() {
         val organisationId = insertOrganisation()
         val eventId = uuidV7()
@@ -213,27 +438,58 @@ class JooqAuditEventQueriesTests(
         return id
     }
 
+    private fun insertBranch(organisationId: UUID): UUID {
+        val id = uuidV7()
+        val now = OffsetDateTime.now()
+        dsl
+            .insertInto(BRANCH)
+            .set(BRANCH.ID, id)
+            .set(BRANCH.ORGANISATION_ID, organisationId)
+            .set(BRANCH.BRANCH_CODE, "branch-$id")
+            .set(BRANCH.BRANCH_NAME, "Test Branch")
+            .set(BRANCH.BRANCH_TYPE, "MAIN")
+            .set(BRANCH.STATUS, "ACTIVE")
+            .set(BRANCH.TIMEZONE, "Africa/Nairobi")
+            .set(BRANCH.CREATED_AT, now)
+            .set(BRANCH.UPDATED_AT, now)
+            .execute()
+        return id
+    }
+
     private fun insertAuditEvent(
         organisationId: UUID,
         actorId: UUID?,
         action: String,
+        eventTime: Instant = Instant.parse("2026-07-13T10:00:00Z"),
         entityType: String = "ORGANISATION",
         entityId: UUID? = null,
-        eventTime: Instant = Instant.parse("2026-07-13T10:00:00Z"),
-    ) {
+        outcome: String = "SUCCESS",
+        severity: String = "INFO",
+        branchId: UUID? = null,
+        actorSubject: String? = null,
+        reason: String? = null,
+    ): UUID {
+        val id = uuidV7()
         dsl
             .insertInto(AUDIT_EVENT)
-            .set(AUDIT_EVENT.ID, uuidV7())
+            .set(AUDIT_EVENT.ID, id)
             .set(AUDIT_EVENT.ORGANISATION_ID, organisationId)
             .set(AUDIT_EVENT.EVENT_TIME, eventTime.atOffset(ZoneOffset.UTC))
             .set(AUDIT_EVENT.ACTOR_USER_ID, actorId)
+            .set(AUDIT_EVENT.ACTOR_EXTERNAL_SUBJECT, actorSubject)
             .set(AUDIT_EVENT.ACTOR_TYPE, if (actorId == null) "SYSTEM" else "USER")
+            .set(AUDIT_EVENT.BRANCH_ID, branchId)
             .set(AUDIT_EVENT.EVENT_TYPE, entityType)
             .set(AUDIT_EVENT.ENTITY_TYPE, entityType)
             .set(AUDIT_EVENT.ENTITY_ID, entityId)
             .set(AUDIT_EVENT.ACTION, action)
-            .set(AUDIT_EVENT.OUTCOME, "SUCCESS")
-            .set(AUDIT_EVENT.SEVERITY, "INFO")
+            .set(AUDIT_EVENT.OUTCOME, outcome)
+            .set(AUDIT_EVENT.SEVERITY, severity)
+            .set(AUDIT_EVENT.REASON, reason)
             .execute()
+        return id
     }
+
+    private fun ids(filter: AuditEventFilter): List<UUID> =
+        queries.search(filter).items.map { it.id }
 }

@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
 import com.finaxis.platform.common.application.ResourceNotFoundException
+import com.finaxis.platform.common.audit.AuditActorType
 import com.finaxis.platform.common.audit.AuditEventDetail
 import com.finaxis.platform.common.audit.AuditEventFilter
 import com.finaxis.platform.common.audit.AuditEventPage
@@ -148,6 +149,80 @@ class AuditEventControllerTests
                 ),
                 capturedFilter,
             )
+        }
+
+        @Test
+        fun `search audit events maps the outcome, severity, branch, text and actor filters`() {
+            val tenantId = uuidV7()
+            val callerId = uuidV7()
+            val branchId = uuidV7()
+            val occurredFrom = Instant.parse("2026-07-20T08:00:00Z")
+
+            val capturedFilter =
+                searchAndCapture(
+                    tenantId,
+                    callerId,
+                    mapOf(
+                        "outcome" to "denied",
+                        "min_severity" to "HIGH",
+                        "branch_id" to branchId.toString(),
+                        "action_prefix" to "branch.",
+                        "q" to "maker",
+                        "occurred_from" to occurredFrom.toString(),
+                        "actor_type" to "SYSTEM",
+                        "actor_subject" to "kc-subject",
+                        "sort_dir" to "asc",
+                    ),
+                )
+
+            assertEquals(
+                AuditEventFilter(
+                    tenantId,
+                    occurredFrom = occurredFrom,
+                    outcome = AuditOutcome.DENIED,
+                    minSeverity = AuditSeverity.HIGH,
+                    branchId = branchId,
+                    actionPrefix = "branch.",
+                    q = "maker",
+                    actorType = AuditActorType.SYSTEM,
+                    actorSubject = "kc-subject",
+                    ascending = true,
+                    page = 1,
+                    size = 25,
+                ),
+                capturedFilter,
+            )
+        }
+
+        @Test
+        fun `search audit events maps an exact severity`() {
+            val tenantId = uuidV7()
+            val callerId = uuidV7()
+
+            val capturedFilter = searchAndCapture(tenantId, callerId, mapOf("severity" to "low"))
+
+            assertEquals(
+                AuditEventFilter(tenantId, severity = AuditSeverity.LOW, page = 1, size = 25),
+                capturedFilter,
+            )
+        }
+
+        @Test
+        fun `search audit events rejects a value outside its closed set with 400`() {
+            val tenantId = uuidV7()
+
+            listOf("outcome", "severity", "min_severity", "actor_type", "sort_dir", "branch_id")
+                .forEach { parameter ->
+                    mockMvc
+                        .get(ApiPaths.AUDIT_EVENTS) {
+                            param(parameter, "sideways")
+                            with(authentication(tenantToken(setOf("audit.view"), tenantId)))
+                        }.andExpect {
+                            status { isBadRequest() }
+                            jsonPath("$.code") { value("invalid_parameter") }
+                            jsonPath("$.violations[0].field") { value(parameter) }
+                        }
+                }
         }
 
         @Test
