@@ -17,7 +17,12 @@ Every audit event maps to one row in `audit_event` (`public` schema; there is no
 - `id`, `event_time` — identity and when it occurred (UTC);
 - `organisation_id`, `branch_id` — tenant and optional branch;
 - `actor_type`, `actor_user_id`, `actor_external_subject` — who acted;
-- `event_type`, `entity_type`, `entity_id` — what was acted on;
+- `event_type` — the domain event name: the row's `action` (`AuditEvent.eventType`), for
+  example `organisation.activate`. Rows written before #187 hold the resource type here instead
+  and are not rewritten;
+- `entity_type`, `entity_id` — what was acted on. `entity_id` is a `UUID`: a resource id that is
+  not one (a tenant-setting key, for example) is stored as `NULL`, by design, rather than
+  rejected; there is no text column for it;
 - `action`, `outcome`, `severity` — what happened and how it should be triaged;
 - `reason`, `correlation_id`, `request_id`, `ip_address`, `user_agent` — request context;
 - `before_jsonb`, `after_jsonb` — optional before/after state summaries;
@@ -111,6 +116,12 @@ operation that forgets to audit fails the build.
 `AuditEventFilter.organisationId` is required, matching the "never expose an unscoped lookup"
 convention every other tenant-owned repository in this codebase follows.
 
+Search and by-id reads return one projection, `AuditEventDetail`, so a page item and a detail
+response carry the same fields under the same names. On the wire both also repeat three older
+names as deprecated aliases (`resource_type` = `entity_type`, `resource_id` = `entity_id` as a
+string, `actor_id` = `actor_user_id`); see the
+[foundation API contract](../api/foundation-api.md#audit-event-shape).
+
 Pagination follows the existing `OrganisationListFilter`/`OrganisationPage` idiom (zero-based
 `page`, bounded `size`) rather than Spring's unused `Pageable`/`Page<T>` machinery, for
 consistency with `OrganisationProvisioningService.list`. `size` must be `1..100`; out-of-bounds
@@ -143,6 +154,15 @@ Platform actions on a tenant are written to that tenant's log, and platform user
 actions to the PLATFORM log, so between them the platform endpoints make every row readable by
 someone. A single tenant event has no platform detail route: platform operators read it through
 the list filters (`entity_id`, `action`, ...) or add a route if a client needs one.
+
+**The sensitive set is withheld on the platform pages, by owner decision.** A page item now has the
+detail's fields (#187), which would let any holder of `audit.view` in PLATFORM (`PLATFORM_SUPPORT`
+included) bulk-read every tenant's state and request context. So the items of both platform
+searches carry `before_json`, `after_json`, `metadata_json`, `user_agent`, `ip_address` and
+`actor_external_subject` as `null` until the owner decides otherwise. The keys stay, so the shape
+is stable. The rule is in one place, `toPlatformSummaryResponse` in the lifecycle web adapter.
+The tenant routes return every field. The platform detail route reads only the platform's own log
+and returns every field, as it did before.
 
 ## What must be audited
 

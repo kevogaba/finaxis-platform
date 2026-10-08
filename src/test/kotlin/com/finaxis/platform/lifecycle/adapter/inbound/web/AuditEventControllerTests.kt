@@ -4,7 +4,6 @@ import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditEventDetail
 import com.finaxis.platform.common.audit.AuditEventFilter
 import com.finaxis.platform.common.audit.AuditEventPage
-import com.finaxis.platform.common.audit.AuditEventSummary
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditQueryService
 import com.finaxis.platform.common.audit.AuditSeverity
@@ -181,6 +180,11 @@ class AuditEventControllerTests
                     status { isOk() }
                     jsonPath("$.items[0].outcome") { value("SUCCESS") }
                     jsonPath("$.items[0].severity") { value("INFO") }
+                    jsonPath("$.items[0].event_type") { value("branch.updated") }
+                    jsonPath("$.items[0].entity_type") { value("BRANCH") }
+                    jsonPath("$.items[0].resource_type") { value("BRANCH") }
+                    jsonPath("$.items[0].request_id") { value("request-456") }
+                    jsonPath("$.items[0].metadata_json") { value("{\"source\":\"api\"}") }
                     jsonPath("$.page.number") { value(1) }
                     jsonPath("$.page.size") { value(25) }
                     jsonPath("$.page.total_items") { value(26) }
@@ -242,9 +246,12 @@ class AuditEventControllerTests
                     jsonPath("$.actor_external_subject") { value("keycloak:external-subject") }
                     jsonPath("$.actor_type") { value("USER") }
                     jsonPath("$.branch_id") { value(detail.branchId.toString()) }
-                    jsonPath("$.event_type") { value("BRANCH_UPDATED") }
+                    jsonPath("$.actor_id") { value(detail.actorUserId.toString()) }
+                    jsonPath("$.event_type") { value("branch.updated") }
                     jsonPath("$.entity_type") { value("BRANCH") }
+                    jsonPath("$.resource_type") { value("BRANCH") }
                     jsonPath("$.entity_id") { value(detail.entityId.toString()) }
+                    jsonPath("$.resource_id") { value(detail.entityId.toString()) }
                     jsonPath("$.action") { value("branch.updated") }
                     jsonPath("$.outcome") { value("FAILURE") }
                     jsonPath("$.severity") { value("HIGH") }
@@ -297,18 +304,9 @@ class AuditEventControllerTests
         }
 
         private fun auditEventSummary() =
-            AuditEventSummary(
-                id = uuidV7(),
-                occurredAt = Instant.parse("2026-07-21T10:15:30Z"),
-                actorType = "USER",
-                actorId = uuidV7(),
-                branchId = uuidV7(),
-                action = "branch.updated",
-                resourceType = "BRANCH",
-                resourceId = "BRANCH-001",
+            auditEventDetail(uuidV7(), uuidV7()).copy(
                 outcome = AuditOutcome.SUCCESS,
                 severity = AuditSeverity.INFO,
-                reason = null,
             )
 
         private fun auditEventDetail(
@@ -322,7 +320,7 @@ class AuditEventControllerTests
             actorExternalSubject = "keycloak:external-subject",
             actorType = "USER",
             branchId = uuidV7(),
-            eventType = "BRANCH_UPDATED",
+            eventType = "branch.updated",
             entityType = "BRANCH",
             entityId = uuidV7(),
             action = "branch.updated",

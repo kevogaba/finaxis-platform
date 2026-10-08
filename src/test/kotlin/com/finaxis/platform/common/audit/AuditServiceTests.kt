@@ -37,6 +37,27 @@ class AuditServiceTests {
     }
 
     @Test
+    fun `an event's type is its action, never its resource type`() {
+        val service = service()
+
+        service.recordLifecycleTransition(
+            actorId = null,
+            tenantId = UUID.fromString("11111111-1111-7111-8111-111111111111"),
+            aggregateType = "ORGANISATION",
+            aggregateId = "11111111-1111-7111-8111-111111111111",
+            transition = "ACTIVATE",
+            fromState = "PENDING_APPROVAL",
+            toState = "ACTIVE",
+            outcome = AuditOutcome.SUCCESS,
+        )
+
+        val event = repository.events.single()
+        assertEquals("organisation.activate", event.eventType)
+        assertEquals(event.action, event.eventType)
+        assertEquals("ORGANISATION", event.resourceType)
+    }
+
+    @Test
     fun `record defaults to INFO severity`() {
         val service = service()
 

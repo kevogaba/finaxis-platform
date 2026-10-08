@@ -19,22 +19,10 @@ data class AuditEventFilter(
     val size: Int = 25,
 )
 
-/** Read projection of a persisted audit event for administration queries. */
-data class AuditEventSummary(
-    val id: UUID,
-    val occurredAt: Instant,
-    val actorType: String,
-    val actorId: UUID?,
-    val branchId: UUID?,
-    val action: String,
-    val resourceType: String,
-    val resourceId: String?,
-    val outcome: AuditOutcome,
-    val severity: AuditSeverity,
-    val reason: String?,
-)
-
-/** Detailed read projection of a persisted audit event for entity details. */
+/**
+ * Read projection of a persisted audit event, used by both the paginated search and the by-id
+ * read so the two return the same columns (#187).
+ */
 data class AuditEventDetail(
     val id: UUID,
     val organisationId: UUID,
@@ -61,7 +49,7 @@ data class AuditEventDetail(
 
 /** Page response for audit event administration queries. */
 data class AuditEventPage(
-    val items: List<AuditEventSummary>,
+    val items: List<AuditEventDetail>,
     val totalItems: Long,
 )
 

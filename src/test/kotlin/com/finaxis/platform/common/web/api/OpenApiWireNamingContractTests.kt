@@ -127,6 +127,24 @@ class OpenApiWireNamingContractTests
         }
 
         @Test
+        fun `audit schemas mark only the three older names deprecated`() {
+            listOf("AuditEventSummaryResponse", "AuditEventDetailResponse").forEach { name ->
+                val properties = schemas.path(name).path("properties")
+
+                listOf("resource_type", "resource_id", "actor_id").forEach { alias ->
+                    assertThat(properties.path(alias).path("deprecated").asBoolean())
+                        .describedAs("%s.%s deprecated", name, alias)
+                        .isTrue()
+                }
+                listOf("entity_type", "entity_id", "actor_user_id", "event_type").forEach {
+                    assertThat(properties.path(it).path("deprecated").asBoolean())
+                        .describedAs("%s.%s deprecated", name, it)
+                        .isFalse()
+                }
+            }
+        }
+
+        @Test
         fun `sort_by documents the accepted camelCase values per list endpoint`() {
             SORT_BY_VALUES.forEach { (path, expected) ->
                 val sortBy = queryParameter(path, "sort_by")

@@ -101,7 +101,7 @@ class JooqAuditEventQueriesTests(
             queries.search(AuditEventFilter(organisationId = organisationId, actorId = actorId))
 
         assertEquals(1, page.items.size)
-        assertEquals(actorId, page.items.single().actorId)
+        assertEquals(actorId, page.items.single().actorUserId)
     }
 
     @Test
