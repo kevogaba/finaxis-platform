@@ -542,9 +542,12 @@ class BranchProvisioningService(
     /**
      * A platform checker acts only while the tenant has no ACTIVE branch beyond the one the
      * bootstrap seeds (the head office, created by the system actor), so it is the way out of the
-     * first-approval deadlock and not a standing approver (ADR 0028).
+     * first-approval deadlock and not a standing approver (ADR 0028). The tenant's organisation
+     * row is locked before the count, so two platform checkers acting on two branches of one
+     * tenant at once are serialised and the second counts the first's commit (ADR 0028 point 8).
      */
     private fun requirePlatformCheckerOpen(organisationId: java.util.UUID) {
+        lifecycleStore.lockOrganisation(organisationId)
         if (lifecycleStore.hasActiveBranchBeyondBootstrap(organisationId)) {
             throw ConflictException(
                 LifecycleErrorCodes.PLATFORM_CHECKER_CLOSED,

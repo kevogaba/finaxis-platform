@@ -1123,6 +1123,9 @@ private class ProvisioningFake(
     BranchLifecycleStore,
     BranchAssignmentStore {
     val settings = mutableMapOf<UUID, Map<String, StoredSetting>>()
+
+    /** The organisation lock and the branch window count, in call order. */
+    val windowCalls = mutableListOf<String>()
     val businessDates = mutableMapOf<UUID, LocalDate>()
     val headOffices = mutableSetOf<UUID>()
     val headOfficeIds = mutableMapOf<UUID, UUID>()
@@ -1170,7 +1173,9 @@ private class ProvisioningFake(
 
     override fun lifecycleState(organisationId: UUID) = organisationStates[organisationId]
 
-    override fun lockOrganisation(organisationId: UUID) = Unit
+    override fun lockOrganisation(organisationId: UUID) {
+        windowCalls += "lock:$organisationId"
+    }
 
     override fun saveSettings(
         organisationId: UUID,
@@ -1312,12 +1317,14 @@ private class ProvisioningFake(
         branchId: UUID,
     ): UUID? = branchCreators[organisationId to branchId]
 
-    override fun hasActiveBranchBeyondBootstrap(organisationId: UUID): Boolean =
-        branchStates.any { (key, state) ->
+    override fun hasActiveBranchBeyondBootstrap(organisationId: UUID): Boolean {
+        windowCalls += "count:$organisationId"
+        return branchStates.any { (key, state) ->
             key.first == organisationId &&
                 state == BranchLifecycleState.ACTIVE &&
                 branchCreators[key] != SystemActor.ID
         }
+    }
 
     override fun submittedBy(
         organisationId: UUID,
@@ -2338,6 +2345,51 @@ class PlatformCheckerBranchTests {
         store.branchCreators[organisationId to ownBranch] = uuidV7()
 
         branches.createDraft(createCommand(ActingScope.PLATFORM))
+    }
+
+    @Test
+    fun `platform activation locks the tenant before it counts the tenant's own branches`() {
+        val branchId = pendingPlatformBranch()
+        store.branchCreators[organisationId to branchId] = platformMaker
+        store.windowCalls.clear()
+
+        branches.activate(activateCommand(branchId, platformChecker))
+
+        // The lock serialises two platform checkers of one tenant (#223, ADR 0028 point 8).
+        assertEquals(listOf("lock:$organisationId", "count:$organisationId"), store.windowCalls)
+    }
+
+    @Test
+    fun `platform submission locks the tenant before it counts the tenant's own branches`() {
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        val branchId = uuidV7()
+        store.branchStates[organisationId to branchId] = BranchLifecycleState.DRAFT
+        lifecyclePersistence.branches[organisationId to branchId] =
+            aggregate(branchId, BranchLifecycleState.DRAFT, "BRANCH")
+
+        branches.submitForApproval(
+            SubmitBranchForApprovalCommand(
+                organisationId = organisationId,
+                branchId = branchId,
+                actorId = platformMaker,
+                requestId = uuidV7(),
+                scope = ActingScope.PLATFORM,
+            ),
+        )
+
+        assertEquals(listOf("lock:$organisationId", "count:$organisationId"), store.windowCalls)
+    }
+
+    @Test
+    fun `the tenant's own branch checker takes no platform window lock`() {
+        val branchId = pendingPlatformBranch()
+        store.windowCalls.clear()
+
+        branches.activate(
+            activateCommand(branchId, platformChecker).copy(scope = ActingScope.TENANT),
+        )
+
+        assertEquals(emptyList(), store.windowCalls)
     }
 
     private fun createCommand(scope: ActingScope) =

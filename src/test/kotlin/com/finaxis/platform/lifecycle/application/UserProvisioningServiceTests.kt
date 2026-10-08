@@ -812,6 +812,36 @@ class UserProvisioningServiceTests {
     }
 
     @Test
+    fun `the platform checker locks the tenant before it counts the tenant's own members`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        fake.windowCalls.clear()
+
+        service.approveUser(
+            ApproveUserCommand(
+                context.org,
+                invitation.membershipId,
+                uuidV7(),
+                scope = ActingScope.PLATFORM,
+            ),
+        )
+
+        // The lock serialises two platform checkers of one tenant (#223, ADR 0028 point 8).
+        assertEquals(listOf("lock:${context.org}", "count:${context.org}"), fake.windowCalls)
+    }
+
+    @Test
+    fun `the tenant's own approver takes no platform window lock`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        fake.windowCalls.clear()
+
+        service.approveUser(ApproveUserCommand(context.org, invitation.membershipId, uuidV7()))
+
+        assertEquals(emptyList(), fake.windowCalls)
+    }
+
+    @Test
     fun `suspend reactivate and deactivate drive user lifecycle transitions`() {
         val org = uuidV7()
         val actor = uuidV7()
@@ -1398,6 +1428,9 @@ private class UserProvisioningFake :
     val dispatches = mutableSetOf<DispatchRecord>()
     var duplicateOnCreateUser = false
 
+    /** The window-check reads in call order, so a test can prove the lock comes first. */
+    val windowCalls = mutableListOf<String>()
+
     fun addUser(
         email: String,
         username: String,
@@ -1428,6 +1461,10 @@ private class UserProvisioningFake :
     }
 
     override fun organisationState(organisationId: UUID) = organisationStates[organisationId]
+
+    override fun lockOrganisation(organisationId: UUID) {
+        windowCalls += "lock:$organisationId"
+    }
 
     override fun findUserIdByEmail(email: String): UUID? =
         userEmails.entries.firstOrNull { it.value.equals(email, ignoreCase = true) }?.key
@@ -1494,12 +1531,14 @@ private class UserProvisioningFake :
         )
     }
 
-    override fun hasActiveMembershipBeyondBootstrap(organisationId: UUID): Boolean =
-        memberships.any { (key, aggregate) ->
+    override fun hasActiveMembershipBeyondBootstrap(organisationId: UUID): Boolean {
+        windowCalls += "count:$organisationId"
+        return memberships.any { (key, aggregate) ->
             key.first == organisationId &&
                 aggregate.state == MembershipLifecycleState.ACTIVE &&
                 membershipInviters[key] != SystemActor.ID
         }
+    }
 
     override fun membershipExists(
         organisationId: UUID,
