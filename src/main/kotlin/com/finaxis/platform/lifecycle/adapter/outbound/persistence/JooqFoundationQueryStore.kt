@@ -6,6 +6,7 @@ import com.finaxis.platform.common.web.api.boundedPageOffset
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE_HISTORY
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
+import com.finaxis.platform.jooq.tables.references.ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
 import com.finaxis.platform.lifecycle.application.query.BranchDetail
 import com.finaxis.platform.lifecycle.application.query.BranchFilter
 import com.finaxis.platform.lifecycle.application.query.BranchSummary
@@ -91,8 +92,9 @@ class JooqFoundationQueryStore(
         return apiPageOf(items, filter.page, filter.size, total)
     }
 
-    override fun findTenantById(id: UUID): TenantDetail? =
-        dsl
+    override fun findTenantById(id: UUID): TenantDetail? {
+        val bootstrap = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
+        return dsl
             .select(
                 ORGANISATION.ID,
                 ORGANISATION.TENANT_CODE,
@@ -104,7 +106,11 @@ class JooqFoundationQueryStore(
                 ORGANISATION.STATUS_REASON,
                 ORGANISATION.CREATED_AT,
                 ORGANISATION.UPDATED_AT,
+                bootstrap.STATUS,
+                bootstrap.LAST_FAILURE_CODE,
             ).from(ORGANISATION)
+            .leftJoin(bootstrap)
+            .on(bootstrap.ORGANISATION_ID.eq(ORGANISATION.ID))
             .where(ORGANISATION.ID.eq(id))
             .fetchOne { record ->
                 TenantDetail(
@@ -118,8 +124,11 @@ class JooqFoundationQueryStore(
                     statusReason = record.get(ORGANISATION.STATUS_REASON),
                     createdAt = requireNotNull(record.get(ORGANISATION.CREATED_AT)).toInstant(),
                     updatedAt = requireNotNull(record.get(ORGANISATION.UPDATED_AT)).toInstant(),
+                    bootstrapStatus = record.get(bootstrap.STATUS),
+                    bootstrapFailureCode = record.get(bootstrap.LAST_FAILURE_CODE),
                 )
             }
+    }
 
     override fun searchBranches(
         organisationId: UUID,

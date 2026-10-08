@@ -8,6 +8,7 @@ import com.finaxis.platform.jooq.tables.references.PERMISSION
 import com.finaxis.platform.jooq.tables.references.ROLE
 import com.finaxis.platform.jooq.tables.references.ROLE_PERMISSION
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
+import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
 import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
 import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.FoundationLifecycleService
@@ -19,6 +20,7 @@ import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.SuspendOrganisationCommand
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleTransition
+import com.finaxis.platform.lifecycle.withRequestContext
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
@@ -54,6 +56,9 @@ class TenantRoleReadinessTests(
     private val accessStore: JooqOrganisationAccessStore,
     private val jdbcTemplate: JdbcTemplate,
 ) {
+    private val fixture = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
+    private val operator by lazy { fixture.createPlatformOperator("readiness-operator") }
+
     @Test
     fun `an existing tenant whose roles still hold the deprecated branch activate stays ready`() {
         // A tenant seeded before V21 holds branch.activate beside branch.approve on its system
@@ -116,14 +121,18 @@ class TenantRoleReadinessTests(
         // would stay suspended (409) until its roles are backfilled. V23 is that backfill.
         val organisationId = approvedOrganisation("legacy-backfill")
         legacyTenantAdmin(organisationId)
-        organisationProvisioningService.suspend(
-            SuspendOrganisationCommand(organisationId, Reason.required("Review")),
-        )
+        withRequestContext {
+            organisationProvisioningService.suspend(
+                SuspendOrganisationCommand(organisationId, Reason.required("Review"), operator),
+            )
+        }
         assertTrue(!isReady(organisationId), "a legacy TENANT_ADMIN lacks the derived bundle")
         assertFailsWith<ConflictException> {
-            organisationProvisioningService.reactivate(
-                ReactivateOrganisationCommand(organisationId),
-            )
+            withRequestContext {
+                organisationProvisioningService.reactivate(
+                    ReactivateOrganisationCommand(organisationId, actorId = operator),
+                )
+            }
         }
 
         jdbcTemplate.execute(
@@ -131,7 +140,11 @@ class TenantRoleReadinessTests(
         )
 
         assertTrue(isReady(organisationId), "the backfill completes the legacy role")
-        organisationProvisioningService.reactivate(ReactivateOrganisationCommand(organisationId))
+        withRequestContext {
+            organisationProvisioningService.reactivate(
+                ReactivateOrganisationCommand(organisationId, actorId = operator),
+            )
+        }
         assertEquals(
             OrganisationLifecycleState.ACTIVE.name,
             dsl
@@ -183,27 +196,32 @@ class TenantRoleReadinessTests(
             accessStore.missingRequiredSetup(organisationId)
 
     private fun approvedOrganisation(label: String): UUID {
-        val requestedBy = insertUser()
+        val requestedBy = operator
         val organisationId =
-            organisationProvisioningService
-                .createDraft(
-                    CreateOrganisationDraftCommand(
-                        tenantCode = "$label-$requestedBy",
-                        displayName = "Readiness Organisation",
-                        legalName = "Readiness Organisation Limited",
-                        registrationNumber = "RDY-$requestedBy",
-                        countryCode = "KE",
-                        baseCurrencyCode = "KES",
-                        timezone = "Africa/Nairobi",
-                        requestedBy = requestedBy,
-                    ),
-                ).organisationId
+            withRequestContext {
+                organisationProvisioningService
+                    .createDraft(
+                        CreateOrganisationDraftCommand(
+                            tenantCode = "$label-$requestedBy",
+                            displayName = "Readiness Organisation",
+                            legalName = "Readiness Organisation Limited",
+                            registrationNumber = "RDY-$requestedBy",
+                            countryCode = "KE",
+                            baseCurrencyCode = "KES",
+                            timezone = "Africa/Nairobi",
+                            requestedBy = requestedBy,
+                        ),
+                    ).organisationId
+            }
         lifecycleService.transition(
             OrganisationTransitionCommand(organisationId, OrganisationLifecycleTransition.SUBMIT),
         )
-        organisationProvisioningService.approveProvisioning(
-            ApproveOrganisationProvisioningCommand(organisationId),
-        )
+        val checker = fixture.createPlatformOperator("readiness-checker")
+        withRequestContext {
+            organisationProvisioningService.approveProvisioning(
+                ApproveOrganisationProvisioningCommand(organisationId, actorId = checker),
+            )
+        }
         return organisationId
     }
 

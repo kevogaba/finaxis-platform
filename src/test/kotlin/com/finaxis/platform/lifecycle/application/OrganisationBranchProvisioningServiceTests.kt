@@ -145,7 +145,9 @@ class OrganisationBranchProvisioningServiceTests {
     fun `submitting organisation emits durable approval request after metadata validation`() {
         val organisationId = activeDraft()
 
-        organisations.submitForApproval(SubmitOrganisationForApprovalCommand(organisationId))
+        organisations.submitForApproval(
+            SubmitOrganisationForApprovalCommand(organisationId, actorId = uuidV7()),
+        )
 
         assertEquals(
             OrganisationLifecycleState.PENDING_APPROVAL,
@@ -164,9 +166,13 @@ class OrganisationBranchProvisioningServiceTests {
     @Test
     fun `approving organisation creates mandatory local setup before activation`() {
         val organisationId = activeDraft()
-        organisations.submitForApproval(SubmitOrganisationForApprovalCommand(organisationId))
+        organisations.submitForApproval(
+            SubmitOrganisationForApprovalCommand(organisationId, actorId = uuidV7()),
+        )
 
-        organisations.approveProvisioning(ApproveOrganisationProvisioningCommand(organisationId))
+        organisations.approveProvisioning(
+            ApproveOrganisationProvisioningCommand(organisationId, actorId = uuidV7()),
+        )
 
         assertEquals(
             OrganisationLifecycleState.ACTIVE,
@@ -198,7 +204,9 @@ class OrganisationBranchProvisioningServiceTests {
     @Test
     fun `approval is refused when the approver is the draft's initial administrator`() {
         val organisationId = activeDraft()
-        organisations.submitForApproval(SubmitOrganisationForApprovalCommand(organisationId))
+        organisations.submitForApproval(
+            SubmitOrganisationForApprovalCommand(organisationId, actorId = uuidV7()),
+        )
         val approver = uuidV7()
         adminBootstrapStore.existingAdministrators[organisationId] = approver
         events.events.clear()
@@ -222,13 +230,19 @@ class OrganisationBranchProvisioningServiceTests {
     @Test
     fun `approval proceeds when the initial administrator is another or no account`() {
         val withOther = activeDraft()
-        organisations.submitForApproval(SubmitOrganisationForApprovalCommand(withOther))
+        organisations.submitForApproval(
+            SubmitOrganisationForApprovalCommand(withOther, actorId = uuidV7()),
+        )
         adminBootstrapStore.existingAdministrators[withOther] = uuidV7()
         val withNone = activeDraft()
-        organisations.submitForApproval(SubmitOrganisationForApprovalCommand(withNone))
+        organisations.submitForApproval(
+            SubmitOrganisationForApprovalCommand(withNone, actorId = uuidV7()),
+        )
 
         listOf(withOther, withNone).forEach {
-            organisations.approveProvisioning(ApproveOrganisationProvisioningCommand(it))
+            organisations.approveProvisioning(
+                ApproveOrganisationProvisioningCommand(it, actorId = uuidV7()),
+            )
             assertEquals(
                 OrganisationLifecycleState.ACTIVE,
                 lifecyclePersistence.organisations.getValue(it).state,
@@ -239,13 +253,16 @@ class OrganisationBranchProvisioningServiceTests {
     @Test
     fun `rejecting an organisation publishes the external rejected lifecycle event`() {
         val organisationId = activeDraft()
-        organisations.submitForApproval(SubmitOrganisationForApprovalCommand(organisationId))
+        organisations.submitForApproval(
+            SubmitOrganisationForApprovalCommand(organisationId, actorId = uuidV7()),
+        )
         events.events.clear()
 
         organisations.rejectProvisioning(
             RejectOrganisationProvisioningCommand(
                 organisationId,
                 req("Registration validation failed"),
+                actorId = uuidV7(),
             ),
         )
 
@@ -265,7 +282,9 @@ class OrganisationBranchProvisioningServiceTests {
         store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
         store.completeSetup(organisationId)
 
-        organisations.suspend(SuspendOrganisationCommand(organisationId, req("Regulatory review")))
+        organisations.suspend(
+            SuspendOrganisationCommand(organisationId, req("Regulatory review"), uuidV7()),
+        )
 
         assertEquals(
             OrganisationLifecycleState.SUSPENDED,
@@ -276,7 +295,7 @@ class OrganisationBranchProvisioningServiceTests {
 
         events.events.clear()
         organisations.reactivate(
-            ReactivateOrganisationCommand(organisationId, opt("Review complete")),
+            ReactivateOrganisationCommand(organisationId, opt("Review complete"), uuidV7()),
         )
 
         assertEquals(
@@ -359,7 +378,9 @@ class OrganisationBranchProvisioningServiceTests {
             store.missingSetup += missing
 
             assertFailsWith<ConflictException> {
-                organisations.reactivate(ReactivateOrganisationCommand(organisationId))
+                organisations.reactivate(
+                    ReactivateOrganisationCommand(organisationId, actorId = uuidV7()),
+                )
             }
             store.missingSetup -= missing
         }
@@ -404,7 +425,7 @@ class OrganisationBranchProvisioningServiceTests {
         store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
 
         organisations.deprovision(
-            DeprovisionOrganisationCommand(organisationId, req("contract ended")),
+            DeprovisionOrganisationCommand(organisationId, req("contract ended"), uuidV7()),
         )
 
         assertEquals(

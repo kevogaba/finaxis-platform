@@ -119,28 +119,33 @@ class JooqFoundationLifecyclePersistenceTests(
 
     @Test
     fun `organisation approval maps default roles to the baseline permission catalogue`() {
-        val requestedBy = insertUser()
+        val requestedBy = fixture.createPlatformOperator("approval-maker")
         val organisationId =
-            organisationProvisioningService
-                .createDraft(
-                    CreateOrganisationDraftCommand(
-                        tenantCode = "approval-$requestedBy",
-                        displayName = "Approval Organisation",
-                        legalName = "Approval Organisation Limited",
-                        registrationNumber = "APP-$requestedBy",
-                        countryCode = "KE",
-                        baseCurrencyCode = "KES",
-                        timezone = "Africa/Nairobi",
-                        requestedBy = requestedBy,
-                    ),
-                ).organisationId
+            withRequestContext {
+                organisationProvisioningService
+                    .createDraft(
+                        CreateOrganisationDraftCommand(
+                            tenantCode = "approval-$requestedBy",
+                            displayName = "Approval Organisation",
+                            legalName = "Approval Organisation Limited",
+                            registrationNumber = "APP-$requestedBy",
+                            countryCode = "KE",
+                            baseCurrencyCode = "KES",
+                            timezone = "Africa/Nairobi",
+                            requestedBy = requestedBy,
+                        ),
+                    ).organisationId
+            }
 
         lifecycleService.transition(
             OrganisationTransitionCommand(organisationId, OrganisationLifecycleTransition.SUBMIT),
         )
-        organisationProvisioningService.approveProvisioning(
-            ApproveOrganisationProvisioningCommand(organisationId),
-        )
+        val checker = fixture.createPlatformOperator("approval-checker")
+        withRequestContext {
+            organisationProvisioningService.approveProvisioning(
+                ApproveOrganisationProvisioningCommand(organisationId, actorId = checker),
+            )
+        }
 
         assertApprovalSetup(organisationId)
     }
@@ -410,9 +415,16 @@ class JooqFoundationLifecyclePersistenceTests(
         val membershipId = insertMembership(organisationId, userId, MembershipLifecycleState.ACTIVE)
         insertActiveAssignments(organisationId, userId, branchId)
 
-        organisationProvisioningService.deprovision(
-            DeprovisionOrganisationCommand(organisationId, Reason.required("Contract ended")),
-        )
+        val operator = fixture.createPlatformOperator("deprovision-operator")
+        withRequestContext {
+            organisationProvisioningService.deprovision(
+                DeprovisionOrganisationCommand(
+                    organisationId,
+                    Reason.required("Contract ended"),
+                    operator,
+                ),
+            )
+        }
 
         assertDeprovisionedAccess(organisationId, branchId, membershipId)
     }

@@ -8,7 +8,6 @@ import com.finaxis.platform.common.web.api.WebJsonConfiguration
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
-import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStore
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
 import com.finaxis.platform.lifecycle.application.query.TenantDetail
 import org.hamcrest.Matchers.containsString
@@ -72,9 +71,6 @@ class TenantControllerTests
         @MockitoBean
         private lateinit var foundationQueryService: FoundationQueryService
 
-        @MockitoBean
-        private lateinit var adminBootstrapStore: InitialAdministratorBootstrapStore
-
         @Test
         fun `a returned tenant reads the reason of its last transition`() {
             val tenantId = uuidV7()
@@ -105,10 +101,27 @@ class TenantControllerTests
                 }
         }
 
+        @Test
+        fun `the bootstrap status comes from the gated tenant detail`() {
+            val tenantId = uuidV7()
+            stubTenant(tenantId, "PENDING_APPROVAL", null, "FAILED", "keycloak_unavailable")
+
+            mockMvc
+                .get(ApiPaths.TENANT) {
+                    with(authentication(tenantToken(tenantId)))
+                }.andExpect {
+                    status { isOk() }
+                    jsonPath("$.bootstrap_status") { value("FAILED") }
+                    jsonPath("$.bootstrap_failure_code") { value("keycloak_unavailable") }
+                }
+        }
+
         private fun stubTenant(
             tenantId: UUID,
             status: String,
             statusReason: String?,
+            bootstrapStatus: String? = null,
+            bootstrapFailureCode: String? = null,
         ) {
             whenever(foundationQueryService.getTenant(eq(tenantId), any()))
                 .thenReturn(
@@ -121,6 +134,8 @@ class TenantControllerTests
                         timezone = "Africa/Nairobi",
                         status = status,
                         statusReason = statusReason,
+                        bootstrapStatus = bootstrapStatus,
+                        bootstrapFailureCode = bootstrapFailureCode,
                         createdAt = Instant.parse("2026-07-18T10:00:00Z"),
                         updatedAt = Instant.parse("2026-07-18T10:00:00Z"),
                     ),

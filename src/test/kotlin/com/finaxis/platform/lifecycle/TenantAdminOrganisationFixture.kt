@@ -7,6 +7,7 @@ import com.finaxis.platform.foundation.ViewCoupledGrants
 import com.finaxis.platform.jooq.tables.references.PERMISSION
 import com.finaxis.platform.jooq.tables.references.ROLE
 import com.finaxis.platform.jooq.tables.references.ROLE_PERMISSION
+import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
 import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
@@ -35,7 +36,7 @@ class TenantAdminOrganisationFixture(
         labelPrefix: String,
         actorId: UUID,
     ): UUID {
-        val organisationId = provisionActiveOrganisation(labelPrefix, actorId)
+        val organisationId = provisionActiveOrganisation(labelPrefix)
         grantTenantAdmin(organisationId, actorId)
         return organisationId
     }
@@ -53,36 +54,63 @@ class TenantAdminOrganisationFixture(
         actorId: UUID,
         vararg permissionCodes: String,
     ): UUID {
-        val organisationId = provisionActiveOrganisation(labelPrefix, actorId)
+        val organisationId = provisionActiveOrganisation(labelPrefix)
         grantTenantPermissionsWithViews(organisationId, actorId, *permissionCodes)
         return organisationId
     }
 
-    private fun provisionActiveOrganisation(
-        labelPrefix: String,
-        actorId: UUID,
-    ): UUID {
-        val organisationId =
-            organisationProvisioningService
-                .createDraft(
-                    CreateOrganisationDraftCommand(
-                        tenantCode = "$labelPrefix-${uuidV7()}",
-                        displayName = "$labelPrefix Organisation",
-                        legalName = "$labelPrefix Organisation Limited",
-                        registrationNumber = "${labelPrefix.uppercase()}-${uuidV7()}",
-                        countryCode = "KE",
-                        baseCurrencyCode = "KES",
-                        timezone = "Africa/Nairobi",
-                        requestedBy = actorId,
-                    ),
-                ).organisationId
-        organisationProvisioningService.submitForApproval(
-            SubmitOrganisationForApprovalCommand(organisationId),
-        )
-        organisationProvisioningService.approveProvisioning(
-            ApproveOrganisationProvisioningCommand(organisationId),
-        )
-        return organisationId
+    private fun provisionActiveOrganisation(labelPrefix: String): UUID {
+        // The service authorises its own use cases (ADR 0030, step 6), so provisioning is done by
+        // two real platform operators: a maker, and a distinct checker (maker-checker).
+        val maker = createPlatformOperator("$labelPrefix-maker")
+        val checker = createPlatformOperator("$labelPrefix-checker")
+        return withRequestContext {
+            val organisationId =
+                organisationProvisioningService
+                    .createDraft(
+                        CreateOrganisationDraftCommand(
+                            tenantCode = "$labelPrefix-${uuidV7()}",
+                            displayName = "$labelPrefix Organisation",
+                            legalName = "$labelPrefix Organisation Limited",
+                            registrationNumber = "${labelPrefix.uppercase()}-${uuidV7()}",
+                            countryCode = "KE",
+                            baseCurrencyCode = "KES",
+                            timezone = "Africa/Nairobi",
+                            requestedBy = maker,
+                        ),
+                    ).organisationId
+            organisationProvisioningService.submitForApproval(
+                SubmitOrganisationForApprovalCommand(organisationId, actorId = maker),
+            )
+            organisationProvisioningService.approveProvisioning(
+                ApproveOrganisationProvisioningCommand(organisationId, actorId = checker),
+            )
+            organisationId
+        }
+    }
+
+    /**
+     * Creates a fresh active user holding the platform organisation's PLATFORM_SUPER_ADMIN role
+     * and returns its id: the acting platform operator for a direct call to a service that
+     * authorises its own use case. Calls made with it need [withRequestContext].
+     */
+    fun createPlatformOperator(label: String = "operator"): UUID {
+        val id = uuidV7()
+        val now = OffsetDateTime.now()
+        dsl
+            .insertInto(USER_ACCOUNT)
+            .set(USER_ACCOUNT.ID, id)
+            .set(USER_ACCOUNT.USERNAME, "$label-${id.toString().take(12)}")
+            .set(USER_ACCOUNT.EMAIL, "$label-$id@platform-operator.test")
+            .set(USER_ACCOUNT.DISPLAY_NAME, label)
+            .set(USER_ACCOUNT.STATUS, "ACTIVE")
+            .set(USER_ACCOUNT.CREATED_AT, now)
+            .set(USER_ACCOUNT.CREATED_BY, SystemActor.ID)
+            .set(USER_ACCOUNT.UPDATED_AT, now)
+            .set(USER_ACCOUNT.UPDATED_BY, SystemActor.ID)
+            .execute()
+        grantPlatformSuperAdmin(id)
+        return id
     }
 
     /** Grants [actorId] the org's TENANT_ADMIN role via a real membership + role assignment. */

@@ -52,7 +52,7 @@ data class AmendOrganisationDraftCommand(
 data class SubmitOrganisationForApprovalCommand(
     val organisationId: UUID,
     val reason: DecisionRemark? = null,
-    val actorId: UUID = uuidV7(),
+    val actorId: UUID,
     val requestId: UUID = uuidV7(),
 )
 
@@ -60,7 +60,7 @@ data class SubmitOrganisationForApprovalCommand(
 data class ApproveOrganisationProvisioningCommand(
     val organisationId: UUID,
     val reason: DecisionRemark? = null,
-    val actorId: UUID = uuidV7(),
+    val actorId: UUID,
     val requestId: UUID = uuidV7(),
 )
 
@@ -68,7 +68,7 @@ data class ApproveOrganisationProvisioningCommand(
 data class RejectOrganisationProvisioningCommand(
     val organisationId: UUID,
     val reason: Reason,
-    val actorId: UUID = uuidV7(),
+    val actorId: UUID,
     val requestId: UUID = uuidV7(),
 )
 
@@ -79,22 +79,34 @@ data class ReturnOrganisationForChangesCommand(
     val actorId: UUID,
 )
 
-/** Suspends an active organisation while retaining all of its data. */
+/**
+ * Suspends an active organisation while retaining all of its data. [actorId] is the platform
+ * operator whose `tenant.suspend` (with `tenant.view`) the service checks and audits.
+ */
 data class SuspendOrganisationCommand(
     val organisationId: UUID,
     val reason: Reason,
+    val actorId: UUID,
 )
 
-/** Reactivates an organisation after its operational prerequisites are checked. */
+/**
+ * Reactivates an organisation after its operational prerequisites are checked. [actorId] is the
+ * platform operator whose `tenant.reactivate` (with `tenant.view`) the service checks.
+ */
 data class ReactivateOrganisationCommand(
     val organisationId: UUID,
     val reason: DecisionRemark? = null,
+    val actorId: UUID,
 )
 
-/** Starts and completes metadata-only organisation deprovisioning. */
+/**
+ * Starts and completes metadata-only organisation deprovisioning. [actorId] is the platform
+ * operator whose `tenant.deprovision` (with `tenant.view`) the service checks.
+ */
 data class DeprovisionOrganisationCommand(
     val organisationId: UUID,
     val reason: Reason,
+    val actorId: UUID,
 )
 
 /** Compact organisation projection for application queries. */

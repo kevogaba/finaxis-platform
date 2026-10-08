@@ -50,6 +50,7 @@ class OrganisationProvisioningService(
     /** Creates a non-operational organisation draft with its initial local configuration. */
     @Transactional
     fun createDraft(command: CreateOrganisationDraftCommand): OrganisationDraftResult {
+        permissionGuard.requirePlatformPermission(command.requestedBy, "tenant.create")
         validateCreate(command)
         validateAdmin(command.admin)
         errorUnless(command.requestedBy != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
@@ -84,6 +85,7 @@ class OrganisationProvisioningService(
     /** Amends an existing organisation draft before it is submitted. */
     @Transactional
     fun amendDraft(command: AmendOrganisationDraftCommand) {
+        permissionGuard.requirePlatformPermission(command.actorId, "tenant.update_draft")
         auditService.requireNotPlatformOrganisation(
             command.organisationId,
             "organisation.amend_draft",
@@ -117,6 +119,7 @@ class OrganisationProvisioningService(
     /** Validates metadata and moves a draft into the approval workflow. */
     @Transactional
     fun submitForApproval(command: SubmitOrganisationForApprovalCommand) {
+        permissionGuard.requirePlatformPermission(command.actorId, "tenant.submit_for_approval")
         auditService.requireNotPlatformOrganisation(
             command.organisationId,
             "organisation.submit_for_approval",
@@ -165,6 +168,7 @@ class OrganisationProvisioningService(
      */
     @Transactional
     fun approveProvisioning(command: ApproveOrganisationProvisioningCommand) {
+        permissionGuard.requirePlatformPermission(command.actorId, "tenant.approve")
         auditService.requireNotPlatformOrganisation(
             command.organisationId,
             "organisation.approve",
@@ -225,6 +229,7 @@ class OrganisationProvisioningService(
     /** Rejects a pending organisation request and preserves its draft data for auditability. */
     @Transactional
     fun rejectProvisioning(command: RejectOrganisationProvisioningCommand) {
+        permissionGuard.requirePlatformPermission(command.actorId, "tenant.reject")
         auditService.requireNotPlatformOrganisation(
             command.organisationId,
             "organisation.reject",
@@ -351,7 +356,12 @@ class OrganisationProvisioningService(
     /** Suspends an active organisation without deleting data. */
     @Transactional
     fun suspend(command: SuspendOrganisationCommand) {
-        auditService.requireNotPlatformOrganisation(command.organisationId, "organisation.suspend")
+        permissionGuard.requirePlatformPermission(command.actorId, "tenant.suspend")
+        auditService.requireNotPlatformOrganisation(
+            command.organisationId,
+            "organisation.suspend",
+            command.actorId,
+        )
         lifecycleService.transition(
             OrganisationTransitionCommand(
                 command.organisationId,
@@ -364,9 +374,11 @@ class OrganisationProvisioningService(
     /** Reactivates an organisation only when its local operating prerequisites still exist. */
     @Transactional
     fun reactivate(command: ReactivateOrganisationCommand) {
+        permissionGuard.requirePlatformPermission(command.actorId, "tenant.reactivate")
         auditService.requireNotPlatformOrganisation(
             command.organisationId,
             "organisation.reactivate",
+            command.actorId,
         )
         lifecycleStore.lifecycleState(command.organisationId).orResourceNotFound()
         accessStore.requireCompleteSetup(command.organisationId)
@@ -382,9 +394,11 @@ class OrganisationProvisioningService(
     /** Performs controlled metadata-only deprovisioning and intentionally retains tenant data. */
     @Transactional
     fun deprovision(command: DeprovisionOrganisationCommand) {
+        permissionGuard.requirePlatformPermission(command.actorId, "tenant.deprovision")
         auditService.requireNotPlatformOrganisation(
             command.organisationId,
             "organisation.deprovision",
+            command.actorId,
         )
         startDeprovisioning(command)
         deprovisionBranches(command)

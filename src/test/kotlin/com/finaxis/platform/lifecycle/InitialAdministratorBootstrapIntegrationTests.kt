@@ -93,40 +93,46 @@ class InitialAdministratorBootstrapIntegrationTests(
             .set(USER_ACCOUNT.UPDATED_BY, SystemActor.ID)
             .execute()
 
+        val fixture = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
+        fixture.grantPlatformSuperAdmin(makerId)
+        fixture.grantPlatformSuperAdmin(checkerId)
         val organisationId =
-            organisationProvisioningService
-                .createDraft(
-                    CreateOrganisationDraftCommand(
-                        tenantCode = tenantCode,
-                        displayName = "Bootstrap Organisation",
-                        legalName = "Bootstrap Organisation Limited",
-                        registrationNumber = "BT-${uuidV7()}",
-                        countryCode = "KE",
-                        baseCurrencyCode = "KES",
-                        timezone = "Africa/Nairobi",
-                        requestedBy = makerId,
-                        admin =
-                            InitialAdministratorDraft(
-                                email = "admin@$tenantCode.test",
-                                username = "admin-$tenantCode",
-                                displayName = "Initial Admin",
-                                phoneE164 = "+254700000000",
-                                sendApplicationInvite = true,
-                            ),
-                    ),
-                ).organisationId
+            withRequestContext {
+                organisationProvisioningService
+                    .createDraft(
+                        CreateOrganisationDraftCommand(
+                            tenantCode = tenantCode,
+                            displayName = "Bootstrap Organisation",
+                            legalName = "Bootstrap Organisation Limited",
+                            registrationNumber = "BT-${uuidV7()}",
+                            countryCode = "KE",
+                            baseCurrencyCode = "KES",
+                            timezone = "Africa/Nairobi",
+                            requestedBy = makerId,
+                            admin =
+                                InitialAdministratorDraft(
+                                    email = "admin@$tenantCode.test",
+                                    username = "admin-$tenantCode",
+                                    displayName = "Initial Admin",
+                                    phoneE164 = "+254700000000",
+                                    sendApplicationInvite = true,
+                                ),
+                        ),
+                    ).organisationId
+            }
 
-        organisationProvisioningService.submitForApproval(
-            SubmitOrganisationForApprovalCommand(organisationId),
-        )
-
-        organisationProvisioningService.approveProvisioning(
-            ApproveOrganisationProvisioningCommand(
-                organisationId = organisationId,
-                actorId = checkerId,
-                reason = DecisionRemark.optional("Approve initial setup"),
-            ),
-        )
+        withRequestContext {
+            organisationProvisioningService.submitForApproval(
+                SubmitOrganisationForApprovalCommand(organisationId, actorId = makerId),
+            )
+            organisationProvisioningService.approveProvisioning(
+                ApproveOrganisationProvisioningCommand(
+                    organisationId = organisationId,
+                    actorId = checkerId,
+                    reason = DecisionRemark.optional("Approve initial setup"),
+                ),
+            )
+        }
 
         // 1. Verify status is QUEUED initially
         var record = adminBootstrapStore.find(organisationId)

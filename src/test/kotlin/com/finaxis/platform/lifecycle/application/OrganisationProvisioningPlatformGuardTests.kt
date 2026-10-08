@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.application
 
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
@@ -164,27 +165,33 @@ class OrganisationProvisioningPlatformGuardTests {
 
     @Test
     fun `suspend refuses the platform organisation`() {
-        assertRefused("organisation.suspend") {
+        val actor = uuidV7()
+        assertRefused("organisation.suspend", actor) {
             organisations.suspend(
-                SuspendOrganisationCommand(platformId, Reason.required("Maintenance.")),
+                SuspendOrganisationCommand(platformId, Reason.required("Maintenance."), actor),
             )
         }
+        verify(permissionGuard).requirePlatformPermission(actor, "tenant.suspend")
     }
 
     @Test
     fun `reactivate refuses the platform organisation`() {
-        assertRefused("organisation.reactivate") {
-            organisations.reactivate(ReactivateOrganisationCommand(platformId))
+        val actor = uuidV7()
+        assertRefused("organisation.reactivate", actor) {
+            organisations.reactivate(ReactivateOrganisationCommand(platformId, actorId = actor))
         }
+        verify(permissionGuard).requirePlatformPermission(actor, "tenant.reactivate")
     }
 
     @Test
     fun `deprovision refuses the platform organisation before it revokes anything`() {
-        assertRefused("organisation.deprovision") {
+        val actor = uuidV7()
+        assertRefused("organisation.deprovision", actor) {
             organisations.deprovision(
-                DeprovisionOrganisationCommand(platformId, Reason.required("Wind down.")),
+                DeprovisionOrganisationCommand(platformId, Reason.required("Wind down."), actor),
             )
         }
+        verify(permissionGuard).requirePlatformPermission(actor, "tenant.deprovision")
     }
 
     @Test
@@ -224,8 +231,128 @@ class OrganisationProvisioningPlatformGuardTests {
     }
 
     @Test
+    fun `every tenant decision checks the platform permission first and writes nothing`() {
+        val actor = uuidV7()
+        val tenantId = uuidV7()
+
+        val decisions = draftDecisions(actor, tenantId) + lifecycleDecisions(actor, tenantId)
+
+        decisions.forEach { (name, permission, call) ->
+            doThrow(MissingPermissionException(permission))
+                .whenever(permissionGuard)
+                .requirePlatformPermission(actor, permission)
+
+            val failure = assertFailsWith<MissingPermissionException>(name) { call() }
+
+            assertEquals("Missing permission: $permission.", failure.safeDetail, name)
+            assertUntouched()
+            verifyNoInteractions(auditService)
+        }
+    }
+
+    private fun draftDecisions(
+        actor: UUID,
+        tenantId: UUID,
+    ): List<Triple<String, String, () -> Unit>> {
+        val admin =
+            InitialAdministratorDraft(
+                email = "admin@test.com",
+                username = "admin",
+                displayName = "Admin",
+                phoneE164 = null,
+                sendApplicationInvite = false,
+            )
+        return listOf(
+            Triple("create", "tenant.create") {
+                organisations.createDraft(
+                    CreateOrganisationDraftCommand(
+                        tenantCode = "acme",
+                        displayName = "Acme",
+                        legalName = null,
+                        registrationNumber = null,
+                        countryCode = "KE",
+                        baseCurrencyCode = "KES",
+                        timezone = "Africa/Nairobi",
+                        requestedBy = actor,
+                        admin = admin,
+                    ),
+                )
+            },
+            Triple("amend", "tenant.update_draft") {
+                organisations.amendDraft(
+                    AmendOrganisationDraftCommand(
+                        organisationId = tenantId,
+                        tenantCode = "acme",
+                        displayName = "Acme",
+                        legalName = null,
+                        registrationNumber = null,
+                        countryCode = "KE",
+                        baseCurrencyCode = "KES",
+                        timezone = "Africa/Nairobi",
+                        actorId = actor,
+                        requestId = uuidV7(),
+                        admin = admin,
+                    ),
+                )
+            },
+            Triple("submit", "tenant.submit_for_approval") {
+                organisations.submitForApproval(
+                    SubmitOrganisationForApprovalCommand(tenantId, actorId = actor),
+                )
+            },
+        )
+    }
+
+    private fun lifecycleDecisions(
+        actor: UUID,
+        tenantId: UUID,
+    ): List<Triple<String, String, () -> Unit>> {
+        val remark = Reason.required("Because.")
+        return listOf(
+            Triple("approve", "tenant.approve") {
+                organisations.approveProvisioning(
+                    ApproveOrganisationProvisioningCommand(tenantId, actorId = actor),
+                )
+            },
+            Triple("reject", "tenant.reject") {
+                organisations.rejectProvisioning(
+                    RejectOrganisationProvisioningCommand(tenantId, remark, actor),
+                )
+            },
+            Triple("suspend", "tenant.suspend") {
+                organisations.suspend(SuspendOrganisationCommand(tenantId, remark, actor))
+            },
+            Triple("reactivate", "tenant.reactivate") {
+                organisations.reactivate(ReactivateOrganisationCommand(tenantId, actorId = actor))
+            },
+            Triple("deprovision", "tenant.deprovision") {
+                organisations.deprovision(DeprovisionOrganisationCommand(tenantId, remark, actor))
+            },
+        )
+    }
+
+    @Test
+    fun `suspend answers a caller without the permission 403 before the platform refusal`() {
+        val actor = uuidV7()
+        doThrow(MissingPermissionException("tenant.suspend"))
+            .whenever(permissionGuard)
+            .requirePlatformPermission(actor, "tenant.suspend")
+
+        assertFailsWith<MissingPermissionException> {
+            organisations.suspend(
+                SuspendOrganisationCommand(platformId, Reason.required("Maintenance."), actor),
+            )
+        }
+
+        assertUntouched()
+        verifyNoInteractions(auditService)
+    }
+
+    @Test
     fun `an ordinary tenant is not refused by the guard`() {
-        organisations.suspend(SuspendOrganisationCommand(uuidV7(), Reason.required("Pause.")))
+        organisations.suspend(
+            SuspendOrganisationCommand(uuidV7(), Reason.required("Pause."), uuidV7()),
+        )
 
         verify(lifecycleService).transition(any<OrganisationTransitionCommand>())
         verifyNoInteractions(auditService)
@@ -236,7 +363,7 @@ class OrganisationProvisioningPlatformGuardTests {
         val unknown = uuidV7()
 
         assertFailsWith<ResourceNotFoundException> {
-            organisations.reactivate(ReactivateOrganisationCommand(unknown))
+            organisations.reactivate(ReactivateOrganisationCommand(unknown, actorId = uuidV7()))
         }
 
         verifyNoInteractions(accessStore, lifecycleService)
@@ -248,7 +375,11 @@ class OrganisationProvisioningPlatformGuardTests {
 
         assertFailsWith<ResourceNotFoundException> {
             organisations.deprovision(
-                DeprovisionOrganisationCommand(unknown, Reason.required("Offboarding.")),
+                DeprovisionOrganisationCommand(
+                    unknown,
+                    Reason.required("Offboarding."),
+                    uuidV7(),
+                ),
             )
         }
 

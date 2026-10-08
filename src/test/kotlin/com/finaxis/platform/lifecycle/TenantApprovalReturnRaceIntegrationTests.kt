@@ -70,8 +70,10 @@ class TenantApprovalReturnRaceIntegrationTests(
     private val fixture = TenantAdminOrganisationFixture(service, dsl)
     private val transaction = TransactionTemplate(transactionManager)
 
-    private val makerId = seedUser("maker")
-    private val submitterId = seedUser("submitter")
+    // The service authorises its own use cases (ADR 0030, step 6): makers and submitters hold a
+    // platform grant too. The maker-checker rules under test are about identity, not permission.
+    private val makerId = seedUser("maker").also { fixture.grantPlatformSuperAdmin(it) }
+    private val submitterId = seedUser("submitter").also { fixture.grantPlatformSuperAdmin(it) }
 
     /** Holds a platform grant, so it can decide on a tenant and return one. */
     private val checkerId = seedUser("checker").also { fixture.grantPlatformSuperAdmin(it) }
