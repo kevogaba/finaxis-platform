@@ -76,7 +76,7 @@ class AuthFlowIntegrationTests {
             .where(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID.eq(uuid(LOCAL_ORGANISATION_ID)))
             .execute()
         restoreProfilePermission()
-        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.clear()
+        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.invalidate()
     }
 
     @Test
@@ -155,7 +155,7 @@ class AuthFlowIntegrationTests {
             .where(ROLE_PERMISSION.ORGANISATION_ID.eq(uuid(LOCAL_ORGANISATION_ID)))
             .and(ROLE_PERMISSION.PERMISSION_ID.eq(uuid(PROFILE_PERMISSION_ID)))
             .execute()
-        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.clear()
+        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.invalidate()
 
         assertCurrentProfileDenied(branchContextToken())
     }

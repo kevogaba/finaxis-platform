@@ -190,7 +190,8 @@ class TenantSettingsController(
     @Operation(
         summary = "Create or update tenant setting",
         description =
-            "Creates or updates one setup-level configuration setting in the active tenant.",
+            "Creates or updates one setup-level configuration setting in the active tenant. " +
+                SETTING_WRITE_PERMISSIONS,
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -289,7 +290,9 @@ class TenantSettingsController(
     @IdempotentMutation(scope = IdempotencyScopeKind.TENANT)
     @Operation(
         summary = "Deactivate tenant setting",
-        description = "Deactivates one setup-level configuration setting in the active tenant.",
+        description =
+            "Deactivates one setup-level configuration setting in the active tenant. " +
+                SETTING_WRITE_PERMISSIONS,
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -395,5 +398,14 @@ class TenantSettingsController(
 
     private companion object {
         const val MAXIMUM_PAGE_SIZE = 100L
+
+        /** The per-key permission model, published because the routes carry no `@PreAuthorize`. */
+        const val SETTING_WRITE_PERMISSIONS =
+            "Requires `settings.update` and its view permission `settings.view` in the active " +
+                "tenant, or, for a platform-admin-only setting key, " +
+                "`tenant_setting.manage_platform` in the platform organisation (decided per " +
+                "setting key). A caller holding `settings.update` without " +
+                "`settings.view` gets 403 `forbidden` naming the first missing code, and " +
+                "nothing is changed."
     }
 }

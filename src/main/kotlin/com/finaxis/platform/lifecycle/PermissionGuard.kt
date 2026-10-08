@@ -7,6 +7,13 @@ import java.util.UUID
  * Public lifecycle-module port for permission-code authorization. Implemented by the identity
  * module so that lifecycle application services can enforce permission codes without depending
  * on the identity module directly (which would create a module cycle).
+ *
+ * Every `require...` check also requires the view permissions the catalogue pairs with a mutation
+ * permission code (`permission_view_requirement`, ADR 0030 decision 4), at the
+ * same scope: tenant, target branch or the platform organisation. The adapter applies the pairing
+ * centrally, so a caller names only the mutation code, and a refusal is always a
+ * [com.finaxis.platform.common.application.MissingPermissionException] naming the first missing
+ * code, the mutation code first. A view or context code is checked alone.
  */
 interface PermissionGuard {
     /**

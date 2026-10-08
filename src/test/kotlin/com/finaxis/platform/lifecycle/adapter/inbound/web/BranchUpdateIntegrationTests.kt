@@ -224,7 +224,7 @@ class BranchUpdateIntegrationTests
             // but holds no branch.update grant, with the authority only on the token: it is the
             // service's own permission check that refuses, and nothing changes.
             val reader = seedUser("reader")
-            fixture.grantTenantPermissionsOnly(organisationId, reader, "branch.view")
+            fixture.grantTenantPermissionsWithViews(organisationId, reader, "branch.view")
             patch(branchId, body, token(reader, organisationId, "branch.update"))
                 .andExpect { status { isForbidden() } }
             assertEquals(0L, branchColumn(branchId, BRANCH.ROW_VERSION))
@@ -233,14 +233,14 @@ class BranchUpdateIntegrationTests
         }
 
         @Test
-        fun `an editor holding only branch update updates the branch and gets the detail back`() {
+        fun `an editor holding branch update and its view updates the branch and reads it back`() {
             val branchId = createBranch()
-            // No branch.view anywhere: the response must not depend on a read permission the
-            // maker was never granted, or the committed update would be rolled back with a 403.
+            // Each editor holds branch.view with branch.update (ADR 0030), so the read-back of
+            // the committed update cannot be refused.
             val tenantMaker = seedUser("tenant-maker")
-            fixture.grantTenantPermissionsOnly(organisationId, tenantMaker, "branch.update")
+            fixture.grantTenantPermissionsWithViews(organisationId, tenantMaker, "branch.update")
             val branchMaker = seedUser("branch-maker")
-            fixture.grantBranchPermissionsOnly(
+            fixture.grantBranchPermissionsWithViews(
                 organisationId,
                 branchId,
                 branchMaker,
@@ -267,6 +267,27 @@ class BranchUpdateIntegrationTests
         }
 
         @Test
+        fun `an editor holding branch update without branch view is refused and nothing changes`() {
+            val branchId = createBranch()
+            val noView = seedUser("editor-no-view")
+            fixture.grantTenantPermissionsExactly(organisationId, noView, "branch.update")
+
+            patch(
+                branchId,
+                """{"branch_name":"Blind Edit"}""",
+                token(noView, organisationId, "branch.update"),
+            ).andExpect {
+                status { isForbidden() }
+                jsonPath("$.code") { value("forbidden") }
+                jsonPath("$.detail") { value("Missing permission: branch.view.") }
+            }
+
+            assertEquals(0L, branchColumn(branchId, BRANCH.ROW_VERSION))
+            assertTrue(updateAudits(branchId).isEmpty())
+            assertEquals("Riverside Branch", branchColumn(branchId, BRANCH.BRANCH_NAME))
+        }
+
+        @Test
         fun `a maker holding only branch create can no longer update the branch`() {
             val branchId = createBranch()
             val body = """{"branch_name":"Maker Edit"}"""
@@ -275,9 +296,9 @@ class BranchUpdateIntegrationTests
             // the controller gate and is refused there; the branch.update token passes the gate
             // with no matching grant behind it, so the service's own check refuses it.
             val tenantMaker = seedUser("create-only-maker")
-            fixture.grantTenantPermissionsOnly(organisationId, tenantMaker, "branch.create")
+            fixture.grantTenantPermissionsWithViews(organisationId, tenantMaker, "branch.create")
             val branchMaker = seedUser("create-only-branch-maker")
-            fixture.grantBranchPermissionsOnly(
+            fixture.grantBranchPermissionsWithViews(
                 organisationId,
                 branchId,
                 branchMaker,
@@ -300,9 +321,9 @@ class BranchUpdateIntegrationTests
             val unknown = uuidV7()
             val body = """{"branch_name":"Ghost"}"""
             val createOnly = seedUser("ghost-create-only")
-            fixture.grantTenantPermissionsOnly(organisationId, createOnly, "branch.create")
+            fixture.grantTenantPermissionsWithViews(organisationId, createOnly, "branch.create")
             val editor = seedUser("ghost-editor")
-            fixture.grantTenantPermissionsOnly(organisationId, editor, "branch.update")
+            fixture.grantTenantPermissionsWithViews(organisationId, editor, "branch.update")
 
             // The permission is checked before existence: a caller who may not edit branches learns
             // nothing about which ids exist.

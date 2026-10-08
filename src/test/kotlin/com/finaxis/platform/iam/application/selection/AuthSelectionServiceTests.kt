@@ -2,6 +2,7 @@ package com.finaxis.platform.iam.application.selection
 
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.InvalidPageRequestException
+import com.finaxis.platform.iam.FixedViewRequirements
 import com.finaxis.platform.iam.application.authorization.AccessDeniedException
 import com.finaxis.platform.iam.application.authorization.AuthorizationService
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
@@ -694,8 +695,8 @@ internal fun serviceWith(
             }
         }
     val resolver = EffectivePermissionResolver(perms, ConcurrentMapCacheManager())
-    val cache = RequestPermissionCache(resolver)
-    val authorizationService = AuthorizationService(lookup, cache, perms)
+    val cache = RequestPermissionCache(resolver, FixedViewRequirements())
+    val authorizationService = AuthorizationService(lookup, cache, perms, FixedViewRequirements())
     return AuthSelectionService(lookup, authorizationService)
 }
 

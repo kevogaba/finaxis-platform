@@ -1,10 +1,12 @@
 package com.finaxis.platform.iam.application.authorization
 
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
+import com.finaxis.platform.iam.application.port.outbound.PermissionViewRequirementQueries
 import com.finaxis.platform.iam.application.security.RequestPermissionCache
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
@@ -40,6 +42,7 @@ class AuthorizationService(
     private val membershipSelectionLookup: MembershipSelectionLookup,
     private val requestPermissionCache: RequestPermissionCache,
     private val permissionResolutionQueries: PermissionResolutionQueries,
+    private val permissionViewRequirementQueries: PermissionViewRequirementQueries,
 ) {
     /**
      * Returns whether the principal has the permission code in the active membership context.
@@ -239,7 +242,7 @@ class AuthorizationService(
         if (holdsBreakGlassPermission(userId, organisationId, permissionCode)) {
             return
         }
-        throw AccessDeniedException("Missing break-glass permission: $permissionCode")
+        throw MissingPermissionException(permissionCode)
     }
 
     private fun holdsBreakGlassPermission(
@@ -311,7 +314,7 @@ class AuthorizationService(
         if (hasPermission(userId, organisationId, permissionCode)) {
             return
         }
-        throw AccessDeniedException("Missing permission: $permissionCode")
+        throw MissingPermissionException(permissionCode)
     }
 
     /**
@@ -326,7 +329,68 @@ class AuthorizationService(
         if (hasPermission(userId, organisationId, branchId, permissionCode)) {
             return
         }
-        throw AccessDeniedException("Missing permission: $permissionCode")
+        throw MissingPermissionException(permissionCode)
+    }
+
+    /**
+     * Requires [userId] to hold [permissionCode] in [organisationId] **and, when it is a
+     * mutation, every view code the catalogue pairs with it** (ADR 0030, decision 4): the
+     * mutation code first, then each view in code order, refusing with a
+     * [MissingPermissionException] that names the first missing one. The views are asked at the
+     * same scope and through the same per-request memo as the read-back that follows the
+     * mutation, so that read cannot disagree with this answer.
+     */
+    fun requirePermissionWithViews(
+        userId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ) {
+        requirePermission(userId, organisationId, permissionCode)
+        if (SystemActor.isSystemActor(userId)) {
+            return
+        }
+        requestPermissionCache.requiredViewCodes(permissionCode).forEach { view ->
+            requirePermission(userId, organisationId, view)
+        }
+    }
+
+    /**
+     * As [requirePermissionWithViews], at the target [branchId]: the mutation code and each view
+     * are asked of the branch's effective set (a tenant-wide grant or a grant on that branch),
+     * the very set, through the same per-request memo, that the gated branch read-back decides
+     * from, so the pre-check and the read-back are one procedure over one piece of data.
+     */
+    fun requirePermissionWithViews(
+        userId: UUID,
+        organisationId: UUID,
+        branchId: UUID,
+        permissionCode: String,
+    ) {
+        requirePermission(userId, organisationId, branchId, permissionCode)
+        if (SystemActor.isSystemActor(userId)) {
+            return
+        }
+        requestPermissionCache.requiredViewCodes(permissionCode).forEach { view ->
+            requirePermission(userId, organisationId, branchId, view)
+        }
+    }
+
+    /**
+     * Break-glass counterpart of [requirePermissionWithViews]: the break-glass [permissionCode]
+     * and then each view it requires, every one decided by the locked, uncached grant read and
+     * the view list read straight from the catalogue, so a background service identity (which
+     * has no request scope) is held to the same rule as an interactive caller.
+     */
+    fun requireBreakGlassPermissionWithViews(
+        userId: UUID,
+        organisationId: UUID,
+        permissionCode: String,
+    ) {
+        requireBreakGlassPermission(userId, organisationId, permissionCode)
+        permissionViewRequirementQueries
+            .requiredViewCodesByPermission()[permissionCode]
+            .orEmpty()
+            .forEach { view -> requireBreakGlassPermission(userId, organisationId, view) }
     }
 
     private fun isOrganisationActive(organisationId: UUID): Boolean =

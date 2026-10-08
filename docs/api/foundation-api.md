@@ -192,6 +192,43 @@ Application exception mappings:
 | `InvalidRequestException`     | 400         |
 | `RequestTooLargeException`    | 413         |
 
+#### A mutation needs its view: the named 403
+
+Every mutation requires its own permission **and every view permission the catalogue pairs with
+it** (`required_view_permissions` on `GET /api/v1/tenant/permissions`; for example
+`branch.suspend` needs `branch.view`, `user.invite` needs `membership.view` and `user.view`) at the
+same scope: the tenant, the target branch, or the platform organisation (ADR 0030). The route
+tables below list both codes. The check is central, runs first in the service (after body
+validation and the endpoint's `@PreAuthorize` gate, before the platform-organisation 404 or 409,
+any existence lookup, the ADR 0028 window and the state check), and writes nothing when it
+refuses, so an unknown id answers `403` and not `404` to a caller without the permission. Two
+routes still read the resource first until the later assignment change (branch-assignment revoke,
+role-assignment revoke), so there a caller without the view gets the target-aware read's unnamed
+`403`, and tenant settings resolve the setting key and organisation state first; refusals of the
+target-aware reads stay unnamed. Role-permission remove is named (`Missing permission:
+role.view.`). The
+refusal is `403 application/problem+json` with `code` `forbidden` and a `detail` naming the first
+missing code, the mutation code first and then each view in code order:
+
+```json
+{
+  "type": "urn:finaxis:problem:forbidden",
+  "title": "Forbidden",
+  "status": 403,
+  "detail": "Missing permission: branch.view.",
+  "code": "forbidden",
+  "request_id": "..."
+}
+```
+
+Nothing is changed: no state, transition log, audit success row, outbox row or idempotency row is
+written, so a retry re-evaluates. A direct `DENY` of a view blocks the mutations that need it. The
+unnamed `403` of a `@PreAuthorize` gate (the mutation code absent from the caller's selected
+context) and a resource-level refusal that carries a resource reference stay generic. An
+idempotent replay still returns the stored response of the caller's own completed write after the
+gate only. A custom role that holds a mutation without its view gets this `403` until the view is
+added to it (see the operator report shipped with the role-composition change).
+
 Framework-level errors include `authentication_required`, `access_denied`,
 `invalid_active_tenant_context`, `rate_limit_exceeded`, `rate_limit_policy_unavailable`, and
 `rate_limiter_unavailable`. Bean Validation failures return 400 with up to 100 violations.
@@ -406,15 +443,15 @@ Base path: `/api/v1/branches`. List filters: `q`, `status`, `type`, `sort_by`, `
 | Method | Path                      | Summary                              | Permission          | Shape    |
 |--------|---------------------------|--------------------------------------|---------------------|----------|
 | GET    | `/`                       | Search branches in the active tenant | `branch.view`       | page     |
-| POST   | `/`                       | Create branch draft                  | `branch.create`     | mutation |
+| POST   | `/`                       | Create branch draft                  | `branch.create` + `branch.view` | mutation |
 | GET    | `/{branch_id}`            | Get branch                           | `branch.view`       | item     |
-| PATCH  | `/{branch_id}`            | Update branch                        | `branch.update`     | mutation |
-| POST   | `/{branch_id}/submit`     | Submit branch draft                  | `branch.create`     | mutation |
-| POST   | `/{branch_id}/activate`   | Approve and activate branch          | `branch.approve`    | mutation |
-| POST   | `/{branch_id}/return`     | Return or withdraw a pending branch  | `branch.approve` (checker) or `branch.create` (maker) | mutation |
-| POST   | `/{branch_id}/suspend`    | Suspend branch                       | `branch.suspend`    | mutation |
-| POST   | `/{branch_id}/reactivate` | Reactivate branch                    | `branch.reactivate` | mutation |
-| POST   | `/{branch_id}/close`      | Close branch                         | `branch.close`      | mutation |
+| PATCH  | `/{branch_id}`            | Update branch                        | `branch.update` + `branch.view` | mutation |
+| POST   | `/{branch_id}/submit`     | Submit branch draft                  | `branch.create` + `branch.view` | mutation |
+| POST   | `/{branch_id}/activate`   | Approve and activate branch          | `branch.approve` + `branch.view` | mutation |
+| POST   | `/{branch_id}/return`     | Return or withdraw a pending branch  | `branch.approve` (checker) or `branch.create` (maker) + `branch.view` | mutation |
+| POST   | `/{branch_id}/suspend`    | Suspend branch                       | `branch.suspend` + `branch.view` | mutation |
+| POST   | `/{branch_id}/reactivate` | Reactivate branch                    | `branch.reactivate` + `branch.view` | mutation |
+| POST   | `/{branch_id}/close`      | Close branch                         | `branch.close` + `branch.view` | mutation |
 
 #### Reading branches (target-aware, ADR 0030)
 
@@ -619,8 +656,9 @@ a flag in the request:
 - **Events.** None. The transition publishes an internal event only; consumers of
   `finaxis.lifecycle.branch.approval-requested` see a repeat per resubmission with no event for the
   return in between (see [transactional outbox](../architecture/transactional-outbox-amqp.md)).
-- **Response and idempotency.** The detail is read back without `branch.view`, so a role holding
-  only `branch.approve` or only `branch.create` gets the result of its own return. The route
+- **Response and idempotency.** The caller needs `branch.view` at the target branch in addition to
+  `branch.approve` or `branch.create` (the named 403 above); a role holding only the mutation code
+  is refused before anything changes. The route
   accepts an optional `Idempotency-Key`; a replay returns the stored response and returns the
   branch once.
 
@@ -634,18 +672,18 @@ Base path: `/api/v1/platform/tenants`. List filters: `q`, `status`, `country`,
 
 | Method | Path                           | Summary             | Permission                   | Shape         |
 |--------|--------------------------------|---------------------|------------------------------|---------------|
-| POST   | `/`                            | Create tenant draft | `tenant.create`              | mutation      |
+| POST   | `/`                            | Create tenant draft | `tenant.create` + `tenant.view` | mutation      |
 | GET    | `/`                            | Search tenants      | `tenant.view`                | page          |
 | GET    | `/{tenant_id}`                 | Get tenant          | `tenant.view`                | item          |
-| PATCH  | `/{tenant_id}`                 | Amend tenant draft  | `tenant.update_draft`        | mutation      |
-| POST   | `/{tenant_id}/submit`          | Submit tenant draft | `tenant.submit_for_approval` | mutation      |
-| POST   | `/{tenant_id}/approve`         | Approve tenant      | `tenant.approve`             | mutation, 202 |
-| POST   | `/{tenant_id}/reject`          | Reject tenant draft | `tenant.reject`              | mutation      |
-| POST   | `/{tenant_id}/return`          | Return to draft     | `tenant.reject`              | mutation      |
-| POST   | `/{tenant_id}/suspend`         | Suspend tenant      | `tenant.suspend`             | mutation      |
-| POST   | `/{tenant_id}/reactivate`      | Reactivate tenant   | `tenant.reactivate`          | mutation      |
-| POST   | `/{tenant_id}/deprovision`     | Deprovision tenant  | `tenant.deprovision`         | mutation      |
-| POST   | `/{tenant_id}/bootstrap/retry` | Retry bootstrap     | `tenant.bootstrap_retry`     | mutation      |
+| PATCH  | `/{tenant_id}`                 | Amend tenant draft  | `tenant.update_draft` + `tenant.view` | mutation      |
+| POST   | `/{tenant_id}/submit`          | Submit tenant draft | `tenant.submit_for_approval` + `tenant.view` | mutation      |
+| POST   | `/{tenant_id}/approve`         | Approve tenant      | `tenant.approve` + `tenant.view` | mutation, 202 |
+| POST   | `/{tenant_id}/reject`          | Reject tenant draft | `tenant.reject` + `tenant.view` | mutation      |
+| POST   | `/{tenant_id}/return`          | Return to draft     | `tenant.reject` + `tenant.view` | mutation      |
+| POST   | `/{tenant_id}/suspend`         | Suspend tenant      | `tenant.suspend` + `tenant.view` | mutation      |
+| POST   | `/{tenant_id}/reactivate`      | Reactivate tenant   | `tenant.reactivate` + `tenant.view` | mutation      |
+| POST   | `/{tenant_id}/deprovision`     | Deprovision tenant  | `tenant.deprovision` + `tenant.view` | mutation      |
+| POST   | `/{tenant_id}/bootstrap/retry` | Retry bootstrap     | `tenant.bootstrap_retry` + `tenant.view` | mutation      |
 
 Every `{tenant_id}` mutation above (`PATCH`, `submit`, `approve`, `reject`, `return`, `suspend`,
 `reactivate`, `deprovision`, `bootstrap/retry`) answers
@@ -803,8 +841,9 @@ is no `422`. Validation runs when the body is bound, before any permission or ex
   for the return in between (see
   [transactional outbox](../architecture/transactional-outbox-amqp.md)).
 - **Audit.** The FSM writes `organisation.return_for_changes` with the reason.
-- **Response and idempotency.** The detail is read back without `tenant.view`, so a role holding
-  only `tenant.reject` gets the result of its own return. The route accepts an optional
+- **Response and idempotency.** The caller needs `tenant.view` in the platform organisation in
+  addition to `tenant.reject` (the named 403 above); a role holding only `tenant.reject` is refused
+  before anything changes. The route accepts an optional
   `Idempotency-Key`; a replay returns the stored response and returns the tenant once.
 
 ### Platform Tenant Branches
@@ -815,11 +854,11 @@ Base path: `/api/v1/platform/tenants/{tenant_id}/branches`. List filters: `q`, `
 | Method | Path                    | Summary                                            | Permission        | Shape    |
 |--------|-------------------------|----------------------------------------------------|-------------------|----------|
 | GET    | `/`                     | Search branches for a platform-selected tenant     | `branch.view`     | page     |
-| POST   | `/`                     | Create branch draft for a platform-selected tenant | `branch.create`   | mutation |
+| POST   | `/`                     | Create branch draft for a platform-selected tenant | `branch.create` + `branch.view` | mutation |
 | GET    | `/{branch_id}`          | Get tenant branch                                  | `branch.view`     | item     |
-| POST   | `/{branch_id}/submit`   | Submit a tenant branch draft for approval          | `branch.create`   | mutation |
-| POST   | `/{branch_id}/activate` | Activate a tenant branch as platform checker       | `branch.approve`  | mutation |
-| POST   | `/{branch_id}/return`   | Return a pending tenant branch to draft, or withdraw it | `branch.approve` (checker) or `branch.create` (maker) | mutation |
+| POST   | `/{branch_id}/submit`   | Submit a tenant branch draft for approval          | `branch.create` + `branch.view` | mutation |
+| POST   | `/{branch_id}/activate` | Activate a tenant branch as platform checker       | `branch.approve` + `branch.view` | mutation |
+| POST   | `/{branch_id}/return`   | Return a pending tenant branch to draft, or withdraw it | `branch.approve` (checker) or `branch.create` (maker) + `branch.view` | mutation |
 
 The create request and branch responses use the same fields as tenant-facing branches. Every
 permission above is checked in the **platform** organisation only: no tenant membership or tenant
@@ -827,9 +866,10 @@ role is needed, and a draft can be created while the tenant is `PROVISIONING` or
 (404 for no such tenant, 409 for any other state). Submit and activate return the branch and
 require the path tenant to own `branch_id` (404 otherwise; the platform organisation is never a
 valid `tenant_id`). The optional body of submit and activate is validated (`reason` at most 500
-characters, otherwise 400 `validation_failed`). The returned branch needs no `branch.view`: the
-route works with its mutation permission alone. Submit needs an `ACTIVE` or `PROVISIONING` tenant (409 otherwise); activation
-needs an `ACTIVE` tenant and a platform actor that neither created, submitted nor amended the
+characters, otherwise 400 `validation_failed`). The caller needs the mutation permission **and
+`branch.view`**, both in the platform organisation (the named 403 above). Submit needs an `ACTIVE`
+or `PROVISIONING` tenant (409 otherwise); activation needs an `ACTIVE` tenant and a platform actor
+that neither created, submitted nor amended the
 branch (403; `lifecycle.approver_is_branch_modifier` for an amender).
 Submit and activate are also bounded: **409 `lifecycle.platform_checker_closed`** once the tenant
 has an `ACTIVE` branch that the system actor did not create (the bootstrap head office does not
@@ -855,13 +895,14 @@ Base path: `/api/v1/platform/tenants/{tenant_id}/memberships`.
 
 | Method | Path                        | Summary                                         | Permission     | Shape    |
 |--------|-----------------------------|-------------------------------------------------|----------------|----------|
-| POST   | `/{membership_id}/activate` | Approve a tenant membership as platform checker | `user.approve` | mutation |
+| POST   | `/{membership_id}/activate` | Approve a tenant membership as platform checker | `user.approve` + `membership.view` | mutation |
 
 Takes an optional decision remark body (see [Decision remarks](#decision-remarks)) and returns the
 membership as `GET /api/v1/tenant/memberships/{membership_id}` does: **200** when the membership became `ACTIVE`, **202** while Keycloak provisioning is queued.
-The permission is checked in the platform organisation, and the returned membership needs no
-`membership.view`: the route works with `user.approve` alone. `404` when the membership is not in the
-path tenant, `409` when the tenant is not `ACTIVE`, the membership is not pending approval, the
+The permission is checked in the platform organisation, together with `membership.view` in the
+same organisation (the named 403 above): `user.approve` alone is refused. `404` when the
+membership is not in the path tenant, `409` when the tenant is not `ACTIVE`, the membership is not
+pending approval, the
 user has no active branch or role assignment yet or the user account is not in a state that allows
 provisioning or activation (the same prerequisites as the tenant route, see
 [Memberships](#memberships)), or the tenant already has an `ACTIVE` membership the system actor did
@@ -899,9 +940,9 @@ Base path: `/api/v1/platform/users`.
 
 | Method | Path                    | Summary                        | Permission        | Shape    |
 |--------|-------------------------|--------------------------------|-------------------|----------|
-| POST   | `/{user_id}/suspend`    | Suspend global user account    | `user.suspend`    | mutation |
-| POST   | `/{user_id}/reactivate` | Reactivate global user account | `user.activate`   | mutation |
-| POST   | `/{user_id}/deactivate` | Deactivate global user account | `user.deactivate` | mutation |
+| POST   | `/{user_id}/suspend`    | Suspend global user account    | `user.suspend` + `user.view` | mutation |
+| POST   | `/{user_id}/reactivate` | Reactivate global user account | `user.activate` + `user.view` | mutation |
+| POST   | `/{user_id}/deactivate` | Deactivate global user account | `user.deactivate` + `user.view` | mutation |
 
 Lifecycle request and response:
 
@@ -947,7 +988,7 @@ Base path: `/api/v1/tenant/users`. List filters: `q`, `user_status`, `membership
 | Method | Path         | Summary                           | Permission    | Shape    |
 |--------|--------------|-----------------------------------|---------------|----------|
 | GET    | `/`          | Search users in the active tenant | `user.view`   | page     |
-| POST   | `/`          | Invite tenant user                | `user.invite` | mutation |
+| POST   | `/`          | Invite tenant user                | `user.invite` + `membership.view` + `user.view` | mutation |
 | GET    | `/{user_id}` | Get tenant user                   | `user.view`   | item     |
 
 Invite request and response:
@@ -1022,10 +1063,10 @@ Base path: `/api/v1/tenant/memberships`. List filters: `q`, `membership_status`,
 |--------|-------------------------------|---------------------------------|-------------------------|----------|
 | GET    | `/`                           | Search tenant memberships       | `membership.view`       | page     |
 | GET    | `/{membership_id}`            | Get membership                  | `membership.view`       | item     |
-| POST   | `/{membership_id}/activate`   | Approve and activate membership | `user.approve`          | mutation |
-| POST   | `/{membership_id}/suspend`    | Suspend membership              | `membership.suspend`    | mutation |
-| POST   | `/{membership_id}/reactivate` | Reactivate                      | `membership.reactivate` | mutation |
-| POST   | `/{membership_id}/revoke`     | Revoke membership               | `membership.revoke`     | mutation |
+| POST   | `/{membership_id}/activate`   | Approve and activate membership | `user.approve` + `membership.view` | mutation |
+| POST   | `/{membership_id}/suspend`    | Suspend membership              | `membership.suspend` + `membership.view` | mutation |
+| POST   | `/{membership_id}/reactivate` | Reactivate                      | `membership.reactivate` + `membership.view` | mutation |
+| POST   | `/{membership_id}/revoke`     | Revoke membership               | `membership.revoke` + `membership.view` | mutation |
 
 Membership response and revoke request:
 
@@ -1072,11 +1113,11 @@ original response.
 Three approvals accept an **optional** JSON body carrying a remark. The body itself is optional and
 so is the field, so a call without one behaves exactly as before:
 
-| Route                                                                        | Permission       |
-|------------------------------------------------------------------------------|------------------|
-| `POST /api/v1/tenant/memberships/{membership_id}/activate`                   | `user.approve`   |
-| `POST /api/v1/platform/tenants/{tenant_id}/memberships/{membership_id}/activate` | `user.approve` |
-| `POST /api/v1/platform/tenants/{tenant_id}/approve`                          | `tenant.approve` |
+| Route | Permission |
+|-------|------------|
+| `POST /api/v1/tenant/memberships/{membership_id}/activate` | `user.approve` + `membership.view` |
+| `POST /api/v1/platform/tenants/{tenant_id}/memberships/{membership_id}/activate` | `user.approve` + `membership.view` |
+| `POST /api/v1/platform/tenants/{tenant_id}/approve` | `tenant.approve` + `tenant.view` |
 
 ```json
 {
@@ -1158,8 +1199,8 @@ Base path: `/api/v1/tenant/branch-assignments`. List filters: `branch_id`,
 |--------|--------------------|---------------------------|--------------------------|----------|
 | GET    | `/`                | Search branch assignments | `branch_assignment.view` | page     |
 | GET    | `/{assignment_id}` | Get branch assignment     | `branch_assignment.view` | item     |
-| POST   | `/`                | Assign user to branch     | `user.assign_branch`     | mutation |
-| DELETE | `/{assignment_id}` | Revoke branch assignment  | `user.revoke_branch`     | mutation |
+| POST   | `/`                | Assign user to branch     | `user.assign_branch` + `branch_assignment.view` | mutation |
+| DELETE | `/{assignment_id}` | Revoke branch assignment  | `user.revoke_branch` + `branch_assignment.view` | mutation |
 
 Reads are target-aware (ADR 0030, decision 5) and carry no coarse `@PreAuthorize` gate: the
 check is a tenant-wide `branch_assignment.view` **or** that permission on the assignment's branch,
@@ -1202,20 +1243,21 @@ Base path: `/api/v1/tenant/roles`. List filters: `q`, `status`, `system_role`,
 Endpoints:
 
 - `GET /`: search roles. Permission `role.view`. Shape: page.
-- `POST /`: create role. Permission `role.create`. Shape: mutation.
+- `POST /`: create role. Permission `role.create` + `role.view`. Shape: mutation.
 - `GET /{role_id}`: get role. Permission `role.view`. Shape: item.
-- `PATCH /{role_id}`: update role metadata. Permission `role.update`. Shape: mutation.
-- `POST /{role_id}/activate`: activate role. Permission `role.activate`. Shape: mutation.
-- `POST /{role_id}/deactivate`: deactivate role. Permission `role.deactivate`.
+- `PATCH /{role_id}`: update role metadata. Permission `role.update` + `role.view`. Shape: mutation.
+- `POST /{role_id}/activate`: activate role. Permission `role.activate` + `role.view`.
+  Shape: mutation.
+- `POST /{role_id}/deactivate`: deactivate role. Permission `role.deactivate` + `role.view`.
   Shape: mutation.
 - `GET /{role_id}/permissions`: list role permissions. Permission `role.view`.
   Shape: page.
-- `POST /{role_id}/permissions`: grant role permission. Permission `role.assign_permission`.
-  Shape: mutation. Refused with `400 validation_failed` when it grants a mutation permission
-  whose required views the role does not hold (see "Role composition" below).
+- `POST /{role_id}/permissions`: grant role permission. Permission `role.assign_permission` +
+  `role.view`. Shape: mutation. Refused with `400 validation_failed` when it grants a mutation
+  permission whose required views the role does not hold (see "Role composition" below).
 - `DELETE /{role_id}/permissions/{role_permission_id}`: remove role permission grant.
-  Permission `role.remove_permission`. Shape: mutation. Refused with `400 validation_failed` when
-  it removes a view that a held mutation permission needs.
+  Permission `role.remove_permission` + `role.view`. Shape: mutation. Refused with
+  `400 validation_failed` when it removes a view that a held mutation permission needs.
 
 Create role and assign-permission examples:
 
@@ -1301,8 +1343,8 @@ Base path: `/api/v1/tenant/role-assignments`. List filters: `user_id`, `role_id`
 |--------|--------------------|-------------------------|------------------------|----------|
 | GET    | `/`                | Search role assignments | `role_assignment.view` | page     |
 | GET    | `/{assignment_id}` | Get role assignment     | `role_assignment.view` | item     |
-| POST   | `/`                | Assign role to user     | `user.assign_role`     | mutation |
-| DELETE | `/{assignment_id}` | Revoke role assignment  | `user.revoke_role`     | mutation |
+| POST   | `/`                | Assign role to user     | `user.assign_role` + `role_assignment.view` | mutation |
+| DELETE | `/{assignment_id}` | Revoke role assignment  | `user.revoke_role` + `role_assignment.view` | mutation |
 
 Reads are target-aware (ADR 0030, decision 5) and carry no coarse `@PreAuthorize` gate. Rows with
 `scope_type = BRANCH` need a tenant-wide `role_assignment.view` **or** that permission on the
@@ -1499,10 +1541,10 @@ Base path: `/api/v1/tenant/business-date`.
 |--------|-----------------|----------------------------|-------------------------|----------|
 | GET    | `/`             | Get current business date  | `business_date.view`    | item     |
 | GET    | `/history`      | List business date history | `business_date.view`    | page     |
-| POST   | `/advance`      | Advance business date      | `business_date.advance` | mutation |
-| POST   | `/cob/start`    | Start close of business    | `cob.start`             | mutation |
-| POST   | `/cob/complete` | Complete close of business | `cob.complete`          | mutation |
-| POST   | `/reopen`       | Reopen business date       | `business_date.reopen`  | mutation |
+| POST   | `/advance`      | Advance business date      | `business_date.advance` + `business_date.view` | mutation |
+| POST   | `/cob/start`    | Start close of business    | `cob.start` + `business_date.view` | mutation |
+| POST   | `/cob/complete` | Complete close of business | `cob.complete` + `business_date.view` | mutation |
+| POST   | `/reopen`       | Reopen business date       | `business_date.reopen` + `business_date.view` | mutation |
 
 Every mutation on this base path takes a row lock that postings in flight for the tenant may be
 holding, so each can return `409` with `lifecycle.business_date_lock_timeout` when it cannot acquire
@@ -1537,6 +1579,9 @@ Base path: `/api/v1/tenant/settings`. List filters: `page`, `size`.
 | GET    | `/{key}` | Get tenant setting              | per-key service authorization | item     |
 | PUT    | `/{key}` | Create or update tenant setting | per-key service authorization | mutation |
 | DELETE | `/{key}` | Deactivate tenant setting       | per-key service authorization | mutation |
+
+A write to a tenant setting requires `settings.update` and its view `settings.view`; the
+platform-only setting code `tenant_setting.manage_platform` is a context code with no view.
 
 Setting update request and response:
 

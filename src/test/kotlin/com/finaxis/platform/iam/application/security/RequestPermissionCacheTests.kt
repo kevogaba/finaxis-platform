@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.application.security
 
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.iam.FixedViewRequirements
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
 import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
@@ -54,6 +55,7 @@ class RequestPermissionCacheTests {
                 queries,
                 ConcurrentMapCacheManager(EffectivePermissionResolver.CACHE_NAME),
             ),
+            FixedViewRequirements(),
         )
 }
 

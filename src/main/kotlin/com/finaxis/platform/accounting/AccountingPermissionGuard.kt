@@ -10,6 +10,11 @@ import java.util.UUID
  * [AccountingBusinessDateLookup], and the reverse edge would be a module cycle. Mirrors the
  * existing inversion where lifecycle declares its permission port and identity supplies the
  * adapter.
+ *
+ * As on the lifecycle port, every check also requires the view permissions the catalogue pairs
+ * with a mutation code, at the same scope (ADR 0030 decision 4), and a refusal is a
+ * [com.finaxis.platform.common.application.MissingPermissionException] naming the first missing
+ * code. A caller names only the mutation code.
  */
 interface AccountingPermissionGuard {
     /**

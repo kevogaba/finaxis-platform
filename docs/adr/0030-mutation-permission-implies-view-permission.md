@@ -463,6 +463,19 @@ the documents the supersessions below name (`authorization-model.md`, `foundatio
   fixture adaptation including the accounting fixtures; named-403 tests; the route tables listing
   both codes. After this, no route can mutate and then roll back on a read-back. Sits after the
   in-flight platform-organisation guard and branch-approval work it touches.
+
+  *Status: implemented by this step's change.* `AuthorizationService.requirePermissionWithViews`
+  (tenant, target-branch and break-glass variants) is called by the lifecycle and accounting guard
+  adapters and reads the pairing through the `PermissionViewRequirementQueries` port, once per
+  request through `RequestPermissionCache`. `MissingPermissionException` (a
+  `ForbiddenOperationException`) names the first missing code, and every refusal the adapters make
+  names its code. The OpenAPI description of each mutation route lists both codes (generated from
+  the catalogue by `PermissionRequirementOpenApiConfiguration` in `iam.config`; the
+  tenant-settings routes state their per-key rule in their own description). The fixtures gained
+  the views through `ViewCoupledGrants`, and `MutationRequiresViewIntegrationTests` and
+  `AccountingMutationViewCouplingIntegrationTests` carry the named-403 and nothing-written proofs.
+  The permission-free read-backs still exist until 6a to 6e; they can no longer be reached by a
+  caller the pre-check refused.
 - **6a.** `refactor(lifecycle): read back branches through the gated query`
   Branch `PATCH`, return, and the platform branch routes.
 - **6b.** `refactor(lifecycle): authorise memberships in the service and read them back gated`

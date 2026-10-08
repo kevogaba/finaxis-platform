@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.iam.FixedViewRequirements
 import com.finaxis.platform.iam.adapter.inbound.security.SessionActiveOrganisationContextResolver
 import com.finaxis.platform.iam.application.authorization.AuthorizationService
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
@@ -171,8 +172,9 @@ class WebAdapterUnitTests {
                 ) = false
             }
         val resolver = EffectivePermissionResolver(queries, ConcurrentMapCacheManager())
-        val cache = RequestPermissionCache(resolver)
-        val authorizationService = AuthorizationService(lookup, cache, queries)
+        val cache = RequestPermissionCache(resolver, FixedViewRequirements())
+        val authorizationService =
+            AuthorizationService(lookup, cache, queries, FixedViewRequirements())
         return AuthSelectionService(lookup, authorizationService)
     }
 

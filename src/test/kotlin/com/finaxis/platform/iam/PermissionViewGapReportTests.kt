@@ -128,12 +128,12 @@ class PermissionViewGapReportTests(
     fun `platform roles that no API lists are covered by both sections`() {
         val actor = uuidV7()
         seedUser(actor)
-        fixture.grantPlatformPermissionsOnly(actor, "tenant.approve")
+        fixture.grantPlatformPermissionsExactly(actor, "tenant.approve")
 
         val roles =
             roleReport().filter {
                 it["organisation_code"] == PLATFORM_CODE &&
-                    (it["role_code"] as String).startsWith("PLATFORM_NARROW_")
+                    (it["role_code"] as String).startsWith("PLATFORM_EXACT_")
             }
         val memberships =
             membershipReport().filter { it["user_id"] == actor }

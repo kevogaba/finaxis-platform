@@ -306,7 +306,7 @@ class BranchReturnIntegrationTests
             submit(branchId, makerToken())
             // The maker's account now holds branch.approve and nothing else.
             val formerMaker = seedUser("former-maker")
-            fixture.grantTenantPermissionsOnly(organisationId, formerMaker, "branch.approve")
+            fixture.grantTenantPermissionsWithViews(organisationId, formerMaker, "branch.approve")
             dsl
                 .update(BRANCH)
                 .set(BRANCH.CREATED_BY, formerMaker)
@@ -325,22 +325,22 @@ class BranchReturnIntegrationTests
         }
 
         @Test
-        fun `a role holding only the mutation permission returns or withdraws and reads it back`() {
+        fun `a role holding the mutation and its view returns or withdraws and reads it back`() {
             val checkerOnly = seedUser("checker-only")
-            fixture.grantTenantPermissionsOnly(organisationId, checkerOnly, "branch.approve")
+            fixture.grantTenantPermissionsWithViews(organisationId, checkerOnly, "branch.approve")
             val makerOnly = seedUser("maker-only")
-            fixture.grantTenantPermissionsOnly(organisationId, makerOnly, "branch.create")
+            fixture.grantTenantPermissionsWithViews(organisationId, makerOnly, "branch.create")
             val branchScoped = seedUser("branch-scoped")
             val first = createBranch()
-            fixture.grantBranchPermissionsOnly(
+            fixture.grantBranchPermissionsWithViews(
                 organisationId,
                 first,
                 branchScoped,
                 "branch.approve",
             )
 
-            // None of them holds branch.view anywhere: the response must not need it, or the
-            // return would be rolled back with a 403 after the mutation.
+            // Each holds branch.view with its mutation code (ADR 0030), at the scope it is
+            // checked at: tenant-wide, or at the branch for the branch-scoped role.
             submit(first, makerToken())
             returnTenant(first, tenantToken(branchScoped, "branch.approve", headOfficeId()))
                 .andExpect {
@@ -367,6 +367,32 @@ class BranchReturnIntegrationTests
                 jsonPath("$.status") { value("DRAFT") }
             }
             assertEquals("DRAFT", branchColumn(third, "status"))
+        }
+
+        @Test
+        fun `a return by a role holding the mutation permission without its view is refused`() {
+            val branchId = createBranch()
+            submit(branchId, makerToken())
+            val noView = seedUser("approve-no-view")
+            fixture.grantTenantPermissionsExactly(organisationId, noView, "branch.approve")
+            val platformNoView = seedUser("p-approve-no-view")
+            fixture.grantPlatformPermissionsExactly(platformNoView, "branch.approve")
+
+            returnTenant(branchId, tenantToken(noView, "branch.approve")).andExpect {
+                status { isForbidden() }
+                jsonPath("$.code") { value("forbidden") }
+                jsonPath("$.detail") { value("Missing permission: branch.view.") }
+            }
+            returnPlatformAs(branchId, platformNoView, setOf("branch.approve")).andExpect {
+                status { isForbidden() }
+                jsonPath("$.detail") { value("Missing permission: branch.view.") }
+            }
+
+            // Refused before anything changed: no state change, transition row or audit row.
+            assertEquals("PENDING_APPROVAL", branchColumn(branchId, "status"))
+            assertTrue(transitionRows(branchId, "RETURN_FOR_CHANGES").isEmpty())
+            assertTrue(auditRows(branchId, "branch.return_for_changes").isEmpty())
+            assertTrue(auditRows(branchId, AS_CHECKER).isEmpty())
         }
 
         @Test
@@ -415,7 +441,7 @@ class BranchReturnIntegrationTests
             val otherOrganisation = fixture.createActiveOrganisation("branch-oth", otherOwner)
             val foreign = createBranchIn(otherOrganisation, otherOwner)
             val reader = seedUser("reader")
-            fixture.grantTenantPermissionsOnly(organisationId, reader, "branch.view")
+            fixture.grantTenantPermissionsWithViews(organisationId, reader, "branch.view")
 
             // Holds the coarse authority on the token but not the grant: 403 for a real branch,
             // a branch of another tenant and a branch that does not exist alike.
@@ -595,9 +621,9 @@ class BranchReturnIntegrationTests
             // The coarse authority is forged to pass the controller gate, so the refusal below is
             // the application layer's own database check, which honours ACTIVE permissions only.
             val tenantLegacy = seedUser("legacy-checker")
-            fixture.grantTenantPermissionsOnly(organisationId, tenantLegacy, "branch.activate")
+            fixture.grantTenantPermissionsWithViews(organisationId, tenantLegacy, "branch.activate")
             val platformLegacy = seedUser("p-legacy-checker")
-            fixture.grantPlatformPermissionsOnly(platformLegacy, "branch.activate")
+            fixture.grantPlatformPermissionsWithViews(platformLegacy, "branch.activate")
             val pending = createBranch()
             submit(pending, makerToken())
 
@@ -618,15 +644,15 @@ class BranchReturnIntegrationTests
         }
 
         @Test
-        fun `a platform role holding only the mutation permission returns and withdraws`() {
+        fun `a platform role holding the mutation permission and its view returns and withdraws`() {
             val onlyApprove = seedUser("p-approve")
-            fixture.grantPlatformPermissionsOnly(onlyApprove, "branch.approve")
+            fixture.grantPlatformPermissionsWithViews(onlyApprove, "branch.approve")
             val onlyCreate = seedUser("p-create")
-            fixture.grantPlatformPermissionsOnly(onlyCreate, "branch.create")
+            fixture.grantPlatformPermissionsWithViews(onlyCreate, "branch.create")
             val pending = createBranch()
             submit(pending, makerToken())
 
-            // Neither holds branch.view: the response must not need it.
+            // Each holds branch.view in the platform organisation along with its mutation code.
             returnPlatformAs(pending, onlyApprove, setOf("branch.approve")).andExpect {
                 status { isOk() }
                 jsonPath("$.status") { value("DRAFT") }

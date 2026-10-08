@@ -52,7 +52,8 @@ During organisation deprovisioning, draft and pending branches can also be moved
 unattributed bulk update.
 
 A platform administrator can create a tenant's branch draft
-(`POST /platform/tenants/{tenant_id}/branches`) with the platform permission alone. It can also
+(`POST /platform/tenants/{tenant_id}/branches`) with `branch.create` and its view `branch.view`,
+both in the platform organisation (a mutation implies its view, ADR 0030). It can also
 submit and activate a tenant's branch as the audited checker, but only **while the tenant has no
 ACTIVE branch other than the one the bootstrap created** (409 `lifecycle.platform_checker_closed`
 otherwise); the creator, and a platform administrator that submitted the branch, still cannot

@@ -1,7 +1,9 @@
 package com.finaxis.platform.iam.application.authorization
 
+import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
+import com.finaxis.platform.iam.FixedViewRequirements
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
@@ -180,7 +182,7 @@ class AuthorizationServiceTests {
                 permissions = mapOf(PermissionKey(membershipId, null) to setOf("branch.read")),
             )
 
-        assertThrows<AccessDeniedException> {
+        assertThrows<MissingPermissionException> {
             service.requirePermission(userId, organisationId, "branch.create")
         }
     }
@@ -223,7 +225,7 @@ class AuthorizationServiceTests {
     fun `break-glass authority is denied when the locking read finds no grant`() {
         val service = authorizationService(memberships = tenantMembership())
 
-        assertThrows<AccessDeniedException> {
+        assertThrows<MissingPermissionException> {
             service.requireBreakGlassPermission(userId, organisationId, BREAK_GLASS)
         }
     }
@@ -232,7 +234,7 @@ class AuthorizationServiceTests {
     fun `break-glass authority is not granted to a system actor`() {
         val service = authorizationService(memberships = tenantMembership())
 
-        assertThrows<AccessDeniedException> {
+        assertThrows<MissingPermissionException> {
             service.requireBreakGlassPermission(SystemActor.ID, organisationId, BREAK_GLASS)
         }
     }
@@ -246,7 +248,7 @@ class AuthorizationServiceTests {
                 organisationStatus = OrganisationStatus.SUSPENDED,
             )
 
-        assertThrows<AccessDeniedException> {
+        assertThrows<MissingPermissionException> {
             service.requireBreakGlassPermission(userId, organisationId, BREAK_GLASS)
         }
     }
@@ -284,8 +286,9 @@ class AuthorizationServiceTests {
             )
         return AuthorizationService(
             FakeMembershipSelectionLookup(memberships, organisationStatus),
-            RequestPermissionCache(resolver),
+            RequestPermissionCache(resolver, FixedViewRequirements()),
             queries,
+            FixedViewRequirements(),
         )
     }
 

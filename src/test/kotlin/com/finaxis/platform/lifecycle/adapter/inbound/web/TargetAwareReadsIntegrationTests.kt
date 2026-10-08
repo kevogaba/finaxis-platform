@@ -74,7 +74,7 @@ class TargetAwareReadsIntegrationTests {
             .set(USER_BRANCH_ASSIGNMENT.STATUS, "ACTIVE")
             .where(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID.eq(ORGANISATION_ID))
             .execute()
-        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.clear()
+        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.invalidate()
     }
 
     @AfterEach
@@ -108,7 +108,7 @@ class TargetAwareReadsIntegrationTests {
                 .execute()
         }
         withheldPermissionIds.clear()
-        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.clear()
+        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.invalidate()
     }
 
     @Test
@@ -370,7 +370,7 @@ class TargetAwareReadsIntegrationTests {
                     .set(MEMBERSHIP_PERMISSION.UPDATED_AT, now)
                     .execute()
             }
-        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.clear()
+        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.invalidate()
     }
 
     private fun readRoutes(): List<String> =
@@ -414,7 +414,7 @@ class TargetAwareReadsIntegrationTests {
             .where(ROLE_PERMISSION.ROLE_ID.eq(LOCAL_ADMIN_ROLE_ID))
             .and(ROLE_PERMISSION.PERMISSION_ID.`in`(permissionIds))
             .execute()
-        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.clear()
+        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.invalidate()
     }
 
     private fun branchAssignmentId(branchId: UUID): UUID =
@@ -504,7 +504,7 @@ class TargetAwareReadsIntegrationTests {
             .set(USER_ROLE_ASSIGNMENT.CREATED_AT, now)
             .set(USER_ROLE_ASSIGNMENT.UPDATED_AT, now)
             .execute()
-        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.clear()
+        cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.invalidate()
         return roleId
     }
 

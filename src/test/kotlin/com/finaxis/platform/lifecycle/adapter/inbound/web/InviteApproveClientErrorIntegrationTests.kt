@@ -102,7 +102,7 @@ class InviteApproveClientErrorIntegrationTests
         @Test
         fun `inviting an existing member under another case of the email is the same 409`() {
             val member = seedUser("member")
-            fixture.grantTenantPermissionsOnly(organisationId, member, "user.view")
+            fixture.grantTenantPermissionsWithViews(organisationId, member, "user.view")
             val before = rowCounts()
 
             invite(inviteBody(emailOf(member).uppercase(), "fresh-${uuidV7()}".take(30)))
@@ -268,7 +268,7 @@ class InviteApproveClientErrorIntegrationTests
         @Test
         fun `a caller without the invite permission gets 403 before any 422`() {
             val narrow = seedUser("narrow")
-            fixture.grantTenantPermissionsOnly(organisationId, narrow, "user.view")
+            fixture.grantTenantPermissionsWithViews(organisationId, narrow, "user.view")
             val before = rowCounts()
 
             post(
@@ -383,7 +383,7 @@ class InviteApproveClientErrorIntegrationTests
             val membership = invitedMembership()
             dsl.execute("DELETE FROM user_role_assignment WHERE user_id = ?", membership.userId)
             val narrow = seedUser("narrow")
-            fixture.grantTenantPermissionsOnly(organisationId, narrow, "user.view")
+            fixture.grantTenantPermissionsWithViews(organisationId, narrow, "user.view")
 
             approve(membership, narrow).andExpect {
                 status { isForbidden() }
@@ -419,7 +419,7 @@ class InviteApproveClientErrorIntegrationTests
 
         private fun checker(): UUID =
             seedUser("checker").also {
-                fixture.grantTenantPermissionsOnly(
+                fixture.grantTenantPermissionsWithViews(
                     organisationId,
                     it,
                     "user.approve",

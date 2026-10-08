@@ -2,6 +2,7 @@ package com.finaxis.platform.iam.application.authorization
 
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
+import com.finaxis.platform.iam.FixedViewRequirements
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
@@ -37,8 +38,10 @@ class AuthorizationServiceBranchVisibilityTests {
                         queries,
                         ConcurrentMapCacheManager(EffectivePermissionResolver.CACHE_NAME),
                     ),
+                    FixedViewRequirements(),
                 ),
                 queries,
+                FixedViewRequirements(),
             )
 
     @Test

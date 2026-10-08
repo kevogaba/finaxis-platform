@@ -6,6 +6,7 @@ import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiJsonCodec
 import com.finaxis.platform.common.web.api.ApiProblemFactory
 import com.finaxis.platform.common.web.api.ApiProblemWriter
+import com.finaxis.platform.iam.FixedViewRequirements
 import com.finaxis.platform.iam.application.authorization.AccessDeniedException
 import com.finaxis.platform.iam.application.authorization.AuthorizationService
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
@@ -101,6 +102,7 @@ class SecurityAdapterTests {
             mock(MembershipSelectionLookup::class.java),
             mock(RequestPermissionCache::class.java),
             mock(PermissionResolutionQueries::class.java),
+            FixedViewRequirements(),
         )
 
     @Test

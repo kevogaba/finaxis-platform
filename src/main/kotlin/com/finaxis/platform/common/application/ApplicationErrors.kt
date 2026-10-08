@@ -26,6 +26,16 @@ open class ForbiddenOperationException(
     safeDetail: String = "You are not permitted to perform this action.",
 ) : ApplicationException(code, safeDetail)
 
+/**
+ * Raised when a caller lacks a specific permission code (ADR 0030, decision 4). It is still a
+ * `403` with the stable `forbidden` code, but the detail names the first missing [permissionCode]
+ * ("Missing permission: branch.view."): codes are public vocabulary, so naming one adds no oracle.
+ * The mutation code is checked first, then each view code the catalogue pairs with it.
+ */
+class MissingPermissionException(
+    val permissionCode: String,
+) : ForbiddenOperationException(safeDetail = "Missing permission: $permissionCode.")
+
 /** Raised when syntactically valid input is rejected by an application rule. */
 class InvalidOperationException(
     code: String = "invalid_operation",

@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.application.security
 
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
+import com.finaxis.platform.iam.application.port.outbound.PermissionViewRequirementQueries
 import com.finaxis.platform.lifecycle.BranchVisibility
 import org.springframework.stereotype.Component
 import org.springframework.web.context.annotation.RequestScope
@@ -16,9 +17,11 @@ import java.util.UUID
 @RequestScope
 class RequestPermissionCache(
     private val resolver: EffectivePermissionResolver,
+    private val viewRequirements: PermissionViewRequirementQueries,
 ) {
     private val permissionsBySelection = mutableMapOf<PermissionSelection, Set<String>>()
     private val visibilityByView = mutableMapOf<VisibilitySelection, BranchVisibility>()
+    private var viewCodesByMutation: Map<String, List<String>>? = null
 
     /**
      * Resolves effective permission codes for [membershipId] and [branchId] once per request.
@@ -30,6 +33,19 @@ class RequestPermissionCache(
         permissionsBySelection.getOrPut(PermissionSelection(membershipId, branchId)) {
             resolver.effectivePermissions(membershipId, branchId)
         }
+
+    /**
+     * The view codes the catalogue pairs with [permissionCode] (ADR 0030), sorted, empty for a
+     * view or context code. The whole pairing table is read once per request, so the guard's
+     * mutation pre-check costs one small query however many checks the request makes.
+     */
+    fun requiredViewCodes(permissionCode: String): List<String> =
+        (
+            viewCodesByMutation
+                ?: viewRequirements.requiredViewCodesByPermission().also {
+                    viewCodesByMutation = it
+                }
+        )[permissionCode].orEmpty()
 
     /**
      * Resolves where [userId] holds [permissionCode] in [organisationId] once per request, by

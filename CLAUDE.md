@@ -300,6 +300,17 @@ outside those documents.
   `OrganisationBootstrapDefaults`. No NON-admin default bundle may hold a break-glass code
   (`fiscal_period.reopen`, `journal.post_prior_period`); the administrators do, and use stays
   audited and lock-checked. `V23` applied this to existing tenants.
+- **A mutation implies its view** (ADR 0030, decision 4): every check through the lifecycle or
+  accounting `PermissionGuard` adapter requires the mutation code **and every view code the
+  catalogue pairs with it** (`permission_view_requirement`), at the same scope (tenant, target
+  branch or the platform organisation). It is central in the adapters, so call sites name only the
+  mutation code, and a refusal is `MissingPermissionException` (403 `forbidden`, detail `Missing
+  permission: <first missing code>.`, mutation code first), raised before any existence lookup and
+  before any write (except branch-assignment revoke and role-assignment revoke, which read
+  first until the 6c change; target-aware read refusals stay unnamed). Do not
+  add the view to a mutation route's `@PreAuthorize`. A test fixture that grants one mutation code
+  adds its views through `ViewCoupledGrants`/the fixture's `...WithViews` methods; use the
+  `...Exactly` variants to prove a refusal.
 - Maker-checker: a platform-context actor holding the permission in the platform organisation may
   be the audited checker of a pending membership only while the tenant has no ACTIVE member beyond
   its bootstrap administrator, and of a pending branch only while it has no ACTIVE branch beyond

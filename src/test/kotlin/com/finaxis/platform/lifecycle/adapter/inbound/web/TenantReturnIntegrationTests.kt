@@ -204,15 +204,15 @@ class TenantReturnIntegrationTests
         }
 
         @Test
-        fun `a role holding only tenant reject returns and reads the response back`() {
+        fun `a role holding tenant reject and tenant view returns and reads the response back`() {
             val maker = admin()
             val narrow = seedUser("narrow")
-            fixture.grantPlatformPermissionsOnly(narrow, "tenant.reject")
+            fixture.grantPlatformPermissionsWithViews(narrow, "tenant.reject")
             val tenantId = draftTenant(maker, "adm-${shortId()}@tenant.test")
             submit(tenantId, admin()).andExpect { status { isOk() } }
 
-            // The role holds no tenant.view: the response must not need it, or the return would
-            // commit and still answer 403.
+            // The role holds tenant.view with tenant.reject (ADR 0030), so the read-back of the
+            // return cannot be refused.
             returnTenant(tenantId, narrow, setOf("tenant.reject")).andExpect {
                 status { isOk() }
                 jsonPath("$.id") { value(tenantId.toString()) }
@@ -223,10 +223,29 @@ class TenantReturnIntegrationTests
         }
 
         @Test
+        fun `a role holding tenant reject without tenant view is refused and changes nothing`() {
+            val maker = admin()
+            val narrow = seedUser("narrow-no-view")
+            fixture.grantPlatformPermissionsExactly(narrow, "tenant.reject")
+            val tenantId = draftTenant(maker, "adm-${shortId()}@tenant.test")
+            submit(tenantId, admin()).andExpect { status { isOk() } }
+
+            returnTenant(tenantId, narrow, setOf("tenant.reject")).andExpect {
+                status { isForbidden() }
+                jsonPath("$.code") { value("forbidden") }
+                jsonPath("$.detail") { value("Missing permission: tenant.view.") }
+            }
+
+            assertEquals("PENDING_APPROVAL", tenantColumn(tenantId, "status"))
+            assertTrue(transitionRows(tenantId, "RETURN_FOR_CHANGES").isEmpty())
+            assertTrue(auditRows(tenantId, "organisation.return_for_changes").isEmpty())
+        }
+
+        @Test
         fun `a missing permission is 403 before any existence signal`() {
             val maker = admin()
             val approverOnly = seedUser("approver-only")
-            fixture.grantPlatformPermissionsOnly(approverOnly, "tenant.approve", "tenant.view")
+            fixture.grantPlatformPermissionsWithViews(approverOnly, "tenant.approve", "tenant.view")
             val tenantId = draftTenant(maker, "adm-${shortId()}@tenant.test")
             submit(tenantId, admin()).andExpect { status { isOk() } }
 
