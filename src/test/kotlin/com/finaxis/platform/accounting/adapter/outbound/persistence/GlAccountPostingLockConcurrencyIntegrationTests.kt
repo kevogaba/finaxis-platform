@@ -56,11 +56,11 @@ import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.dao.ConcurrencyFailureException
-import org.springframework.dao.DeadlockLoserDataAccessException
 import org.springframework.test.context.TestConstructor
 import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.support.TransactionTemplate
 import java.math.BigDecimal
+import java.sql.SQLException
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.UUID
@@ -70,6 +70,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -439,8 +440,14 @@ class GlAccountPostingLockConcurrencyIntegrationTests(
 
         outcomes.forEach { outcome ->
             val failure = outcome.exceptionOrNull()
-            assertFalse(
-                failure is DeadlockLoserDataAccessException,
+            // Spring translates 40P01 into a class it has deprecated, so the deadlock is named by
+            // the SQLSTATE it carries rather than by a type that is going away.
+            assertNotEquals(
+                DEADLOCK_DETECTED,
+                generateSequence(failure) { it.cause }
+                    .filterIsInstance<SQLException>()
+                    .firstOrNull()
+                    ?.sqlState,
                 "PostgreSQL raised deadlock_detected, which is the one outcome the ascending-id " +
                     "lock order exists to make impossible - and the one SERIALIZABLE does not " +
                     "excuse: $failure",
@@ -757,6 +764,7 @@ class GlAccountPostingLockConcurrencyIntegrationTests(
         val MAKER: UUID = UUID.fromString("11111111-1111-1111-1111-111111111111")
         const val TIMEOUT_SECONDS = 20L
         const val DEADLOCK_TIMEOUT_SECONDS = 20L
+        const val DEADLOCK_DETECTED = "40P01"
         const val CHECKER_USERNAME = "gl.lock.checker"
         val ONE_HUNDRED: BigDecimal = BigDecimal(100)
         val TEN: BigDecimal = BigDecimal("10.00")

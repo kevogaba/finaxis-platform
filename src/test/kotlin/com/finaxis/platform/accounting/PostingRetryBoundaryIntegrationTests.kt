@@ -11,14 +11,17 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.dao.CannotAcquireLockException
 import org.springframework.dao.ConcurrencyFailureException
-import org.springframework.dao.DeadlockLoserDataAccessException
 import org.springframework.dao.OptimisticLockingFailureException
+import org.springframework.dao.PessimisticLockingFailureException
+import org.springframework.jdbc.support.SQLErrorCodeSQLExceptionTranslator
 import org.springframework.test.context.TestConstructor
 import org.springframework.transaction.interceptor.TransactionInterceptor
 import org.springframework.transaction.support.TransactionSynchronizationManager
+import java.sql.SQLException
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -109,7 +112,7 @@ class PostingRetryBoundaryIntegrationTests(
         assertFailsWith<ConflictException> {
             boundary.execute("Deadlock probe") {
                 deadlocked.incrementAndGet()
-                throw DeadlockLoserDataAccessException(
+                throw PessimisticLockingFailureException(
                     "40P01",
                     RuntimeException("deadlock detected"),
                 )
@@ -238,7 +241,7 @@ class PostingRetryBoundaryIntegrationTests(
     }
 
     @Test
-    fun `both translations of SQLSTATE 40001 are covered by the retry type`() {
+    fun `the translations of SQLSTATE 40001 and 40P01 are covered by the retry type`() {
         // The retry names ConcurrencyFailureException rather than either concrete class, because
         // one SQLSTATE arrives as two unrelated Spring types depending on WHERE it is raised: a
         // statement-level 40001 through jOOQ's SQLErrorCodeSQLExceptionTranslator, and a
@@ -250,11 +253,15 @@ class PostingRetryBoundaryIntegrationTests(
                 .isAssignableFrom(CannotAcquireLockException::class.java),
             "the commit-time translation must be retryable",
         )
-        assertTrue(
-            ConcurrencyFailureException::class.java
-                .isAssignableFrom(DeadlockLoserDataAccessException::class.java),
-            "40P01 must be retryable",
-        )
+        // Spring has deprecated the concrete classes it picks for 40001 and 40P01, so the test
+        // asks the translator jOOQ uses what it yields rather than naming either class.
+        val translator = SQLErrorCodeSQLExceptionTranslator("PostgreSQL")
+        listOf("40001", "40P01").forEach { sqlState ->
+            assertIs<ConcurrencyFailureException>(
+                translator.translate("probe", null, SQLException("forced", sqlState)),
+                "SQLSTATE $sqlState must translate to a retryable type",
+            )
+        }
         assertTrue(
             ConcurrencyFailureException::class.java
                 .isAssignableFrom(OptimisticLockingFailureException::class.java),
