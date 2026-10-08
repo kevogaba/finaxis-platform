@@ -344,6 +344,42 @@ it, at the same scope**: the tenant, the target branch, or the PLATFORM organisa
   the gated `IamQueryService.getGlobalUser` (`user.view` in the platform organisation; it needs no
   platform membership, as these routes act on any user account), so the response status is the
   stored one.
+- **Tenant branch routes authorise in the service.** `BranchProvisioningService` checks
+  `branch.create` for create draft (tenant-wide: no branch exists yet) and, at the target branch,
+  `branch.create` for submit, `branch.approve`, `branch.suspend`, `branch.reactivate` and
+  `branch.close`, before anything else, so `BranchController` carries only the coarse
+  `@PreAuthorize` gate and the gated read-back: it no longer repeats the same check (same code,
+  same scope) before delegating.
+- **The build enforces it** (ADR 0030, decision 6). `PermissionFreeReadRuleTests` (rules in
+  `ReadGateRules`) fails the build when: a method named `get...AfterAuthorizedMutation` exists; a
+  web adapter calls or references a query-service method (a `..application.query..` or
+  `..application.reporting..` `*Service`, or a `*QueryService`) that is not marked `@GatedRead`
+  (the marker, in `common.application`, sits on `FoundationQueryService`, `IamQueryService`,
+  `LifecycleIamReadService` and its adapter, `AuditQueryService`, the accounting
+  `LedgerReportingService` and `FinancialStatementService` reads, and the business-date reads); a
+  GET handler (`@GetMapping`, or a GET `@RequestMapping`) calls any application-package service or
+  bean through an unmarked method that is not on the commented allowlist
+  (`UserProfileService.profile` and `AuthSelectionService.available*`; the per-key
+  `TenantSettingsService` reads are marked, and authorise per key before reading the stored row);
+  a marked lifecycle or IAM query method does not take the caller; a marked method does not ask a
+  `*PermissionGuard` (or a marked delegate) before its first store call, in line order; an
+  implementation of a marked method drops the marker (erased parameter types are compared; Kotlin
+  `by` delegation fails closed, since it forces explicit overrides); a web adapter depends on a
+  platform type outside the web layer that is neither a `*Service` that depends on a
+  `*PermissionGuard` or declares a marked method, nor a plain value, nor on the commented
+  allowlist of six (a store, a reader class, a `@Component`, a `@Bean`-built engine, a resolver or
+  a port of any name, in a domain package too, is refused), names `SystemActor`, builds or copies
+  a `TenantCaller`/`PlatformCaller` itself, or depends on the bootstrap service; or any class but
+  the initial-administrator bootstrap calls or references `inviteAsSystem`/`approveAsSystem`
+  (`inviteAsSystem` also requires `SystemActor.ID` as the inviter; `approveAsSystem` cannot, its
+  approver is the platform user who approved the tenant). Each rule is proved against a violating
+  fixture class. What it does not cover: the marker check is structural (a guard comes first, not
+  that it runs on every path, which the named-403 integration tests cover), a bean registered
+  without a stereotype or a `@Bean` method is not seen, and a non-GET handler's reads outside a
+  query service rely on the mutation service's own check. A new read must carry the marker and
+  authorise its caller, or no controller can call it. Finding: `UserProfileService.profile` makes
+  no application-layer check; `GET /api/v1/auth/me` is gated only by `@PreAuthorize` and serves
+  the authenticated principal's own profile.
 - **A direct `DENY` of a view** removes it from the resolved set, so the operator who holds a
   mutation and a `DENY` of its view cannot mutate either, by design.
 - **Hand SQL on the catalogue fails open.** The pairing is reference data changed only by forward
@@ -354,7 +390,7 @@ it, at the same scope**: the tenant, the target branch, or the PLATFORM organisa
   catalogue. The accepted cost of keeping the rule in data (ADR 0030).
 
 **Lock-out implications.** A custom role (or a direct override, or a platform checker role) that
-holds a mutation code without its view stops being able to mutate when this check ships. What the
+holds a mutation code without its view cannot mutate: the check refuses it. What the
 caller gets is a clean `403` naming the missing view and no change, never a mutation that rolls
 back after the fact. Repair the role by adding the view (`assign-permission`), after listing the
 violators with the operator report shipped with the role-composition change. The seeded roles
@@ -594,19 +630,20 @@ rows count, so suspending or revoking them reopens the route. A tenant draft tha
 approving platform user's own account as its initial administrator cannot be approved by that user
 (403 `lifecycle.approver_is_initial_administrator`).
 
-| Route | Permission | Scope |
+| Route | Permission and its view | Scope |
 | --- | --- | --- |
-| `POST /platform/tenants/{tenant_id}/memberships/{membership_id}/activate` | `user.approve` | PLATFORM |
-| `POST /platform/tenants/{tenant_id}/branches/{branch_id}/activate` | `branch.approve` | PLATFORM |
-| `POST /platform/tenants/{tenant_id}/branches/{branch_id}/submit` | `branch.create` | PLATFORM |
-| `POST /platform/tenants/{tenant_id}/branches/{branch_id}/return` | `branch.approve` (checker) or `branch.create` (maker) | PLATFORM |
-| `POST /platform/tenants/{tenant_id}/branches` | `branch.create` | PLATFORM |
+| `POST /platform/tenants/{tenant_id}/memberships/{membership_id}/activate` | `user.approve` + `membership.view` | PLATFORM |
+| `POST /platform/tenants/{tenant_id}/branches/{branch_id}/activate` | `branch.approve` + `branch.view` | PLATFORM |
+| `POST /platform/tenants/{tenant_id}/branches/{branch_id}/submit` | `branch.create` + `branch.view` | PLATFORM |
+| `POST /platform/tenants/{tenant_id}/branches/{branch_id}/return` | `branch.approve` (checker) or `branch.create` (maker), + `branch.view` | PLATFORM |
+| `POST /platform/tenants/{tenant_id}/branches` | `branch.create` + `branch.view` | PLATFORM |
 
-Order of checks on every one of them: platform context, then the platform permission, then the
-path tenant's ownership of the id (404 otherwise; the platform organisation is never a valid
-`{tenant_id}`, see [below](#the-platform-organisation-is-never-a-tenant)), then the tenant state
-and the maker/beneficiary rules. The tenant must be `ACTIVE`
-to approve or activate, and `ACTIVE` or `PROVISIONING` to create or submit a branch.
+Order of checks on every one of them: platform context, then the platform permission with its
+view (a custom platform checker role must hold both; `PLATFORM_SUPER_ADMIN` holds every code),
+then the path tenant's ownership of the id (404 otherwise; the platform organisation is never a
+valid `{tenant_id}`, see [below](#the-platform-organisation-is-never-a-tenant)), then the tenant
+state and the maker/beneficiary rules. The tenant must be `ACTIVE` to approve or activate, and
+`ACTIVE` or `PROVISIONING` to create or submit a branch.
 `PLATFORM_SUPPORT` holds none of the permissions.
 
 Every use is attributed to the platform actor in the tenant's audit log: the transition row, the

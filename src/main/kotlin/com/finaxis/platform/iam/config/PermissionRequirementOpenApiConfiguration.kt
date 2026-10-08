@@ -1,9 +1,16 @@
 package com.finaxis.platform.iam.config
 
 import com.finaxis.platform.iam.application.port.outbound.PermissionViewRequirementQueries
+import io.swagger.v3.oas.models.Operation
+import io.swagger.v3.oas.models.media.Content
+import io.swagger.v3.oas.models.media.MediaType
+import io.swagger.v3.oas.models.media.Schema
+import io.swagger.v3.oas.models.responses.ApiResponse
+import io.swagger.v3.oas.models.responses.ApiResponses
 import org.springdoc.core.customizers.GlobalOperationCustomizer
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.core.annotation.AnnotatedElementUtils
 import org.springframework.security.access.prepost.PreAuthorize
 
 /**
@@ -13,6 +20,11 @@ import org.springframework.security.access.prepost.PreAuthorize
  * (`permission_view_requirement`), the very rows the guard enforces. Reading them here, and not
  * typing them in each route's description, means the document cannot drift from the rule: a
  * migration that changes a pairing changes the published text with it.
+ *
+ * The text goes in two places: the operation description, and the `403` response, because the
+ * refusal is what a client reads when it lacks a code and a hand-written `403` such as "Forbidden"
+ * says nothing about the views. The gate is found on the method, or on the controller class when
+ * the method carries none, so a class-level `@PreAuthorize` is covered the same way.
  */
 @Configuration(proxyBeanMethods = false)
 class PermissionRequirementOpenApiConfiguration {
@@ -24,22 +36,69 @@ class PermissionRequirementOpenApiConfiguration {
         val pairing by lazy { requirements.requiredViewCodesByPermission() }
         return GlobalOperationCustomizer { operation, handlerMethod ->
             val expression =
-                handlerMethod.getMethodAnnotation(PreAuthorize::class.java)?.value
+                (
+                    AnnotatedElementUtils.findMergedAnnotation(
+                        handlerMethod.method,
+                        PreAuthorize::class.java,
+                    ) ?: AnnotatedElementUtils.findMergedAnnotation(
+                        handlerMethod.beanType,
+                        PreAuthorize::class.java,
+                    )
+                )?.value
             val codes =
                 expression
                     ?.let { AUTHORITY.findAll(it).map { match -> match.groupValues[1] }.toList() }
                     .orEmpty()
-            val sentences =
-                codes.mapNotNull { code ->
-                    pairing[code]?.let { views -> sentence(code, views) }
-                }
-            if (sentences.isNotEmpty()) {
+            val required = codes.filter { it in pairing }
+            if (required.isNotEmpty()) {
+                val text =
+                    if (required.size == 1) {
+                        sentence(required.single(), pairing.getValue(required.single()))
+                    } else {
+                        anyOfSentence(required.associateWith { pairing.getValue(it) })
+                    }
                 operation.description =
-                    listOfNotNull(operation.description, sentences.joinToString(" "))
-                        .joinToString("\n\n")
+                    listOfNotNull(operation.description, text).joinToString("\n\n")
+                appendToForbidden(operation, text)
             }
             operation
         }
+    }
+
+    private fun appendToForbidden(
+        operation: Operation,
+        text: String,
+    ) {
+        val responses = operation.responses ?: ApiResponses().also { operation.responses = it }
+        val forbidden =
+            responses[FORBIDDEN] ?: newForbidden().also { responses.addApiResponse(FORBIDDEN, it) }
+        forbidden.description =
+            listOfNotNull(
+                forbidden.description?.trimEnd()?.takeIf { it.isNotEmpty() }?.let {
+                    if (it.endsWith(".")) it else "$it."
+                },
+                text,
+            ).joinToString(" ")
+    }
+
+    private fun newForbidden(): ApiResponse =
+        ApiResponse().content(
+            Content().addMediaType(
+                PROBLEM_JSON,
+                MediaType().schema(Schema<Any>().`$ref`("#/components/schemas/ApiProblem")),
+            ),
+        )
+
+    /** A gate that accepts any one of several mutation codes, each with its own views. */
+    private fun anyOfSentence(pairs: Map<String, List<String>>): String {
+        val codes = pairs.keys.joinToString(" or ") { "`$it`" }
+        val detail =
+            pairs.entries.joinToString("; ") { (code, views) ->
+                "`$code` needs ${views.joinToString(" and ") { "`$it`" }}"
+            }
+        return "Requires any one of $codes, together with its view permissions at the same " +
+            "scope ($detail). A caller holding one of them without its views gets 403 " +
+            "`forbidden` naming the first missing code, and nothing is changed."
     }
 
     private fun sentence(
@@ -54,6 +113,8 @@ class PermissionRequirementOpenApiConfiguration {
     }
 
     private companion object {
+        const val FORBIDDEN = "403"
+        const val PROBLEM_JSON = "application/problem+json"
         val AUTHORITY = Regex("'([a-z_.]+)'")
     }
 }

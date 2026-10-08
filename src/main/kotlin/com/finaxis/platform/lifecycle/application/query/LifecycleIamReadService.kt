@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application.query
 
+import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.lifecycle.FoundationCaller
 import java.time.Instant
@@ -8,6 +9,7 @@ import java.util.UUID
 /** Read port used by lifecycle web adapters for IAM-owned membership and assignment projections. */
 interface LifecycleIamReadService {
     /** Searches membership summaries in an organisation. */
+    @GatedRead
     fun searchMemberships(
         organisationId: UUID,
         filter: LifecycleMembershipFilter,
@@ -15,6 +17,7 @@ interface LifecycleIamReadService {
     ): ApiPage<LifecycleMembershipSummary>
 
     /** Retrieves a membership detail in an organisation. */
+    @GatedRead
     fun getMembership(
         organisationId: UUID,
         membershipId: UUID,
@@ -25,6 +28,7 @@ interface LifecycleIamReadService {
      * Searches branch-assignment summaries in an organisation, limited to the branches the caller
      * holds `branch_assignment.view` on (ADR 0030, decision 5).
      */
+    @GatedRead
     fun searchBranchAssignments(
         organisationId: UUID,
         filter: LifecycleBranchAssignmentFilter,
@@ -35,6 +39,7 @@ interface LifecycleIamReadService {
      * Retrieves a branch-assignment detail in an organisation, authorised at the assignment's
      * branch: 404 for an unknown id to a tenant-wide holder, 403 to a branch-scoped one.
      */
+    @GatedRead
     fun getBranchAssignment(
         organisationId: UUID,
         assignmentId: UUID,

@@ -32,6 +32,9 @@ this ADR names the permission a route needs (3b "Permission", "Order of checks" 
 permission is required **plus its view code at the same scope** (`branch.view`, `tenant.view`,
 `branch_assignment.view`, `role_assignment.view`), and a missing view is a `403` that names it.
 No new permission code is introduced by this. Nothing else in this ADR changes.
+The amendment is in effect: the ADR 0030 rollout is implemented (steps 1 to 7), so each route
+named above checks its permission and the view in the service and reads back through the gated
+query.
 
 ## Context
 

@@ -235,6 +235,25 @@ class TenantSettingsServiceTests {
     }
 
     @Test
+    fun `get of an unknown key is refused as forbidden before the key is judged when denied`() {
+        activate()
+        guard.deny(organisationId, "settings.view")
+
+        assertFailsWith<SecurityException> {
+            service.get(GetTenantSettingQuery(organisationId, "no_such_key", actorId))
+        }
+    }
+
+    @Test
+    fun `get of an unknown key is invalid when the caller may read settings`() {
+        activate()
+
+        assertFailsWith<InvalidOperationException> {
+            service.get(GetTenantSettingQuery(organisationId, "no_such_key", actorId))
+        }
+    }
+
+    @Test
     fun `list requires settings-view permission`() {
         activate()
         guard.deny(organisationId, "settings.view")

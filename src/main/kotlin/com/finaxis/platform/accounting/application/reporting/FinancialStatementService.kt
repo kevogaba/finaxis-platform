@@ -11,6 +11,7 @@ import com.finaxis.platform.accounting.domain.AccountUsage
 import com.finaxis.platform.accounting.domain.AccountingPermissions
 import com.finaxis.platform.accounting.domain.FiscalPeriodKey
 import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import org.springframework.stereotype.Service
@@ -76,6 +77,7 @@ class FinancialStatementService(
      * formatting.
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    @GatedRead
     fun balanceSheet(query: BalanceSheetQuery): BalanceSheet {
         requireReportPermission(query.actorId, query.organisationId)
         // The same reason the trial balance runs at REPEATABLE_READ, and the failure is worse
@@ -128,6 +130,7 @@ class FinancialStatementService(
      * not two computations that ought to agree, but one used twice.
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    @GatedRead
     fun incomeStatement(query: IncomeStatementQuery): IncomeStatement {
         requireReportPermission(query.actorId, query.organisationId)
         // One snapshot, so the period resolution and the movement aggregate cannot straddle a

@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application.query
 
+import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.requireValidPage
@@ -26,6 +27,7 @@ class FoundationQueryService(
      * a web adapter never reaches the bootstrap store itself. It is also the read-back of every
      * platform tenant mutation, at `tenant.view` in the platform organisation.
      */
+    @GatedRead
     fun getTenant(
         id: UUID,
         caller: FoundationCaller,
@@ -47,6 +49,7 @@ class FoundationQueryService(
     }
 
     /** Searches tenant summaries, restricting results to caller's tenant scope if restricted. */
+    @GatedRead
     fun searchTenants(
         filter: TenantFilter,
         caller: FoundationCaller,
@@ -79,6 +82,7 @@ class FoundationQueryService(
      * branch-scoped holder asking for another branch or an unknown id gets 403, while a
      * tenant-wide holder gets 404 for an unknown id: there is no existence oracle.
      */
+    @GatedRead
     fun getBranch(
         organisationId: UUID,
         id: UUID,
@@ -109,6 +113,7 @@ class FoundationQueryService(
      * grant), restricted in the store query so pages and totals are exact; a caller holding it
      * nowhere gets 403.
      */
+    @GatedRead
     fun searchBranches(
         organisationId: UUID,
         filter: BranchFilter,
@@ -134,6 +139,7 @@ class FoundationQueryService(
     }
 
     /** Retrieves detailed business date history metadata by id, validating caller context. */
+    @GatedRead
     fun getBusinessDateHistory(
         organisationId: UUID,
         id: UUID,
@@ -160,6 +166,7 @@ class FoundationQueryService(
     }
 
     /** Lists business date history events for an organisation, validating caller context. */
+    @GatedRead
     fun listBusinessDateHistory(
         organisationId: UUID,
         filter: BusinessDateHistoryFilter,

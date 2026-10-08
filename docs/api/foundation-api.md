@@ -207,7 +207,8 @@ before the grant is read), and for the two revoke routes that take only an assig
 resolve the assignment's scope through an authorised combined lookup (see
 [Branch Assignments](#branch-assignments) and [Role Assignments](#role-assignments)). Tenant
 settings resolve the setting key and organisation state first; refusals of the target-aware reads
-stay unnamed. The refusal is `403 application/problem+json` with `code` `forbidden` and a
+stay unnamed. The OpenAPI `403` response of every such route lists its mutation code and its views.
+The refusal is `403 application/problem+json` with `code` `forbidden` and a
 `detail` naming the first missing code, the mutation code first and then each view in code order:
 
 ```json
@@ -1639,6 +1640,9 @@ Base path: `/api/v1/tenant/settings`. List filters: `page`, `size`.
 
 A write to a tenant setting requires `settings.update` and its view `settings.view`; the
 platform-only setting code `tenant_setting.manage_platform` is a context code with no view.
+`GET /{key}` authorises per key before it reads the stored row: an unknown key without
+`settings.view` answers 403 (it was 400 before ADR 0030 step 7), the same refusal as a known key,
+so it reveals nothing; with the permission it is still 400.
 
 Setting update request and response:
 

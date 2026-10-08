@@ -8,7 +8,6 @@ import com.finaxis.platform.common.web.api.ApiProblemFactory
 import com.finaxis.platform.common.web.api.WebJsonConfiguration
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
-import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.query.BranchDetail
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
@@ -57,9 +56,6 @@ class BranchDetailMappingControllerTests
 
         @MockitoBean
         private lateinit var foundationQueryService: FoundationQueryService
-
-        @MockitoBean
-        private lateinit var permissionGuard: PermissionGuard
 
         private val tenantId = uuidV7()
         private val branchId = uuidV7()

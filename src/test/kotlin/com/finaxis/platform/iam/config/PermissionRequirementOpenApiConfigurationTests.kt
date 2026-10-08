@@ -2,6 +2,8 @@ package com.finaxis.platform.iam.config
 
 import com.finaxis.platform.iam.FixedViewRequirements
 import io.swagger.v3.oas.models.Operation
+import io.swagger.v3.oas.models.responses.ApiResponse
+import io.swagger.v3.oas.models.responses.ApiResponses
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.springframework.security.access.prepost.PreAuthorize
@@ -48,8 +50,56 @@ class PermissionRequirementOpenApiConfigurationTests {
         val operation = customise("returnBranch", Operation())
 
         assertThat(operation.description)
-            .contains("Requires `branch.approve`")
-            .contains("Requires `branch.create`")
+            .contains("Requires any one of `branch.create` or `branch.approve`")
+            .contains("`branch.approve` needs `branch.view`")
+            .doesNotContain("Requires `branch.approve`")
+    }
+
+    @Test
+    fun `the 403 response keeps its own text and lists the code and its views`() {
+        val operation =
+            customise(
+                "invite",
+                Operation().responses(
+                    ApiResponses().addApiResponse("403", ApiResponse().description("Forbidden")),
+                ),
+            )
+
+        assertThat(operation.responses["403"]?.description)
+            .startsWith("Forbidden. Requires `user.invite`")
+            .contains("`membership.view` and `user.view`")
+            .contains("naming the first missing code")
+    }
+
+    @Test
+    fun `a mutation route with no 403 response gains one`() {
+        val operation = customise("suspend", Operation())
+
+        assertThat(operation.responses["403"]?.description)
+            .startsWith("Requires `branch.suspend` and its view permission `branch.view`")
+        assertThat(operation.responses["403"]?.content).containsKey("application/problem+json")
+    }
+
+    @Test
+    fun `an any-of gate lists every code in the 403 response`() {
+        val operation = customise("returnBranch", Operation())
+
+        assertThat(operation.responses["403"]?.description)
+            .contains("Requires any one of `branch.create` or `branch.approve`")
+            .contains("`branch.create` needs `branch.view`")
+    }
+
+    @Test
+    fun `a gate on the controller class is found when the method has none`() {
+        val operation =
+            customizer.customize(
+                Operation(),
+                HandlerMethod(ClassGated(), ClassGated::class.java.getMethod("act")),
+            )
+
+        assertThat(operation.responses["403"]?.description)
+            .contains("Requires `branch.suspend` and its view permission `branch.view`")
+        assertThat(operation.description).contains("`branch.suspend`")
     }
 
     @Test
@@ -58,6 +108,8 @@ class PermissionRequirementOpenApiConfigurationTests {
             .isEqualTo("Reads.")
         assertThat(customise("open", Operation().description("Open.")).description)
             .isEqualTo("Open.")
+        assertThat(customise("read", Operation()).responses).isNull()
+        assertThat(customise("open", Operation()).responses).isNull()
     }
 
     private fun customise(
@@ -68,6 +120,11 @@ class PermissionRequirementOpenApiConfigurationTests {
             operation,
             HandlerMethod(Routes(), Routes::class.java.getMethod(method)),
         )
+
+    @PreAuthorize("hasAuthority('branch.suspend')")
+    class ClassGated {
+        fun act(): String = toString()
+    }
 
     @Suppress("FunctionOnlyReturningConstant", "EmptyFunctionBlock")
     class Routes {

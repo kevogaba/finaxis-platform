@@ -392,6 +392,17 @@ locked, uncached read as the code itself, so a background identity is held to it
 accounting roles already hold the views (`ACCOUNTING_OPERATOR`, `ACCOUNTING_APPROVER`, the
 administrators); a custom role that holds an accounting mutation without its view is refused until
 the view is added. See "Mutation-time check" in the [authorization model](authorization-model.md).
+Reads follow the same discipline when accounting gains inbound adapters: a web adapter may call a
+query service only through a method marked `@GatedRead`, and may depend on a platform type outside
+the web layer only if it is a governed `*Service` or a plain value, so a store, a
+reader class or any other bean is refused. The ledger and financial-statement reads
+(`LedgerReportingService`, `FinancialStatementService`) already carry the marker, and
+`PermissionFreeReadRuleTests` checks that each asks a `*PermissionGuard` (here
+`AccountingPermissionGuard`) before its first store call. The rule selects query services by
+package and name (`application.query`, `application.reporting`, `*QueryService`), so a new
+accounting read elsewhere needs that selection extended. Those methods take a query object
+carrying `actorId`, not a `FoundationCaller`, so the "takes the caller" clause (lifecycle and IAM
+query packages) does not apply to them.
 
 - Controllers use permission authorities for coarse gates
   (`@PreAuthorize("hasAuthority('gl_account.view')")`, `@authz.hasPermission(...)`).

@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.outbound.query
 
+import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.iam.application.query.BranchAssignmentFilter
 import com.finaxis.platform.iam.application.query.BranchAssignmentSummary
@@ -25,6 +26,7 @@ import java.util.UUID
 class IamLifecycleReadAdapter(
     private val iamQueryService: IamQueryService,
 ) : LifecycleIamReadService {
+    @GatedRead
     override fun searchMemberships(
         organisationId: UUID,
         filter: LifecycleMembershipFilter,
@@ -43,6 +45,7 @@ class IamLifecycleReadAdapter(
                 caller,
             ).let { page -> ApiPage(page.items.map { it.toLifecycle() }, page.page) }
 
+    @GatedRead
     override fun getMembership(
         organisationId: UUID,
         membershipId: UUID,
@@ -50,6 +53,7 @@ class IamLifecycleReadAdapter(
     ): LifecycleMembershipDetail =
         iamQueryService.getMembership(organisationId, membershipId, caller).toLifecycle()
 
+    @GatedRead
     override fun searchBranchAssignments(
         organisationId: UUID,
         filter: LifecycleBranchAssignmentFilter,
@@ -69,6 +73,7 @@ class IamLifecycleReadAdapter(
                 caller,
             ).let { page -> ApiPage(page.items.map { it.toLifecycle() }, page.page) }
 
+    @GatedRead
     override fun getBranchAssignment(
         organisationId: UUID,
         assignmentId: UUID,

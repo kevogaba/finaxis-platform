@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted, **implemented** (rollout steps 1 to 7, below).
 
 Date: 2026-10-04
 
@@ -13,10 +13,12 @@ with its one permission alone" and the permission-free read-back it justified) a
 route needs. Builds on [ADR 0012](0012-keycloak-authentication-application-authorization.md) (the
 application owns authorization, by permission code and never by role name) and on
 [ADR 0018](0018-financial-transaction-atomicity-invariant.md) (a mutation and its stored response
-commit or roll back together). Like ADR 0029 it records decisions and a plan: **nothing described
-under "Decision" is implemented by this ADR**, and the code is unchanged by it. The rollout is the
-stack under "Rollout"; each change takes effect as its pull request lands, and the supersessions
-below take effect with the pull request that implements the sentence they replace.
+commit or roll back together).
+
+The decisions below were recorded first and implemented as the stack under "Rollout" landed;
+every step has landed, so "Decision" describes current behaviour and the supersessions below are
+in effect. The step 7 change adds the architecture rules of decision 6, so the property no longer
+rests on review alone.
 
 ## Context
 
@@ -161,11 +163,11 @@ reveals nothing about whether an id exists.
 - **Replay** is unchanged: an idempotent replay returns the stored response of the caller's own
   completed write after `@PreAuthorize` only, even if the caller has since lost the view.
 
-Some route families check only in the controller today (tenant membership transitions, platform
-tenant transitions, `user.invite`, platform user lifecycle: `UserProvisioningService` performs no
-permission check for suspend, reactivate or deactivate, which live only in the platform user
-controller). Each moves its check into the application service in its own pull request (6b, 6d
-and 6e below), so the central pre-check covers it.
+Some route families checked only in the controller before the rollout (tenant membership
+transitions, platform tenant transitions, `user.invite`, platform user lifecycle:
+`UserProvisioningService` performed no permission check for suspend, reactivate or deactivate,
+which lived only in the platform user controller). Each moved its check into the application
+service in its own pull request (6b, 6d and 6e below), so the central pre-check covers it.
 
 ### 5. Target-branch-aware views for branch resources
 
@@ -191,13 +193,13 @@ enum-like filter (exact value, otherwise an empty page).
 Platform callers are unchanged: the platform view is checked in the platform organisation.
 
 The read endpoints for branches, branch assignments and role assignments (list and by id) carry
-an endpoint-level `@PreAuthorize("hasAuthority('...view')")` today, and that gate evaluates the
-**pinned** branch's authority set. A caller pinned to A who holds the view only through a role
-scoped to B would be answered `403` before the target-aware application query ran, which
-contradicts "lists return every branch the caller may view". So these coarse gates are **removed
-or replaced by authentication-only access**, and the application-layer target-aware check is the
-only authorisation for those reads (it still answers `403` for a caller with no grant at all, so a
-route is never open). Mutation routes keep their coarse gates (point 4).
+an endpoint-level `@PreAuthorize("hasAuthority('...view')")` before step 4, and that gate
+evaluates the **pinned** branch's authority set. A caller pinned to A who holds the view only
+through a role scoped to B would be answered `403` before the target-aware application query ran,
+which contradicts "lists return every branch the caller may view". So these coarse gates are
+**removed or replaced by authentication-only access**, and the application-layer target-aware
+check is the only authorisation for those reads (it still answers `403` for a caller with no
+grant at all, so a route is never open). Mutation routes keep their coarse gates (point 4).
 
 This closes the BRANCH-scope case of the defect: a `BRANCH_MANAGER` assigned to A can read A,
 suspend A and read it back, and still gets 403 on B. The branch pin keeps its meaning for what the
@@ -207,17 +209,28 @@ alike).
 
 ### 6. The permission-free read-backs go away
 
-All seven routes that read back permission-free today, which include the platform checker routes
-of ADR 0028, come under the same rule. They read back through the gated query like the other 23:
-platform branch submit, activate and return; platform tenant return; platform membership activate;
-tenant branch `PATCH` and return.
+All seven routes that read back permission-free before the rollout, which include the platform
+checker routes of ADR 0028, come under the same rule. They read back through the gated query like
+the other 23: platform branch submit, activate and return; platform tenant return; platform
+membership activate; tenant branch `PATCH` and return.
 
-- The remaining `get...AfterAuthorizedMutation` helpers (four declarations once 6a has deleted
-  the branch one) are **deleted**, and an **ArchUnit** guard forbids them from coming back: no
-  method of that name may exist; web adapters may call only query methods that take a caller and
-  are gated by the `PermissionGuard`; a gated method must actually call the guard; and web adapters
-  do not reach query or store ports directly (the platform tenant controllers read the initial-administrator bootstrap store
-  directly today; that data folds into the gated tenant detail).
+- The five `get...AfterAuthorizedMutation` helpers are **deleted** (by steps 6a, 6b and 6d), and
+  **ArchUnit** guards forbid them from coming back (`PermissionFreeReadRuleTests`): no method of
+  that name may exist; a web adapter may call a query-service method only if it carries the
+  `@GatedRead` marker, and a GET handler may call any application-package service or bean only
+  through a marked method or a commented allowlist entry; a marked query method takes the caller;
+  a marked method must ask a `*PermissionGuard` (or a marked delegate) before its first store
+  call, so the marker cannot be a bare claim, and every implementation of it carries the marker;
+  web adapters depend, among the platform types outside the web layer, only on
+  governed `*Service`s (one that depends on a guard or declares a marked method), plain values and
+  a short commented allowlist, never on a store, reader, bean or interface (the platform tenant
+  controllers read the initial-administrator bootstrap store themselves before step 6d folded that
+  data into the gated tenant detail), never name `SystemActor`, build or copy no caller by hand
+  and never start the bootstrap. Further rules restrict `UserProvisioningService.inviteAsSystem`
+  and `approveAsSystem`, the two entry points that ask no actor permission, to the
+  initial-administrator bootstrap service (calls and method references alike). Each rule is proved
+  against a violating fixture class. They are structural, not path-complete, and a non-GET
+  handler's reads outside a query service rely on the mutation service's own check.
 - The two "by first page of 100" read-backs (role permission grant, branch assignment assign)
   become by-key reads, which also removes a latent 404-after-mutation for a branch with more than
   100 assignments.
@@ -289,7 +302,7 @@ every bootstrap tenant bundle). A catalogue test proves it (point 8).
 ### 8. The mapping is stored in the database
 
 The mapping is **data in the permission catalogue**, delivered by **one forward-only migration**
-of catalogue metadata (V22, in the next pull request). It adds `permission.kind` and
+of catalogue metadata (V22). It adds `permission.kind` and
 `permission.grant_scope`, both `NOT NULL` once every existing code is classified, and the join
 table:
 
@@ -539,19 +552,34 @@ the documents the supersessions below name (`authorization-model.md`, `foundatio
   `getUserInTenant` joins a membership in the organisation, and the platform organisation holds no
   membership for a tenant user, so a global read-back needs its own gated query.
 - **7.** `test(architecture): forbid permission-free reads from web adapters`
-  Delete the remaining helper declarations; the ArchUnit rules of point 6; the final documentation sweep
-  turning "planned" into current.
+  Delete the remaining helper declarations; the ArchUnit rules of point 6; the final documentation
+  sweep turning "planned" into current.
 
-Pull request 5 is safe before 6a to 6e (the old permission-free read-backs still answer, and the
-gated ones can no longer fail), and pull request 7's rules pass only once 6a to 6e are in. The
-migration number is the next free one at the time pull request 2 is cut.
+  *Status: implemented by this step's change.* No helper declaration remained to delete.
+  `PermissionFreeReadRuleTests` carries the rules of point 6 (helper name; gated calls only, with
+  the marker taking the caller; GET handlers; the marker authorising before any read, and carried
+  by implementations; no port access from a web adapter; system entry points, the system actor and
+  hand-built callers), each failing on a fixture class under `architecture.fixtures`; the query
+  services, the accounting reporting reads, the business-date reads and the tenant-settings reads
+  mark their methods with `@GatedRead`; `GET /tenant/settings/{key}` authorises per key before it
+  reads the stored row, so an unknown key without `settings.view` is now 403 where it was 400 (the
+  same refusal as a known key, nothing leaked); `inviteAsSystem` requires the system actor; the
+  tenant branch controller no longer repeats the service's check on submit, activate, suspend,
+  reactivate, close and create (create is checked tenant-wide, the rest at the target branch); and
+  the OpenAPI `403` of every mutation route names its mutation code and views ("any one of" for an
+  any-of gate). The documents named by the supersessions now state current behaviour.
+
+Step 5 was safe before 6a to 6e (the old permission-free read-backs still answered, and the gated
+ones could no longer fail), and step 7's rules pass only because 6a to 6e are in. The migration
+number was the next free one when step 2 was cut (`V22`).
 
 ## Supersession
 
 ### ADR 0028
 
-Superseded in part. Each sentence below is amended **by the pull request that implements it**; the
-status note added to ADR 0028 points here and its history is not rewritten.
+Superseded in part. Each sentence below was amended by the rollout step that implemented it, and
+all of them are in effect; the status note on ADR 0028 points here and its history is not
+rewritten.
 
 - "Each route works with its one permission alone. The membership or branch it returns is read back
   without a second permission gate (`membership.view`, `branch.view`) inside the same transaction,
@@ -570,8 +598,8 @@ status note added to ADR 0028 points here and its history is not rewritten.
 
 ### ADR 0029
 
-Amended wherever it names the permission a route needs; the new requirement is **plus the view
-code at the same scope**.
+Amended wherever it names the permission a route needs; the requirement, in effect since the
+rollout step that implemented each route, is **plus the view code at the same scope**.
 
 - 3b "Permission: no new code": the maker (withdraw) needs `branch.create` and `branch.view`, and
   anyone else (return) needs `branch.approve` and `branch.view`. "No new code" stays true; the
@@ -589,6 +617,16 @@ Nothing in ADR 0029 about maker-checker, remarks, return-to-draft, events or the
 
 ## Open items
 
+- **The rollout is complete** (steps 1 to 7). What remains below is follow-up, not a gap in the
+  rule. One of them: `RoleController`, `RoleAssignmentController` and `PermissionController` still
+  repeat, in the controller, a check the application service already makes (same code, same scope).
+  They are redundant, not holes (`BranchController` was cleaned the same way in step 7), and
+  removing them is a separate tidy-up.
+- **`GET /api/v1/auth/me`** is authorised only by its route's `@PreAuthorize("hasAuthority(
+  'iam.profile.read')")`; `UserProfileService.profile` makes no application-layer check and sits on
+  the rule's allowlist. It serves the authenticated principal's own profile, built by the security
+  configuration from the JWT subject, membership, organisation and branch, so it is not a hole, but
+  it is the one read whose service checks nothing.
 - **The seeded-roles rule.** "An admin holds every permission of its scope", deriving the seeded
   admin role bundles from `permission.grant_scope`, is its own change and **is implemented by
   `V23`**. This ADR only shares the catalogue metadata migration with it and references it.
@@ -610,5 +648,10 @@ Nothing in ADR 0029 about maker-checker, remarks, return-to-draft, events or the
   `violations` entry on the composition 400, is not required by the rule and is not decided here.
 - **A future override writer** (direct `membership_permission` rows) must apply the composition
   rule to the membership's effective set.
-- **Accounting inbound adapters**, when they land, inherit the central check and need no new
-  decision; their routes document both codes.
+- **Accounting inbound adapters**, when they land, inherit the central check and the architecture
+  rules of point 6: the accounting reporting reads (`LedgerReportingService`,
+  `FinancialStatementService`) already carry `@GatedRead` and are checked against
+  `AccountingPermissionGuard`, and `PermissionFreeReadRuleTests` selects query services by
+  package and name (`application.query`, `application.reporting`, `*QueryService`). Their routes
+  need no new decision and document both codes. A new accounting read in another package needs
+  the rule's selection extended.
