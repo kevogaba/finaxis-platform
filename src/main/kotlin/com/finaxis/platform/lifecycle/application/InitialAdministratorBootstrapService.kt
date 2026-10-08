@@ -177,6 +177,15 @@ class InitialAdministratorBootstrapService(
     }
 
     /**
+     * Whether [userId] is the user the organisation's bootstrap record resolved as its initial
+     * administrator. The same correlation [completeBootstrapIfCorrelated] applies on success.
+     */
+    fun isInitialAdministrator(
+        organisationId: UUID,
+        userId: UUID,
+    ): Boolean = adminBootstrapStore.find(organisationId)?.userId == userId
+
+    /**
      * Idempotently completes the bootstrap record when identity provisioning succeeds.
      */
     @Transactional

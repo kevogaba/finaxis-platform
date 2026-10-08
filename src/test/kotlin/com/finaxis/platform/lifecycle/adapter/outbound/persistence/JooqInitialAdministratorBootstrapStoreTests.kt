@@ -284,6 +284,62 @@ class JooqInitialAdministratorBootstrapStoreTests(
         assertNull(record.lastFailureCode)
     }
 
+    @Test
+    fun `a FAILED write never overwrites a COMPLETED record`() {
+        val organisationId = insertOrganisation()
+        store.createDraft(organisationId, defaultAdmin(), uuidV7())
+        store.updateStatus(organisationId, InitialAdministratorBootstrapStatus.COMPLETED, null)
+        val before = assertNotNull(store.find(organisationId))
+
+        val changed =
+            store.updateStatus(
+                organisationId = organisationId,
+                status = InitialAdministratorBootstrapStatus.FAILED,
+                lastFailureCode = InitialAdministratorBootstrapFailureCode.IDENTITY_PROVIDER_FAILED,
+                incrementAttempts = true,
+            )
+
+        assertEquals(0, changed)
+        val after = assertNotNull(store.find(organisationId))
+        assertEquals(InitialAdministratorBootstrapStatus.COMPLETED, after.status)
+        assertNull(after.lastFailureCode)
+        assertEquals(before.attempts, after.attempts)
+        assertEquals(before.rowVersion, after.rowVersion)
+        assertEquals(before.updatedAt, after.updatedAt)
+    }
+
+    @Test
+    fun `a FAILED write still moves an unfinished record and a retry can follow`() {
+        val organisationId = insertOrganisation()
+        store.createDraft(organisationId, defaultAdmin(), uuidV7())
+        store.updateStatus(
+            organisationId,
+            InitialAdministratorBootstrapStatus.PROVISIONING_IDENTITY,
+            incrementAttempts = true,
+        )
+
+        val changed =
+            store.updateStatus(
+                organisationId,
+                InitialAdministratorBootstrapStatus.FAILED,
+                InitialAdministratorBootstrapFailureCode.CONFLICT,
+            )
+
+        assertEquals(1, changed)
+        val failed = assertNotNull(store.find(organisationId))
+        assertEquals(InitialAdministratorBootstrapStatus.FAILED, failed.status)
+        assertEquals(InitialAdministratorBootstrapFailureCode.CONFLICT, failed.lastFailureCode)
+        store.updateStatus(
+            organisationId,
+            InitialAdministratorBootstrapStatus.PROVISIONING_IDENTITY,
+            incrementAttempts = true,
+        )
+        val retried = assertNotNull(store.find(organisationId))
+        assertEquals(InitialAdministratorBootstrapStatus.PROVISIONING_IDENTITY, retried.status)
+        assertNull(retried.lastFailureCode)
+        assertEquals(2, retried.attempts)
+    }
+
     // ── incrementAttempts via updateStatus ─────────────────────────────────────
 
     @Test

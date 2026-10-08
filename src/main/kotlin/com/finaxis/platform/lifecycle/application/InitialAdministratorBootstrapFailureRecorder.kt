@@ -27,12 +27,15 @@ import java.util.UUID
  *
  * The log line is written at the point the failure is **actually recorded** (after the enclosing
  * transaction rolls back, or at once when there is none), never when it is merely registered: a
- * transaction that commits despite the failure records nothing, and logs nothing. This is the one
- * place that logs the failure together with the organisation id and the code. For the failures
- * they catch, the job handlers rethrow only a [SanitisedJobFailureException] (the closed code, no
- * cause but a message-free `InterruptedException` where the original had one) to JobRunr, and the
- * bootstrap and invite handlers always (the Keycloak handler for a failure it does not record)
- * log a message-free `WARN` of their own after any line written here;
+ * transaction that commits despite the failure records nothing, and logs nothing. The `ERROR` line
+ * follows the write and is written only when the write changed a row: a `FAILED` write never
+ * overwrites a `COMPLETED` record (and finds nothing for a missing one), and then nothing is
+ * recorded and a `WARN` with the organisation id and the code alone is written instead. This is
+ * the one place that logs the failure together with the organisation id and the code. For the
+ * failures they catch, the job handlers rethrow only a [SanitisedJobFailureException] (the
+ * closed code, no cause but a message-free `InterruptedException` where the original had one) to
+ * JobRunr, and the bootstrap and invite handlers always (the Keycloak handler for a failure it
+ * does not record) log a message-free `WARN` of their own after any line written here;
  * `ApiExceptionHandler` logs the class and frames only. An exception type a handler does not
  * catch (the invite handler's, for one) still reaches JobRunr as raised, and the synchronous
  * retry route propagates the original exception to that handler for its HTTP mapping.
@@ -71,6 +74,16 @@ class InitialAdministratorBootstrapFailureRecorder(
         failureCode: InitialAdministratorBootstrapFailureCode,
         failure: Throwable,
     ) {
+        val changed = failureStatusWriter.markFailed(organisationId, failureCode)
+        if (changed == 0) {
+            log.warn(
+                "Initial administrator bootstrap failure with code {} for organisation {} " +
+                    "was not recorded: no bootstrap record, or it is already COMPLETED",
+                failureCode,
+                organisationId,
+            )
+            return
+        }
         // The throwable is deliberately not passed to the logger: it would print its message
         // and every cause's, which can carry an email, SQL or identity-provider output.
         log.error(
@@ -84,7 +97,6 @@ class InitialAdministratorBootstrapFailureRecorder(
             failure.rootCauseClassNameOrUnavailable(),
             failure.toMessageFreeStackTraceOrUnavailable(),
         )
-        failureStatusWriter.markFailed(organisationId, failureCode)
     }
 
     private companion object {
@@ -100,16 +112,18 @@ class InitialAdministratorBootstrapFailureRecorder(
 class InitialAdministratorBootstrapFailureStatusWriter(
     private val adminBootstrapStore: InitialAdministratorBootstrapStore,
 ) {
-    /** Marks the bootstrap record failed independently of its provisioning transaction. */
+    /**
+     * Marks the bootstrap record failed independently of its provisioning transaction, returning
+     * the rows changed (0 when the record is already COMPLETED).
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun markFailed(
         organisationId: UUID,
         failureCode: InitialAdministratorBootstrapFailureCode,
-    ) {
+    ): Int =
         adminBootstrapStore.updateStatus(
             organisationId = organisationId,
             status = InitialAdministratorBootstrapStatus.FAILED,
             lastFailureCode = failureCode,
         )
-    }
 }

@@ -139,7 +139,7 @@ class JooqInitialAdministratorBootstrapStore(
         status: InitialAdministratorBootstrapStatus,
         lastFailureCode: InitialAdministratorBootstrapFailureCode?,
         incrementAttempts: Boolean,
-    ) {
+    ): Int {
         val now = now()
         val t = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
         val update =
@@ -154,7 +154,15 @@ class JooqInitialAdministratorBootstrapStore(
             update.set(t.ATTEMPTS, t.ATTEMPTS.plus(1))
         }
 
-        update.where(t.ORGANISATION_ID.eq(organisationId)).execute()
+        val condition = t.ORGANISATION_ID.eq(organisationId)
+        return update
+            .where(
+                if (status == InitialAdministratorBootstrapStatus.FAILED) {
+                    condition.and(t.STATUS.ne(InitialAdministratorBootstrapStatus.COMPLETED.name))
+                } else {
+                    condition
+                },
+            ).execute()
     }
 
     override fun linkResolvedEntities(

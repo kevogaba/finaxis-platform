@@ -227,6 +227,7 @@ the top of the stack. Merge bottom-up, rebasing the remainder after each merge.
 | Architecture | [Transactional outbox and AMQP](docs/architecture/transactional-outbox-amqp.md) |
 | Database | [Accounting schema](docs/database/accounting-erd.md) |
 | Database | [Foundation schema](docs/database/foundation-schema.md) |
+| Operations | [Bootstrap false-FAILED report](docs/operations/bootstrap-false-failed-report.md) |
 | Operations | [Branch provisioning](docs/operations/branch-provisioning.md) |
 | Operations | [Business date and COB](docs/operations/business-date.md) |
 | Operations | [Native image deployment](docs/operations/native-image-deployment.md) |

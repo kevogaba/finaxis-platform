@@ -877,7 +877,7 @@ internal class FakeInitialAdminBootstrapStore : InitialAdministratorBootstrapSto
         status: InitialAdministratorBootstrapStatus,
         lastFailureCode: InitialAdministratorBootstrapFailureCode?,
         incrementAttempts: Boolean,
-    ) {
+    ): Int {
         val record = records[organisationId] ?: error("Not found")
         records[organisationId] =
             record.copy(
@@ -887,6 +887,7 @@ internal class FakeInitialAdminBootstrapStore : InitialAdministratorBootstrapSto
                 updatedAt = java.time.Instant.now(),
                 rowVersion = record.rowVersion + 1,
             )
+        return 1
     }
 
     override fun existingAdministratorUserId(organisationId: UUID): UUID? =

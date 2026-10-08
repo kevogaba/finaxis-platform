@@ -1746,7 +1746,10 @@ DRAFT -> PENDING_ACTIVATION -> QUEUED -> PROVISIONING_IDENTITY -> COMPLETED
 ```
 
 `FAILED` records a `bootstrap_failure_code` and allows retry through
-`tenant.bootstrap_retry`.
+`tenant.bootstrap_retry`. Only the bootstrap administrator's own failure sets it: another
+invitee's failed Keycloak job fails that user's dispatch alone, and a `COMPLETED` record is never
+overwritten by a `FAILED` write. Records the earlier behaviour wrongly failed are found with
+[the false-FAILED report](../operations/bootstrap-false-failed-report.md).
 
 `bootstrap_failure_code` is a **closed code**, never free text: `null` when no attempt failed,
 otherwise one of `IDENTITY_PROVIDER_FAILED` (the identity provider could not be reached, refused the
