@@ -62,11 +62,18 @@ class ApiProblemFactory {
         const val REQUEST_ID_ATTRIBUTE = "com.finaxis.platform.common.web.api.request-id"
         const val MAXIMUM_VIOLATIONS = 100
 
-        /** Resolves one request id for filters, problem bodies, and response headers. */
+        /**
+         * Resolves one request id for filters, problem bodies, response headers, the MDC and
+         * stored rows: the client's `X-Request-Id` when [ClientRequestIds] accepts it, otherwise
+         * a generated UUIDv7. A rejected value is discarded here, the only place the header is
+         * read, so it is never logged, echoed or recorded. The result is cached on the request.
+         */
         fun requestId(request: HttpServletRequest): String =
             (request.getAttribute(REQUEST_ID_ATTRIBUTE) as? String)
                 ?.takeIf { it.isNotBlank() }
-                ?: request.getHeader(REQUEST_ID_HEADER)?.takeIf { it.isNotBlank() }
-                ?: uuidV7().toString().also { request.setAttribute(REQUEST_ID_ATTRIBUTE, it) }
+                ?: (
+                    ClientRequestIds.acceptable(request.getHeader(REQUEST_ID_HEADER))
+                        ?: uuidV7().toString()
+                ).also { request.setAttribute(REQUEST_ID_ATTRIBUTE, it) }
     }
 }

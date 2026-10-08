@@ -62,8 +62,9 @@ every tenant that is not `ACTIVE` or terminal.
 
 ## Request Correlation
 
-`HttpAccessLogFilter` preserves inbound `X-Request-Id` or generates one. It returns the header to
-clients and stores `requestId` in MDC for request logs. `ActiveOrganisationContextFilter`
+`HttpAccessLogFilter` preserves an inbound `X-Request-Id` of 8 to 64 characters of
+`[A-Za-z0-9._-]` or generates one (a rejected value is never logged or stored). It returns the
+header to clients and stores `requestId` in MDC for request logs. `ActiveOrganisationContextFilter`
 separately installs `RequestContexts`, which carries tenant/branch/actor/correlation/user-agent
 for the audit adapter to fall back on when a caller does not supply them explicitly.
 

@@ -42,6 +42,7 @@ import java.util.UUID
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -367,7 +368,7 @@ class SecurityAdapterTests {
     }
 
     @Test
-    fun `authentication entry point returns shared correlated problem`() {
+    fun `authentication entry point returns a correlated problem and a bare bearer challenge`() {
         val request = MockHttpServletRequest("GET", "/api/v1/auth/me")
         request.addHeader("X-Request-Id", "security-request")
         val response = MockHttpServletResponse()
@@ -379,6 +380,11 @@ class SecurityAdapterTests {
         )
 
         assertSecurityProblem(response, 401, "authentication_required")
+        // RFC 6750 s3: a request with no credentials gets a challenge without an error code.
+        assertEquals(
+            "Bearer resource_metadata=\"http://localhost/.well-known/oauth-protected-resource\"",
+            response.getHeader("WWW-Authenticate"),
+        )
     }
 
     @Test
@@ -398,6 +404,31 @@ class SecurityAdapterTests {
         assertSecurityProblem(response, 401, "authentication_required")
         val challenge = requireNotNull(response.getHeader("WWW-Authenticate"))
         assertTrue(challenge.contains("error=\"invalid_token\""))
+        assertTrue(
+            challenge.contains(
+                "error_description=\"${ApiBearerTokenEntryPoint.INVALID_TOKEN_DESCRIPTION}\"",
+            ),
+        )
+        assertFalse(challenge.contains("unsafe internal detail"))
+    }
+
+    @Test
+    fun `bearer token entry point answers a non-401 challenge with invalid_request`() {
+        val request = MockHttpServletRequest("GET", "/api/v1/auth/me")
+        request.addHeader("X-Request-Id", "security-request")
+        val response = MockHttpServletResponse()
+
+        ApiBearerTokenEntryPoint(problemWriter()).commence(
+            request,
+            response,
+            OAuth2AuthenticationException(
+                BearerTokenErrors.invalidRequest("Found multiple bearer tokens in the request"),
+            ),
+        )
+
+        assertSecurityProblem(response, 400, "invalid_request")
+        val challenge = requireNotNull(response.getHeader("WWW-Authenticate"))
+        assertTrue(challenge.contains("error=\"invalid_request\""))
     }
 
     @Test

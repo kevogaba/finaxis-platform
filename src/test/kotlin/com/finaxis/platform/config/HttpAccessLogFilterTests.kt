@@ -11,10 +11,12 @@ import org.slf4j.LoggerFactory
 import org.springframework.mock.web.MockHttpServletRequest
 import org.springframework.mock.web.MockHttpServletResponse
 import java.io.IOException
+import java.util.UUID
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -92,6 +94,26 @@ class HttpAccessLogFilterTests {
     }
 
     @Test
+    fun `filter never logs, puts in MDC or echoes a rejected client request id`() {
+        val hostile = "forged\r\nhttp_access requestId=\"spoofed\""
+        val request =
+            MockHttpServletRequest("GET", "/api/v1/auth/me").apply {
+                addHeader("X-Request-Id", hostile)
+            }
+        val response = MockHttpServletResponse()
+
+        HttpAccessLogFilter().doFilter(request, response, FilterChain { _, _ -> })
+
+        val event = appender.list.single()
+        val generated = requireNotNull(response.getHeader("X-Request-Id"))
+        assertEquals(UUID_V7, UUID.fromString(generated).version())
+        assertEquals(generated, event.mdcPropertyMap["requestId"])
+        assertTrue(event.formattedMessage.contains("""requestId="$generated""""))
+        assertFalse(event.formattedMessage.contains("forged"))
+        assertFalse(event.mdcPropertyMap.values.any { it.contains("forged") })
+    }
+
+    @Test
     fun `filter reuses a request id established before access logging`() {
         val request =
             MockHttpServletRequest("GET", "/api/v1/auth/me").apply {
@@ -103,5 +125,9 @@ class HttpAccessLogFilterTests {
 
         assertEquals("problem-request-1", response.getHeader("X-Request-Id"))
         assertEquals("problem-request-1", appender.list.single().mdcPropertyMap["requestId"])
+    }
+
+    private companion object {
+        const val UUID_V7 = 7
     }
 }

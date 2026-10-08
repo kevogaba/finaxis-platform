@@ -80,7 +80,12 @@ to match.
 ## Failure shape and context propagation
 
 JWT failures are handled by Spring Security's resource-server path and return `401` with the
-shared problem body (`authentication_required`), `X-Request-Id` and the RFC 6750 challenge. Local
+shared problem body (`authentication_required`), `X-Request-Id` and the RFC 6750 challenge:
+`error="invalid_token"` with the fixed `error_description` `The access token is invalid or has
+expired.`, never the decoder's message (expiry instants and claims stay server-side). A request
+with no token gets `WWW-Authenticate: Bearer resource_metadata="..."` and no error code (RFC 6750
+section 3). A non-`401` challenge (`400` `invalid_request`) gets body code `invalid_request`; it is
+unreachable while tokens are read from the `Authorization` header only. Local
 precheck failures return `403` from the active-organisation filter with generic messages such as
 `Invalid active organisation context`; the code does not expose tenant lookup detail to callers.
 
@@ -93,4 +98,8 @@ reaches the scope check or the controller (an ungated one such as `POST
 
 When a principal is installed, `RequestContexts` carries tenant, optional branch, actor, and
 correlation data for downstream code. `X-Request-Id` and `X-Correlation-Id` are propagated into
-the request context and MDC-aware logging path; cleanup happens at the end of the request.
+the request context and MDC-aware logging path; cleanup happens at the end of the request. A client
+`X-Request-Id` is used only if it is 8 to 64 characters of `[A-Za-z0-9._-]`
+(`ClientRequestIds`, applied in `ApiProblemFactory.requestId`, the one place the header is read);
+otherwise a UUIDv7 replaces it and the application never logs, stores, puts in the MDC or echoes
+the rejected value.
