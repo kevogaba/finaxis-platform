@@ -384,7 +384,12 @@ Do not invent accounting tables or columns outside those documents.
   its bootstrap administrator, and of a pending branch only while it has no ACTIVE branch beyond
   the bootstrap head office; the checker is never the maker or the beneficiary — ADR 0028. On
   either route a branch's approver is also never anyone who amended it (a successful
-  `branch.update` audit event on it, 403 `lifecycle.approver_is_branch_modifier`).
+  `branch.update` audit event on it, 403 `lifecycle.approver_is_branch_modifier`). A pending
+  tenant mirrors this on its platform `approve`/`reject`/`return` routes (#221): its requester or
+  submitter is refused on all three (403 `lifecycle.approver_is_tenant_maker`), and anyone with a
+  successful `organisation.amend_draft` on it cannot approve or reject it (403
+  `lifecycle.approver_is_tenant_modifier`); each refusal is a `DENIED` audit row written through
+  `AuditService.recordIndependently`.
 - Active organisation is request/session context, not a permanent `app_user` field. The
   Redis-backed HTTP session carries active-organisation context only — never authentication
   (every request authenticates via the bearer JWT).

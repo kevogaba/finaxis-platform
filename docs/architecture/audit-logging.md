@@ -55,7 +55,10 @@ Audit rows are also a **control input**, not only evidence: branch approval refu
 successful `branch.update` event on the branch (`lifecycle.approver_is_branch_modifier`, ADR 0028).
 Any future audit retention or purge job (the `audit_retention_days` setting) must therefore exclude
 the `branch.update` events of branches that are not `ACTIVE` or terminal, or the rule fails open. A
-durable column on `branch` is the long-term alternative.
+durable column on `branch` is the long-term alternative. The same holds for tenants (#221):
+approving or rejecting a pending tenant refuses anyone with a successful `organisation.amend_draft`
+event on it (`lifecycle.approver_is_tenant_modifier`), so a purge must also keep those events of
+every tenant that is not `ACTIVE` or terminal.
 
 ## Request Correlation
 

@@ -1190,6 +1190,11 @@ private class ProvisioningFake(
 
     override fun hasRequiredMetadata(organisationId: UUID) = organisationId in metadataComplete
 
+    override fun hasAmendedOrganisation(
+        organisationId: UUID,
+        actorId: UUID,
+    ) = false
+
     override fun timezone(organisationId: UUID) = "Africa/Nairobi"
 
     override fun baseCurrencyCode(organisationId: UUID) = "KES"

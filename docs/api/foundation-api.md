@@ -724,6 +724,27 @@ and the reserved platform organisation id still answers `409` as above.
 [Decision remarks](#decision-remarks). `POST /{tenant_id}/return` takes a required reason, see
 [Return tenant for changes](#return-tenant-for-changes).
 
+**Who may decide a pending tenant (#221).** `approve`, `reject` and `return` are checker
+decisions, and the tenant mirrors the branch rule
+([Approving a branch](#approving-a-branch-activate)). After the permission, the platform
+organisation refusal and the tenant lock, each refuses, before any state check and changing
+nothing:
+
+- `403 lifecycle.approver_is_tenant_maker` ("The checker cannot be the tenant's requester or
+  submitter.") when the caller **requested** the draft or **submitted** the current submission,
+  on all three routes;
+- `403 lifecycle.approver_is_tenant_modifier` ("The checker cannot be someone who amended the
+  tenant.") on `approve` and `reject` when the caller **amended** the draft: anyone with a
+  successful `organisation.amend_draft` audit event on the tenant, however many returns, amends
+  and resubmissions came later. A checker who only *returned* the tenant amended nothing and may
+  decide its resubmission; an amender may still `return` it, as a branch amender may, since
+  returning approves nothing.
+
+Each refusal writes a `DENIED`, `HIGH` audit row (action `organisation.approve`,
+`organisation.reject` or `organisation.return_for_changes`, reason the code) in its own
+transaction, so the request's rollback does not take it. Until #221 a maker was refused with the
+generic `403 forbidden`, and `reject` had no maker or amender rule at all.
+
 `base_currency_code` is the tenant's functional currency for every future journal line, so create
 and amend validate it against the ledger's own currency authority and not only against its shape:
 beyond the `^[A-Z]{3}$` pattern the request body enforces as a `400`, it must be an ISO 4217 code
@@ -823,13 +844,14 @@ is no `422`. Validation runs when the body is bound, before any permission or ex
   decision, together with `tenant.view`, checked in the platform organisation by the application
   service. No new code.
 - **Checker only.** The caller must be neither the tenant's requester nor the actor of its current
-  submission (the rule `approve` applies, `403 forbidden`), and not the system actor. A maker
-  cannot withdraw a tenant through this route: a tenant has no maker-side withdraw, a maker amends
-  a `DRAFT` only. A maker holding `tenant.reject` can still terminally reject their own submission,
-  as before.
+  submission (the rule `approve` and `reject` apply, `403 lifecycle.approver_is_tenant_maker`), and
+  not the system actor. An amender may return a tenant. A maker cannot withdraw a tenant through
+  this route: a tenant has no maker-side withdraw, a maker amends a `DRAFT` only, and since #221 a
+  maker can no longer reject their own submission either.
 - **Check order.** The permission (`403`, before any existence signal); the platform organisation
   (`409` `lifecycle.platform_organisation_protected`, before any lock or read); the tenant (`404`
-  for an unknown id); the maker-checker rule (`403`); the state (`409`).
+  for an unknown id); the maker-checker rule (`403 lifecycle.approver_is_tenant_maker`); the state
+  (`409`).
 - **State.** Only `PENDING_APPROVAL` can be returned; any other state, including `REJECTED`, answers
   `409 conflict` and changes nothing. `reject` is unchanged and stays terminal (recovering a
   rejected tenant is a separate piece of work).
@@ -841,10 +863,12 @@ is no `422`. Validation runs when the body is bound, before any permission or ex
   unchanged, so the submitter of the new request is whoever resubmits. The maker-checker rule and
   the `lifecycle.approver_is_initial_administrator` refusal are read from the record at approval,
   so they hold across the loop: the requester and the new submitter cannot approve, and if the
-  amended administrator is the account of whoever approves, that approval is refused. The checker
-  who returned a tenant, like any amender, is not a maker and may approve a later resubmission; so
-  may the earlier submitter, who is not the submitter of the current request (an accepted
-  consequence of reading the rule from the record at approval). A returned tenant cannot be
+  amended administrator is the account of whoever approves, that approval is refused. Anyone who
+  amended the draft in any loop can neither approve nor reject it
+  (`403 lifecycle.approver_is_tenant_modifier`, #221). The checker who only returned a tenant is
+  not a maker and may approve a later resubmission; so may the earlier submitter, who is not the
+  submitter of the current request (an accepted consequence of reading the rule from the record at
+  approval). A returned tenant cannot be
   approved until it is resubmitted (`409`). Approve, return, reject, submit and amend each lock the
   tenant row before they read the record or the state, so a decision racing another is judged
   against whatever the other committed (ADR 0029, "Locking rule").
@@ -1680,8 +1704,10 @@ Tenant onboarding is a platform workflow:
    `POST /api/v1/platform/tenants/{tenant_id}/bootstrap/retry`.
 
 The maker-checker rule is enforced by the application service: the actor who requested or
-submitted a tenant draft cannot approve it, and neither can the platform user whose own account the
-draft names (by email) as its initial administrator, because the bootstrap approves that
+submitted a tenant draft cannot approve, reject or return it
+(`lifecycle.approver_is_tenant_maker`), anyone who amended the draft can neither approve nor
+reject it (`lifecycle.approver_is_tenant_modifier`), and neither can the platform user whose own
+account the draft names (by email) as its initial administrator, because the bootstrap approves that
 administrator's membership in the approver's name and nobody may approve their own membership. That
 refusal is 403 with code `lifecycle.approver_is_initial_administrator`, returned before any state
 change (the tenant stays `PENDING_APPROVAL`); if no account exists yet for the administrator email
@@ -1689,12 +1715,12 @@ there is nothing to compare. Self-approval returns 403:
 
 ```json
 {
-  "type": "urn:finaxis:problem:forbidden",
+  "type": "urn:finaxis:problem:lifecycle.approver_is_tenant_maker",
   "title": "Forbidden",
   "status": 403,
-  "detail": "The requested operation is not allowed.",
+  "detail": "The checker cannot be the tenant's requester or submitter.",
   "instance": "/api/v1/platform/tenants/11111111-1111-7111-8111-111111111111/approve",
-  "code": "forbidden",
+  "code": "lifecycle.approver_is_tenant_maker",
   "request_id": "019f7d45-f87d-7b55-9a68-208779281375"
 }
 ```

@@ -189,8 +189,10 @@ The invariant is that the record describes the draft as currently amended and it
 actor of the current submission. A returned tenant is a `DRAFT`: `PATCH /platform/tenants/{id}`
 amends it (replacing the administrator block), `POST .../submit` resubmits it (setting the new
 submitter), and the maker-checker rule and the approver-is-the-initial-administrator refusal
-(ADR 0028) are read from the record at approval, never cached, so they hold across the loop. The
-returning checker, like any amender, is not a maker and may approve a later resubmission.
+(ADR 0028) are read from the record at approval, never cached, so they hold across the loop. A
+checker who only returned the tenant is neither its maker nor an amender and may decide a later
+resubmission; whoever amended the draft (#221) may not approve or reject it, though they may still
+return it, as for branches.
 
 The reason is the tenant's `status_reason` until its next transition (an amend keeps it, the next
 `SUBMIT` replaces it); the history stays in the transition log and the audit trail. The platform

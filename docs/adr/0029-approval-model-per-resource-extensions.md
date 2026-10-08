@@ -15,6 +15,16 @@ anyone who amended it (has a successful `branch.update` on it), on either route,
 returned draft is amendable by anyone holding `branch.update`. Returning, amending and
 resubmitting are otherwise as written below.
 
+Amended by the tenant checker rule (#221), which mirrors that branch rule for tenants: on the
+platform tenant routes (the only routes that decide a tenant) the requester and the submitter of
+the current submission can neither approve, reject nor return a pending tenant (403
+`lifecycle.approver_is_tenant_maker`, replacing the generic `forbidden`), and anyone with a
+successful `organisation.amend_draft` audit event on it can neither approve nor reject it (403
+`lifecycle.approver_is_tenant_modifier`); an amender may still return it, as a branch amender may.
+Each refusal is audited `DENIED` in its own transaction. This supersedes 3c's "Amenders are not
+makers" and the consequence "Rejecting is wider than returning"; see
+`docs/security/authorization-model.md` ("Tenant checker rule").
+
 Resolves GitHub issue #178, the design gate of the approval-model gap #155, and fixes the scope of
 its sub-issues #179, #180 and #181. Closes #182 as not planned. Builds on
 [ADR 0002](0002-fsm-transition-infrastructure.md) and
@@ -353,7 +363,9 @@ since #208) in 3b are unchanged.
   approve). Approve, return and amend are proved against Postgres by
   `TenantApprovalReturnRaceIntegrationTests`; the order in reject and submit, and in all five, is
   pinned by `OrganisationProvisioningLockOrderTests`.
-- **Amenders are not makers.** Only `requested_by` and the submitter are excluded from approving.
+- **Amenders are not makers.** *(Superseded by #221, see the amendment at the top: an amender can
+  neither approve nor reject; a checker who only returned the tenant still may.)* Only
+  `requested_by` and the submitter are excluded from approving.
   A checker can return a tenant, amend it, and later approve it after a third party resubmits.
   That is pre-existing behaviour for any draft amended by someone other than its requester, and it
   is accepted: two distinct people (requester and submitter versus approver) still stand behind
@@ -370,7 +382,8 @@ since #208) in 3b are unchanged.
 - **Audit and event.** The FSM writes `organisation.return_for_changes` with the `reason`. No
   event: the transition uses `internalEventFactories()` (see "Events" below).
 - **Errors.** `403` when `tenant.reject` is missing or the actor is the requester or submitter
-  (the same `forbidden` code as the existing approvals, until #156 adds a distinct one), `404` for
+  (the same `forbidden` code as the existing approvals, until #156 adds a distinct one; since #221
+  the maker refusal is `lifecycle.approver_is_tenant_maker`), `404` for
   an unknown tenant or the platform organisation, `409` when the tenant is not `PENDING_APPROVAL`
   (the FSM's conflict). Request validation is `400`, as for the branch routes, with the same
   non-null `reason` shape: a missing or unreadable body (required here), or an absent or `null`
@@ -444,7 +457,9 @@ catalogue** (`TenantSettingCatalog.kt`), not wired to behaviour.
   ADR needs only that **remarks and the return flows do not change who the maker is**: `created_by`
   and `requested_by` are never rewritten, and the submitter is the actor of the latest `SUBMIT`.
   The new `return` routes and any resubmission must raise the same dedicated code as the existing
-  approvals once #156 introduces it.
+  approvals once #156 introduces it. Since #221 the tenant already raises
+  `lifecycle.approver_is_tenant_maker` and `lifecycle.approver_is_tenant_modifier`; #156 must reuse
+  or replace those names, not add a third.
 
 ### 6. Sequencing
 
@@ -500,7 +515,8 @@ the retirement of their persisted rows (see point 4) and the update of
   asynchronous membership path the remark is on the `user.approve` audit row only.
 - A maker will be able to withdraw their own pending branch, and a pending tenant can be returned
   to its maker. A maker cannot withdraw a pending tenant.
-- **Rejecting is wider than returning.** `rejectProvisioning` has no requester or submitter check,
+- **Rejecting is wider than returning.** *(Superseded by #221: reject now refuses the requester,
+  the submitter and every amender.)* `rejectProvisioning` has no requester or submitter check,
   while return is checker-only, so a maker holding `tenant.reject` can terminally reject their own
   submitted tenant but cannot return it. This ADR does not widen return or narrow reject; changing
   reject's maker rule is separate work.

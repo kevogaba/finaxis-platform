@@ -47,6 +47,8 @@ class OrganisationProvisioningService(
     private val permissionGuard: PermissionGuard,
     private val clock: Clock,
 ) {
+    private val checkerRule = TenantCheckerRule(lifecycleStore, auditService)
+
     /** Creates a non-operational organisation draft with its initial local configuration. */
     @Transactional
     fun createDraft(command: CreateOrganisationDraftCommand): OrganisationDraftResult {
@@ -164,14 +166,15 @@ class OrganisationProvisioningService(
      * and since the return edge exists a request can commit return, amend and resubmit and so
      * replace both; an approval that read them first and locked second would approve the new
      * submission on the old submitter's say-so. Locked first, it waits for such a request and
-     * reads what it left.
+     * reads what it left. The amender rule (see [TenantCheckerRule]) is judged after the
+     * lock for the same reason.
      */
     @Transactional
     fun approveProvisioning(command: ApproveOrganisationProvisioningCommand) {
         permissionGuard.requirePlatformPermission(command.actorId, "tenant.approve")
         auditService.requireNotPlatformOrganisation(
             command.organisationId,
-            "organisation.approve",
+            APPROVE_ACTION,
             command.actorId,
         )
         lifecycleStore.lockOrganisation(command.organisationId)
@@ -179,7 +182,13 @@ class OrganisationProvisioningService(
             adminBootstrapStore
                 .find(command.organisationId)
                 .orResourceNotFound()
-        requireNotMaker(record, command.actorId)
+        checkerRule.require(
+            command.organisationId,
+            record,
+            command.actorId,
+            APPROVE_ACTION,
+            refuseAmender = true,
+        )
         errorUnless(command.actorId != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
         // The bootstrap approves its administrator's membership in the approver's name, and a user
         // may never approve their own membership, so refuse now rather than fail it later.
@@ -226,13 +235,19 @@ class OrganisationProvisioningService(
         )
     }
 
-    /** Rejects a pending organisation request and preserves its draft data for auditability. */
+    /**
+     * Rejects a pending organisation request and preserves its draft data for auditability.
+     * Checker only, as [approveProvisioning] is (#221): the actor may be neither the requester,
+     * the submitter of the current submission, nor anyone who amended the draft (see
+     * [TenantCheckerRule]). A tenant with no bootstrap record has no maker to compare, and
+     * is refused or not found by the transition exactly as before.
+     */
     @Transactional
     fun rejectProvisioning(command: RejectOrganisationProvisioningCommand) {
         permissionGuard.requirePlatformPermission(command.actorId, "tenant.reject")
         auditService.requireNotPlatformOrganisation(
             command.organisationId,
-            "organisation.reject",
+            REJECT_ACTION,
             command.actorId,
         )
         errorUnless(command.actorId != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
@@ -240,6 +255,13 @@ class OrganisationProvisioningService(
         // the others, organisation then bootstrap record, where it used to take them the other
         // way round.
         lifecycleStore.lockOrganisation(command.organisationId)
+        checkerRule.require(
+            command.organisationId,
+            adminBootstrapStore.find(command.organisationId),
+            command.actorId,
+            REJECT_ACTION,
+            refuseAmender = true,
+        )
         adminBootstrapStore.reject(command.organisationId)
 
         lifecycleService.transition(
@@ -260,7 +282,8 @@ class OrganisationProvisioningService(
      * platform organisation (409, `requireNotPlatformOrganisation`); then the organisation lock,
      * before the record is read and held through the transition, for the reason given on
      * [approveProvisioning]; then the bootstrap record, whose absence (an unknown tenant) is a
-     * 404; then the maker-checker rule; then the FSM's own state
+     * 404; then the maker-checker rule (the maker only: an amender may return, as a branch
+     * amender may, since returning approves nothing); then the FSM's own state
      * conflict. The transition runs before the record is reset, so a tenant that is not pending
      * is refused without touching the record. The record then becomes a draft again, exactly as
      * [rejectProvisioning] leaves it, and the amend and resubmit that follow re-establish what
@@ -271,7 +294,7 @@ class OrganisationProvisioningService(
         permissionGuard.requirePlatformPermission(command.actorId, "tenant.reject")
         auditService.requireNotPlatformOrganisation(
             command.organisationId,
-            "organisation.return_for_changes",
+            RETURN_ACTION,
             command.actorId,
         )
         lifecycleStore.lockOrganisation(command.organisationId)
@@ -279,7 +302,13 @@ class OrganisationProvisioningService(
             adminBootstrapStore
                 .find(command.organisationId)
                 .orResourceNotFound()
-        requireNotMaker(record, command.actorId)
+        checkerRule.require(
+            command.organisationId,
+            record,
+            command.actorId,
+            RETURN_ACTION,
+            refuseAmender = false,
+        )
         errorUnless(!SystemActor.isSystemActor(command.actorId), SafeError.INVALID_OPERATION)
 
         lifecycleService.transition(
@@ -541,24 +570,12 @@ class OrganisationProvisioningService(
                 ),
             )
 
-        /**
-         * The tenant maker-checker rule, shared by every checker decision on a pending tenant
-         * (approve and return): the actor may be neither the requester nor the submitter of the
-         * current submission. One place, so a dedicated error code (#156) changes it once.
-         */
-        fun requireNotMaker(
-            record: InitialAdministratorBootstrapRecord,
-            actorId: UUID,
-        ) {
-            errorUnless(actorId != record.requestedBy, SafeError.FORBIDDEN)
-            if (record.submittedBy != null) {
-                errorUnless(actorId != record.submittedBy, SafeError.FORBIDDEN)
-            }
-        }
-
+        const val APPROVE_ACTION = "organisation.approve"
+        const val REJECT_ACTION = "organisation.reject"
+        const val RETURN_ACTION = "organisation.return_for_changes"
         const val USER = "USER"
         const val SYSTEM = "SYSTEM"
-        const val ORGANISATION = "ORGANISATION"
+        const val ORGANISATION = ORGANISATION_AUDIT_ENTITY_TYPE
         const val MAXIMUM_PAGE_SIZE = 100
         val SYSTEM_ACTOR = UUID(0L, 0L)
     }
@@ -735,7 +752,6 @@ private enum class SafeError(
 ) {
     INVALID_OPERATION({ InvalidOperationException() }),
     CONFLICT({ ConflictException() }),
-    FORBIDDEN({ ForbiddenOperationException() }),
     INVALID_PAGE_REQUEST({ InvalidPageRequestException() }),
 }
 

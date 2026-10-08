@@ -555,8 +555,11 @@ class PlatformTenantController(
         ApiResponse(
             responseCode = "403",
             description =
-                "Forbidden, maker-checker violation, or the approver is the account named as the " +
-                    "initial administrator (code `lifecycle.approver_is_initial_administrator`)",
+                "Forbidden: `tenant.approve` is missing; the caller requested or submitted the " +
+                    "tenant (`lifecycle.approver_is_tenant_maker`) or amended it " +
+                    "(`lifecycle.approver_is_tenant_modifier`); or the approver is the account " +
+                    "named as the initial administrator " +
+                    "(`lifecycle.approver_is_initial_administrator`)",
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -611,7 +614,9 @@ class PlatformTenantController(
     @PreAuthorize("hasAuthority('tenant.reject')")
     @Operation(
         summary = "Reject tenant",
-        description = "Rejects a submitted tenant approval request.",
+        description =
+            "Rejects a submitted tenant approval request. Checker only: the requester, the " +
+                "submitter and anyone who amended the tenant cannot reject it.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -649,7 +654,10 @@ class PlatformTenantController(
         ),
         ApiResponse(
             responseCode = "403",
-            description = "Forbidden",
+            description =
+                "Forbidden: `tenant.reject` is missing; the caller requested or submitted the " +
+                    "tenant (`lifecycle.approver_is_tenant_maker`) or amended it " +
+                    "(`lifecycle.approver_is_tenant_modifier`)",
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -750,7 +758,7 @@ class PlatformTenantController(
             responseCode = "403",
             description =
                 "Forbidden: `tenant.reject` is missing, or the caller requested or submitted " +
-                    "the tenant",
+                    "the tenant (`lifecycle.approver_is_tenant_maker`)",
             content = [
                 Content(
                     mediaType = "application/problem+json",

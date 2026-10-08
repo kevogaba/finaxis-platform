@@ -450,9 +450,17 @@ internal class BootstrapProvisioningFake(
 
     override fun createDraft(command: CreateOrganisationDraftCommand): UUID = uuidV7()
 
+    /** (organisation, actor) of every amendment, standing in for its `amend_draft` audit row. */
+    val organisationAmenders = mutableSetOf<Pair<UUID, UUID>>()
+
     override fun amendDraft(command: AmendOrganisationDraftCommand) {
-        // no-op
+        organisationAmenders += command.organisationId to command.actorId
     }
+
+    override fun hasAmendedOrganisation(
+        organisationId: UUID,
+        actorId: UUID,
+    ) = (organisationId to actorId) in organisationAmenders
 
     override fun lifecycleState(organisationId: UUID) = organisationStates[organisationId]
 

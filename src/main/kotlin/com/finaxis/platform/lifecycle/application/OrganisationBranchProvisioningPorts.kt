@@ -49,7 +49,30 @@ interface OrganisationLifecycleProvisioningStore {
 
     /** Returns whether submit-required organisation metadata is complete. */
     fun hasRequiredMetadata(organisationId: UUID): Boolean
+
+    /**
+     * Whether [actorId] has a successful `organisation.amend_draft` audit event on the
+     * organisation, that is whether they ever amended its draft. A tenant is amendable only in
+     * `DRAFT` and decided only in `PENDING_APPROVAL`, so "ever" is every amender of the version
+     * being decided, as for a branch's `branch.update` (`BranchLifecycleStore.hasAmended`).
+     */
+    fun hasAmendedOrganisation(
+        organisationId: UUID,
+        actorId: UUID,
+    ): Boolean
 }
+
+/**
+ * The audit action recorded for every successful tenant draft amendment, read by the tenant
+ * checker rule to learn who ever amended a tenant. `OrganisationProvisioningService.amendDraft`
+ * writes it as the literal `"organisation.amend_draft"`, deliberately: the high-risk audit
+ * coverage ratchet finds a call site by that literal (or a `*AuditActions` constant), and the
+ * amender integration tests fail if the two ever differ.
+ */
+const val ORGANISATION_AMEND_AUDIT_ACTION = "organisation.amend_draft"
+
+/** The audit `entity_type` of every organisation event, shared by the audit writer and reader. */
+const val ORGANISATION_AUDIT_ENTITY_TYPE = "ORGANISATION"
 
 /** Persistence operations for the local setup created within organisation provisioning. */
 interface OrganisationBootstrapStore {
