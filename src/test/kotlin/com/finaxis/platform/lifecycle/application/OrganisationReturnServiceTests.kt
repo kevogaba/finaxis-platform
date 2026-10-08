@@ -362,8 +362,8 @@ class OrganisationReturnServiceTests {
             SubmitOrganisationForApprovalCommand(organisationId, actorId = uuidV7()),
         )
 
-        // Returners and amenders are not makers (ADR 0029, 3c): two other people still stand
-        // behind the approval, the requester and the new submitter.
+        // A returner is not a maker and, having amended nothing, not an amender either (#221):
+        // two other people still stand behind the approval, the requester and the new submitter.
         organisations.approveProvisioning(
             ApproveOrganisationProvisioningCommand(organisationId, actorId = returner),
         )

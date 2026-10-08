@@ -588,19 +588,50 @@ organisation and an unknown id alike; the controller's coarse gate is `tenant.re
 
 It is **checker only**: the actor may be neither the requester nor the actor of the current
 submission (`requested_by` and `submitted_by` on the initial-administrator record, the rule
-`approveProvisioning` applies) and may not be the system actor, so there is no maker-side withdraw
-of a tenant. Rejecting is wider: `rejectProvisioning` has no maker check, so a maker holding
-`tenant.reject` can terminally reject their own submission but cannot return it. The rule is read
-from the record at approval, so it holds across the return, amend, resubmit loop, and so does the
-`lifecycle.approver_is_initial_administrator` refusal. The returner and amenders are not makers
-and may approve a later resubmission, as may the earlier submitter, who is not the submitter of
-the current request (an accepted consequence of reading the rule from the record at approval).
+`approveProvisioning` and `rejectProvisioning` apply, 403 `lifecycle.approver_is_tenant_maker`) and
+may not be the system actor, so there is no maker-side withdraw of a tenant. An amender may return
+a tenant (see [Tenant checker rule](#tenant-checker-rule)). The rule is read from the record at
+decision time, so it holds across the return, amend, resubmit loop, and so does the
+`lifecycle.approver_is_initial_administrator` refusal. The returner is not a maker and may approve
+a later resubmission, as may the earlier submitter, who is not the submitter of the current
+request (an accepted consequence of reading the rule from the record at approval).
 
 `tenant.reject` is checked together with `tenant.view` in the platform organisation (the mutation
 check, "Mutation-time check"), so a checker role holding `tenant.reject` alone is refused with
 `Missing permission: tenant.view.` before anything changes. The `status_reason` it sets is
 exposed on the platform tenant routes (`tenant.view`) and on the tenant's own `GET /tenant`, as an
 always-present nullable field.
+
+## Tenant checker rule
+
+A pending tenant is decided only on the platform routes `/platform/tenants/{tenant_id}/approve`,
+`/reject` and `/return` (no tenant-context route decides a tenant), and since #221 the tenant
+mirrors the branch rule of ADR 0028 decision 5 on all of them
+(`TenantCheckerRule.require`, called from `OrganisationProvisioningService`). After the
+permission, the platform-organisation refusal and the organisation lock, and before any state check:
+
+- the **maker**, the requester of the draft or the submitter of the current submission, can
+  neither approve, reject nor return it: 403 `lifecycle.approver_is_tenant_maker` (the generic
+  `forbidden` until #221; `reject` had no maker rule at all, so a maker holding `tenant.reject`
+  could terminally reject their own submission);
+- anyone who **amended** the draft, that is has a successful `organisation.amend_draft` audit
+  event on the tenant, can neither approve nor reject it: 403
+  `lifecycle.approver_is_tenant_modifier`. "Ever", not the latest amender, for the branch's
+  reason: a tenant is amendable only in `DRAFT` and decided only in `PENDING_APPROVAL`, so every
+  amendment precedes the version being decided, and a "latest amender" rule could be laundered by
+  a later no-op `PATCH`. The checker who only returned the tenant amended nothing and may decide
+  its resubmission. An amender may still **return** it, exactly as a branch amender may return a
+  branch: returning approves nothing.
+
+Both compare user ids, and both are judged after the organisation row lock, so a decision racing a
+return, amend and resubmit reads who amended and submitted what it then decides
+(`TenantApprovalReturnRaceIntegrationTests`). Each refusal is recorded as a `DENIED`, `HIGH` audit
+row (action `organisation.approve`, `organisation.reject` or `organisation.return_for_changes`,
+reason the code) through `AuditService.recordIndependently`, so the request's rollback cannot take
+it. The rule reads `organisation.amend_draft` rows of the audit trail, so, as for
+`branch.update`, any future audit retention or purge job must keep those events of every tenant
+that is not `ACTIVE` or terminal, or the rule fails open. The cost is the branch rule's: an amender
+whose edit was later overwritten still cannot decide, so the platform may need a third person.
 
 ## Bootstrap failure code
 
@@ -644,7 +675,10 @@ permissions. `UserProvisioningService.approveUser` refuses the actor that invite
 `branch.update` and one person must not amend, resubmit and approve another's draft. The checker who
 merely returned a draft is not an amender and may approve its resubmission. An amender whose edit
 was later overwritten is still refused, so a tiny tenant may need a third person or the platform
-checker. Both compare user ids, so switching organisation context does not get round them.
+checker. Both compare user ids, so switching organisation context does not get round them. A
+pending tenant follows the same rule on its platform decision routes: its requester, its submitter
+and anyone who amended it cannot approve or reject it (see
+[Tenant checker rule](#tenant-checker-rule)).
 
 A freshly approved tenant has one user, the bootstrap `TENANT_ADMIN`, who is the maker of everything
 it creates and so cannot finish onboarding a second person or a first branch. The resolution is

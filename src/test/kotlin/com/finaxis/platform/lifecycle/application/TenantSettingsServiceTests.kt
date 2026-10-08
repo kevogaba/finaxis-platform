@@ -350,6 +350,11 @@ private class FakeLifecycleStoreForSettings : OrganisationLifecycleProvisioningS
     ) = Unit
 
     override fun hasRequiredMetadata(organisationId: UUID): Boolean = true
+
+    override fun hasAmendedOrganisation(
+        organisationId: UUID,
+        actorId: UUID,
+    ): Boolean = false
 }
 
 private class FakeSettingsStore : OrganisationSettingsStore {

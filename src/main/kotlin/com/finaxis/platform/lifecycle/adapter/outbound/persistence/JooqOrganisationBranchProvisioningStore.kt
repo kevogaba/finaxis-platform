@@ -39,6 +39,8 @@ import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapS
 import com.finaxis.platform.lifecycle.application.MembershipLifecycleSnapshot
 import com.finaxis.platform.lifecycle.application.MembershipSnapshot
 import com.finaxis.platform.lifecycle.application.MembershipType
+import com.finaxis.platform.lifecycle.application.ORGANISATION_AMEND_AUDIT_ACTION
+import com.finaxis.platform.lifecycle.application.ORGANISATION_AUDIT_ENTITY_TYPE
 import com.finaxis.platform.lifecycle.application.OrganisationAccessStore
 import com.finaxis.platform.lifecycle.application.OrganisationBootstrapStore
 import com.finaxis.platform.lifecycle.application.OrganisationLifecycleProvisioningStore
@@ -174,6 +176,22 @@ class JooqOrganisationBranchProvisioningStore(
                 .and(ORGANISATION.COUNTRY_CODE.isNotNull)
                 .and(ORGANISATION.BASE_CURRENCY_CODE.isNotNull)
                 .and(ORGANISATION.TIMEZONE.ne("")),
+        )
+
+    override fun hasAmendedOrganisation(
+        organisationId: UUID,
+        actorId: UUID,
+    ): Boolean =
+        dsl.fetchExists(
+            AUDIT_EVENT,
+            // Leads idx_audit_event_organisation_entity, as the branch amender read does.
+            AUDIT_EVENT.ORGANISATION_ID
+                .eq(organisationId)
+                .and(AUDIT_EVENT.ENTITY_TYPE.eq(ORGANISATION_AUDIT_ENTITY_TYPE))
+                .and(AUDIT_EVENT.ENTITY_ID.eq(organisationId))
+                .and(AUDIT_EVENT.ACTION.eq(ORGANISATION_AMEND_AUDIT_ACTION))
+                .and(AUDIT_EVENT.OUTCOME.eq(AuditOutcome.SUCCESS.name))
+                .and(AUDIT_EVENT.ACTOR_USER_ID.eq(actorId)),
         )
 
     /** Finds a compact organisation projection using the stable tenant-code field. */

@@ -55,6 +55,27 @@ object LifecycleErrorCodes {
         "The approver cannot be someone who amended the branch."
 
     /**
+     * A checker decision on a pending tenant (approve, reject or return) was refused because the
+     * actor is its maker: the requester of the draft or the submitter of the current submission.
+     */
+    const val APPROVER_IS_TENANT_MAKER = "lifecycle.approver_is_tenant_maker"
+
+    /** The safe detail that accompanies [APPROVER_IS_TENANT_MAKER]. */
+    const val APPROVER_IS_TENANT_MAKER_DETAIL =
+        "The checker cannot be the tenant's requester or submitter."
+
+    /**
+     * A tenant approval or rejection was refused because the actor amended the tenant (has a
+     * successful `organisation.amend_draft` on it), so one person cannot amend, resubmit and
+     * decide another's draft. The tenant analogue of [APPROVER_IS_BRANCH_MODIFIER].
+     */
+    const val APPROVER_IS_TENANT_MODIFIER = "lifecycle.approver_is_tenant_modifier"
+
+    /** The safe detail that accompanies [APPROVER_IS_TENANT_MODIFIER]. */
+    const val APPROVER_IS_TENANT_MODIFIER_DETAIL =
+        "The checker cannot be someone who amended the tenant."
+
+    /**
      * The reserved `PLATFORM` organisation was named as the target of a tenant lifecycle action
      * (amend, submit, approve, reject, return, suspend, reactivate, deprovision, bootstrap retry).
      * It is the identity every platform principal authenticates against, so it is never a tenant

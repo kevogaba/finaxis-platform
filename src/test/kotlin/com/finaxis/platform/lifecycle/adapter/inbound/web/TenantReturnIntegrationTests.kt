@@ -139,8 +139,8 @@ class TenantReturnIntegrationTests
             approve(tenantId, maker).andExpect { status { isForbidden() } }
             approve(tenantId, resubmitter).andExpect { status { isForbidden() } }
             assertEquals("PENDING_APPROVAL", tenantColumn(tenantId, "status"))
-            // The checker who returned it is neither maker nor submitter, so may approve it
-            // (ADR 0029 3c: returners and amenders are not makers).
+            // The checker who returned it is neither maker, submitter nor amender, so may approve
+            // it (ADR 0029 3c; an amender would be refused, #221).
             approve(tenantId, returner).andExpect {
                 status { isAccepted() }
                 jsonPath("$.status") { value("ACTIVE") }

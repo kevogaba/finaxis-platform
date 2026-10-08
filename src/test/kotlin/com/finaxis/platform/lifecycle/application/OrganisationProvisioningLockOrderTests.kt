@@ -95,7 +95,24 @@ class OrganisationProvisioningLockOrderTests {
 
         inOrder(store, adminBootstrapStore).apply {
             verify(store).lockOrganisation(organisationId)
+            verify(adminBootstrapStore).find(organisationId)
+            verify(store).hasAmendedOrganisation(any(), any())
             verify(adminBootstrapStore).reject(organisationId)
+        }
+    }
+
+    @Test
+    fun `approve locks the organisation before it reads who amended the tenant`() {
+        val organisationId = pendingTenant()
+
+        organisations.approveProvisioning(
+            ApproveOrganisationProvisioningCommand(organisationId, actorId = uuidV7()),
+        )
+
+        // The amender rule (#221) is judged on what the lock holds still, as the maker rule is.
+        inOrder(store).apply {
+            verify(store).lockOrganisation(organisationId)
+            verify(store).hasAmendedOrganisation(any(), any())
         }
     }
 

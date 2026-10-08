@@ -14,6 +14,7 @@ import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.InitialAdministratorDraft
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.application.Reason
+import com.finaxis.platform.lifecycle.application.RejectOrganisationProvisioningCommand
 import com.finaxis.platform.lifecycle.application.ReturnOrganisationForChangesCommand
 import com.finaxis.platform.lifecycle.application.SubmitOrganisationForApprovalCommand
 import org.jooq.DSLContext
@@ -93,7 +94,10 @@ class TenantApprovalReturnRaceIntegrationTests(
                 submit(tenantId, lateActorId)
             }
 
-        assertEquals("forbidden", assertIs<ForbiddenOperationException>(outcome).code)
+        assertEquals(
+            "lifecycle.approver_is_tenant_maker",
+            assertIs<ForbiddenOperationException>(outcome).code,
+        )
         assertEquals("PENDING_APPROVAL", status(tenantId), "the refused approval changed nothing")
         assertEquals(lateActorId, submittedBy(tenantId))
         assertEquals(null, approvedBy(tenantId))
@@ -117,6 +121,47 @@ class TenantApprovalReturnRaceIntegrationTests(
         )
         assertEquals("PENDING_APPROVAL", status(tenantId))
         assertEquals(null, approvedBy(tenantId))
+    }
+
+    @Test
+    fun `an approval racing return amend and resubmit cannot be made by the new amender`() {
+        val tenantId = pendingTenant()
+
+        val outcome =
+            raceDecision(LockMode.TABLE, decide = { approve(tenantId, lateActorId) }) {
+                returnTenant(tenantId, checkerId)
+                // The approver amends the draft inside the rival and someone else resubmits it.
+                amend(tenantId, lateActorId)
+                submit(tenantId, submitterId)
+            }
+
+        assertEquals(
+            "lifecycle.approver_is_tenant_modifier",
+            assertIs<ForbiddenOperationException>(outcome).code,
+        )
+        assertEquals("PENDING_APPROVAL", status(tenantId), "the refused approval changed nothing")
+        assertEquals(null, approvedBy(tenantId))
+        assertEquals(1, deniedRows(tenantId, lateActorId, "organisation.approve"))
+    }
+
+    @Test
+    fun `a rejection racing return amend and resubmit cannot be made by the new amender`() {
+        val tenantId = pendingTenant()
+
+        val outcome =
+            raceDecision(LockMode.TABLE, decide = { reject(tenantId, lateActorId) }) {
+                returnTenant(tenantId, checkerId)
+                amend(tenantId, lateActorId)
+                submit(tenantId, submitterId)
+            }
+
+        assertEquals(
+            "lifecycle.approver_is_tenant_modifier",
+            assertIs<ForbiddenOperationException>(outcome).code,
+        )
+        assertEquals("PENDING_APPROVAL", status(tenantId), "the refused rejection changed nothing")
+        assertEquals(submitterId, submittedBy(tenantId))
+        assertEquals(1, deniedRows(tenantId, lateActorId, "organisation.reject"))
     }
 
     @Test
@@ -289,6 +334,17 @@ class TenantApprovalReturnRaceIntegrationTests(
         ApproveOrganisationProvisioningCommand(tenantId, actorId = actorId),
     )
 
+    private fun reject(
+        tenantId: UUID,
+        actorId: UUID,
+    ) = service.rejectProvisioning(
+        RejectOrganisationProvisioningCommand(
+            tenantId,
+            Reason.required("Documents incomplete."),
+            actorId,
+        ),
+    )
+
     private fun returnTenant(
         tenantId: UUID,
         actorId: UUID,
@@ -376,6 +432,22 @@ class TenantApprovalReturnRaceIntegrationTests(
             .from(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP)
             .where(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.ORGANISATION_ID.eq(tenantId))
             .fetchOne(ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP.APPROVED_BY)
+
+    /** Committed `DENIED` audit rows of [action] by [actorId] on the tenant. */
+    private fun deniedRows(
+        tenantId: UUID,
+        actorId: UUID,
+        action: String,
+    ): Int =
+        (
+            dsl.fetchValue(
+                "SELECT count(*) FROM audit_event WHERE entity_id = ? AND actor_user_id = ? " +
+                    "AND action = ? AND outcome = 'DENIED'",
+                tenantId,
+                actorId,
+                action,
+            ) as Number
+        ).toInt()
 
     private fun emailOf(userId: UUID): String = "race-$userId@tenant-race.test"
 

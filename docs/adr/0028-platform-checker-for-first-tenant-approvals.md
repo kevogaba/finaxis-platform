@@ -14,6 +14,13 @@ Amended by the branch amender rule: on both routes the approver of a branch is a
 who amended it (has a successful `branch.update` on it), see the fourth bullet of decision 5. The
 window and the creator and submitter rules are unchanged.
 
+Amended by the tenant checker rule (#221): decision 5's creator, submitter and amender rules now
+also hold for the tenant itself on its platform decision routes (`approve`, `reject`, `return`),
+with tenant-named codes `lifecycle.approver_is_tenant_maker` and
+`lifecycle.approver_is_tenant_modifier` (the amender is barred from approving and rejecting, not
+from returning) and a `DENIED` audit row per refusal. A tenant is not a platform-checker item, so
+decision 7's window does not apply to it; see ADR 0029's matching amendment.
+
 Resolves GitHub issue #153. Relaxes, in one named place, the maker-checker rule that
 `UserProvisioningService.approveUser` and `BranchProvisioningService.activate` enforce. Does not
 amend [ADR 0004](0004-membership-activation-notification-pipeline.md): the notification pipeline

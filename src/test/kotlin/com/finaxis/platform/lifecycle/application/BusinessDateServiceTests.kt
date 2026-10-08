@@ -456,6 +456,11 @@ private class FakeOrganisationLifecycleStoreForBusinessDate :
     ) = Unit
 
     override fun hasRequiredMetadata(organisationId: UUID): Boolean = true
+
+    override fun hasAmendedOrganisation(
+        organisationId: UUID,
+        actorId: UUID,
+    ): Boolean = false
 }
 
 /**

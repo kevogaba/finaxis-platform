@@ -45,10 +45,12 @@ Implemented transitions and effects:
   `finaxis.lifecycle.organisation.rejected`.
 - `PENDING_APPROVAL` to `DRAFT`: `RETURN_FOR_CHANGES` is the checker's recoverable decision
   (`POST /api/v1/platform/tenants/{tenant_id}/return`, `tenant.reject`, reason required, caller
-  neither the requester nor the submitter). It publishes only an internal transition event. The
-  initial-administrator record goes back to a draft as `REJECT` leaves it, the maker amends the
-  draft (`PATCH`) and resubmits it (`SUBMIT`), and the reason is readable as `status_reason` on the
-  platform tenant detail and on `GET /tenant`. `REJECT` stays terminal. See
+  neither the requester nor the submitter; since #221 the maker is also refused on approve and
+  reject, and whoever amended the draft may not approve or reject it). It publishes only an
+  internal transition event. The initial-administrator record goes back to a draft as `REJECT`
+  leaves it, the maker amends the draft (`PATCH`) and resubmits it (`SUBMIT`), and the reason is
+  readable as `status_reason` on the platform tenant detail and on `GET /tenant`. `REJECT` stays
+  terminal. See
   [lifecycle FSMs](../architecture/lifecycle-fsm.md#return-a-pending-tenant-to-draft-adr-0029-181).
 - `ACTIVE` to `SUSPENDED`: `SUSPEND` blocks operations and emits
   `finaxis.lifecycle.organisation.suspended`.
