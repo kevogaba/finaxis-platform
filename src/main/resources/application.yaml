@@ -393,6 +393,11 @@ finaxis:
       hsts-enabled: false
     api-docs:
       public-access-enabled: ${FINAXIS_API_DOCS_PUBLIC_ACCESS_ENABLED:true}
+    client-ip:
+      # The reverse proxies (addresses or CIDR ranges, comma-separated) whose X-Forwarded-For is
+      # believed for the audit client address (#185). Empty: the header is ignored and the peer is
+      # the client, so behind an unlisted proxy every audit row records the proxy's address.
+      trusted-proxies: ${FINAXIS_CLIENT_IP_TRUSTED_PROXIES:}
 
 springdoc:
   swagger-ui:

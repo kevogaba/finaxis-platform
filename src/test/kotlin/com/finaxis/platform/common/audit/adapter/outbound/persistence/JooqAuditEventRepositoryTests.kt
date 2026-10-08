@@ -50,6 +50,38 @@ class JooqAuditEventRepositoryTests(
     }
 
     @Test
+    fun `save falls back to the request context client address and an explicit one wins`() {
+        val organisationId = insertOrganisation()
+        val fromContext = uuidV7()
+        val explicit = uuidV7()
+
+        RequestContexts.with(RequestContext(clientIp = "198.51.100.23")) {
+            repository.save(baseEvent(fromContext, organisationId))
+            repository.save(baseEvent(explicit, organisationId, sourceIp = "203.0.113.7"))
+        }
+
+        assertEquals("198.51.100.23", ipAddress(fromContext))
+        assertEquals("203.0.113.7", ipAddress(explicit))
+    }
+
+    @Test
+    fun `save leaves the address empty with no request context and no explicit one`() {
+        val organisationId = insertOrganisation()
+        val eventId = uuidV7()
+
+        repository.save(baseEvent(eventId, organisationId))
+
+        assertNull(ipAddress(eventId))
+    }
+
+    private fun ipAddress(eventId: UUID): String? =
+        dsl
+            .select(AUDIT_EVENT.IP_ADDRESS)
+            .from(AUDIT_EVENT)
+            .where(AUDIT_EVENT.ID.eq(eventId))
+            .fetchOne(AUDIT_EVENT.IP_ADDRESS)
+
+    @Test
     fun `save stores the action as event_type and the resource type as entity_type`() {
         val organisationId = insertOrganisation()
         val eventId = uuidV7()

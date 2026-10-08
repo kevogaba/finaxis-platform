@@ -46,7 +46,12 @@ deployment and are not provisioned by it:
 | `FINAXIS_KEYCLOAK_AUDIENCE` | |
 | `FINAXIS_ACTIVE_ORGANISATION_CONTEXT_SECRET` | No default — startup fails fast without it |
 | `FINAXIS_CORS_ALLOWED_ORIGINS` | |
+| `FINAXIS_CLIENT_IP_TRUSTED_PROXIES` | The proxy's address or range [^client-ip] |
 
+[^client-ip]: Traefik's own container address (pinned), or a dedicated network that only Traefik
+  and the app join; never the shared Coolify network or its range, which every co-hosted container
+  and the bridge gateway can reach the app from. See production-hardening.md ("Client address
+  behind a reverse proxy"). Unset, every audit row records the proxy's address.
 [^issuer]: Reachable both by the app container and by whatever URL clients use to obtain tokens.
   Keycloak stamps each token with the issuer URL the caller used; an internal-only hostname here
   401s every request — the same trap `compose.yaml` documents for local host networking.

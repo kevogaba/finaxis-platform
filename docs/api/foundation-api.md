@@ -1744,8 +1744,11 @@ the FSM transition `ACTIVATE` on the organisation, written by a platform checker
   `entity_id` and `resource_id`; its `entity_type`, `action` and `before_json`/`after_json` still
   identify it. There is no text column for it and none is planned in this change.
 - `actor_user_id` (and `actor_id`) is `null` when a system process acted (`actor_type`
-  `SYSTEM`). `ip_address` is `null` on the rows the application writes today: no request path
-  captures the client address yet.
+  `SYSTEM`). `ip_address` is the client address of the request that wrote the row (personal
+  data, #185): the direct peer, or the `X-Forwarded-For` client only when the peer is a configured
+  trusted proxy (`finaxis.security.client-ip.trusted-proxies`, empty by default). IPv4 dotted
+  quad or RFC 5952 IPv6, at most 39 characters; `null` for rows written outside an HTTP request
+  and for rows written before #185.
 - `before_json`, `after_json` and `metadata_json` are JSON documents as strings, after redaction.
 - The tenant search (`/api/v1/tenant/audit-events`) and both platform searches return this shape
   in `items`; `GET .../{event_id}` returns it as the body.

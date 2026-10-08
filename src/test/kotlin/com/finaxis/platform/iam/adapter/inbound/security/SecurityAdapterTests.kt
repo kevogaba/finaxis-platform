@@ -316,7 +316,13 @@ class SecurityAdapterTests {
     fun `active organisation filter upgrades jwt authentication`() {
         val contextResolver = mock(ActiveOrganisationContextResolver::class.java)
         val loader = mock(AppPrincipalLoader::class.java)
-        val filter = ActiveOrganisationContextFilter(contextResolver, loader, problemWriter())
+        val filter =
+            ActiveOrganisationContextFilter(
+                contextResolver,
+                loader,
+                problemWriter(),
+                clientIpResolver(),
+            )
         val context =
             ActiveOrganisationContext(uuidV7(), uuidV7(), uuidV7())
         val principal = principal()
@@ -336,6 +342,45 @@ class SecurityAdapterTests {
     }
 
     @Test
+    fun `principal loading sees the request metadata so first login audit rows carry it`() {
+        // AppPrincipalLoader.load runs the first-login activation, which writes audit rows before
+        // the principal's own request context exists: the address, user agent and request id must
+        // already be ambient then, or those rows are stored without them.
+        val contextResolver = mock(ActiveOrganisationContextResolver::class.java)
+        val loader = mock(AppPrincipalLoader::class.java)
+        val filter =
+            ActiveOrganisationContextFilter(
+                contextResolver,
+                loader,
+                problemWriter(),
+                clientIpResolver(),
+            )
+        val context = ActiveOrganisationContext(uuidV7(), uuidV7(), uuidV7())
+        val request = MockHttpServletRequest()
+        request.remoteAddr = "198.51.100.7"
+        request.addHeader("User-Agent", "JUnit/1")
+        var seen: RequestContext? = null
+        SecurityContextHolder.getContext().authentication = jwtAuthentication("subject")
+        `when`(contextResolver.resolve(request))
+            .thenReturn(ActiveOrganisationContextResolution(context))
+        `when`(loader.load("subject", context)).thenAnswer {
+            seen = RequestContexts.current()
+            principal()
+        }
+
+        filter.doFilter(request, MockHttpServletResponse(), MockFilterChain())
+
+        val loading = requireNotNull(seen)
+        assertEquals("198.51.100.7", loading.clientIp)
+        assertEquals("JUnit/1", loading.userAgent)
+        assertEquals(ApiProblemFactory.requestId(request), loading.correlation?.requestId)
+        // Only request metadata: no tenant or actor is claimed before the principal is verified.
+        assertNull(loading.tenant)
+        assertNull(loading.actor)
+        assertNull(RequestContexts.current())
+    }
+
+    @Test
     fun `active organisation filter rejects invalid context`() {
         val contextResolver = mock(ActiveOrganisationContextResolver::class.java)
         val request = MockHttpServletRequest()
@@ -344,6 +389,7 @@ class SecurityAdapterTests {
                 contextResolver,
                 mock(AppPrincipalLoader::class.java),
                 problemWriter(),
+                clientIpResolver(),
             )
         val response = MockHttpServletResponse()
         SecurityContextHolder.getContext().authentication = jwtAuthentication("subject")
@@ -484,10 +530,38 @@ class SecurityAdapterTests {
     }
 
     @Test
+    fun `active organisation filter carries the client address but keeps it out of MDC`() {
+        val request = MockHttpServletRequest()
+        request.remoteAddr = "198.51.100.7"
+        request.addHeader("X-Forwarded-For", "203.0.113.9")
+        var mdcValues: Collection<String>? = null
+
+        val context =
+            captureRequestContext(request) {
+                mdcValues =
+                    org.slf4j.MDC
+                        .getCopyOfContextMap()
+                        .orEmpty()
+                        .values
+            }
+
+        // No trusted proxy is configured, so the forwarded header is ignored.
+        assertEquals("198.51.100.7", context.clientIp)
+        assertTrue(requireNotNull(mdcValues).isNotEmpty())
+        assertTrue(requireNotNull(mdcValues).none { it.contains("198.51.100.7") })
+    }
+
+    @Test
     fun `active organisation filter rejects context that cannot load principal`() {
         val contextResolver = mock(ActiveOrganisationContextResolver::class.java)
         val loader = mock(AppPrincipalLoader::class.java)
-        val filter = ActiveOrganisationContextFilter(contextResolver, loader, problemWriter())
+        val filter =
+            ActiveOrganisationContextFilter(
+                contextResolver,
+                loader,
+                problemWriter(),
+                clientIpResolver(),
+            )
         val context =
             ActiveOrganisationContext(uuidV7(), uuidV7(), uuidV7())
         val request = MockHttpServletRequest()
@@ -516,6 +590,7 @@ class SecurityAdapterTests {
                 contextResolver,
                 mock(AppPrincipalLoader::class.java),
                 problemWriter(),
+                clientIpResolver(),
             )
         val request = MockHttpServletRequest()
         val response = MockHttpServletResponse()
@@ -541,6 +616,7 @@ class SecurityAdapterTests {
                 contextResolver,
                 mock(AppPrincipalLoader::class.java),
                 problemWriter(),
+                clientIpResolver(),
             )
         val response = MockHttpServletResponse()
         SecurityContextHolder.getContext().authentication = jwtAuthentication("subject")
@@ -551,10 +627,19 @@ class SecurityAdapterTests {
         assertEquals(200, response.status)
     }
 
-    private fun captureRequestContext(request: MockHttpServletRequest): RequestContext {
+    private fun captureRequestContext(
+        request: MockHttpServletRequest,
+        inChain: () -> Unit = {},
+    ): RequestContext {
         val contextResolver = mock(ActiveOrganisationContextResolver::class.java)
         val loader = mock(AppPrincipalLoader::class.java)
-        val filter = ActiveOrganisationContextFilter(contextResolver, loader, problemWriter())
+        val filter =
+            ActiveOrganisationContextFilter(
+                contextResolver,
+                loader,
+                problemWriter(),
+                clientIpResolver(),
+            )
         val context = ActiveOrganisationContext(uuidV7(), uuidV7(), uuidV7())
         var captured: RequestContext? = null
 
@@ -566,6 +651,7 @@ class SecurityAdapterTests {
 
         filter.doFilter(request, MockHttpServletResponse()) { _, _ ->
             captured = RequestContexts.current()
+            inChain()
         }
 
         return requireNotNull(captured) { "the filter did not install a request context" }
@@ -579,6 +665,8 @@ class SecurityAdapterTests {
                 .subject(subject)
                 .build(),
         )
+
+    private fun clientIpResolver(): ClientIpResolver = ClientIpResolver(ClientIpProperties())
 
     private fun problemWriter(): ApiProblemWriter =
         ApiProblemWriter(ApiProblemFactory(), ApiJsonCodec())

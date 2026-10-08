@@ -345,6 +345,7 @@ class ActiveOrganisationContextFilter(
     private val contextResolver: ActiveOrganisationContextResolver,
     private val principalLoader: AppPrincipalLoader,
     private val problemWriter: ApiProblemWriter,
+    private val clientIpResolver: ClientIpResolver,
 ) : OncePerRequestFilter() {
     override fun doFilterInternal(
         request: HttpServletRequest,
@@ -374,11 +375,16 @@ class ActiveOrganisationContextFilter(
         return resolution.failureMessage?.let { forbidden(request, response) }
             ?: resolution.context?.let { context ->
                 authentication.token.subject?.let { subject ->
-                    principalLoader.load(subject, context)?.let { principal ->
-                        SecurityContextHolder.getContext().authentication =
-                            AppPrincipalAuthenticationToken(principal)
-                        true
-                    } ?: forbidden(request, response)
+                    // Loading runs the first-login activation, which writes audit rows before the
+                    // principal's own context exists: make the request metadata ambient for it.
+                    RequestContexts
+                        .with(requestMetadata(request)) {
+                            principalLoader.load(subject, context)
+                        }?.let { principal ->
+                            SecurityContextHolder.getContext().authentication =
+                                AppPrincipalAuthenticationToken(principal)
+                            true
+                        } ?: forbidden(request, response)
                 } ?: forbidden(request, response)
             }
             ?: true
@@ -415,8 +421,7 @@ class ActiveOrganisationContextFilter(
         // including for the majority of callers that send no X-Request-Id at all. This filter runs
         // inside the security chain and therefore before HttpAccessLogFilter, so this call is
         // usually the one that generates the id; the attribute cache stops a second one appearing.
-        val requestId = ApiProblemFactory.requestId(request)
-        return RequestContext(
+        return requestMetadata(request).copy(
             tenant = TenantContext(principal.organisationId),
             branch = principal.branchId?.let(::BranchContext),
             actor =
@@ -426,12 +431,23 @@ class ActiveOrganisationContextFilter(
                     principal.fullName,
                     principal.email,
                 ),
+        )
+    }
+
+    /**
+     * The request's own metadata only (ids, user agent, client address): no tenant or actor, so
+     * nothing is claimed for a caller whose principal has not been verified yet.
+     */
+    private fun requestMetadata(request: HttpServletRequest): RequestContext {
+        val requestId = ApiProblemFactory.requestId(request)
+        return RequestContext(
             correlation =
                 CorrelationContext(
                     requestId,
                     request.getHeader(CORRELATION_ID_HEADER) ?: requestId,
                 ),
             userAgent = request.getHeader(USER_AGENT_HEADER),
+            clientIp = clientIpResolver.resolve(request),
         )
     }
 
