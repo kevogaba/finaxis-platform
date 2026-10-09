@@ -154,6 +154,30 @@ class JooqPermissionResolutionQueriesTests(
         assertEquals(setOf(ownBranch), queries.branchIdsGranting(membershipId, code))
     }
 
+    /** Issue #242: a branch-scope grant counts only while its branch is ACTIVE. */
+    @Test
+    fun `branchIdsGranting counts a branch only while it is ACTIVE`() {
+        val organisationId = insertOrganisation()
+        val userId = insertUser()
+        val membershipId = insertMembership(organisationId, userId)
+        val code = "branch.report.view"
+        val role = insertRole(organisationId)
+        insertRolePermission(organisationId, role, insertPermission(code))
+        val branches = BRANCH_STATUSES.associateWith { insertBranch(organisationId, it) }
+        branches.values.forEach { insertUserRoleAssignment(organisationId, userId, role, it) }
+        val active = requireNotNull(branches["ACTIVE"])
+        val suspended = requireNotNull(branches["SUSPENDED"])
+
+        assertEquals(setOf(active), queries.branchIdsGranting(membershipId, code))
+
+        dsl
+            .update(BRANCH)
+            .set(BRANCH.STATUS, "ACTIVE")
+            .where(BRANCH.ID.eq(suspended))
+            .execute()
+        assertEquals(setOf(active, suspended), queries.branchIdsGranting(membershipId, code))
+    }
+
     @Test
     fun `directPermissionEffects returns allow and deny overrides for the membership`() {
         val organisationId = insertOrganisation()
@@ -371,7 +395,10 @@ class JooqPermissionResolutionQueriesTests(
         return id
     }
 
-    internal fun insertBranch(organisationId: UUID): UUID {
+    internal fun insertBranch(
+        organisationId: UUID,
+        status: String = "ACTIVE",
+    ): UUID {
         val id = uuidV7()
         val now = OffsetDateTime.now()
         dsl
@@ -381,7 +408,7 @@ class JooqPermissionResolutionQueriesTests(
             .set(BRANCH.BRANCH_CODE, "branch-$id")
             .set(BRANCH.BRANCH_NAME, "Test Branch")
             .set(BRANCH.BRANCH_TYPE, "MAIN")
-            .set(BRANCH.STATUS, "ACTIVE")
+            .set(BRANCH.STATUS, status)
             .set(BRANCH.TIMEZONE, "Africa/Nairobi")
             .set(BRANCH.CREATED_AT, now)
             .set(BRANCH.UPDATED_AT, now)
@@ -501,6 +528,10 @@ class JooqPermissionResolutionQueriesTests(
          * per-case code keeps every scenario building only rows it owns.
          */
         fun breakGlassCode(): String = "test.break_glass.${uuidV7()}"
+
+        /** Every value `chk_branch_status` admits. */
+        val BRANCH_STATUSES =
+            listOf("DRAFT", "PENDING_APPROVAL", "ACTIVE", "SUSPENDED", "CLOSED", "ARCHIVED")
 
         /**
          * One row per branch of the predicate. `DENY` beside a role grant is the precedence case;

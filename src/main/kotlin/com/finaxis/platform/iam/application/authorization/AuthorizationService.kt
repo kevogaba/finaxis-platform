@@ -116,34 +116,17 @@ class AuthorizationService(
     }
 
     /**
-     * Lists effective permission codes for [userId] in [organisationId] and [branchId].
-     */
-    fun listEffectiveBranchPermissions(
-        userId: UUID,
-        organisationId: UUID,
-        branchId: UUID,
-    ): Set<String> {
-        if (!isOrganisationActive(organisationId)) {
-            return emptySet()
-        }
-        val membership =
-            membershipSelectionLookup.findMembership(
-                userId = userId,
-                organisationId = organisationId,
-            ) ?: return emptySet()
-        return requestPermissionCache.effectivePermissions(membership.membershipId, branchId)
-    }
-
-    /**
      * Answers where [userId] holds the view permission [permissionCode] in [organisationId], the
      * check a branch-resource read makes in place of the pinned branch's authority set.
      *
      * A tenant-wide grant (the code is in the tenant set, which includes a direct allow) means
-     * every branch. Otherwise the visible branches are those carrying a branch-scope grant, read
-     * by [PermissionResolutionQueries.branchIdsGranting] under the same ACTIVE rules as runtime
-     * resolution. A direct deny settles the question for every branch, exactly as it removes the
-     * code from the effective set. An inactive organisation or membership sees nothing. The
-     * answer is memoised per request, so every read of one request decides from the same answer.
+     * every branch, whatever its status. Otherwise the visible branches are the ACTIVE ones
+     * carrying a branch-scope grant, read by [PermissionResolutionQueries.branchIdsGranting]
+     * under the same ACTIVE rules as runtime resolution (a suspended or closed branch is not
+     * visible through a grant scoped to it, issue #242). A direct deny settles the question for
+     * every branch, exactly as it removes the code from the effective set. An inactive
+     * organisation or membership sees nothing. The answer is memoised per request, so every read
+     * of one request decides from the same answer.
      */
     fun branchVisibility(
         userId: UUID,
@@ -316,21 +299,20 @@ class AuthorizationService(
             permissionCode in listEffectivePermissions(userId, organisationId)
 
     /**
-     * Returns whether [userId] has [permissionCode] in [organisationId] and [branchId].
+     * Returns whether [userId] has [permissionCode] in [organisationId] at the target [branchId]:
+     * a tenant-wide grant, or a grant on that branch **while it is ACTIVE** (issue #242).
+     *
+     * It is [branchVisibility] asked about one branch, so a target-branch check, a target-aware
+     * read and an assignment-id lookup are one procedure over one per-request answer: a mutation
+     * that suspends or closes the branch it was allowed on still reads it back, and a
+     * branch-scoped holder of a branch that is not ACTIVE may neither read nor act on it.
      */
     fun hasPermission(
         userId: UUID,
         organisationId: UUID,
         branchId: UUID,
         permissionCode: String,
-    ): Boolean =
-        SystemActor.isSystemActor(userId) ||
-            permissionCode in
-            listEffectiveBranchPermissions(
-                userId = userId,
-                organisationId = organisationId,
-                branchId = branchId,
-            )
+    ): Boolean = branchVisibility(userId, organisationId, permissionCode).canSee(branchId)
 
     /**
      * Requires [userId] to have [permissionCode] in [organisationId].
@@ -385,9 +367,10 @@ class AuthorizationService(
 
     /**
      * As [requirePermissionWithViews], at the target [branchId]: the mutation code and each view
-     * are asked of the branch's effective set (a tenant-wide grant or a grant on that branch),
-     * the very set, through the same per-request memo, that the gated branch read-back decides
-     * from, so the pre-check and the read-back are one procedure over one piece of data.
+     * are asked of the branch visibility (a tenant-wide grant or a grant on that branch while it
+     * is ACTIVE), the very answer, through the same per-request memo, that the gated branch
+     * read-back decides from, so the pre-check and the read-back are one procedure over one piece
+     * of data.
      */
     fun requirePermissionWithViews(
         userId: UUID,

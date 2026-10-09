@@ -84,8 +84,8 @@ class BranchController(
         description =
             "Searches the branches in the active tenant organisation that the caller holds " +
                 "branch.view on: every branch for a tenant-wide grant, otherwise the branches " +
-                "carrying a branch-scope grant. The selected branch does not narrow the list. " +
-                "403 when the caller holds branch.view nowhere.",
+                "carrying a branch-scope grant while they are ACTIVE. The selected branch does " +
+                "not narrow the list. 403 when the caller holds branch.view nowhere.",
     )
     @ApiResponses(
         ApiResponse(
@@ -258,9 +258,10 @@ class BranchController(
         summary = "Get branch details",
         description =
             "Retrieves detailed metadata for a specific branch under the active tenant. " +
-                "Requires branch.view tenant-wide or on this branch. An unknown id is 404 to a " +
-                "tenant-wide holder and 403 to a branch-scoped holder, like any other branch " +
-                "the caller cannot view.",
+                "Requires branch.view tenant-wide or on this branch while it is ACTIVE (a " +
+                "branch-scoped holder cannot view a suspended or closed branch). An unknown " +
+                "id is 404 to a tenant-wide holder and 403 to a branch-scoped holder, like any " +
+                "other branch the caller cannot view.",
     )
     @ApiResponses(
         ApiResponse(

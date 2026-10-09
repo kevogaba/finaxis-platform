@@ -423,6 +423,10 @@ Do not invent accounting tables or columns outside those documents.
   404) for a branch-scoped caller's unknown id. These routes deliberately carry **no**
   `@PreAuthorize` view gate (it would test the pinned branch's authorities); the application-layer
   check is their only authorisation, so never add an endpoint gate back or drop that check.
+  A branch-scope grant counts only while its branch is `ACTIVE` (#242): `branchIdsGranting` is the
+  one place that rule lives, and the target-branch check (`requireBranchPermission`) is that same
+  visibility, so a branch-scoped holder neither sees nor acts on a suspended or closed branch
+  (a grant made while it was ACTIVE survives suspension; none can exist on DRAFT/PENDING_APPROVAL).
 
 ## FSM / events / async
 

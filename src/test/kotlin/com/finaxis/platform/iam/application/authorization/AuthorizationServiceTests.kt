@@ -114,8 +114,9 @@ class AuthorizationServiceTests {
     }
 
     @Test
-    fun `branch permissions resolve with branch cache key`() {
+    fun `a branch permission is a tenant wide grant or a grant on that branch`() {
         val branchId = uuidV7()
+        val otherBranchId = uuidV7()
         val service =
             authorizationService(
                 memberships = mapOf(userId to selection()),
@@ -126,12 +127,12 @@ class AuthorizationServiceTests {
                     ),
             )
 
-        assertEquals(
-            setOf("branch.create"),
-            service.listEffectiveBranchPermissions(userId, organisationId, branchId),
-        )
         assertTrue(service.hasPermission(userId, organisationId, branchId, "branch.create"))
-        assertFalse(service.hasPermission(userId, organisationId, branchId, "organisation.read"))
+        assertFalse(service.hasPermission(userId, organisationId, otherBranchId, "branch.create"))
+        assertTrue(service.hasPermission(userId, organisationId, branchId, "organisation.read"))
+        assertTrue(
+            service.hasPermission(userId, organisationId, otherBranchId, "organisation.read"),
+        )
     }
 
     @Test
@@ -157,7 +158,7 @@ class AuthorizationServiceTests {
     }
 
     @Test
-    fun `listEffectiveBranchPermissions returns empty when organisation is not active`() {
+    fun `a branch permission is refused when the organisation is not active`() {
         val branchId = uuidV7()
         val service =
             authorizationService(
@@ -167,10 +168,6 @@ class AuthorizationServiceTests {
                 organisationStatus = OrganisationStatus.DEPROVISIONED,
             )
 
-        assertEquals(
-            emptySet(),
-            service.listEffectiveBranchPermissions(userId, organisationId, branchId),
-        )
         assertFalse(service.hasPermission(userId, organisationId, branchId, "branch.create"))
     }
 
@@ -360,10 +357,16 @@ private class FakePermissionResolutionQueries(
     ): List<com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment> =
         emptyList()
 
+    /** The branch keys of this membership whose codes include [permissionCode]. */
     override fun branchIdsGranting(
         membershipId: UUID,
         permissionCode: String,
-    ): Set<UUID> = emptySet()
+    ): Set<UUID> =
+        permissions
+            .filter { (key, codes) -> key.membershipId == membershipId && permissionCode in codes }
+            .keys
+            .mapNotNull(PermissionKey::branchId)
+            .toSet()
 
     /**
      * The locking break-glass read, answered from the same map the cached resolver reads.

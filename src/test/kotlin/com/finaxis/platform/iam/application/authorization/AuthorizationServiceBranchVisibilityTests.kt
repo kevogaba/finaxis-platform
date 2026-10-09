@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.application.authorization
 
+import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.iam.FixedViewRequirements
@@ -17,6 +18,9 @@ import org.springframework.cache.concurrent.ConcurrentMapCacheManager
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /** Pins the per-branch projection of the effective permission rule (ADR 0030, decision 5). */
 class AuthorizationServiceBranchVisibilityTests {
@@ -114,16 +118,49 @@ class AuthorizationServiceBranchVisibilityTests {
     }
 
     @Test
-    fun `visibility agrees with the effective permission set at each branch`() {
+    fun `visibility agrees with the target branch check at each branch`() {
         queries.branchGrants = mapOf(VIEW to setOf(branchA))
         val visibility = visibility()
 
         listOf(branchA, branchB).forEach { branchId ->
             assertEquals(
                 visibility.canSee(branchId),
-                VIEW in service.listEffectiveBranchPermissions(userId, organisationId, branchId),
+                service.hasPermission(userId, organisationId, branchId, VIEW),
             )
         }
+    }
+
+    /**
+     * Issue #242: the target-branch check is the visibility, not the effective set of a selected
+     * branch, so a branch the projection leaves out (one that is not ACTIVE) is refused although
+     * a role assignment on it still grants the code.
+     */
+    @Test
+    fun `the target branch check refuses a branch the visibility leaves out`() {
+        queries.selectedBranchOnlyGrants = mapOf(VIEW to setOf(branchA))
+        queries.branchGrants = mapOf(VIEW to setOf(branchB))
+
+        assertFalse(service.hasPermission(userId, organisationId, branchA, VIEW))
+        assertTrue(service.hasPermission(userId, organisationId, branchB, VIEW))
+        assertFailsWith<MissingPermissionException> {
+            service.requirePermissionWithViews(userId, organisationId, branchA, VIEW)
+        }
+    }
+
+    @Test
+    fun `a target branch check and a later read of one request decide from one answer`() {
+        queries.branchGrants = mapOf(VIEW to setOf(branchA))
+        val perRequest = service
+
+        assertTrue(perRequest.hasPermission(userId, organisationId, branchA, VIEW))
+        // The branch leaving the projection mid-request (say the mutation suspended it) does not
+        // refuse the read-back of the same request.
+        queries.branchGrants = emptyMap()
+        assertTrue(perRequest.hasPermission(userId, organisationId, branchA, VIEW))
+        val visibility = perRequest.branchVisibility(userId, organisationId, VIEW)
+        assertEquals(BranchVisibility.Branches(setOf(branchA)), visibility)
+        // A new request decides afresh.
+        assertFalse(service.hasPermission(userId, organisationId, branchA, VIEW))
     }
 
     @Test
@@ -180,6 +217,9 @@ class AuthorizationServiceBranchVisibilityTests {
         var tenantCodes: Set<String> = emptySet()
         var branchGrants: Map<String, Set<UUID>> = emptyMap()
         var direct: List<PermissionEffectAssignment> = emptyList()
+
+        /** Grants the selected-branch set still carries that the projection has left out. */
+        var selectedBranchOnlyGrants: Map<String, Set<UUID>> = emptyMap()
         var branchReads = 0
         var statusReads = 0
 
@@ -193,7 +233,8 @@ class AuthorizationServiceBranchVisibilityTests {
             branchId: UUID?,
         ): Set<String> =
             tenantCodes +
-                branchGrants.filterValues { branchId in it }.keys
+                branchGrants.filterValues { branchId in it }.keys +
+                selectedBranchOnlyGrants.filterValues { branchId in it }.keys
 
         override fun directPermissionEffects(membershipId: UUID) = direct
 
