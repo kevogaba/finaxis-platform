@@ -21,6 +21,27 @@ Production session cookies are `Secure` and `SameSite=Strict`.
 The application always sends content-type-options, frame-options, and referrer-policy headers.
 Production additionally enables HSTS and CSP.
 
+## Client address behind a reverse proxy
+
+Audit rows record the client address (`audit_event.ip_address`, #185). The application believes
+`X-Forwarded-For` only from a direct peer listed in `finaxis.security.client-ip.trusted-proxies`
+(`FINAXIS_CLIENT_IP_TRUSTED_PROXIES`: comma-separated addresses or CIDR ranges, IPv4 or IPv6),
+and then takes the right-most entry that is not itself a trusted proxy. The list is empty by
+default, and the header is then ignored.
+
+**A deployment behind a reverse proxy (Coolify's Traefik) must set it to that proxy's own
+address**: pin Traefik's container address (a static IP), or put Traefik and the application on a
+dedicated network that only the two of them join and trust that network. Do **not** trust the
+shared Docker network Coolify attaches every co-hosted resource to, nor its range: any other
+container on it could connect straight to the application with a forged `X-Forwarded-For` and be
+believed, and the range also holds the bridge gateway, which Docker's userland proxy uses as the
+source of host-published traffic. Unset, every audit row records the proxy's address, not the
+client's; too wide, a client can name any address it likes. A malformed entry fails startup, and
+so does a range of every address (`0.0.0.0/0`, `::/0`). The proxy must append the address it
+received the request from to `X-Forwarded-For`, which Traefik does by default. Spring's own
+`ForwardedHeaderFilter` (`server.forward-headers-strategy: framework`) is not used for this: it
+believes the left-most entry from any peer (#256, owner decision pending).
+
 ## Bootstrap identities
 
 `V3` seeds a demo tenant, `FINAXIS-LOCAL`, with two demo identities, `local.admin` and

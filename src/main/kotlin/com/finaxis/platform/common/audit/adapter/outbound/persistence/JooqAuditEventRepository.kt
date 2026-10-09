@@ -52,7 +52,7 @@ class JooqAuditEventRepository(
             .set(AUDIT_EVENT.OUTCOME, event.outcome.name)
             .set(AUDIT_EVENT.REASON, event.reason)
             .set(AUDIT_EVENT.SEVERITY, event.severity.name)
-            .set(AUDIT_EVENT.IP_ADDRESS, event.sourceIp)
+            .set(AUDIT_EVENT.IP_ADDRESS, event.sourceIp ?: context?.clientIp)
             .set(AUDIT_EVENT.USER_AGENT, event.userAgent ?: context?.userAgent)
             .set(AUDIT_EVENT.CORRELATION_ID, context?.correlation?.correlationId)
             .set(AUDIT_EVENT.REQUEST_ID, event.requestId ?: context?.correlation?.requestId)

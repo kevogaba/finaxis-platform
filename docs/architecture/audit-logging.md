@@ -68,7 +68,50 @@ every tenant that is not `ACTIVE` or terminal.
 `[A-Za-z0-9._-]` or generates one (a rejected value is never logged or stored). It returns the
 header to clients and stores `requestId` in MDC for request logs. `ActiveOrganisationContextFilter`
 separately installs `RequestContexts`, which carries tenant/branch/actor/correlation/user-agent
-for the audit adapter to fall back on when a caller does not supply them explicitly.
+and the client address for the audit adapter to fall back on when a caller does not supply them
+explicitly.
+
+### Client address (#185)
+
+`audit_event.ip_address` is the client address of the request that wrote the row. The rule is in
+one place, `ClientIpResolver` (`iam.adapter.inbound.security`), called by
+`ActiveOrganisationContextFilter` where the user agent is read; the result travels on
+`RequestContext.clientIp`, and `JooqAuditEventRepository` stores `AuditCommand.sourceIp` when a
+caller set one and the context's address otherwise. A row written outside an HTTP request (a
+JobRunr handler, a listener) has no context, so its address is the command's or `NULL`.
+
+- **Trust is configured, never assumed.** `finaxis.security.client-ip.trusted-proxies`
+  (`FINAXIS_CLIENT_IP_TRUSTED_PROXIES`, `ClientIpProperties`) lists the reverse proxies as
+  addresses or CIDR ranges, IPv4 or IPv6. It is **empty by default**: then `X-Forwarded-For` is
+  ignored and the direct peer is the client. An entry that is not an address or a range, or a
+  range of every address (`0.0.0.0/0`, `::/0`, `::ffff:0:0/96`), fails startup naming the
+  property and the entry. An IPv4-mapped entry (`::ffff:10.0.0.0/104`) is the IPv4 range it maps.
+- **The peer is the container's.** The resolver reads the remote address and the header from the
+  innermost (container) request, past every wrapper. This matters: `server.forward-headers-strategy:
+  framework` installs Spring's `ForwardedHeaderFilter`, which rewrites `getRemoteAddr()` to the
+  **left-most** `X-Forwarded-For` entry of **any** peer and hides the header, a value the client
+  controls. The resolver never uses that view.
+- **Behind a trusted peer**, `X-Forwarded-For` is walked lazily from the right (several header
+  lines are one list, in order): the client is the first entry that is not itself a trusted
+  proxy; if every entry is trusted, the left-most. Entries to the left of the client are never
+  read, so a forged left-most entry is neither believed nor able to veto the real one, however
+  long or malformed it is. Only `X-Forwarded-For` is read; the RFC 7239 `Forwarded` header is not.
+- **Bad input stops the walk, never an error.** A blank or malformed entry (not an IP literal,
+  optionally with a port) reached during the walk, or more than 16 entries (`MAX_HOPS`), stops it
+  and the trusted peer is the client. A peer address with an IPv6 zone id is read without it.
+- **Normalised text**: IPv4 dotted quad; an IPv4-mapped IPv6 address as IPv4; other IPv6 in
+  RFC 5952 form (lower case, longest zero run compressed), no zone or port; at most 39
+  characters. The column is unbounded `TEXT`, so no migration was needed. A peer that is not an IP
+  literal stores `NULL`.
+- **Personal data.** The address is only stored on the audit row. It is not put into MDC, logs or
+  metric tags (the access log's `remoteAddress` is unchanged and separate). **The access log and
+  the audit row can show different addresses for the same request** until #256
+  (`forward-headers-strategy: framework`) is decided: the access log's `remoteAddress` and MDC
+  `client.address` hold `ForwardedHeaderFilter`'s view, the left-most forwarded entry of any peer,
+  so for forensics the audit row's address is the authoritative one. Only the tenant audit
+  routes and the platform detail route of the platform's own log return it; both platform pages
+  withhold it (owner ruling, #247). How long rows, and with them addresses, are kept is not yet
+  defined: the `audit_retention_days` setting has no purge job behind it (#164).
 
 ## Reading the log
 

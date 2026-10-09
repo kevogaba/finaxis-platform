@@ -62,3 +62,20 @@ data class SecurityHeadersProperties(
 data class ApiDocsProperties(
     val publicAccessEnabled: Boolean = true,
 )
+
+/**
+ * Which direct peers may tell the application the client's address (#185).
+ *
+ * `trusted-proxies` lists the reverse proxies in front of the application, each an IPv4 or IPv6
+ * address or a CIDR range. Empty by default: then `X-Forwarded-For` is ignored and the peer is
+ * the client. A deployment behind a proxy must list it, or every audit row records the proxy's
+ * address. An entry that is not an address or a range, or a range of every address (`/0`), fails
+ * startup (see [ClientIpResolver] and [IpRange]).
+ */
+@ConfigurationProperties(prefix = "finaxis.security.client-ip")
+data class ClientIpProperties(
+    val trustedProxies: List<String> = emptyList(),
+) {
+    /** The parsed entries; parsing them at binding time is what refuses a bad entry at startup. */
+    val trustedRanges: List<IpRange> = trustedProxies.map(IpRange::parse)
+}

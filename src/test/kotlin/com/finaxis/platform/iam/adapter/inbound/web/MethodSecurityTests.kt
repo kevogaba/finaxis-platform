@@ -4,6 +4,7 @@ import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiProblemWriter
 import com.finaxis.platform.iam.adapter.inbound.security.ActiveOrganisationContextResolver
 import com.finaxis.platform.iam.adapter.inbound.security.AppPrincipalLoader
+import com.finaxis.platform.iam.adapter.inbound.security.ClientIpResolver
 import com.finaxis.platform.iam.adapter.inbound.security.MethodSecurityAuthorizer
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
@@ -44,6 +45,9 @@ class MethodSecurityTests {
 
     @MockitoBean
     private lateinit var apiProblemWriter: ApiProblemWriter
+
+    @MockitoBean
+    private lateinit var clientIpResolver: ClientIpResolver
 
     @Test
     fun `controller protected by PreAuthorize rejects missing permission`() {

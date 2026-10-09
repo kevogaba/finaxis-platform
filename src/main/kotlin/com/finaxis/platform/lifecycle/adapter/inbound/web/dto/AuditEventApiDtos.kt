@@ -18,6 +18,11 @@ private const val ENTITY_ID_DOC =
 private const val WITHHELD_DOC =
     "Withheld (null) in the items of the platform audit pages by owner decision; populated on " +
         "the tenant routes and the platform detail route."
+private const val IP_ADDRESS_DOC =
+    "Client address of the request that wrote the row (personal data): the direct peer, or the " +
+        "X-Forwarded-For client when the peer is a configured trusted proxy. IPv4 dotted quad or " +
+        "RFC 5952 IPv6, at most 39 characters; null for a row written outside an HTTP request " +
+        "and for rows written before client addresses were captured."
 
 /**
  * One audit event in a paginated search. Carries exactly the fields of
@@ -49,7 +54,7 @@ data class AuditEventSummaryResponse(
     val outcome: String,
     val severity: String,
     val reason: String?,
-    @field:Schema(description = WITHHELD_DOC)
+    @field:Schema(description = "$IP_ADDRESS_DOC $WITHHELD_DOC")
     val ipAddress: String?,
     @field:Schema(description = WITHHELD_DOC)
     val userAgent: String?,
@@ -92,6 +97,7 @@ data class AuditEventDetailResponse(
     val outcome: String,
     val severity: String,
     val reason: String?,
+    @field:Schema(description = IP_ADDRESS_DOC)
     val ipAddress: String?,
     val userAgent: String?,
     val correlationId: String?,

@@ -29,13 +29,19 @@ data class CorrelationContext(
     val correlationId: String?,
 )
 
-/** Immutable context snapshot used to install the complete request context. */
+/**
+ * Immutable context snapshot used to install the complete request context.
+ *
+ * [clientIp] is the client address resolved behind the configured trusted proxies (#185). It is
+ * personal data, carried only for the audit row: it is deliberately not put into MDC.
+ */
 data class RequestContext(
     val tenant: TenantContext? = null,
     val branch: BranchContext? = null,
     val actor: ActorContext? = null,
     val correlation: CorrelationContext? = null,
     val userAgent: String? = null,
+    val clientIp: String? = null,
 )
 
 /** Thread-bound context and matching MDC lifecycle for synchronous Spring MVC execution. */

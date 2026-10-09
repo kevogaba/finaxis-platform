@@ -29,9 +29,19 @@ Every audit event maps to one row in `audit_event` (`public` schema; there is no
 - `metadata_jsonb` — everything else, including `sourceModule`, `commandName`, and
   `externalSystemReference` (see `AuditMetadataKeys` in `common.audit`).
 
-`tenant_id`/`branch_id`/`actor_id`/`correlation_id`/`request_id` are filled from an explicit
-`AuditCommand` field when the caller supplies one, and otherwise fall back to the ambient
-`RequestContexts` snapshot installed by `ActiveOrganisationContextFilter`. Background workers
+`tenant_id`/`branch_id`/`actor_id`/`correlation_id`/`request_id`/`user_agent`/`ip_address` are
+filled from an explicit `AuditCommand` field when the caller supplies one, and otherwise fall back
+to the ambient `RequestContexts` snapshot installed by `ActiveOrganisationContextFilter`.
+`ip_address` is the client address that `ClientIpResolver` resolves: the direct peer, or the
+`X-Forwarded-For` client only when the peer is listed in
+`finaxis.security.client-ip.trusted-proxies` (empty by default, so the header is ignored). It is
+personal data: kept on the audit row only, never in MDC or logs beyond the access log's existing
+`remoteAddress`, and withheld on the platform pages. Until #256 is fixed the access log's
+`remoteAddress` can differ from the audit row's address for the same request (it is
+`ForwardedHeaderFilter`'s client-controlled view); the audit row is authoritative. See
+[audit architecture](../architecture/audit-logging.md#client-address-185) for the full rule and
+[production hardening](production-hardening.md#client-address-behind-a-reverse-proxy) for the
+deployment requirement. Background workers
 (JobRunr handlers, Namastack-triggered listeners) run with no HTTP request thread, so they must
 pass `tenantId`/`actorId` explicitly — see the Keycloak and invite-dispatch handlers for the
 pattern.
