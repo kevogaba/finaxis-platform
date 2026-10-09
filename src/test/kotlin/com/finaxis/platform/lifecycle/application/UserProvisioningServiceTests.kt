@@ -827,18 +827,62 @@ class UserProvisioningServiceTests {
         )
 
         // The lock serialises two platform checkers of one tenant (#223, ADR 0028 point 8).
-        assertEquals(listOf("lock:${context.org}", "count:${context.org}"), fake.windowCalls)
+        assertEquals(
+            listOf("lock:${context.org}", "count:${context.org}"),
+            fake.windowCalls.filterNot { it.startsWith("read:") },
+        )
     }
 
     @Test
-    fun `the tenant's own approver takes no platform window lock`() {
+    fun `the tenant's own approver locks the tenant before it reads the membership`() {
         val context = activeInvitationContext()
         val invitation = service.inviteUser(inviteCommand(context))
         fake.windowCalls.clear()
 
         service.approveUser(ApproveUserCommand(context.org, invitation.membershipId, uuidV7()))
 
+        // The same lock as the platform checker's, first, so a platform checker of the same
+        // tenant waits for this approval and counts what it committed (#250, ADR 0028 point 8).
+        // The tenant's approver is not bounded, so it counts nothing.
+        assertEquals("lock:${context.org}", fake.windowCalls.first())
+        assertEquals(1, fake.windowCalls.count { it.startsWith("lock:") })
+        assertTrue(fake.windowCalls.contains("read:${invitation.membershipId}"))
+        assertTrue(fake.windowCalls.none { it.startsWith("count:") })
+    }
+
+    @Test
+    fun `a tenant approver without the permission is refused before it takes any lock`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        val approver = uuidV7()
+        doThrow(MissingPermissionException("user.approve"))
+            .whenever(permissionGuard)
+            .requireTenantPermission(approver, context.org, "user.approve")
+        fake.windowCalls.clear()
+
+        assertFailsWith<MissingPermissionException> {
+            service.approveUser(ApproveUserCommand(context.org, invitation.membershipId, approver))
+        }
+
+        // Permission first: an unauthorised caller never holds the tenant's row lock.
         assertEquals(emptyList(), fake.windowCalls)
+    }
+
+    @Test
+    fun `the bootstrap approval of the system-invited administrator takes no lock`() {
+        val context = activeInvitationContext()
+        val invitation =
+            service.inviteAsSystem(inviteCommand(context).copy(invitedBy = SystemActor.ID))
+        fake.windowCalls.clear()
+
+        service.approveAsSystem(
+            ApproveUserCommand(context.org, invitation.membershipId, context.checker),
+        )
+
+        // A system-invited membership never counts towards the window, so its activation cannot
+        // close it; the bootstrap job holds its bootstrap row and must not then wait for the
+        // organisation row a platform retry holds first.
+        assertTrue(fake.windowCalls.none { it.startsWith("lock:") })
     }
 
     @Test
@@ -1428,7 +1472,7 @@ private class UserProvisioningFake :
     val dispatches = mutableSetOf<DispatchRecord>()
     var duplicateOnCreateUser = false
 
-    /** The window-check reads in call order, so a test can prove the lock comes first. */
+    /** The lock, the window count and membership reads in call order (lock comes first). */
     val windowCalls = mutableListOf<String>()
 
     fun addUser(
@@ -1513,6 +1557,7 @@ private class UserProvisioningFake :
         organisationId: UUID,
         membershipId: UUID,
     ): MembershipProvisioningSnapshot? {
+        windowCalls += "read:$membershipId"
         val key = organisationId to membershipId
         val aggregate = memberships[key] ?: return null
         val userId = requireNotNull(membershipUsers[key])

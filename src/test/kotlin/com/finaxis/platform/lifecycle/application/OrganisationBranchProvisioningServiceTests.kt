@@ -1315,7 +1315,10 @@ private class ProvisioningFake(
     override fun createdBy(
         organisationId: UUID,
         branchId: UUID,
-    ): UUID? = branchCreators[organisationId to branchId]
+    ): UUID? {
+        windowCalls += "creator:$branchId"
+        return branchCreators[organisationId to branchId]
+    }
 
     override fun hasActiveBranchBeyondBootstrap(organisationId: UUID): Boolean {
         windowCalls += "count:$organisationId"
@@ -2356,7 +2359,10 @@ class PlatformCheckerBranchTests {
         branches.activate(activateCommand(branchId, platformChecker))
 
         // The lock serialises two platform checkers of one tenant (#223, ADR 0028 point 8).
-        assertEquals(listOf("lock:$organisationId", "count:$organisationId"), store.windowCalls)
+        assertEquals(
+            listOf("lock:$organisationId", "count:$organisationId"),
+            store.windowCalls.filterNot { it.startsWith("creator:") },
+        )
     }
 
     @Test
@@ -2381,7 +2387,7 @@ class PlatformCheckerBranchTests {
     }
 
     @Test
-    fun `the tenant's own branch checker takes no platform window lock`() {
+    fun `the tenant's own branch checker locks the tenant before it reads the branch maker`() {
         val branchId = pendingPlatformBranch()
         store.windowCalls.clear()
 
@@ -2389,7 +2395,60 @@ class PlatformCheckerBranchTests {
             activateCommand(branchId, platformChecker).copy(scope = ActingScope.TENANT),
         )
 
+        // The same lock as the platform checker's, so a platform checker of the same tenant
+        // waits for this activation and counts what it committed (#250, ADR 0028 point 8). The
+        // tenant's own checker is not bounded, so it counts nothing.
+        assertEquals("lock:$organisationId", store.windowCalls.first())
+        assertEquals(1, store.windowCalls.count { it.startsWith("lock:") })
+        assertTrue(store.windowCalls.contains("creator:$branchId"))
+        assertTrue(store.windowCalls.none { it.startsWith("count:") })
+        assertEquals(
+            BranchLifecycleState.ACTIVE,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+    }
+
+    @Test
+    fun `a tenant branch checker without the permission is refused before it takes any lock`() {
+        val branchId = pendingPlatformBranch()
+        doThrow(MissingPermissionException("branch.approve"))
+            .whenever(permissionGuard)
+            .requireBranchPermission(platformChecker, organisationId, branchId, "branch.approve")
+        store.windowCalls.clear()
+
+        assertFailsWith<MissingPermissionException> {
+            branches.activate(
+                activateCommand(branchId, platformChecker).copy(scope = ActingScope.TENANT),
+            )
+        }
+
+        // Permission first: an unauthorised caller never holds the tenant's row lock.
         assertEquals(emptyList(), store.windowCalls)
+        assertEquals(
+            BranchLifecycleState.PENDING_APPROVAL,
+            lifecyclePersistence.branches.getValue(organisationId to branchId).state,
+        )
+    }
+
+    @Test
+    fun `the tenant's own branch submission takes no lock`() {
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        val branchId = uuidV7()
+        store.branchStates[organisationId to branchId] = BranchLifecycleState.DRAFT
+        lifecyclePersistence.branches[organisationId to branchId] =
+            aggregate(branchId, BranchLifecycleState.DRAFT, "BRANCH")
+
+        branches.submitForApproval(
+            SubmitBranchForApprovalCommand(
+                organisationId = organisationId,
+                branchId = branchId,
+                actorId = platformMaker,
+                requestId = uuidV7(),
+            ),
+        )
+
+        // A submission does not change the tenant's ACTIVE branch count, so it needs no lock.
+        assertTrue(store.windowCalls.none { it.startsWith("lock:") })
     }
 
     private fun createCommand(scope: ActingScope) =

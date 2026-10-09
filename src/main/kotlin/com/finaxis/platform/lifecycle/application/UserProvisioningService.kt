@@ -140,6 +140,11 @@ class UserProvisioningService(
      * tenant user (ADR 0028). The approver authorises here, first: a platform-scope approval
      * against the platform organisation (then never the platform organisation itself, a 404), a
      * tenant-scope approval against the tenant, each with `membership.view` (ADR 0030).
+     *
+     * Either scope then takes the tenant's organisation row lock before it activates anything:
+     * a platform checker before it counts the tenant's own members, and the tenant's own approver
+     * first, before it reads the membership, so the two are serialised and a platform checker
+     * that follows a tenant approval counts what it committed (#250, ADR 0028 point 8).
      */
     @Transactional
     fun approveUser(command: ApproveUserCommand): UserApprovalResult {
@@ -154,6 +159,9 @@ class UserProvisioningService(
                     command.organisationId,
                     "user.approve",
                 )
+                // Unbounded itself, but it can close the platform checker's window, so it takes
+                // that window's lock, in the same order: the organisation row before any other.
+                store.lockOrganisation(command.organisationId)
             }
         }
         return approve(command)
@@ -169,6 +177,11 @@ class UserProvisioningService(
      * approved the tenant (the stored `approvedBy`), a real identity the maker-checker rules
      * must see, so its only guard is the architecture rule that limits its callers to the
      * bootstrap service.
+     *
+     * It takes no organisation lock: the administrator it activates was invited by the system
+     * actor, so it never counts towards the platform checker's window (ADR 0028 point 7), and
+     * the bootstrap holds its bootstrap row by then, which the organisation provisioning
+     * decisions update only after the organisation row: locking it here would invert that order.
      */
     @Transactional
     fun approveAsSystem(command: ApproveUserCommand): UserApprovalResult {
@@ -634,8 +647,8 @@ private fun membershipRevocationTransition(
  * A platform checker acts only on an ACTIVE tenant that has no ACTIVE member beyond its bootstrap
  * administrator, so it is the way out of the first-approval deadlock and not a standing approver.
  * The tenant's organisation row is locked before the count, so two platform checkers approving
- * two memberships of one tenant at once are serialised and the second counts the first's commit
- * (ADR 0028 point 8).
+ * two memberships of one tenant at once are serialised and the second counts the first's commit,
+ * and so is a tenant approval, which takes the same lock (ADR 0028 point 8, #250).
  */
 private fun UserProvisioningStore.requirePlatformCheckerOpen(command: ApproveUserCommand) {
     lockOrganisation(command.organisationId)
