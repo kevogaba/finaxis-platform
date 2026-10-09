@@ -57,7 +57,7 @@ class JooqUserProfileLookup(
 
     override fun assignedBranches(membershipId: UUID): List<ProfileBranch> =
         dsl
-            .select(BRANCH.ID, BRANCH.BRANCH_CODE, BRANCH.BRANCH_NAME, BRANCH.STATUS)
+            .selectDistinct(BRANCH.ID, BRANCH.BRANCH_CODE, BRANCH.BRANCH_NAME, BRANCH.STATUS)
             .from(USER_BRANCH_ASSIGNMENT)
             .join(USER_ORGANISATION_MEMBERSHIP)
             .on(
@@ -70,6 +70,7 @@ class JooqUserProfileLookup(
             .and(BRANCH.ID.eq(USER_BRANCH_ASSIGNMENT.BRANCH_ID))
             .where(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
             .and(USER_BRANCH_ASSIGNMENT.STATUS.eq(ACTIVE))
+            .and(BRANCH.STATUS.eq(ACTIVE))
             .orderBy(BRANCH.BRANCH_CODE)
             .fetch()
             .map { record ->
@@ -83,7 +84,7 @@ class JooqUserProfileLookup(
 
     override fun assignedRoles(membershipId: UUID): List<ProfileRole> =
         dsl
-            .select(ROLE.ID, ROLE.ROLE_CODE, ROLE.ROLE_NAME, ROLE.STATUS)
+            .selectDistinct(ROLE.ID, ROLE.ROLE_CODE, ROLE.ROLE_NAME, ROLE.STATUS)
             .from(USER_ROLE_ASSIGNMENT)
             .join(USER_ORGANISATION_MEMBERSHIP)
             .on(
@@ -96,6 +97,7 @@ class JooqUserProfileLookup(
             .and(ROLE.ID.eq(USER_ROLE_ASSIGNMENT.ROLE_ID))
             .where(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
             .and(USER_ROLE_ASSIGNMENT.STATUS.eq(ACTIVE))
+            .and(ROLE.STATUS.eq(ACTIVE))
             .orderBy(ROLE.ROLE_CODE)
             .fetch()
             .map { record ->

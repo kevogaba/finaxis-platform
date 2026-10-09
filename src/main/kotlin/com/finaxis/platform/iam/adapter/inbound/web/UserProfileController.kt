@@ -34,7 +34,8 @@ class UserProfileController(
         summary = "Get current user profile",
         description =
             "Returns the authenticated application user, selected organisation, selected branch, " +
-                "assigned branches, roles, and effective permissions.",
+                "ACTIVE assigned branches and ACTIVE roles (each listed once), and effective " +
+                "permissions.",
         security = [SecurityRequirement(name = "bearer-key")],
     )
     @ApiResponses(

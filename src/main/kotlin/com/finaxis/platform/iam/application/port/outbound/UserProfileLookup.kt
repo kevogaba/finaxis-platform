@@ -58,12 +58,12 @@ interface UserProfileLookup {
     fun membership(membershipId: UUID): ProfileMembership?
 
     /**
-     * Lists branches assigned to the selected membership.
+     * Lists the distinct ACTIVE branches the selected membership holds an ACTIVE assignment to.
      */
     fun assignedBranches(membershipId: UUID): List<ProfileBranch>
 
     /**
-     * Lists roles assigned to the selected membership.
+     * Lists the distinct ACTIVE roles the selected membership holds an ACTIVE assignment to.
      */
     fun assignedRoles(membershipId: UUID): List<ProfileRole>
 }

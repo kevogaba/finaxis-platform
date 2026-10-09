@@ -136,7 +136,9 @@ class AuthSelectionService(
             denied("Missing permission: $PERM_SELECT_ORG")
         }
 
-        val assignedBranchIds = lookup.findAssignedBranchIds(membership.membershipId)
+        // One choice means one distinct branch: a branch held through two assignment rows
+        // (say HOME and OPERATE) is still a single choice, never a reason to skip the pin.
+        val assignedBranchIds = lookup.findAssignedBranchIds(membership.membershipId).distinct()
         val branchId = assignedBranchIds.singleOrNull()
         val context =
             ActiveOrganisationContext(userId, organisationId, membership.membershipId, branchId)

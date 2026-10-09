@@ -41,6 +41,15 @@ If the membership has exactly one assigned branch, the branch is auto-selected a
 
 If the membership has more than one assigned branch, the response sets `requiresBranchSelection` to `true` and includes `assignedBranchIds`.
 
+"Assigned branch" here means a **distinct** branch that is `ACTIVE` and holds at least one ACTIVE
+assignment row for the membership. A branch held through two rows (for example `HOME` and
+`OPERATE`) is one branch, so it can never turn a single choice into an apparent multi-choice that
+skips the auto-selection (and `assignedBranchIds` and `GET /auth/branches` list it once). A
+`SUSPENDED` or `CLOSED` branch is not a choice. `GET /auth/me` follows the same rule for its
+`branches` list and also omits `DISABLED`/`ARCHIVED` roles and lists a role once however many
+tenant- and branch-scope assignments grant it; its `permissions` are untouched, because the
+effective-permission resolution already honours only ACTIVE roles and permissions (issue #170).
+
 Before selecting, clients may discover the assigned branches:
 
 ```http

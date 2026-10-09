@@ -263,9 +263,9 @@ class AuthController(
     @Operation(
         summary = "List available branches",
         description =
-            "Lists active branches assigned to the authenticated user's active organisation " +
-                "membership. This endpoint requires the active organisation context and " +
-                "auth.select_branch permission.",
+            "Lists ACTIVE branches assigned to the authenticated user's active organisation " +
+                "membership, each listed once. This endpoint requires the active organisation " +
+                "context and auth.select_branch permission.",
         security = [SecurityRequirement(name = "bearer-key")],
     )
     @ApiResponses(

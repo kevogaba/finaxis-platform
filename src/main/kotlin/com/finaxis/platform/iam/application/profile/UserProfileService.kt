@@ -7,8 +7,11 @@ import com.finaxis.platform.iam.application.port.outbound.ProfileMembership
 import com.finaxis.platform.iam.application.port.outbound.ProfileOrganisation
 import com.finaxis.platform.iam.application.port.outbound.ProfileRole
 import com.finaxis.platform.iam.application.port.outbound.UserProfileLookup
+import com.finaxis.platform.iam.domain.RoleStatus
 import org.springframework.stereotype.Service
 import java.util.UUID
+
+private const val ACTIVE_BRANCH = "ACTIVE"
 
 /**
  * Authenticated user profile including the selected tenant context and effective access.
@@ -36,6 +39,11 @@ class UserProfileService(
 ) {
     /**
      * Returns profile details for the active organisation and optional selected branch.
+     *
+     * Branches and roles are each listed once and only while ACTIVE: a suspended or closed branch
+     * and a disabled role are not part of the caller's current access, the same rule the runtime
+     * applies when it resolves permissions. The permission list is the principal's own and is not
+     * recomputed here.
      */
     fun profile(principal: AppPrincipal): UserProfile {
         val organisation =
@@ -44,7 +52,11 @@ class UserProfileService(
         val membership =
             lookup.membership(principal.membershipId)
                 ?: denied("Selected membership no longer exists")
-        val branches = lookup.assignedBranches(principal.membershipId)
+        val branches =
+            lookup
+                .assignedBranches(principal.membershipId)
+                .filter { it.status == ACTIVE_BRANCH }
+                .distinctBy { it.id }
         val selectedBranch = principal.branchId?.let { selectedBranch(it, branches) }
 
         return UserProfile(
@@ -56,7 +68,11 @@ class UserProfileService(
             membership = membership,
             selectedBranch = selectedBranch,
             branches = branches,
-            roles = lookup.assignedRoles(principal.membershipId),
+            roles =
+                lookup
+                    .assignedRoles(principal.membershipId)
+                    .filter { it.status == RoleStatus.ACTIVE }
+                    .distinctBy { it.id },
             permissions = principal.permissions.sorted(),
         )
     }

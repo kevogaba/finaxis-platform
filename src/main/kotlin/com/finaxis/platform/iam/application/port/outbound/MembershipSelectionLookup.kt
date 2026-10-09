@@ -85,7 +85,7 @@ interface MembershipSelectionLookup {
     fun organisationStatus(organisationId: UUID): OrganisationStatus?
 
     /**
-     * Lists branch ids assigned to a membership.
+     * Lists the distinct ids of the ACTIVE branches a membership holds an ACTIVE assignment to.
      */
     fun findAssignedBranchIds(membershipId: UUID): List<UUID>
 
