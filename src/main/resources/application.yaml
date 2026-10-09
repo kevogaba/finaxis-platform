@@ -405,6 +405,12 @@ finaxis:
       # client is the proxy and scheme and port are what the proxy connected with (production
       # logs a startup WARN).
       trusted-proxies: ${FINAXIS_CLIENT_IP_TRUSTED_PROXIES:}
+    protected-resource:
+      # The canonical origin clients call, published as `resource` in the RFC 9728 metadata at
+      # GET /.well-known/oauth-protected-resource (#253). Configured, never read from a request.
+      # Production has no default (unset there: a startup WARN and the request's origin); set
+      # FINAXIS_PROTECTED_RESOURCE_URL to the public https origin.
+      resource: ${FINAXIS_PROTECTED_RESOURCE_URL:http://localhost:${server.port}}
 
 springdoc:
   swagger-ui:

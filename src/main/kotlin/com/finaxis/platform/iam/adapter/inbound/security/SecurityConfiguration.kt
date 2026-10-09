@@ -24,6 +24,7 @@ import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.ObjectProvider
+import org.springframework.boot.security.oauth2.server.resource.autoconfigure.OAuth2ResourceServerProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpStatus
@@ -77,6 +78,8 @@ class SecurityConfiguration(
     private val securityHeadersProperties: SecurityHeadersProperties,
     private val apiDocsProperties: ApiDocsProperties,
     private val problemWriter: ApiProblemWriter,
+    private val protectedResourceProperties: ProtectedResourceProperties,
+    private val resourceServerProperties: OAuth2ResourceServerProperties,
 ) {
     /**
      * Builds the servlet security filter chain for JWT authentication and method security.
@@ -137,6 +140,17 @@ class SecurityConfiguration(
                 resourceServer
                     .authenticationEntryPoint(ApiBearerTokenEntryPoint(problemWriter))
                     .jwt { }
+                    // The public, unversioned RFC 9728 document the 401 challenge's
+                    // resource_metadata points at, served ahead of bearer authentication and the
+                    // rate limiter (#253): see docs/security/production-hardening.md.
+                    .protectedResourceMetadata { metadata ->
+                        metadata.protectedResourceMetadataCustomizer(
+                            ProtectedResourceMetadataCustomizer.from(
+                                protectedResourceProperties,
+                                resourceServerProperties,
+                            ),
+                        )
+                    }
             }.exceptionHandling { exceptions ->
                 exceptions
                     .authenticationEntryPoint(ApiAuthenticationEntryPoint(problemWriter))

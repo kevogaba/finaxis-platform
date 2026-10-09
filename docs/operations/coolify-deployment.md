@@ -51,6 +51,7 @@ deployment and are not provisioned by it:
 | `FINAXIS_ACTIVE_ORGANISATION_CONTEXT_SECRET` | No default — startup fails fast without it |
 | `FINAXIS_CORS_ALLOWED_ORIGINS` | |
 | `FINAXIS_CLIENT_IP_TRUSTED_PROXIES` | **Required behind Traefik**: its address [^client-ip] |
+| `FINAXIS_PROTECTED_RESOURCE_URL` | Recommended: the public `https` origin [^resource] |
 
 [^client-ip]: Traefik's own container address (pinned), or a dedicated network that only Traefik
   and the app join; never the shared Coolify network or its range, which every co-hosted container
@@ -61,6 +62,12 @@ deployment and are not provisioned by it:
   Traefik passes through); no response carries HSTS; and a same-origin browser request (the docs
   page's "try it") is judged cross-origin and refused with `403` unless the public origin is in
   `FINAXIS_CORS_ALLOWED_ORIGINS`.
+[^resource]: The `resource` of the public `/.well-known/oauth-protected-resource` document
+  (#253), such as `https://api.finaxis.example`: an origin only, no path. When set, never read
+  from a request header. No default; unset, the app still boots, logs one startup `WARN` and
+  publishes the request's origin instead. Recommended before merging the release that introduces
+  it (every merge deploys). A set but invalid value fails startup. See production-hardening.md
+  ("Protected-resource metadata").
 [^issuer]: Reachable both by the app container and by whatever URL clients use to obtain tokens.
   Keycloak stamps each token with the issuer URL the caller used; an internal-only hostname here
   401s every request — the same trap `compose.yaml` documents for local host networking.
