@@ -37,11 +37,17 @@ interface PermissionResolutionQueries {
     fun directPermissionEffects(membershipId: UUID): List<PermissionEffectAssignment>
 
     /**
-     * Reads the ids of the branches on which [membershipId] holds [permissionCode] through an
-     * ACTIVE branch-scoped role assignment, an ACTIVE role and an ACTIVE catalogue entry. The
+     * Reads the ids of the ACTIVE branches on which [membershipId] holds [permissionCode] through
+     * an ACTIVE branch-scoped role assignment, an ACTIVE role and an ACTIVE catalogue entry. The
      * same joins as [rolePermissionCodes] for a selected branch, projecting the branch instead of
      * the code, and ignoring tenant-scope assignments (a tenant-wide grant is answered by the
      * tenant permission set, not by this).
+     *
+     * A branch that is not ACTIVE (draft, pending, suspended, closed or archived) is never
+     * returned, whatever grants it carries (issue #242): a branch-scope grant counts only while
+     * its branch is ACTIVE, which is also the only state in which the branch can be selected.
+     * This is the one place that rule lives; [rolePermissionCodes] does not apply it, because a
+     * selected branch is already required to be ACTIVE and its result is cached across requests.
      */
     fun branchIdsGranting(
         membershipId: UUID,

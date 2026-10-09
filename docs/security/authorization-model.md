@@ -446,11 +446,36 @@ grant OR a grant on that branch**.
 
 - `AllBranches` when the code is in the tenant-wide effective set (a tenant-scope role or a direct
   `ALLOW`);
-- otherwise `Branches(ids)`, the branches carrying an ACTIVE branch-scope role assignment to an
-  ACTIVE role granting an ACTIVE catalogue code (`PermissionResolutionQueries.branchIdsGranting`),
-  empty when there is none;
+- otherwise `Branches(ids)`, the **ACTIVE** branches carrying an ACTIVE branch-scope role
+  assignment to an ACTIVE role granting an ACTIVE catalogue code
+  (`PermissionResolutionQueries.branchIdsGranting`), empty when there is none;
 - empty as well for an inactive organisation or membership and for a direct `DENY` of the code,
   exactly as the effective set is.
+
+**A branch-scope grant counts only while its branch is `ACTIVE`** (issue #242). A branch in any
+other state (`DRAFT`, `PENDING_APPROVAL`, `SUSPENDED`, `CLOSED`, `ARCHIVED`) is visible only
+through a tenant-wide grant, so an administrator still finds, inspects and reactivates a suspended
+branch, while a holder of a role scoped to it no longer sees it: it is absent from `GET /branches`
+and the assignment lists, and `GET /branches/{id}`, an explicit `branch_id` filter and the
+assignment reads by id on it are `403`, exactly as for a branch the caller holds nothing on (never
+`404`). It is visible again once reactivated. No branch state needs a scoped exception. A
+branch-scope role needs an ACTIVE branch assignment, which can only be created on an `ACTIVE`
+branch, and a branch never returns to `DRAFT` or `PENDING_APPROVAL`, so no scoped grant can exist
+on a `DRAFT` or `PENDING_APPROVAL` branch (its maker reaches it through the tenant-wide
+`branch.create` it needed to create it). A scoped grant **can** exist on a `SUSPENDED` or `CLOSED`
+branch: one made while the branch was `ACTIVE` outlives its suspension or closure (branch
+suspension revokes no assignment), and a tenant-wide holder can still assign a branch-scope role
+there afterwards, since the role-assignment route checks the user's branch assignment and not the
+branch status. That is exactly the grant this rule makes inert. The rule lives in one place, the
+`branchIdsGranting` query, and the **target-branch check** (`requireBranchPermission`, the check
+every branch mutation and `GET /branches/{id}` make) is that same visibility asked about one branch.
+Because a mutation implies its view at the same branch (ADR 0030, decision 4), a branch-scoped
+holder may neither read nor act on a branch that is not `ACTIVE` (reactivate, close, update, revoke
+an assignment on it); a tenant-wide holder is unaffected. A branch-scoped holder that suspends or
+closes its `ACTIVE` branch still reads it back, because the read-back decides from the answer the
+pre-check memoised.
+The per-selected-branch effective set (`rolePermissionCodes`, cached in Redis) does not apply the
+rule: a selected branch must already be `ACTIVE` on every request.
 
 A by-id read is `404` for an unknown id to an `AllBranches` holder, and `403` to a branch-scoped
 holder for an unknown id and for another branch alike, so there is no existence oracle. A list

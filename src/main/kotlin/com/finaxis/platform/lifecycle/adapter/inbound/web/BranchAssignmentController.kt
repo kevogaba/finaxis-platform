@@ -67,8 +67,9 @@ class BranchAssignmentController(
         description =
             "Searches user branch assignments in the active tenant organisation, limited to " +
                 "the branches the caller holds branch_assignment.view on (all of them for a " +
-                "tenant-wide grant). An explicit branch_id outside that set is 403. Without " +
-                "branch_id the list defaults to the selected branch when the caller may view it.",
+                "tenant-wide grant, the ACTIVE ones for a branch-scope grant). An explicit " +
+                "branch_id outside that set is 403. Without branch_id the list defaults to the " +
+                "selected branch when the caller may view it.",
     )
     @ApiResponses(
         ApiResponse(
@@ -140,8 +141,9 @@ class BranchAssignmentController(
         summary = "Get branch assignment details",
         description =
             "Retrieves user branch-assignment metadata in the active tenant organisation. " +
-                "Requires branch_assignment.view tenant-wide or on the assignment's branch. An " +
-                "unknown id is 404 to a tenant-wide holder and 403 to a branch-scoped holder.",
+                "Requires branch_assignment.view tenant-wide or on the assignment's branch " +
+                "while it is ACTIVE. An unknown id is 404 to a tenant-wide holder and 403 to a " +
+                "branch-scoped holder.",
     )
     @ApiResponses(
         ApiResponse(

@@ -104,7 +104,8 @@ The selected branch **narrows operational authority; it does not scope tenant ad
   `@PreAuthorize` is only a coarse gate on the selected-branch authority set. The application
   layer then decides, per target: branch lifecycle transitions and BRANCH-scope role assignment
   check the permission against the **target** branch (`PermissionGuard.requireBranchPermission`:
-  tenant-scope grants plus branch-scope grants on that branch), in the service and only there
+  tenant-scope grants plus branch-scope grants on that branch while that branch is `ACTIVE`,
+  issue #242), in the service and only there
   (`BranchController` carries the coarse gate and the gated read-back, not a second check); branch
   assignment follows the same rule (`user.assign_branch` and `branch_assignment.view` at the
   target branch). Branch-assignment revocation names only an assignment id, so the service
@@ -121,7 +122,9 @@ The selected branch **narrows operational authority; it does not scope tenant ad
   `/tenant/role-assignments` reads (rows with `scope_type = BRANCH`; `TENANT`-scope rows need the
   tenant-wide view) check `branch.view`, `branch_assignment.view` and `role_assignment.view` as **a
   tenant-wide grant OR a grant on that branch**, through `PermissionGuard.branchVisibility`
-  (either every branch, or the set of branches carrying a branch-scope grant). They carry no
+  (either every branch, or the set of **ACTIVE** branches carrying a branch-scope grant: a
+  suspended or closed branch, which cannot be selected, is visible only through a tenant-wide
+  grant, issue #242). They carry no
   `@PreAuthorize` gate, because that gate evaluates the *selected* branch's authority set and
   would answer `403` before the target-aware check ran for a caller pinned to A who holds the view
   only through a role scoped to B. The application-layer check is the only authorisation and

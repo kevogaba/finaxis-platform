@@ -38,7 +38,9 @@ interface PermissionGuard {
 
     /**
      * Requires [actorId] to hold [permissionCode] in the branch scope of [branchId] within
-     * [organisationId]. Throws an authorization exception when the permission is absent.
+     * [organisationId]: a tenant-wide grant, or a grant on that branch while the branch is
+     * ACTIVE (issue #242), exactly the branches [branchVisibility] answers. Throws an
+     * authorization exception when the permission is absent.
      */
     fun requireBranchPermission(
         actorId: UUID,
@@ -60,10 +62,11 @@ interface PermissionGuard {
     /**
      * Answers where [actorId] holds the view permission [permissionCode] in [organisationId]:
      * [BranchVisibility.AllBranches] for a tenant-wide grant (a tenant-scope role or a direct
-     * allow), otherwise the set of branch ids carrying a branch-scope grant, which is empty when
-     * the actor holds the permission nowhere (also for an inactive organisation or membership,
-     * and for a direct deny). The same rule as the effective permission set, projected per branch,
-     * so a target-aware read agrees with the check a mutation makes at that branch.
+     * allow), otherwise the set of ACTIVE branch ids carrying a branch-scope grant, which is
+     * empty when the actor holds the permission nowhere (also for an inactive organisation or
+     * membership, and for a direct deny). A branch that is not ACTIVE is visible only through a
+     * tenant-wide grant (issue #242). The same rule as the effective permission set, projected
+     * per branch, so a target-aware read agrees with the check a mutation makes at that branch.
      */
     fun branchVisibility(
         actorId: UUID,

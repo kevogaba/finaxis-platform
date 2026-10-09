@@ -65,9 +65,9 @@ class RoleAssignmentController(
         summary = "Search role assignments",
         description =
             "Searches user role assignments. A tenant-wide role_assignment.view sees every " +
-                "row; a branch-scoped holder sees only BRANCH-scope rows on the branches it " +
-                "holds the view on (any other scope_type filter is an empty page). A branch_id " +
-                "outside that set, or no grant at all, is 403.",
+                "row; a branch-scoped holder sees only BRANCH-scope rows on the ACTIVE branches " +
+                "it holds the view on (any other scope_type filter is an empty page). A " +
+                "branch_id outside that set, or no grant at all, is 403.",
     )
     @ApiResponses(
         ApiResponse(
@@ -115,9 +115,9 @@ class RoleAssignmentController(
         summary = "Get role assignment",
         description =
             "Retrieves a user role assignment. BRANCH-scope rows need role_assignment.view " +
-                "tenant-wide or on the row's branch; TENANT-scope rows need the tenant-wide " +
-                "view. An unknown id is 404 to a tenant-wide holder and 403 to a branch-scoped " +
-                "holder.",
+                "tenant-wide or on the row's branch while it is ACTIVE; TENANT-scope rows need " +
+                "the tenant-wide view. An unknown id is 404 to a tenant-wide holder and 403 to " +
+                "a branch-scoped holder.",
     )
     @ApiResponses(
         ApiResponse(
