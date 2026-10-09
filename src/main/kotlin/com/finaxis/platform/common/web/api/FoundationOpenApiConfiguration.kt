@@ -108,7 +108,11 @@ class FoundationOpenApiConfiguration {
     private fun Components.addHeaderParameters(): Components =
         addParameters(
             "RequestId",
-            headerParameter(ApiProblemFactory.REQUEST_ID_HEADER, "Request correlation identifier."),
+            headerParameter(
+                ApiProblemFactory.REQUEST_ID_HEADER,
+                "Optional request correlation identifier: 8 to 64 characters of " +
+                    "[A-Za-z0-9._-]. Any other value is ignored and the server generates one.",
+            ),
         ).addParameters(
             "IdempotencyKey",
             headerParameter(

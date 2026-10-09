@@ -657,8 +657,8 @@ log a message-free `WARN` with the class names and frames. The synchronous `boot
 still raises the original to `ApiExceptionHandler`, which maps it and logs only its class and
 message-free frames; Sentry's MVC resolver runs after Spring's own, so it never sees an exception
 that handler resolves. **Still stored or not covered:** the raw message of a failed Keycloak or
-invite job in `identity_dispatch_log.last_error` (database only, no API returns it: a deliberate,
-flagged choice, so operators can diagnose); the job request's input (the administrator's email and
+invite job in `identity_dispatch_log.last_error` (database only, no API returns it; accepted by
+the owner as the operator diagnostic); the job request's input (the administrator's email and
 username) in `jobrunr_jobs`; an exception type the invite handler does not catch reaches JobRunr as
 raised. A failed `tenant.bootstrap_retry` also writes an audit row with the code and the exception
 class name, never the message; the failed `user.keycloak_provisioning` audit row carries the class

@@ -25,12 +25,16 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpStatus
 import org.springframework.security.access.AccessDeniedException
+import org.springframework.security.authentication.InsufficientAuthenticationException
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
 import org.springframework.security.core.AuthenticationException
 import org.springframework.security.core.context.SecurityContextHolder
+import org.springframework.security.oauth2.core.OAuth2AuthenticationException
+import org.springframework.security.oauth2.server.resource.BearerTokenErrorCodes
+import org.springframework.security.oauth2.server.resource.BearerTokenErrors
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken
 import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter
@@ -172,15 +176,23 @@ class SecurityConfiguration(
     }
 }
 
-/** Writes unauthenticated Spring Security failures through the public API problem contract. */
+/**
+ * Writes unauthenticated Spring Security failures (no bearer token) through the public API problem
+ * contract, with the RFC 6750 section 3 challenge for a request that carried no credentials: a
+ * bare `WWW-Authenticate: Bearer` plus the `resource_metadata` Spring adds, and no error code.
+ */
 class ApiAuthenticationEntryPoint(
     private val problemWriter: ApiProblemWriter,
 ) : AuthenticationEntryPoint {
+    private val challenge = BearerTokenAuthenticationEntryPoint()
+
     override fun commence(
         request: HttpServletRequest,
         response: HttpServletResponse,
         authException: AuthenticationException,
     ) {
+        // A fresh non-OAuth2 exception, whatever arrived, so the challenge never names an error.
+        challenge.commence(request, response, InsufficientAuthenticationException(NO_TOKEN))
         problemWriter.write(
             request,
             response,
@@ -189,12 +201,18 @@ class ApiAuthenticationEntryPoint(
             "Authentication is required.",
         )
     }
+
+    private companion object {
+        const val NO_TOKEN = "No bearer token."
+    }
 }
 
 /**
  * Writes a rejected bearer token (malformed, expired, bad signature) as the public problem
- * contract. Keeps Spring's RFC 6750 `WWW-Authenticate` challenge, then adds the same
- * `application/problem+json` body and `X-Request-Id` as every other `401`.
+ * contract. Keeps Spring's RFC 6750 `WWW-Authenticate` challenge, `error="invalid_token"`
+ * included, but with the fixed [INVALID_TOKEN_DESCRIPTION] in place of the decoder's message
+ * (which names expiry instants and claims), then adds the same `application/problem+json` body
+ * and `X-Request-Id` as every other `401`.
  */
 class ApiBearerTokenEntryPoint(
     private val problemWriter: ApiProblemWriter,
@@ -206,9 +224,10 @@ class ApiBearerTokenEntryPoint(
         response: HttpServletResponse,
         authException: AuthenticationException,
     ) {
-        challenge.commence(request, response, authException)
+        challenge.commence(request, response, withFixedDescription(authException))
         // The challenge chose its own status (401 for an invalid token, 400 for an
-        // `invalid_request` such as a token sent in a disabled place); the body follows it.
+        // `invalid_request` such as two tokens at once, reachable only if query or form tokens
+        // are enabled on the resolver, which they are not); the body follows it.
         val status = HttpStatus.resolve(response.status) ?: HttpStatus.UNAUTHORIZED
         if (status == HttpStatus.UNAUTHORIZED) {
             problemWriter.write(
@@ -221,6 +240,22 @@ class ApiBearerTokenEntryPoint(
         } else {
             problemWriter.write(request, response, status, "invalid_request", "Malformed request.")
         }
+    }
+
+    private fun withFixedDescription(exception: AuthenticationException): AuthenticationException =
+        if (
+            exception is OAuth2AuthenticationException &&
+            exception.error.errorCode == BearerTokenErrorCodes.INVALID_TOKEN
+        ) {
+            OAuth2AuthenticationException(BearerTokenErrors.invalidToken(INVALID_TOKEN_DESCRIPTION))
+        } else {
+            exception
+        }
+
+    /** The public, fixed wording of a rejected token's challenge. */
+    companion object {
+        /** The only `error_description` an `invalid_token` challenge carries. */
+        const val INVALID_TOKEN_DESCRIPTION = "The access token is invalid or has expired."
     }
 }
 
@@ -373,9 +408,10 @@ class ActiveOrganisationContextFilter(
         request: HttpServletRequest,
     ): RequestContext {
         // The platform's request id is whatever ApiProblemFactory resolves - the client header
-        // when one was sent, otherwise a generated id cached on the request attribute. Resolving
-        // it here (rather than reading the raw header) is what makes the id recorded on a posting
-        // the same one returned in the response header, the access log, and any problem document,
+        // when one was sent and passes ClientRequestIds, otherwise a generated id cached on the
+        // request attribute. Resolving it here (rather than reading the raw header) is what makes
+        // the id recorded on a posting the same one returned in the response header, the access
+        // log, and any problem document,
         // including for the majority of callers that send no X-Request-Id at all. This filter runs
         // inside the security chain and therefore before HttpAccessLogFilter, so this call is
         // usually the one that generates the id; the attribute cache stops a second one appearing.
