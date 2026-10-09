@@ -25,6 +25,7 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SuspendTenantReque
 import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
 import com.finaxis.platform.lifecycle.application.DeprovisionOrganisationCommand
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
+import com.finaxis.platform.lifecycle.application.LifecycleErrorCodes
 import com.finaxis.platform.lifecycle.application.OrganisationDraftResult
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.application.ReactivateOrganisationCommand
@@ -488,7 +489,10 @@ class PlatformTenantControllerTests
             doAnswer { invocation ->
                 val command = invocation.getArgument<ApproveOrganisationProvisioningCommand>(0)
                 if (command.actorId == makerId) {
-                    throw ForbiddenOperationException()
+                    throw ForbiddenOperationException(
+                        LifecycleErrorCodes.APPROVER_IS_TENANT_MAKER,
+                        LifecycleErrorCodes.APPROVER_IS_TENANT_MAKER_DETAIL,
+                    )
                 }
                 Unit
             }.whenever(organisationProvisioningService).approveProvisioning(any())
@@ -499,7 +503,10 @@ class PlatformTenantControllerTests
                         with(authentication(platformToken(setOf("tenant.approve"), makerId)))
                     }.andExpect {
                         status { isForbidden() }
-                        jsonPath("$.code") { value("forbidden") }
+                        jsonPath("$.code") { value("lifecycle.approver_is_tenant_maker") }
+                        jsonPath("$.detail") {
+                            value("The checker cannot be the tenant's requester or submitter.")
+                        }
                     }
 
                 mockMvc
