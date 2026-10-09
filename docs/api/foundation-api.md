@@ -231,8 +231,21 @@ gate only. A custom role that holds a mutation without its view gets this `403` 
 added to it (see the operator report shipped with the role-composition change).
 
 Framework-level errors include `authentication_required`, `access_denied`,
-`invalid_active_tenant_context`, `rate_limit_exceeded`, `rate_limit_policy_unavailable`, and
-`rate_limiter_unavailable`. Bean Validation failures return 400 with up to 100 violations.
+`invalid_active_tenant_context`, `rate_limit_exceeded`, `rate_limit_policy_unavailable`,
+`rate_limiter_unavailable`, and `request_rejected` (400: Spring Security's firewall refused the
+request, for example a header value carrying CR, LF or a C1 control, or an unnormalised path such
+as one with `;` or `//`). Its body names nothing from the request: `instance` is the fixed
+`about:blank`, never the request path (which may be the refused value), and `request_id` is the
+resolved request id. A path is refused before the security headers are written, so this response
+sets its own: `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`, `X-Frame-Options:
+DENY`, the referrer policy, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`
+and, when enabled, HSTS. It also applies the configured CORS policy, which `CorsFilter` never got
+to: an allowed `Origin` gets its `Access-Control-*` headers, any other origin none. The firewall
+checks a header value only when it is read, so a value the access log reads last (`Referer`,
+`User-Agent`) is refused after the response was written: a committed response is then left as
+written, with a message-free `WARN` naming the request id in place of the access-log line, and an
+uncommitted one has its body discarded before the problem is written. Bean Validation failures
+return 400 with up to 100 violations.
 
 `code` is always a stable machine value and never a sentence; the human text is in `detail`.
 Two `403` codes name a route that was called from the wrong organisation context:
@@ -334,11 +347,24 @@ selection. Full policy detail is in [rate limiting](../architecture/rate-limitin
 accepted only if it is 8 to 64 characters of `[A-Za-z0-9._-]`; any other value (spaces, quotes,
 CR/LF, non-ASCII, too short or too long) is replaced by a generated UUIDv7, so the application
 never echoes, logs, puts in the MDC or stores a rejected value (an error monitor such as Sentry
-may still attach the raw request headers to an event it records). The one id chosen
+may still attach the raw request headers to an event it records, and a trace exporter records
+the firewall's exception message, which holds a refused value, on the request's span). The one
+id chosen
 is echoed on success and error responses, used as the problem body's `request_id`, and carried in
 the request context that audit events and posting requests record. A value carrying CR or LF does
 not reach the application: the HTTP parser ends or refuses the header line there, and inside the
-container Spring Security's firewall refuses the request with a `400`.
+container Spring Security's firewall refuses the request with a `400` `request_rejected` problem
+whose `request_id` (and `X-Request-Id` header) is a generated one.
+
+`X-Correlation-Id` is optional and is never echoed in a response (the audit read API returns the
+recorded `correlation_id`). It takes the same shape as `X-Request-Id`
+(8 to 64 characters of `[A-Za-z0-9._-]`, #252) and, when accepted, is the `correlation_id` that
+the MDC, audit events and posting requests record for an authenticated request.
+When it is absent or any other value, the request id is used instead, and a rejected value is
+never logged, put in the MDC, stored or echoed. The header is read only for an authenticated
+request with an active organisation context: there a value carrying CR or LF is refused by the
+firewall with the same `400` `request_rejected` problem, and on any other request it is never
+read, so it is ignored.
 
 ## Endpoint Reference
 

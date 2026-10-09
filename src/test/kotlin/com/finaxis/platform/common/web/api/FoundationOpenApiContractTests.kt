@@ -158,6 +158,14 @@ class FoundationOpenApiContractTests
                     .asString(),
             ).isEqualTo("bearer")
             assertThat(components.path("schemas").has("ApiProblem")).isTrue
+            listOf("RequestId" to "X-Request-Id", "CorrelationId" to "X-Correlation-Id")
+                .forEach { (component, header) ->
+                    val parameter = components.path("parameters").path(component)
+                    assertThat(parameter.path("name").asString()).isEqualTo(header)
+                    assertThat(parameter.path("in").asString()).isEqualTo("header")
+                    assertThat(parameter.path("description").asString())
+                        .contains("8 to 64 characters of [A-Za-z0-9._-]")
+                }
         }
 
         private fun controllerOperations(): Map<OperationRoute, HandlerMethod> {

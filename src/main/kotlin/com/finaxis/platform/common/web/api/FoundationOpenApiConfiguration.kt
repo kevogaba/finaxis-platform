@@ -117,6 +117,14 @@ class FoundationOpenApiConfiguration {
                     "[A-Za-z0-9._-]. Any other value is ignored and the server generates one.",
             ),
         ).addParameters(
+            "CorrelationId",
+            headerParameter(
+                ApiProblemFactory.CORRELATION_ID_HEADER,
+                "Optional cross-request correlation identifier recorded on audit events and " +
+                    "posting requests: 8 to 64 characters of [A-Za-z0-9._-]. When it is " +
+                    "absent or any other value, the request id is used instead.",
+            ),
+        ).addParameters(
             "IdempotencyKey",
             headerParameter(
                 IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER,

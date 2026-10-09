@@ -69,7 +69,10 @@ every tenant that is not `ACTIVE` or terminal.
 header to clients and stores `requestId` in MDC for request logs. `ActiveOrganisationContextFilter`
 separately installs `RequestContexts`, which carries tenant/branch/actor/correlation/user-agent
 and the client address for the audit adapter to fall back on when a caller does not supply them
-explicitly.
+explicitly. Its correlation id is the client's `X-Correlation-Id` only when it has the same 8 to
+64 character `[A-Za-z0-9._-]` shape (#252); otherwise, as when the header is absent, it is the
+request id, so `audit_event.correlation_id` and the `correlationId` MDC field never hold a
+rejected value. The same holds for the request metadata made ambient while the principal loads.
 
 ### Client address (#185)
 

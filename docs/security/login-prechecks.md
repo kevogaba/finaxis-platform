@@ -102,4 +102,10 @@ the request context and MDC-aware logging path; cleanup happens at the end of th
 `X-Request-Id` is used only if it is 8 to 64 characters of `[A-Za-z0-9._-]`
 (`ClientRequestIds`, applied in `ApiProblemFactory.requestId`, the one place the header is read);
 otherwise a UUIDv7 replaces it and the application never logs, stores, puts in the MDC or echoes
-the rejected value.
+the rejected value. `X-Correlation-Id` takes the same shape (`ApiProblemFactory.correlationId`,
+the one place it is read, #252); a rejected or absent value is replaced by the request id, again
+without the rejected value being logged, stored, put in the MDC or echoed. A header value Spring
+Security's firewall refuses (CR or LF) gets the `400` `request_rejected` problem with a generated
+request id. The firewall checks a value only when it is read, and `X-Correlation-Id` is read
+only on an authenticated request with an active organisation context; on any other request it is
+ignored.

@@ -521,11 +521,11 @@ class SecurityAdapterTests {
     @Test
     fun `active organisation filter keeps an explicit correlation id separate`() {
         val request = MockHttpServletRequest()
-        request.addHeader("X-Correlation-Id", "saga-1")
+        request.addHeader("X-Correlation-Id", "saga-0001")
 
         val correlation = requireNotNull(captureRequestContext(request).correlation)
 
-        assertEquals("saga-1", correlation.correlationId)
+        assertEquals("saga-0001", correlation.correlationId)
         assertEquals(ApiProblemFactory.requestId(request), correlation.requestId)
     }
 
