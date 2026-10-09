@@ -64,13 +64,15 @@ data class ApiDocsProperties(
 )
 
 /**
- * Which direct peers may tell the application the client's address (#185).
+ * Which direct peers may forward the client's address, scheme, host and port (#185, #256).
  *
  * `trusted-proxies` lists the reverse proxies in front of the application, each an IPv4 or IPv6
- * address or a CIDR range. Empty by default: then `X-Forwarded-For` is ignored and the peer is
- * the client. A deployment behind a proxy must list it, or every audit row records the proxy's
- * address. An entry that is not an address or a range, or a range of every address (`/0`), fails
- * startup (see [ClientIpResolver] and [IpRange]).
+ * address or a CIDR range. It governs Tomcat's `RemoteIpValve` ([TrustedProxyValveCustomizer]),
+ * so `getRemoteAddr()` (the access log, the anonymous rate-limit key), the scheme, host and port
+ * of URLs built from a request and HSTS, and the audit address ([ClientIpResolver]). Empty by
+ * default: then no forwarded header is believed and the peer is the client. A deployment behind a
+ * proxy must list it, or all of these are the proxy connection's. An entry that is not an address
+ * or a range, or a range of every address (`/0`), fails startup (see [IpRange]).
  */
 @ConfigurationProperties(prefix = "finaxis.security.client-ip")
 data class ClientIpProperties(

@@ -36,9 +36,10 @@ to the ambient `RequestContexts` snapshot installed by `ActiveOrganisationContex
 `X-Forwarded-For` client only when the peer is listed in
 `finaxis.security.client-ip.trusted-proxies` (empty by default, so the header is ignored). It is
 personal data: kept on the audit row only, never in MDC or logs beyond the access log's existing
-`remoteAddress`, and withheld on the platform pages. Until #256 is fixed the access log's
-`remoteAddress` can differ from the audit row's address for the same request (it is
-`ForwardedHeaderFilter`'s client-controlled view); the audit row is authoritative. See
+`remoteAddress`, and withheld on the platform pages. Tomcat's `RemoteIpValve` applies the same
+trusted list before any filter (#256), so the access log's `remoteAddress` and the audit row name
+the same address for the same request whenever the listed proxy writes plain canonical IP literals
+(Traefik does; otherwise the log holds the entry's text verbatim). See
 [audit architecture](../architecture/audit-logging.md#client-address-185) for the full rule and
 [production hardening](production-hardening.md#client-address-behind-a-reverse-proxy) for the
 deployment requirement. Background workers

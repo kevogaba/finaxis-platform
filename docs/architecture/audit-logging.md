@@ -87,10 +87,22 @@ JobRunr handler, a listener) has no context, so its address is the command's or 
   range of every address (`0.0.0.0/0`, `::/0`, `::ffff:0:0/96`), fails startup naming the
   property and the entry. An IPv4-mapped entry (`::ffff:10.0.0.0/104`) is the IPv4 range it maps.
 - **The peer is the container's.** The resolver reads the remote address and the header from the
-  innermost (container) request, past every wrapper. This matters: `server.forward-headers-strategy:
-  framework` installs Spring's `ForwardedHeaderFilter`, which rewrites `getRemoteAddr()` to the
-  **left-most** `X-Forwarded-For` entry of **any** peer and hides the header, a value the client
-  controls. The resolver never uses that view.
+  innermost (container) request, past every wrapper, so no filter's view is ever used. Spring's
+  `ForwardedHeaderFilter` (`server.forward-headers-strategy: framework`), which rewrote
+  `getRemoteAddr()` to the left-most entry of any peer, is gone: every strategy but `native` is
+  refused at startup (#256).
+- **Tomcat has already applied the same list** (`forward-headers-strategy: native`, #256): from a
+  listed peer its `RemoteIpValve` walks `X-Forwarded-For` from the right past the listed hops,
+  makes the entry it stops at the container's remote address and leaves only the entries to its
+  left in the header; from any other peer it changes nothing. The resolver continues that one walk
+  with the same list, so it never trusts more than the list: an unlisted remote address is the
+  client. It is kept as defence in depth and for what the valve does not do (strict parsing,
+  normalisation, the hop cap, an entry with a port or brackets, where the valve stops). An entry
+  that is no address at all, or an empty entry, which only a listed hop could have written as its
+  own peer, leaves that text as the remote address and the row stores `NULL`. A listed IPv6 hop
+  written with a `%zone` is passed over by the valve where the resolver alone would stop; its
+  address is listed either way. See
+  `docs/security/production-hardening.md` ("Forwarded headers").
 - **Behind a trusted peer**, `X-Forwarded-For` is walked lazily from the right (several header
   lines are one list, in order): the client is the first entry that is not itself a trusted
   proxy; if every entry is trusted, the left-most. Entries to the left of the client are never
@@ -104,11 +116,11 @@ JobRunr handler, a listener) has no context, so its address is the command's or 
   characters. The column is unbounded `TEXT`, so no migration was needed. A peer that is not an IP
   literal stores `NULL`.
 - **Personal data.** The address is only stored on the audit row. It is not put into MDC, logs or
-  metric tags (the access log's `remoteAddress` is unchanged and separate). **The access log and
-  the audit row can show different addresses for the same request** until #256
-  (`forward-headers-strategy: framework`) is decided: the access log's `remoteAddress` and MDC
-  `client.address` hold `ForwardedHeaderFilter`'s view, the left-most forwarded entry of any peer,
-  so for forensics the audit row's address is the authoritative one. Only the tenant audit
+  metric tags by the resolver (the access log's `remoteAddress` and MDC `client.address` are
+  `getRemoteAddr()`, which since #256 is the client the valve resolved, so the access log and the
+  audit row name the same address whenever the listed proxy writes plain canonical IP literals, as
+  Traefik does; an entry with a port, `::ffff:` or other non-canonical text is the access log's
+  address verbatim while the row holds the normalised address). Only the tenant audit
   routes and the platform detail route of the platform's own log return it; both platform pages
   withhold it (owner ruling, #247). How long rows, and with them addresses, are kept is not yet
   defined: the `audit_retention_days` setting has no purge job behind it (#164).
