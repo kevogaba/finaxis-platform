@@ -10,17 +10,29 @@ import com.finaxis.platform.common.web.api.boundedPageOffset
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import org.jooq.Condition
 import org.jooq.DSLContext
+import org.jooq.SortField
+import org.jooq.impl.DSL.inline
+import org.jooq.impl.DSL.noCondition
 import org.springframework.stereotype.Component
 import java.time.ZoneOffset
 import java.util.UUID
 
-/** jOOQ adapter for paginated, tenant-scoped audit event administration reads. */
+/**
+ * jOOQ adapter for paginated, tenant-scoped audit event administration reads.
+ *
+ * Index support for the #183 filters (V25-V28): `branch_id` and `actor_external_subject` lead a
+ * partial index after the organisation, and `outcome` and `severity` have partial indexes over
+ * the rare values (not `SUCCESS`, not `INFO`). Those two are compared with inlined literals, never
+ * bind values: they come from closed enums, and a literal lets the planner prove a partial
+ * index's predicate in a cached generic plan too. `q` is an unindexed substring match, bounded by
+ * the 31-day window [com.finaxis.platform.common.audit.requireValid] enforces.
+ */
 @Component
 class JooqAuditEventQueries(
     private val dsl: DSLContext,
 ) : AuditEventQueries {
     override fun search(filter: AuditEventFilter): AuditEventPage {
-        val condition = buildCondition(filter)
+        val condition = searchCondition(filter)
         val total = dsl.fetchCount(AUDIT_EVENT, condition).toLong()
         val offset =
             boundedPageOffset(filter.page, filter.size, total)
@@ -30,7 +42,7 @@ class JooqAuditEventQueries(
                 .select(FIELDS)
                 .from(AUDIT_EVENT)
                 .where(condition)
-                .orderBy(AUDIT_EVENT.EVENT_TIME.desc(), AUDIT_EVENT.ID.desc())
+                .orderBy(order(filter.ascending))
                 .limit(filter.size)
                 .offset(offset)
                 .fetch(::toDetail)
@@ -48,7 +60,11 @@ class JooqAuditEventQueries(
             .and(AUDIT_EVENT.ORGANISATION_ID.eq(organisationId))
             .fetchOne(::toDetail)
 
-    private fun buildCondition(filter: AuditEventFilter): Condition {
+    /**
+     * The WHERE clause of [search] and its count. Internal so `AuditQueryPlanTests` can plan the
+     * exact SQL this adapter renders.
+     */
+    internal fun searchCondition(filter: AuditEventFilter): Condition {
         var condition: Condition = AUDIT_EVENT.ORGANISATION_ID.eq(filter.organisationId)
         filter.entityType?.let { condition = condition.and(AUDIT_EVENT.ENTITY_TYPE.eq(it)) }
         filter.entityId?.let { condition = condition.and(AUDIT_EVENT.ENTITY_ID.eq(it)) }
@@ -60,8 +76,49 @@ class JooqAuditEventQueries(
         filter.occurredTo?.let {
             condition = condition.and(AUDIT_EVENT.EVENT_TIME.le(it.atOffset(ZoneOffset.UTC)))
         }
+        return condition.and(classificationCondition(filter)).and(textCondition(filter))
+    }
+
+    private fun classificationCondition(filter: AuditEventFilter): Condition {
+        var condition = noCondition()
+        filter.outcome?.let { condition = condition.and(AUDIT_EVENT.OUTCOME.eq(inline(it.name))) }
+        filter.severity?.let {
+            condition = condition.and(AUDIT_EVENT.SEVERITY.eq(inline(it.name)))
+        }
+        filter.minSeverity?.let { minimum ->
+            val atLeast = AuditSeverity.entries.filter { it >= minimum }.map { inline(it.name) }
+            condition = condition.and(AUDIT_EVENT.SEVERITY.`in`(atLeast))
+        }
+        filter.branchId?.let { condition = condition.and(AUDIT_EVENT.BRANCH_ID.eq(it)) }
+        filter.actorType?.let { condition = condition.and(AUDIT_EVENT.ACTOR_TYPE.eq(it.name)) }
+        filter.actorSubject?.let {
+            condition = condition.and(AUDIT_EVENT.ACTOR_EXTERNAL_SUBJECT.eq(it))
+        }
         return condition
     }
+
+    /** jOOQ's `startsWith` and `containsIgnoreCase` escape `%`, `_` and the escape character. */
+    private fun textCondition(filter: AuditEventFilter): Condition {
+        var condition = noCondition()
+        filter.actionPrefix?.let { condition = condition.and(AUDIT_EVENT.ACTION.startsWith(it)) }
+        filter.q?.let { text ->
+            condition =
+                condition.and(
+                    AUDIT_EVENT.ACTION
+                        .containsIgnoreCase(text)
+                        .or(AUDIT_EVENT.ENTITY_TYPE.containsIgnoreCase(text))
+                        .or(AUDIT_EVENT.REASON.containsIgnoreCase(text)),
+                )
+        }
+        return condition
+    }
+
+    private fun order(ascending: Boolean): List<SortField<*>> =
+        if (ascending) {
+            listOf(AUDIT_EVENT.EVENT_TIME.asc(), AUDIT_EVENT.ID.asc())
+        } else {
+            listOf(AUDIT_EVENT.EVENT_TIME.desc(), AUDIT_EVENT.ID.desc())
+        }
 
     private companion object {
         /** The columns both the search and the by-id read return (#187). */

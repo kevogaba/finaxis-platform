@@ -125,7 +125,26 @@ string, `actor_id` = `actor_user_id`); see the
 Pagination follows the existing `OrganisationListFilter`/`OrganisationPage` idiom (zero-based
 `page`, bounded `size`) rather than Spring's unused `Pageable`/`Page<T>` machinery, for
 consistency with `OrganisationProvisioningService.list`. `size` must be `1..100`; out-of-bounds
-values are rejected with `IllegalArgumentException` before any query runs.
+values are rejected with `InvalidPageRequestException` (a 400) before any query runs.
+
+`AuditEventFilter` also carries the #183 filters (`outcome`, `severity`/`min_severity`,
+`branch_id`, `action_prefix`, `q`, `actor_type`, `actor_subject`, `sort_dir`). The order of
+checks is the same on all three search routes: the endpoint's coarse `audit.view` gate, then the
+caller's context (a tenant context on a platform route, or the reverse, is a 403 before any filter
+is looked at), then the closed-set values (`outcome`, `severity`, `min_severity`, `actor_type`,
+`sort_dir`), which the web adapter parses through `AuditSearchParameters` and answers with a 400,
+then the application-layer `audit.view` check in `AuditQueryService`, and only then the bounds
+(`requireValid`: lengths, `severity` with `min_severity`, the `q` window, the platform
+`actor_subject` refusal). So a bad closed-set value can be a 400 for a caller in the right context
+whom the application-layer check would refuse; the 400 names only the parameter and its public set.
+A malformed UUID or instant is refused by Spring's binding before the handler runs. No filter
+reads anything before both checks pass. Their design, bounds and index support are recorded in
+[audit architecture](../architecture/audit-logging.md#search-filters-183). Two of them are
+security rules, not conveniences: the free-text `q` must name a window of at most 31 days
+(`occurred_from` is required), so one request cannot make the database scan a tenant's whole log;
+and `searchForPlatform` refuses `actor_subject`, which would otherwise reveal the withheld
+`actor_external_subject` of platform page items one guess at a time. No filter reads
+`before_jsonb`, `after_jsonb`, `metadata_jsonb`, `user_agent` or `ip_address`.
 
 ### REST read endpoints and the platform permission model
 

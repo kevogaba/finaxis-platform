@@ -5,7 +5,11 @@ import java.util.UUID
 
 /**
  * Pagination-safe filter for audit event administration queries. Every query is scoped to one
- * tenant; audit events must never be readable across organisation boundaries.
+ * tenant; audit events must never be readable across organisation boundaries. Every other field
+ * narrows the page further and they combine with AND (#183): [action] is exact, [actionPrefix]
+ * a literal prefix of it, [q] a case-insensitive substring of the action, entity type or reason,
+ * [severity] exact and [minSeverity] that severity or above. Results are ordered by event time,
+ * newest first unless [ascending], with the id as tie-break. [requireValid] holds the bounds.
  */
 data class AuditEventFilter(
     val organisationId: UUID,
@@ -15,9 +19,27 @@ data class AuditEventFilter(
     val action: String? = null,
     val occurredFrom: Instant? = null,
     val occurredTo: Instant? = null,
+    val outcome: AuditOutcome? = null,
+    val severity: AuditSeverity? = null,
+    val minSeverity: AuditSeverity? = null,
+    val branchId: UUID? = null,
+    val actionPrefix: String? = null,
+    val q: String? = null,
+    val actorType: AuditActorType? = null,
+    val actorSubject: String? = null,
+    val ascending: Boolean = false,
     val page: Int = 0,
     val size: Int = 25,
 )
+
+/** The actor kinds an audit search can filter on: the two the application writes today. */
+enum class AuditActorType {
+    /** A person acting through the API (`actor_user_id` is set). */
+    USER,
+
+    /** A system process: a job, a listener or the bootstrap (`actor_user_id` is null). */
+    SYSTEM,
+}
 
 /**
  * Read projection of a persisted audit event, used by both the paginated search and the by-id

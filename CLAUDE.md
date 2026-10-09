@@ -273,6 +273,27 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   post-condition asserts in-file — see `docs/operations/tenant-provisioning.md` ("Failed
   initial-administrator bootstrap") and `docs/security/authorization-model.md`
   ("Bootstrap failure code")
+- `V25__audit_event_branch_index.sql`, `V26__audit_event_actor_subject_index.sql`,
+  `V27__audit_event_outcome_index.sql`, `V28__audit_event_severity_index.sql` — **one partial
+  index each, no data, no trigger** (#183): the audit search filters that would otherwise count
+  by scanning a tenant's whole log. `idx_audit_event_organisation_branch_time`
+  (`branch_id IS NOT NULL`), `..._subject_time` (`actor_external_subject IS NOT NULL`),
+  `..._outcome_time` (`outcome <> 'SUCCESS'`) and `..._severity_time` (`severity <> 'INFO'`),
+  each `(organisation_id, <column>, event_time DESC)`. The unselective filters (`actor_type`,
+  `action_prefix`, `SUCCESS`, `INFO`) stay on V1's `idx_audit_event_organisation_time`, and the
+  free-text `q` is bounded in the application (31-day window, `occurred_from` required) instead of
+  by a trigram index. `JooqAuditEventQueries` inlines the outcome and severity literals so the
+  partial predicates hold in generic plans (`AuditQueryPlanTests`).
+  **This is the repository's convention for an index on a big, hot table** (owner ruling):
+  `CREATE INDEX CONCURRENTLY IF NOT EXISTS`, one index per migration, the migration made
+  non-transactional by a `V<N>__….sql.conf` holding `executeInTransaction=false` next to it, and
+  an invalid-index guard first (a `DO` block that raises, with the operator step, when an
+  `INVALID` index of that name exists, since `IF NOT EXISTS` would skip it and
+  `DROP INDEX CONCURRENTLY` cannot run inside the block). Flyway therefore runs with
+  `spring.flyway.postgresql.transactional-lock: false` (and the jOOQ codegen Flyway likewise): a
+  concurrent build never finishes under the transactional advisory lock. `AuditIndexMigrationTests`
+  proves all of it on PostgreSQL. A failed concurrent build needs the operator step in
+  `docs/operations/audit-index-migrations.md`. It adds no trigger, so it does not touch ADR 0024
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -304,7 +325,8 @@ state. `V18` is a data backfill of the branch lifecycle dates, `V19` a foundatio
 seed (`branch.update`), `V20` a foundation CHECK pinning the platform organisation to `ACTIVE`,
 `V21` the move of branch approval to `branch.approve` (deprecating `branch.activate`), `V22`
 the permission catalogue's kind, grant scope and view requirements, `V23` the seeded
-administrator roles' grants, and `V24` the closed bootstrap failure-code set; none is accounting.
+administrator roles' grants, `V24` the closed bootstrap failure-code set, and `V25`-`V28` the
+audit search indexes; none is accounting.
 Do not invent accounting tables or columns outside those documents.
 
 ## Authorization

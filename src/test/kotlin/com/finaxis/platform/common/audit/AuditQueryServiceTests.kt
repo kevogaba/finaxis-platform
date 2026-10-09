@@ -5,15 +5,21 @@ import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import org.junit.jupiter.api.Test
+import java.time.Clock
+import java.time.Duration
 import java.time.Instant
+import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
+private val NOW = Instant.parse("2026-10-08T12:00:00Z")
+
 class AuditQueryServiceTests {
     private val queries = CapturingAuditEventQueries()
     private val permissionGuard = FakeAuditPermissionGuard()
-    private val service = AuditQueryService(queries, permissionGuard)
+    private val service =
+        AuditQueryService(queries, permissionGuard, Clock.fixed(NOW, ZoneOffset.UTC))
 
     @Test
     fun `listByTenant delegates a tenant-scoped filter and verifies permission`() {
@@ -148,6 +154,93 @@ class AuditQueryServiceTests {
         assertFailsWith<InvalidPageRequestException> {
             service.searchForPlatform(filter.copy(size = 101), UUID.randomUUID())
         }
+    }
+
+    @Test
+    fun `search validates the filters after the permission check and before any read`() {
+        val organisationId = UUID.randomUUID()
+        val actorId = UUID.randomUUID()
+
+        val failure =
+            assertFailsWith<InvalidPageRequestException> {
+                service.search(AuditEventFilter(organisationId, q = "ab"), actorId)
+            }
+
+        assertEquals("q", failure.parameter)
+        assertEquals("audit.view", permissionGuard.lastPermissionCode)
+        assertEquals(null, queries.lastFilter)
+    }
+
+    @Test
+    fun `search measures a text search window against the clock`() {
+        val organisationId = UUID.randomUUID()
+        val filter =
+            AuditEventFilter(
+                organisationId,
+                q = "abc",
+                occurredFrom = NOW.minus(Duration.ofDays(31)),
+            )
+
+        service.search(filter, UUID.randomUUID())
+        assertEquals(filter, queries.lastFilter)
+
+        assertFailsWith<InvalidPageRequestException> {
+            service.search(
+                filter.copy(occurredFrom = NOW.minus(Duration.ofDays(31)).minusSeconds(1)),
+                UUID.randomUUID(),
+            )
+        }
+    }
+
+    @Test
+    fun `search passes every new filter to the query port unchanged`() {
+        val filter =
+            AuditEventFilter(
+                organisationId = UUID.randomUUID(),
+                outcome = AuditOutcome.DENIED,
+                minSeverity = AuditSeverity.HIGH,
+                branchId = UUID.randomUUID(),
+                actionPrefix = "branch.",
+                actorType = AuditActorType.SYSTEM,
+                actorSubject = "kc-subject",
+                ascending = true,
+            )
+
+        service.search(filter, UUID.randomUUID())
+
+        assertEquals(filter, queries.lastFilter)
+    }
+
+    @Test
+    fun `searchForPlatform refuses the withheld actor subject as a filter`() {
+        val failure =
+            assertFailsWith<InvalidPageRequestException> {
+                service.searchForPlatform(
+                    AuditEventFilter(organisationId = UUID.randomUUID(), actorSubject = "kc"),
+                    UUID.randomUUID(),
+                )
+            }
+
+        assertEquals("actor_subject", failure.parameter)
+        assertEquals(null, queries.lastFilter)
+    }
+
+    @Test
+    fun `searchForPlatform validates the shared filters too`() {
+        val failure =
+            assertFailsWith<InvalidPageRequestException> {
+                service.searchForPlatform(
+                    AuditEventFilter(
+                        organisationId = UUID.randomUUID(),
+                        severity = AuditSeverity.LOW,
+                        minSeverity = AuditSeverity.LOW,
+                    ),
+                    UUID.randomUUID(),
+                )
+            }
+
+        assertEquals("min_severity", failure.parameter)
+        assertEquals(null, queries.lastFilter)
     }
 
     @Test

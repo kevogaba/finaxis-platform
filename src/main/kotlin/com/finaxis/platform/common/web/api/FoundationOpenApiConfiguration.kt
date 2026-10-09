@@ -68,6 +68,8 @@ class FoundationOpenApiConfiguration {
     /**
      * Documents the `sort_dir` values every list endpoint accepts. The service layer upper-cases
      * the value, so the lower-case spelling is accepted too, but the canonical form is published.
+     * A description the operation already declares (the audit searches say what they sort by) is
+     * kept; the generic one fills only a missing description.
      */
     @Bean
     fun sortDirectionOperationCustomizer(): GlobalOperationCustomizer =
@@ -75,7 +77,8 @@ class FoundationOpenApiConfiguration {
             operation.parameters
                 ?.filter { it.name == SORT_DIR_PARAMETER && it.`$ref` == null }
                 ?.forEach { parameter ->
-                    parameter.description = "Sort direction. Case-insensitive."
+                    parameter.description =
+                        parameter.description ?: "Sort direction. Case-insensitive."
                     parameter.schema = StringSchema().apply { enum = SORT_DIRECTIONS }
                 }
             operation

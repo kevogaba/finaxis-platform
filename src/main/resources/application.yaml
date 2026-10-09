@@ -64,7 +64,11 @@ spring:
   flyway:
     enabled: true
     postgresql:
-      transactional-lock: true
+      # Session-level advisory lock, not a transactional one: the audit index migrations (V25-V28)
+      # build CONCURRENTLY outside a transaction, and a concurrent build waits for every open
+      # transaction, Flyway's own lock transaction included, so a transactional lock never
+      # releases. The session lock still serialises instances migrating at once.
+      transactional-lock: false
   threads:
     virtual:
       enabled: true

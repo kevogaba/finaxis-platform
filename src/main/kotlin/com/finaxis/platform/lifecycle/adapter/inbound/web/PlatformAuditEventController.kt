@@ -1,7 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
-import com.finaxis.platform.common.audit.AuditEventFilter
 import com.finaxis.platform.common.audit.AuditQueryService
+import com.finaxis.platform.common.audit.AuditSearchParameters
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
@@ -10,6 +10,7 @@ import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.AuditEventDetailResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.AuditEventSummaryResponse
 import io.swagger.v3.oas.annotations.Operation
+import io.swagger.v3.oas.annotations.Parameter
 import io.swagger.v3.oas.annotations.media.Content
 import io.swagger.v3.oas.annotations.media.Schema
 import io.swagger.v3.oas.annotations.responses.ApiResponse
@@ -49,7 +50,9 @@ class PlatformAuditEventController(
     @PreAuthorize("hasAuthority('audit.view')")
     @Operation(
         summary = "Search platform audit events",
-        description = "Searches audit events recorded under the reserved platform organisation.",
+        description =
+            "Searches audit events recorded under the reserved platform organisation. " +
+                "Filters combine with AND; results are ordered by event time, then id.",
     )
     @ApiResponses(
         ApiResponse(
@@ -61,7 +64,10 @@ class PlatformAuditEventController(
         ),
         ApiResponse(
             responseCode = "400",
-            description = "Invalid page or filter",
+            description =
+                "Invalid page, sort or filter: a value outside its set or bounds, severity " +
+                    "with min_severity, q without a window of at most 31 days, or any " +
+                    "actor_subject",
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -94,24 +100,64 @@ class PlatformAuditEventController(
         @RequestParam(required = false, name = "entity_type") entityType: String?,
         @RequestParam(required = false, name = "entity_id") entityId: UUID?,
         @RequestParam(required = false, name = "actor_id") actorId: UUID?,
+        @Parameter(description = AUDIT_ACTION_DOC)
         @RequestParam(required = false) action: String?,
+        @Parameter(description = AUDIT_ACTION_PREFIX_DOC)
+        @RequestParam(required = false, name = "action_prefix") actionPrefix: String?,
         @RequestParam(required = false, name = "occurred_from") occurredFrom: Instant?,
         @RequestParam(required = false, name = "occurred_to") occurredTo: Instant?,
+        @Parameter(
+            description = AUDIT_OUTCOME_DOC,
+            schema = Schema(allowableValues = ["SUCCESS", "FAILURE", "DENIED"]),
+        )
+        @RequestParam(required = false) outcome: String?,
+        @Parameter(
+            description = AUDIT_SEVERITY_DOC,
+            schema = Schema(allowableValues = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]),
+        )
+        @RequestParam(required = false) severity: String?,
+        @Parameter(
+            description = AUDIT_MIN_SEVERITY_DOC,
+            schema = Schema(allowableValues = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]),
+        )
+        @RequestParam(required = false, name = "min_severity") minSeverity: String?,
+        @Parameter(description = AUDIT_BRANCH_DOC)
+        @RequestParam(required = false, name = "branch_id") branchId: UUID?,
+        @Parameter(description = AUDIT_Q_DOC)
+        @RequestParam(required = false) q: String?,
+        @Parameter(
+            description = AUDIT_ACTOR_TYPE_DOC,
+            schema = Schema(allowableValues = ["USER", "SYSTEM"]),
+        )
+        @RequestParam(required = false, name = "actor_type") actorType: String?,
+        @Parameter(description = PLATFORM_AUDIT_ACTOR_SUBJECT_DOC)
+        @RequestParam(required = false, name = "actor_subject") actorSubject: String?,
+        @Parameter(description = AUDIT_SORT_DIR_DOC)
+        @RequestParam(required = false, name = "sort_dir") sortDir: String?,
         @RequestParam(defaultValue = "0") @Min(0) page: Int,
         @RequestParam(defaultValue = "25") @Min(1) @Max(MAXIMUM_PAGE_SIZE) size: Int,
     ): ApiPage<AuditEventSummaryResponse> =
         search(
-            AuditEventFilter(
-                organisationId = PlatformOrganisation.ID,
+            PlatformOrganisation.ID,
+            AuditSearchParameters(
                 entityType = entityType,
                 entityId = entityId,
                 actorId = actorId,
                 action = action,
                 occurredFrom = occurredFrom,
                 occurredTo = occurredTo,
-                page = page,
-                size = size,
+                outcome = outcome,
+                severity = severity,
+                minSeverity = minSeverity,
+                branchId = branchId,
+                actionPrefix = actionPrefix,
+                q = q,
+                actorType = actorType,
+                actorSubject = actorSubject,
+                sortDir = sortDir,
             ),
+            page,
+            size,
         )
 
     /** Retrieves one detailed audit event recorded under the reserved platform organisation. */
@@ -174,7 +220,9 @@ class PlatformAuditEventController(
     @PreAuthorize("hasAuthority('audit.view')")
     @Operation(
         summary = "Search tenant audit events",
-        description = "Searches the audit events of one tenant as a platform operator.",
+        description =
+            "Searches the audit events of one tenant as a platform operator. Filters " +
+                "combine with AND; results are ordered by event time, then id.",
     )
     @ApiResponses(
         ApiResponse(
@@ -186,7 +234,10 @@ class PlatformAuditEventController(
         ),
         ApiResponse(
             responseCode = "400",
-            description = "Invalid page or filter",
+            description =
+                "Invalid page, sort or filter: a value outside its set or bounds, severity " +
+                    "with min_severity, q without a window of at most 31 days, or any " +
+                    "actor_subject",
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -220,33 +271,83 @@ class PlatformAuditEventController(
         @RequestParam(required = false, name = "entity_type") entityType: String?,
         @RequestParam(required = false, name = "entity_id") entityId: UUID?,
         @RequestParam(required = false, name = "actor_id") actorId: UUID?,
+        @Parameter(description = AUDIT_ACTION_DOC)
         @RequestParam(required = false) action: String?,
+        @Parameter(description = AUDIT_ACTION_PREFIX_DOC)
+        @RequestParam(required = false, name = "action_prefix") actionPrefix: String?,
         @RequestParam(required = false, name = "occurred_from") occurredFrom: Instant?,
         @RequestParam(required = false, name = "occurred_to") occurredTo: Instant?,
+        @Parameter(
+            description = AUDIT_OUTCOME_DOC,
+            schema = Schema(allowableValues = ["SUCCESS", "FAILURE", "DENIED"]),
+        )
+        @RequestParam(required = false) outcome: String?,
+        @Parameter(
+            description = AUDIT_SEVERITY_DOC,
+            schema = Schema(allowableValues = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]),
+        )
+        @RequestParam(required = false) severity: String?,
+        @Parameter(
+            description = AUDIT_MIN_SEVERITY_DOC,
+            schema = Schema(allowableValues = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]),
+        )
+        @RequestParam(required = false, name = "min_severity") minSeverity: String?,
+        @Parameter(description = AUDIT_BRANCH_DOC)
+        @RequestParam(required = false, name = "branch_id") branchId: UUID?,
+        @Parameter(description = AUDIT_Q_DOC)
+        @RequestParam(required = false) q: String?,
+        @Parameter(
+            description = AUDIT_ACTOR_TYPE_DOC,
+            schema = Schema(allowableValues = ["USER", "SYSTEM"]),
+        )
+        @RequestParam(required = false, name = "actor_type") actorType: String?,
+        @Parameter(description = PLATFORM_AUDIT_ACTOR_SUBJECT_DOC)
+        @RequestParam(required = false, name = "actor_subject") actorSubject: String?,
+        @Parameter(description = AUDIT_SORT_DIR_DOC)
+        @RequestParam(required = false, name = "sort_dir") sortDir: String?,
         @RequestParam(defaultValue = "0") @Min(0) page: Int,
         @RequestParam(defaultValue = "25") @Min(1) @Max(MAXIMUM_PAGE_SIZE) size: Int,
     ): ApiPage<AuditEventSummaryResponse> =
         search(
-            AuditEventFilter(
-                organisationId = tenantId,
+            tenantId,
+            AuditSearchParameters(
                 entityType = entityType,
                 entityId = entityId,
                 actorId = actorId,
                 action = action,
                 occurredFrom = occurredFrom,
                 occurredTo = occurredTo,
-                page = page,
-                size = size,
+                outcome = outcome,
+                severity = severity,
+                minSeverity = minSeverity,
+                branchId = branchId,
+                actionPrefix = actionPrefix,
+                q = q,
+                actorType = actorType,
+                actorSubject = actorSubject,
+                sortDir = sortDir,
             ),
+            page,
+            size,
         )
 
-    private fun search(filter: AuditEventFilter): ApiPage<AuditEventSummaryResponse> {
+    /**
+     * Resolves the platform caller first, so a tenant context is refused with 403 before any
+     * filter is parsed (as on the tenant route), then parses and runs the search.
+     */
+    private fun search(
+        organisationId: UUID,
+        parameters: AuditSearchParameters,
+        page: Int,
+        size: Int,
+    ): ApiPage<AuditEventSummaryResponse> {
         val caller = CallerContextResolver.getPlatformCaller()
+        val filter = parameters.toFilter(organisationId, page, size)
         val result = auditQueryService.searchForPlatform(filter, caller.actorId)
         return apiPageOf(
             items = result.items.map { it.toPlatformSummaryResponse() },
-            number = filter.page,
-            size = filter.size,
+            number = page,
+            size = size,
             totalItems = result.totalItems,
         )
     }

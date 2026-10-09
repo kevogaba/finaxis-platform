@@ -79,3 +79,45 @@ organisation's log and any tenant's). A page item and a detail response have the
 under the same names. Both reuse `audit.view`; the platform routes require it in
 the PLATFORM organisation. See
 [audit logging](../security/audit-logging.md#rest-read-endpoints-and-the-platform-permission-model).
+
+### Search filters (#183)
+
+The three searches share one filter set, parsed by `AuditSearchParameters` and bounded by
+`AuditEventFilter.requireValid` in `AuditQueryService` (a bad value is a 400 naming the
+parameter, never a 500). The owner delegated these defaults to the builder; they are the design:
+
+- **`outcome`**: the closed set `SUCCESS`, `FAILURE`, `DENIED` (`AuditOutcome`), exact match.
+- **`severity` and `min_severity`**: both, as `AuditSeverity`; `severity` is exact and
+  `min_severity` is that value or above in the order `INFO` < `LOW` < `MEDIUM` < `HIGH` <
+  `CRITICAL`. Supplying both is a 400.
+- **`branch_id`**: the row's branch. It only narrows: `audit.view` is checked tenant-wide, as
+  before, so no caller sees a row it could not already read.
+- **`action_prefix`**: a literal prefix of `action` (LIKE wildcards escaped), 2 to 64 characters.
+  It is the event-type filter, because `event_type` is the action (rows from before #187 keep the
+  resource type in `event_type`, and filtering on `action` finds them too). `action` stays exact.
+- **`q`**: a case-insensitive substring of `action`, `entity_type` or `reason` (the text columns
+  the row has), 3 to 64 characters, wildcards escaped, bound as a parameter. It cannot use a
+  B-tree index, so it **requires `occurred_from` no more than 31 days before `occurred_to` (or
+  now)**, a window that bounds its cost on the tenant's `(organisation_id, event_time)` index. No
+  trigram index.
+- **`actor_type`**: `USER` or `SYSTEM` (`AuditActorType`), the two values the application
+  writes, so system actors are findable. **`actor_subject`**: exact match on
+  `actor_external_subject`, 1 to 255 characters.
+- **`sort_dir`**: `ASC` or `DESC` on `event_time`, with the id as tie-break; `DESC` by default.
+- **No side channel.** There is no filter over `before_jsonb`, `after_jsonb`, `metadata_jsonb`,
+  `user_agent` or `ip_address`, and the platform searches refuse `actor_subject` with a 400,
+  because their pages withhold `actor_external_subject` and a filter would reveal it one guess at
+  a time.
+
+Index support (`V25`-`V28`, one migration per index): the selective filters (`branch_id`,
+`actor_subject`, an `outcome` other than `SUCCESS`, a severity above `INFO`) each have a partial
+index after `organisation_id`, so their page count is an index-only scan of the matching rows rather
+than a pass over the tenant's log. `actor_type`, `action_prefix`, `SUCCESS` and `INFO` match too
+much of the log for an index to help and use `idx_audit_event_organisation_time`.
+`JooqAuditEventQueries` renders the outcome and severity values as SQL literals, so the planner can
+prove the partial predicates in a cached generic plan as well.
+
+The four indexes are built `CONCURRENTLY` by non-transactional migrations (owner ruling), so
+deploying them never blocks the audited writes of the running instances; the convention and the
+recovery from a failed build are in
+[audit index migrations](../operations/audit-index-migrations.md).
