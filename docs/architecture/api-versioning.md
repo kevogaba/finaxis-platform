@@ -19,6 +19,9 @@ second list here would only let the two drift apart.
 Do not add public endpoints outside `/api/v1`, `/api/v2`, and future explicit versions. Actuator,
 OpenAPI docs, Scalar docs, and static docs are operational/documentation endpoints, not public
 business APIs.
+The one public route outside them is `GET /.well-known/oauth-protected-resource`, the RFC 9728
+protected-resource metadata, whose path the standard fixes (see
+[Foundation REST API](../api/foundation-api.md), "Protected-Resource Metadata").
 
 ## Version Introduction
 

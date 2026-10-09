@@ -109,6 +109,51 @@ frame-ancestors 'none'` CSP in every profile and HSTS when it is enabled (see
 observation with the firewall's exception, whose message embeds the refused header value or path:
 with a trace exporter configured, the span records it.
 
+## Protected-resource metadata
+
+`GET /.well-known/oauth-protected-resource` (#253) is public by design: an OAuth client reads it,
+before it holds a token, to learn which authorization server issues tokens for this API (RFC
+9728), and the `401` challenge's `resource_metadata` points at it. Spring Security's own filter
+serves it ahead of bearer authentication, the active-organisation filter and the rate limiter, so
+it is not rate-limited; it is a document from configuration (checked at startup) plus, for a
+path-suffixed request, that request's own path (RFC 9728 section 3.3), with no database, Redis or
+Keycloak call. It is the only unversioned public route (see
+`docs/api/foundation-api.md`).
+
+It exposes nothing secret: the API's own public origin (`resource`), the Keycloak issuer URL
+(`authorization_servers`, which every token already carries as `iss`) and `bearer_methods_supported:
+["header"]`. Spring's default `tls_client_certificate_bound_access_tokens: true` is removed (the
+application does not bind tokens to client certificates), and no scopes are listed.
+
+`resource` comes from `finaxis.security.protected-resource.resource`
+(`FINAXIS_PROTECTED_RESOURCE_URL`) when it is set, and its origin is then **never taken from the
+request**: a forged `Host` or `X-Forwarded-*` header cannot make the document name another origin,
+whatever the trusted-proxy list says. Only the path of a path-suffixed request
+(`/.well-known/oauth-protected-resource/api/v1` names `<origin>/api/v1`, as RFC 9728 section 3.3
+requires) is taken from the request, parsed as a URI and reflected only when it is already
+normalised and has no query or fragment; it is the requester's own path, echoed to the requester.
+A set value must be an `http` or `https` origin with no path, query, fragment or user info, or
+startup fails; the error names the property and never repeats the value (it may carry user
+info). The scheme's default port is dropped (`https://api…:443` is published as
+`https://api…`), as in the challenge's URL. Locally it defaults to
+`http://localhost:<server.port>`.
+
+**Production: recommended, not required.** Set `FINAXIS_PROTECTED_RESOURCE_URL` to the public
+`https` origin clients call (`https://api.finaxis.example`, no path). The `production` profile has
+no default; unset, the application still starts, logs one `WARN` naming the property, and the
+document's `resource` falls back to Spring's request-derived value: the origin the request arrived
+with, scheme, host and port believed from a listed trusted proxy only (see "Forwarded headers").
+That value reflects the requester's own `Host` (the response is `no-store`), so it is no cross-user
+risk, but it loses the canonical identity. Keep `FINAXIS_KEYCLOAK_ISSUER_URI` the public issuer
+URL, since it is published too.
+
+The challenge's `resource_metadata` URL is built from the request's origin (see "Forwarded
+headers"), so behind a listed proxy it and `resource` name the same origin when the configured
+value is the public host Traefik forwards (a default port is normalised away on both sides). The
+route runs after the security-header and CORS filters, so in production a cross-origin browser
+`GET` from an origin not in `FINAXIS_CORS_ALLOWED_ORIGINS` is refused like any other; no browser
+client discovers through it today.
+
 ## Client address behind a reverse proxy
 
 Audit rows record the client address (`audit_event.ip_address`, #185), resolved by
@@ -158,6 +203,8 @@ one. This is the honest cost of exposing the docs publicly, not an oversight: se
 to `false` restores the strict CSP everywhere with the same container restart.
 
 The active-organisation HMAC secret has no production default. Startup fails fast unless
-`FINAXIS_ACTIVE_ORGANISATION_CONTEXT_SECRET` is configured.
+`FINAXIS_ACTIVE_ORGANISATION_CONTEXT_SECRET` is configured. `FINAXIS_PROTECTED_RESOURCE_URL` has
+no production default either but is recommended, not required: unset, startup logs a `WARN` (see
+"Protected-resource metadata").
 
 This document is linked from `CLAUDE.md`.

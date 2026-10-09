@@ -7,7 +7,10 @@ It complements the generated OpenAPI document at `/v3/api-docs` and the local Sc
 ## Overview
 
 All public endpoints are versioned under `/api/v1`. Future incompatible contracts must use a
-new version path; unversioned public routes are not part of the contract.
+new version path; unversioned public routes are not part of the contract. The one exception is
+the OAuth 2.0 protected-resource metadata, `GET /.well-known/oauth-protected-resource`: RFC 9728
+fixes its path, so it is intentionally public and unversioned (see
+[Protected-Resource Metadata](#protected-resource-metadata)).
 
 Every request authenticates with an OAuth2 bearer JWT issued by Keycloak:
 
@@ -288,6 +291,10 @@ a listed trusted proxy, and `Forwarded` and `X-Forwarded-Prefix` never do (#256,
   `error_description="The access token is invalid or has expired."`. The decoder's own message
   (expiry instants, failing claims) is never sent; it used to be echoed verbatim.
 
+The advertised URL serves the [protected-resource metadata](#protected-resource-metadata). Its
+location follows the request's origin; the document's own `resource` is configured (falling back
+to the request's origin only when it is not set).
+
 A challenge with a status other than `401` (an RFC 6750 `invalid_request`, `400`, such as two
 tokens in one request) gets the body `code` `invalid_request`, `detail` `Malformed request.`.
 It is unreachable while the resolver reads tokens from the `Authorization` header only, as it does.
@@ -370,6 +377,64 @@ read, so it is ignored.
 
 The `Shape` column uses `page` for an `ApiPage<T>` collection, `item` for a single resource, and
 `mutation` for state-changing operations.
+
+### Protected-Resource Metadata
+
+`GET /.well-known/oauth-protected-resource` (#253) is the RFC 9728 document the `401`
+challenge's `resource_metadata` points at. It is **intentionally public and unversioned**, the
+only route outside `/api/vN`: the standard fixes the path, and a client reads it before it has a
+token. It is not in the OpenAPI document, since Spring Security's own filter serves it (ahead of
+bearer authentication, the active-organisation filter and the rate limiter, though after the
+security-header and CORS filters), not a controller.
+A bearer token or context header sent with it is ignored. Only `GET` is served.
+
+| Method | Path | Auth | Shape |
+| --- | --- | --- | --- |
+| `GET` | `/.well-known/oauth-protected-resource` | none | item |
+
+`200`, `Content-Type: application/json`, exactly these members:
+
+```json
+{
+  "resource": "https://api.finaxis.example",
+  "authorization_servers": ["https://id.finaxis.example/realms/finaxis"],
+  "bearer_methods_supported": ["header"]
+}
+```
+
+- `resource`: `finaxis.security.protected-resource.resource`
+  (`FINAXIS_PROTECTED_RESOURCE_URL`), the canonical origin (plus the request's path for a
+  path-suffixed request, see below), lower-cased without a trailing `/` or
+  the scheme's default port (`:443`, `:80`), so it reads like the challenge's URL. When it is set,
+  **nothing in the request changes it**: no `Host`, `X-Forwarded-*` or `Forwarded` header, from a
+  trusted proxy or not. When it is not set (production has no default; startup logs one `WARN`),
+  `resource` falls back to Spring's value: the origin the request arrived with, as believed
+  through the trusted-proxy list (#256). A set but invalid value fails startup.
+- `authorization_servers`: the Keycloak issuer the JWT decoder trusts
+  (`spring.security.oauth2.resourceserver.jwt.issuer-uri`); omitted if none is configured.
+- `bearer_methods_supported`: `header` only; tokens in a query parameter or form body are not
+  read.
+- Absent on purpose: `tls_client_certificate_bound_access_tokens` (Spring's default claims `true`;
+  the application does not bind tokens to client certificates) and `scopes_supported` (access is
+  decided by application permission codes, not OAuth scopes).
+
+RFC 9728 section 3.3 requires `resource` to be identical to the resource identifier the client
+derived the metadata URL from, and a client to reject a mismatch. Spring also answers path-suffixed
+requests (`/.well-known/oauth-protected-resource/<path>`), so `resource` keeps the request's path
+after the well-known segment:
+
+- `GET /.well-known/oauth-protected-resource` names the origin (`https://api.finaxis.example`);
+- `GET /.well-known/oauth-protected-resource/api/v1/auth/me` names
+  `https://api.finaxis.example/api/v1/auth/me`.
+
+When the property is set, only that path comes from the request: scheme, host and port are always
+the configured ones. A path that is not already normalised (dot segments) or does not parse is not
+reflected: the document then names the bare origin, which such a client rejects. Unset, Spring's
+request-derived value is used as is. The `401` challenge advertises the root URL, whose `resource`
+is the origin; a client that called `https://api.finaxis.example/api/v1/...` and compares
+literally would refuse it, so clients following the challenge are expected to match `resource` as
+the origin of the API URLs they call (the RFC's section 5.1 example, Spring's own root default, and
+what MCP-style clients do).
 
 ### Auth And Profile
 
