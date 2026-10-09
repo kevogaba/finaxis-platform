@@ -28,8 +28,12 @@ deployment, not a Coolify-native build from source.
   `SecurityConfiguration` permits only the literal string `/actuator/health` unauthenticated;
   `/actuator/health/readiness` or `/actuator/health/liveness` will 401 against Coolify's check even
   though the probes themselves are enabled (`management.endpoint.health.probes.enabled: true`).
-- Coolify sits in front of the application as a reverse proxy (Traefik); `server.forward-headers-
-  strategy: framework` is already set for that.
+- Coolify sits in front of the application as a reverse proxy (Traefik). `server.forward-headers-
+  strategy: native` believes Traefik's `X-Forwarded-*` headers **only** once
+  `FINAXIS_CLIENT_IP_TRUSTED_PROXIES` names Traefik [^client-ip]; until then the client address,
+  scheme and port the application sees are Traefik's connection's (#256), HSTS is not sent and a
+  same-origin browser request is refused as CORS. Set it before, or with, the first deploy of this
+  release; the `production` profile logs a startup `WARN` while it is empty.
 
 ## Required environment variables
 
@@ -46,12 +50,17 @@ deployment and are not provisioned by it:
 | `FINAXIS_KEYCLOAK_AUDIENCE` | |
 | `FINAXIS_ACTIVE_ORGANISATION_CONTEXT_SECRET` | No default — startup fails fast without it |
 | `FINAXIS_CORS_ALLOWED_ORIGINS` | |
-| `FINAXIS_CLIENT_IP_TRUSTED_PROXIES` | The proxy's address or range [^client-ip] |
+| `FINAXIS_CLIENT_IP_TRUSTED_PROXIES` | **Required behind Traefik**: its address [^client-ip] |
 
 [^client-ip]: Traefik's own container address (pinned), or a dedicated network that only Traefik
   and the app join; never the shared Coolify network or its range, which every co-hosted container
-  and the bridge gateway can reach the app from. See production-hardening.md ("Client address
-  behind a reverse proxy"). Unset, every audit row records the proxy's address.
+  and the bridge gateway can reach the app from. See production-hardening.md ("Forwarded
+  headers"). Unset, no forwarded header is believed: audit rows, the access log and anonymous rate
+  limits name Traefik's address (one shared anonymous bucket); URLs the app builds, such as the
+  `401` challenge's `resource_metadata`, carry `http` and port `8081` (the host is the public one
+  Traefik passes through); no response carries HSTS; and a same-origin browser request (the docs
+  page's "try it") is judged cross-origin and refused with `403` unless the public origin is in
+  `FINAXIS_CORS_ALLOWED_ORIGINS`.
 [^issuer]: Reachable both by the app container and by whatever URL clients use to obtain tokens.
   Keycloak stamps each token with the issuer URL the caller used; an internal-only hostname here
   401s every request — the same trap `compose.yaml` documents for local host networking.

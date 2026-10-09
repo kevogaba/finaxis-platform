@@ -13,9 +13,17 @@ import java.net.InetAddress
  * when the direct peer is a configured trusted proxy.
  *
  * - The peer is the **container's** remote address, read from the innermost request rather than
- *   through any wrapper. Spring's `ForwardedHeaderFilter` (`server.forward-headers-strategy:
- *   framework`) rewrites `getRemoteAddr()` to the left-most `X-Forwarded-For` entry of any peer
- *   and hides the header, so its view is client-controlled and is never used here.
+ *   through any wrapper, so no filter's view of the address is ever used.
+ * - Under `server.forward-headers-strategy: native` (#256) Tomcat's `RemoteIpValve` has already
+ *   applied the same trusted list ([TrustedProxyValveCustomizer]) before any filter runs: from a
+ *   trusted peer it walked `X-Forwarded-For` from the right past the trusted hops, made the entry
+ *   it stopped at the remote address and left only the entries to the left of it in the header.
+ *   This resolver then continues that one walk with the same list, never a second, wider trust:
+ *   a peer that is not trusted is the client and the header is ignored. Kept as defence in depth
+ *   and for what the valve does not do: it parses strictly, normalises, caps the walk, and reads
+ *   an entry with a port or brackets, where the valve stops and leaves that text as the address.
+ *   An entry that is no address at all, written by a trusted hop as its own peer, is the remote
+ *   address the valve leaves and resolves to `null`: the hop that forwarded it is no longer known.
  * - With no trusted proxy configured (the default), or a peer outside the list, the peer address
  *   is the client and every forwarded header is ignored.
  * - Behind a trusted peer `X-Forwarded-For` is walked lazily from the right (several header lines
@@ -25,7 +33,8 @@ import java.net.InetAddress
  *   malformed entry (not an IP literal, optionally with a port) during the walk, or more than
  *   [MAX_HOPS] entries, stops it and the trusted peer is the client: never an error. Only
  *   `X-Forwarded-For` is read, never `Forwarded`.
- * - A peer address with an IPv6 zone id (`fe80::1%eth0`) is read without the zone.
+ * - A peer address with an IPv6 zone id (`fe80::1%eth0`) is read without the zone; a peer that is
+ *   an entry the valve stopped at may carry a port or brackets, which are dropped.
  *
  * The result is normalised: IPv4 dotted quad, IPv4-mapped IPv6 as IPv4, other IPv6 in RFC 5952
  * form (at most 39 characters), no zone or port. It is personal data: it goes on
@@ -41,7 +50,7 @@ class ClientIpResolver(
     fun resolve(request: HttpServletRequest): String? {
         val container = containerRequest(request)
         val peerText = container.remoteAddr.orEmpty().substringBefore(ZONE_SEPARATOR)
-        val peer = IpLiterals.parse(peerText) ?: return null
+        val peer = parseEntry(peerText) ?: return null
         val client = if (isTrusted(peer)) forwardedClient(container) ?: peer else peer
         return IpLiterals.format(client)
     }
@@ -112,8 +121,8 @@ class ClientIpResolver(
  * given). Host bits beyond the prefix are ignored, so `10.1.2.3/8` means `10.0.0.0/8`.
  */
 class IpRange private constructor(
-    private val network: ByteArray,
-    private val prefixLength: Int,
+    internal val network: ByteArray,
+    internal val prefixLength: Int,
 ) {
     /** True when [address] is of the same family and shares the first prefix bits. */
     fun contains(address: InetAddress): Boolean {

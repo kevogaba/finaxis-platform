@@ -19,28 +19,97 @@ the selected active-organisation context and never authentication state.
 Production session cookies are `Secure` and `SameSite=Strict`.
 
 The application always sends content-type-options, frame-options, and referrer-policy headers.
-Production additionally enables HSTS and CSP.
+Production additionally enables HSTS and CSP. HSTS (`Strict-Transport-Security`) is written only on
+a response to a request the application sees as secure: one that arrived over HTTPS, or, when TLS
+is terminated upstream (Coolify's Traefik), one a **listed** trusted proxy forwarded with
+`X-Forwarded-Proto: https`. Behind an unlisted proxy no response carries it (see "Forwarded
+headers").
+
+## Forwarded headers
+
+`server.forward-headers-strategy` is `native` (#256): Tomcat's `RemoteIpValve` rewrites the remote
+address, scheme, host and port from `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host` and
+`X-Forwarded-Port`, and it does so **only when the direct peer is listed in
+`finaxis.security.client-ip.trusted-proxies`** (`FINAXIS_CLIENT_IP_TRUSTED_PROXIES`:
+comma-separated addresses or CIDR ranges, IPv4 or IPv6). `TrustedProxyValveCustomizer` builds the
+valve's internal-proxies pattern from that list, replacing Tomcat's default (which trusts every
+private range, `127.0.0.0/8` included) and pinning the four header names, so the
+`server.tomcat.remoteip.*` properties cannot widen it. The pattern is a regular expression, never
+Tomcat's CIDR form, which resolves each header entry through DNS.
+
+- **Empty list (the default): no forwarded header is believed from anyone.** `getRemoteAddr()` is
+  the peer and scheme, host and port are what the connector saw. Everything that reads them is
+  then correct by construction for a directly reached application: the access log's
+  `remoteAddress` and MDC `client.address`, the anonymous rate-limit key
+  (`rate-limit:<policy>:anon:<remoteAddr>`), and every absolute URL built from the request (the
+  `resource_metadata` of the `401` challenge, the OpenAPI server URL, any `Location`).
+- **Listed peer:** the client is the right-most `X-Forwarded-For` entry that is not itself a listed
+  proxy (listed hops are skipped; all listed gives the left-most), and the scheme, host and port
+  come from the other three headers.
+- **Never read, from anyone:** the RFC 7239 `Forwarded` header and `X-Forwarded-Prefix`. A proxy
+  that strips a path prefix is not supported by this setting. This holds for today's
+  configuration: enabling springdoc's swagger-ui would bring back a reader of both
+  (`ForwardedHeaderUtils`), enabling Sentry's send-default-pii would record the left-most,
+  client-chosen `X-Forwarded-For` as the user's address, and a separate `management.server.port`
+  builds a second Tomcat this customizer is not proven to narrow. Re-check before turning any on.
+- **Every strategy but `native` is refused at startup**, unset included; the message names
+  `server.forward-headers-strategy` and the required `native`. `framework` installs Spring's
+  `ForwardedHeaderFilter`, which has no trusted-proxy list and believes all of these headers,
+  `Forwarded` first, from any peer, so any client could choose its rate-limit bucket, its logged
+  address and the scheme and host of the URLs the application builds. `none` (and unset) installs
+  no valve, so the list would no longer govern `getRemoteAddr()`, scheme, host, port, HSTS or the
+  anonymous rate-limit key while the audit resolver still applied it: inconsistent data. Startup
+  also fails if, with `native`, Tomcat has no `RemoteIpValve`. The checks run when the embedded
+  Tomcat is built, which every deployment does.
+- An entry the pattern does not recognise (a port, brackets, `::ffff:a.b.c.d`, text, an empty
+  entry) is never trusted: the valve stops there and that entry's text, verbatim, is the remote
+  address (and so the access log's address and the anonymous rate-limit key; an empty entry gives
+  an empty one). Only an entry to the right of which every entry is a listed hop can be reached.
+  A listed IPv6 hop written with a `%zone` is recognised (Tomcat writes a link-local peer that
+  way), so the valve passes over it where the audit resolver alone would stop; its address is
+  listed either way.
+
+**A deployment behind a reverse proxy (Coolify's Traefik) must list that proxy**, or the client is
+the proxy connection:
+
+- every audit row, access-log line and anonymous rate-limit bucket names the proxy's address (all
+  anonymous callers then share one bucket);
+- URLs the application builds carry the scheme and port Traefik connected with (`http`, `8081`)
+  instead of the public `https` ones; the host stays right, since Traefik passes the public `Host`
+  through;
+- **HSTS is not sent**: no request is secure to the application;
+- **a same-origin browser request is refused as CORS** (`403`): the browser's `Origin` is the
+  public `https://` one and the application sees `http://…:8081`, so the request counts as
+  cross-origin and is refused unless that origin is in `FINAXIS_CORS_ALLOWED_ORIGINS` (the
+  docs page's "try it" is such a request). Both are reproduced by
+  `ForwardedHeadersIntegrationTests`.
+
+The `production` profile logs one `WARN` at startup when the list is empty
+(`TrustedProxyValveCustomizer`); a direct deployment with no proxy stays legal. Set the list
+before, or together with, the release that brings this setting.
+Pin Traefik's container address (a static IP), or put Traefik and the application on a dedicated
+network that only the two of them join and trust that network. Do **not** trust the shared Docker
+network Coolify attaches every co-hosted resource to, nor its range: any other container on it
+could connect straight to the application with forged headers and be believed, and the range also
+holds the bridge gateway, which Docker's userland proxy uses as the source of host-published
+traffic. Too wide a list lets a client name any address, scheme or host it likes. A malformed
+entry fails startup, and so does a range of every address (`0.0.0.0/0`, `::/0`). The proxy must
+append the address it received the request from to `X-Forwarded-For` and set `X-Forwarded-Proto`
+and `X-Forwarded-Host`, which Traefik does by default; the application must not be reachable on
+`8081` except through it.
 
 ## Client address behind a reverse proxy
 
-Audit rows record the client address (`audit_event.ip_address`, #185). The application believes
-`X-Forwarded-For` only from a direct peer listed in `finaxis.security.client-ip.trusted-proxies`
-(`FINAXIS_CLIENT_IP_TRUSTED_PROXIES`: comma-separated addresses or CIDR ranges, IPv4 or IPv6),
-and then takes the right-most entry that is not itself a trusted proxy. The list is empty by
-default, and the header is then ignored.
-
-**A deployment behind a reverse proxy (Coolify's Traefik) must set it to that proxy's own
-address**: pin Traefik's container address (a static IP), or put Traefik and the application on a
-dedicated network that only the two of them join and trust that network. Do **not** trust the
-shared Docker network Coolify attaches every co-hosted resource to, nor its range: any other
-container on it could connect straight to the application with a forged `X-Forwarded-For` and be
-believed, and the range also holds the bridge gateway, which Docker's userland proxy uses as the
-source of host-published traffic. Unset, every audit row records the proxy's address, not the
-client's; too wide, a client can name any address it likes. A malformed entry fails startup, and
-so does a range of every address (`0.0.0.0/0`, `::/0`). The proxy must append the address it
-received the request from to `X-Forwarded-For`, which Traefik does by default. Spring's own
-`ForwardedHeaderFilter` (`server.forward-headers-strategy: framework`) is not used for this: it
-believes the left-most entry from any peer (#256, owner decision pending).
+Audit rows record the client address (`audit_event.ip_address`, #185), resolved by
+`ClientIpResolver` with the same list (see "Forwarded headers" above for the deployment
+requirement). Behind a listed peer the valve has already applied the list; the resolver continues
+the same walk and never trusts more, parses strictly and normalises the address. Unset, every audit
+row records the proxy's address, not the client's. The access log, the rate-limit key and the audit
+row name the same address for the same request whenever the listed proxy writes plain, canonical
+IP literals (Traefik does). When a listed hop writes a port, `::ffff:a.b.c.d`, brackets or
+non-canonical text, that text verbatim is the access log's address and the rate-limit key (a port
+then makes the anonymous bucket per source port), while the audit row holds the normalised address
+the resolver continues to; a proxy that appends ports is unsupported.
 
 ## Bootstrap identities
 

@@ -41,10 +41,11 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Full-stack proof of #185 through the real filter chain (Spring's ForwardedHeaderFilter
- * included): the audit row a mutation writes stores the client address resolved from the peer,
- * or from `X-Forwarded-For` only when the peer is a configured trusted proxy. The tenant audit
- * read returns it; a platform page withholds it (owner ruling, #247).
+ * Full-stack proof of #185 through the real filter chain: the audit row a mutation writes stores
+ * the client address resolved from the peer, or from `X-Forwarded-For` only when the peer is a
+ * configured trusted proxy. The tenant audit read returns it; a platform page withholds it (owner
+ * ruling, #247). MockMvc has no Tomcat valve, so this is the resolver on its own; the valve in
+ * front of it is proven through a real server by `ForwardedHeadersIntegrationTests` (#256).
  */
 @Import(PostgresTestConfiguration::class, ClientIpAuditIntegrationTests.RemoteAddressProbe::class)
 @SpringBootTest(properties = [ClientIpAuditIntegrationTests.TRUSTED_PROXIES])
@@ -81,9 +82,9 @@ class ClientIpAuditIntegrationTests
         fun `a forwarded header from an untrusted peer is ignored`() {
             val rows = createBranch(peer = "198.51.100.23", forwardedFor = "203.0.113.66")
 
-            // The application's forward-headers strategy ran on this request: a filter after it saw
-            // getRemoteAddr() rewritten to the forged entry, which the resolver did not believe.
-            assertEquals("203.0.113.66", probedRemoteAddress)
+            // No filter rewrites the address any more (#256: no ForwardedHeaderFilter): the first
+            // filter already sees the peer, and the resolver did not believe the forged entry.
+            assertEquals("198.51.100.23", probedRemoteAddress)
             rows.forEach { assertEquals("198.51.100.23", it.ipAddress) }
         }
 
@@ -209,9 +210,8 @@ class ClientIpAuditIntegrationTests
         }
 
         /**
-         * Records the `getRemoteAddr()` a filter placed right after Spring's ForwardedHeaderFilter
-         * sees, so the test proves that filter ran on the request rather than only that it is
-         * registered.
+         * Records the `getRemoteAddr()` the first application filter sees, so the test proves no
+         * forward-headers filter rewrote it on the request.
          */
         @TestConfiguration(proxyBeanMethods = false)
         class RemoteAddressProbe {

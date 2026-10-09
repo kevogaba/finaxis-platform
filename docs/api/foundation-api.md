@@ -264,7 +264,10 @@ header as a missing token, plus the RFC 6750 `WWW-Authenticate: Bearer ...` chal
 carry only the challenge, with an empty body and no request id.
 
 Both `401`s carry an RFC 6750 challenge with the `resource_metadata` URL
-(`<origin>/.well-known/oauth-protected-resource`):
+(`<origin>/.well-known/oauth-protected-resource`). `<origin>` is the scheme, host and port the
+request arrived with; `X-Forwarded-Proto`/`-Host`/`-Port` change it only when the direct peer is
+a listed trusted proxy, and `Forwarded` and `X-Forwarded-Prefix` never do (#256,
+`docs/security/production-hardening.md`, "Forwarded headers"):
 
 - no token: `WWW-Authenticate: Bearer resource_metadata="..."`, with **no** `error` (RFC 6750
   section 3: a request without credentials is not told why). It used to carry no challenge.

@@ -178,6 +178,15 @@ class ClientIpResolverTests {
     }
 
     @Test
+    fun `a peer the valve left as an entry with a port continues the same walk`() {
+        // Tomcat's RemoteIpValve stops at an entry it cannot match, port included, and makes
+        // that text the remote address, leaving only the entries to its left in the header.
+        assertEquals("203.0.113.9", behindProxy.resolve(request("10.0.0.5:443", "203.0.113.9")))
+        assertEquals("10.0.0.5", behindProxy.resolve(request("10.0.0.5:443")))
+        assertEquals("2001:db8::2", resolver().resolve(request("[2001:db8::2]:443", "6.6.6.6")))
+    }
+
+    @Test
     fun `a peer address that is not an IP literal resolves to nothing`() {
         assertNull(resolver().resolve(request("localhost")))
     }
