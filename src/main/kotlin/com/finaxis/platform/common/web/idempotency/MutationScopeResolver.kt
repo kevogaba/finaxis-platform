@@ -1,6 +1,7 @@
 package com.finaxis.platform.common.web.idempotency
 
 import com.finaxis.platform.common.application.ForbiddenOperationException
+import com.finaxis.platform.common.application.WrongContext
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.web.api.ApiJsonCodec
@@ -44,11 +45,12 @@ class MutationScopeResolver(
 
     private fun reservedPlatformContext(): UUID {
         val active = RequestContexts.current()?.tenant?.organisationId
-        if (active != PlatformOrganisation.ID) denied()
+        if (active != PlatformOrganisation.ID) throw WrongContext.platformRequired()
         return PlatformOrganisation.ID
     }
 
-    private fun activeTenant(): UUID = RequestContexts.current()?.tenant?.organisationId ?: denied()
+    private fun activeTenant(): UUID =
+        RequestContexts.current()?.tenant?.organisationId ?: throw WrongContext.tenantRequired()
 
     private fun denied(): Nothing =
         throw ForbiddenOperationException(

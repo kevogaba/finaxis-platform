@@ -34,7 +34,9 @@ import org.springframework.mock.web.MockHttpServletRequest
 import org.springframework.mock.web.MockHttpServletResponse
 import org.springframework.security.authentication.InsufficientAuthenticationException
 import org.springframework.security.core.context.SecurityContextHolder
+import org.springframework.security.oauth2.core.OAuth2AuthenticationException
 import org.springframework.security.oauth2.jwt.Jwt
+import org.springframework.security.oauth2.server.resource.BearerTokenErrors
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken
 import java.util.UUID
 import kotlin.test.AfterTest
@@ -377,6 +379,25 @@ class SecurityAdapterTests {
         )
 
         assertSecurityProblem(response, 401, "authentication_required")
+    }
+
+    @Test
+    fun `bearer token entry point returns shared correlated problem and keeps the challenge`() {
+        val request = MockHttpServletRequest("GET", "/api/v1/auth/me")
+        request.addHeader("X-Request-Id", "security-request")
+        val response = MockHttpServletResponse()
+
+        ApiBearerTokenEntryPoint(problemWriter()).commence(
+            request,
+            response,
+            OAuth2AuthenticationException(
+                BearerTokenErrors.invalidToken("unsafe internal detail"),
+            ),
+        )
+
+        assertSecurityProblem(response, 401, "authentication_required")
+        val challenge = requireNotNull(response.getHeader("WWW-Authenticate"))
+        assertTrue(challenge.contains("error=\"invalid_token\""))
     }
 
     @Test

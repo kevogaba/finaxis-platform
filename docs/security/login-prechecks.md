@@ -79,9 +79,17 @@ to match.
 
 ## Failure shape and context propagation
 
-JWT failures are handled by Spring Security's resource-server path and return `401`. Local
+JWT failures are handled by Spring Security's resource-server path and return `401` with the
+shared problem body (`authentication_required`), `X-Request-Id` and the RFC 6750 challenge. Local
 precheck failures return `403` from the active-organisation filter with generic messages such as
 `Invalid active organisation context`; the code does not expose tenant lookup detail to callers.
+
+A request with no active-organisation context passes the filter but carries no permission
+authority. Method security runs before the idempotency scope check and the controller, so a tenant
+route gated by `@PreAuthorize` refuses it with the generic `403` `forbidden`; only a route that
+reaches the scope check or the controller (an ungated one such as `POST
+/api/v1/auth/select-branch`) answers `tenant_context_required`. See the error codes in
+[`foundation-api.md`](../api/foundation-api.md).
 
 When a principal is installed, `RequestContexts` carries tenant, optional branch, actor, and
 correlation data for downstream code. `X-Request-Id` and `X-Correlation-Id` are propagated into

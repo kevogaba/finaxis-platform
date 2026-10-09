@@ -197,9 +197,8 @@ class PlatformTenantControllerTests
                         with(authentication(tenantToken(setOf("tenant.create"))))
                     }.andExpect {
                         status { isForbidden() }
-                        jsonPath(
-                            "$.code",
-                        ) {
+                        jsonPath("$.code") { value("platform_context_required") }
+                        jsonPath("$.detail") {
                             value(
                                 "Reserved platform organisation context is " +
                                     "required for this route.",
