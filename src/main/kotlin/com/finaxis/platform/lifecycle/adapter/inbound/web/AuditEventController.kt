@@ -46,7 +46,7 @@ class AuditEventController(
     @ApiResponses(
         ApiResponse(
             responseCode = "200",
-            description = "Audit event page",
+            description = "Audit event page; every item has the detail response's fields",
         ),
         ApiResponse(
             responseCode = "400",
@@ -107,7 +107,7 @@ class AuditEventController(
                 actorId = caller.actorId,
             )
         return apiPageOf(
-            items = result.items.map { it.toResponse() },
+            items = result.items.map { it.toSummaryResponse() },
             number = page,
             size = size,
             totalItems = result.totalItems,
@@ -124,7 +124,7 @@ class AuditEventController(
     @ApiResponses(
         ApiResponse(
             responseCode = "200",
-            description = "Audit event details",
+            description = "Audit event details; the same fields as a search item",
             content = [Content(schema = Schema(implementation = AuditEventDetailResponse::class))],
         ),
         ApiResponse(

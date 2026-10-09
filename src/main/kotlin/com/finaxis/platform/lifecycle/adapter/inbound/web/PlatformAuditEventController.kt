@@ -52,7 +52,13 @@ class PlatformAuditEventController(
         description = "Searches audit events recorded under the reserved platform organisation.",
     )
     @ApiResponses(
-        ApiResponse(responseCode = "200", description = "Audit event page"),
+        ApiResponse(
+            responseCode = "200",
+            description =
+                "Audit event page; every item has the detail response's fields, with " +
+                    "before_json, after_json, metadata_json, user_agent, ip_address and " +
+                    "actor_external_subject withheld (null)",
+        ),
         ApiResponse(
             responseCode = "400",
             description = "Invalid page or filter",
@@ -120,7 +126,7 @@ class PlatformAuditEventController(
     @ApiResponses(
         ApiResponse(
             responseCode = "200",
-            description = "Audit event details",
+            description = "Audit event details; the same fields as a search item",
             content = [Content(schema = Schema(implementation = AuditEventDetailResponse::class))],
         ),
         ApiResponse(
@@ -171,7 +177,13 @@ class PlatformAuditEventController(
         description = "Searches the audit events of one tenant as a platform operator.",
     )
     @ApiResponses(
-        ApiResponse(responseCode = "200", description = "Audit event page"),
+        ApiResponse(
+            responseCode = "200",
+            description =
+                "Audit event page; every item has the detail response's fields, with " +
+                    "before_json, after_json, metadata_json, user_agent, ip_address and " +
+                    "actor_external_subject withheld (null)",
+        ),
         ApiResponse(
             responseCode = "400",
             description = "Invalid page or filter",
@@ -232,7 +244,7 @@ class PlatformAuditEventController(
         val caller = CallerContextResolver.getPlatformCaller()
         val result = auditQueryService.searchForPlatform(filter, caller.actorId)
         return apiPageOf(
-            items = result.items.map { it.toResponse() },
+            items = result.items.map { it.toPlatformSummaryResponse() },
             number = filter.page,
             size = filter.size,
             totalItems = result.totalItems,

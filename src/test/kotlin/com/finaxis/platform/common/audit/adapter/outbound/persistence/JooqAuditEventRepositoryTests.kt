@@ -50,6 +50,44 @@ class JooqAuditEventRepositoryTests(
     }
 
     @Test
+    fun `save stores the action as event_type and the resource type as entity_type`() {
+        val organisationId = insertOrganisation()
+        val eventId = uuidV7()
+
+        repository.save(baseEvent(eventId, organisationId))
+
+        val audit =
+            requireNotNull(
+                dsl
+                    .select(AUDIT_EVENT.EVENT_TYPE, AUDIT_EVENT.ENTITY_TYPE, AUDIT_EVENT.ACTION)
+                    .from(AUDIT_EVENT)
+                    .where(AUDIT_EVENT.ID.eq(eventId))
+                    .fetchOne(),
+            )
+
+        assertEquals("organisation.activate", audit.get(AUDIT_EVENT.EVENT_TYPE))
+        assertEquals("ORGANISATION", audit.get(AUDIT_EVENT.ENTITY_TYPE))
+        assertEquals("organisation.activate", audit.get(AUDIT_EVENT.ACTION))
+    }
+
+    @Test
+    fun `save stores a resource id that is not a UUID as a null entity_id`() {
+        val organisationId = insertOrganisation()
+        val eventId = uuidV7()
+
+        repository.save(baseEvent(eventId, organisationId).copy(resourceId = "a-setting-key"))
+
+        val entityId =
+            dsl
+                .select(AUDIT_EVENT.ENTITY_ID)
+                .from(AUDIT_EVENT)
+                .where(AUDIT_EVENT.ID.eq(eventId))
+                .fetchOne(AUDIT_EVENT.ENTITY_ID)
+
+        assertNull(entityId)
+    }
+
+    @Test
     fun `save stores the common system actor without a user foreign key`() {
         val organisationId = insertOrganisation()
         val eventId = uuidV7()

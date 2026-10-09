@@ -4,7 +4,6 @@ import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditEventDetail
 import com.finaxis.platform.common.audit.AuditEventFilter
 import com.finaxis.platform.common.audit.AuditEventPage
-import com.finaxis.platform.common.audit.AuditEventSummary
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditQueryService
 import com.finaxis.platform.common.audit.AuditSeverity
@@ -131,7 +130,12 @@ class PlatformAuditEventControllerTests
             val tenantId = uuidV7()
             val filterCaptor = argumentCaptor<AuditEventFilter>()
             whenever(auditQueryService.searchForPlatform(filterCaptor.capture(), eq(callerId)))
-                .thenReturn(AuditEventPage(listOf(summary()), totalItems = 1))
+                .thenReturn(
+                    AuditEventPage(
+                        listOf(summary().copy(organisationId = tenantId)),
+                        totalItems = 1,
+                    ),
+                )
 
             mockMvc
                 .get("${ApiPaths.PLATFORM_TENANTS}/$tenantId/audit-events") {
@@ -140,6 +144,11 @@ class PlatformAuditEventControllerTests
                 }.andExpect {
                     status { isOk() }
                     jsonPath("$.items[0].action") { value("branch.updated") }
+                    jsonPath("$.items[0].event_type") { value("branch.updated") }
+                    jsonPath("$.items[0].organisation_id") { value(tenantId.toString()) }
+                    jsonPath("$.items[0].resource_type") { value("BRANCH") }
+                    jsonPath("$.items[0].metadata_json") { value(null) }
+                    jsonPath("$.items[0].actor_external_subject") { value(null) }
                 }
 
             assertEquals(
@@ -241,18 +250,11 @@ class PlatformAuditEventControllerTests
         }
 
         private fun summary() =
-            AuditEventSummary(
-                id = uuidV7(),
-                occurredAt = Instant.parse("2026-07-21T10:15:30Z"),
-                actorType = "USER",
-                actorId = uuidV7(),
-                branchId = null,
+            detail(uuidV7()).copy(
+                eventType = "branch.updated",
+                entityType = "BRANCH",
                 action = "branch.updated",
-                resourceType = "BRANCH",
-                resourceId = "BRANCH-001",
-                outcome = AuditOutcome.SUCCESS,
                 severity = AuditSeverity.INFO,
-                reason = null,
             )
 
         private fun detail(eventId: UUID) =
@@ -264,7 +266,7 @@ class PlatformAuditEventControllerTests
                 actorExternalSubject = "keycloak:external-subject",
                 actorType = "USER",
                 branchId = null,
-                eventType = "USER_SUSPENDED",
+                eventType = "user.suspend",
                 entityType = "USER",
                 entityId = uuidV7(),
                 action = "user.suspend",

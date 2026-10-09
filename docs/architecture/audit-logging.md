@@ -27,8 +27,10 @@ The common audit foundation records:
 
 - actor type and actor ID;
 - tenant/organisation ID and branch ID;
-- action;
-- resource type and resource ID;
+- action, and the event type derived from it (`event_type` is the action itself, the domain
+  event name such as `organisation.activate`; it no longer repeats the resource type);
+- resource type and resource ID (stored as `entity_type`/`entity_id`; the ID only when it is a
+  UUID);
 - outcome and severity;
 - reason/comment;
 - before/after state summaries;
@@ -73,6 +75,7 @@ for the audit adapter to fall back on when a caller does not supply them explici
 Audit events are read through `GET /api/v1/tenant/audit-events` (tenant users, active tenant
 only) and `GET /api/v1/platform/audit-events` plus
 `GET /api/v1/platform/tenants/{tenant_id}/audit-events` (platform operators: the PLATFORM
-organisation's log and any tenant's). Both reuse `audit.view`; the platform routes require it in
+organisation's log and any tenant's). A page item and a detail response have the same fields
+under the same names. Both reuse `audit.view`; the platform routes require it in
 the PLATFORM organisation. See
 [audit logging](../security/audit-logging.md#rest-read-endpoints-and-the-platform-permission-model).

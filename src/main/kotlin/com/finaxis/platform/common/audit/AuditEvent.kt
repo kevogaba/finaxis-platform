@@ -25,4 +25,11 @@ data class AuditEvent(
     val after: Map<String, Any?>?,
     val metadata: Map<String, Any?>,
     val occurredAt: Instant,
-)
+) {
+    /**
+     * The domain event name stored as `audit_event.event_type`: the [action] itself (for example
+     * `organisation.activate`), so the column says what happened rather than repeating
+     * [resourceType], which is stored separately as `entity_type`.
+     */
+    val eventType: String get() = action
+}

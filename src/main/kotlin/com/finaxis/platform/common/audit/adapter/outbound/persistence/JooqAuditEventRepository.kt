@@ -45,7 +45,7 @@ class JooqAuditEventRepository(
             .set(
                 AUDIT_EVENT.BRANCH_ID,
                 (event.branchId?.toUuidOrNull()) ?: context?.branch?.branchId,
-            ).set(AUDIT_EVENT.EVENT_TYPE, event.resourceType)
+            ).set(AUDIT_EVENT.EVENT_TYPE, event.eventType)
             .set(AUDIT_EVENT.ENTITY_TYPE, event.resourceType)
             .set(AUDIT_EVENT.ENTITY_ID, event.resourceId?.toUuidOrNull())
             .set(AUDIT_EVENT.ACTION, event.action)

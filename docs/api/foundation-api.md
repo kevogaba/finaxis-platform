@@ -1637,7 +1637,7 @@ Base path: `/api/v1/tenant/audit-events`. List filters: `entity_type`, `entity_i
 Platform operators read audit logs through `/api/v1/platform/**`; the tenant routes above stay
 tenant-only and answer a platform context with 403. Both platform search routes accept the same
 filters and `page`/`size` bounds (`size` 1-100) as the tenant search and return the same page and
-summary shapes; the detail route returns the audit detail response below.
+item shapes; the detail route returns the audit event shape below.
 
 | Method | Path                                                | Permission   | Shape |
 |--------|-----------------------------------------------------|--------------|-------|
@@ -1653,33 +1653,70 @@ operators wrote against it. A tenant user (or a platform user without the permis
 unknown `tenant_id` yields an empty page. Platform reads fall under the `platform-read` rate-limit
 policy.
 
-Audit detail response:
+#### Audit event shape
+
+A search item and a detail response carry **the same fields under the same names** (#187), so
+a client can render a page row and a detail view from one type. Example (the tenant approval:
+the FSM transition `ACTIVATE` on the organisation, written by a platform checker):
 
 ```json
 {
   "id": "bbbbbbbb-bbbb-7bbb-8bbb-bbbbbbbbbbbb",
   "organisation_id": "11111111-1111-7111-8111-111111111111",
   "occurred_at": "2026-07-25T08:12:00Z",
-  "actor_user_id": "44444444-4444-7444-8444-444444444444",
-  "actor_external_subject": "local.admin",
   "actor_type": "USER",
+  "actor_id": "44444444-4444-7444-8444-444444444444",
+  "actor_user_id": "44444444-4444-7444-8444-444444444444",
+  "actor_external_subject": "6f1c2a9e-0d4b-4c3e-9a51-2b7d8e4f1a03",
   "branch_id": null,
-  "event_type": "TenantApproved",
+  "event_type": "organisation.activate",
+  "action": "organisation.activate",
+  "resource_type": "ORGANISATION",
+  "resource_id": "11111111-1111-7111-8111-111111111111",
   "entity_type": "ORGANISATION",
   "entity_id": "11111111-1111-7111-8111-111111111111",
-  "action": "tenant.approve",
   "outcome": "SUCCESS",
   "severity": "INFO",
-  "ip_address": "127.0.0.1",
+  "reason": "Approved for onboarding.",
+  "ip_address": null,
   "user_agent": "curl/8.0",
   "correlation_id": "019f7d42-8db9-7ef7-9f5e-53211981bb54",
   "request_id": "019f7d42-8db9-7ef7-9f5e-53211981bb54",
   "before_json": null,
   "after_json": null,
-  "metadata_json": "{}",
-  "reason": "Approved for onboarding."
+  "metadata_json": "{\"to\": \"ACTIVE\", \"from\": \"PENDING_APPROVAL\"}"
 }
 ```
+
+- **`event_type`** is the domain event name of the row: its `action`. A lifecycle transition is
+  `<aggregate>.<transition>` in lower case (`organisation.activate`, `branch.suspend`); any other
+  audited operation uses its own action (`user.invite`, `settings.update`, `journal.approve`).
+  Rows written before this release carry the resource type (the `entity_type` value) here
+  instead; they are not rewritten. **Behaviour change:** `event_type` used to repeat
+  `entity_type` on every row.
+- **Deprecated aliases.** `resource_type`, `resource_id` and `actor_id` are kept so existing
+  clients keep working, and always hold the same value as `entity_type`, `entity_id` (as a string)
+  and `actor_user_id`. Read the canonical names in new code; the aliases are marked deprecated in
+  the OpenAPI document and may be dropped by a later API version. The search filters keep their
+  names (`entity_type`, `entity_id`, `actor_id`); `actor_id` filters on `actor_user_id`.
+- **`entity_id` holds UUIDs only.** A resource id that is not a UUID (a tenant-setting audit row
+  is keyed by the setting key, for example) is not stored, so such a row reads `null` in both
+  `entity_id` and `resource_id`; its `entity_type`, `action` and `before_json`/`after_json` still
+  identify it. There is no text column for it and none is planned in this change.
+- `actor_user_id` (and `actor_id`) is `null` when a system process acted (`actor_type`
+  `SYSTEM`). `ip_address` is `null` on the rows the application writes today: no request path
+  captures the client address yet.
+- `before_json`, `after_json` and `metadata_json` are JSON documents as strings, after redaction.
+- The tenant search (`/api/v1/tenant/audit-events`) and both platform searches return this shape
+  in `items`; `GET .../{event_id}` returns it as the body.
+- **Withheld on the platform pages (owner decision).** In the items of both platform searches
+  (`/api/v1/platform/audit-events` and `/api/v1/platform/tenants/{tenant_id}/audit-events`),
+  `before_json`, `after_json`, `metadata_json`, `user_agent`, `ip_address` and
+  `actor_external_subject` are always `null`, even when the row holds values, until the owner
+  decides otherwise. The keys stay, so the shape is the same. Every other field, including
+  `organisation_id`, `request_id` and `correlation_id`, is returned. The tenant routes return all
+  fields. `GET /api/v1/platform/audit-events/{event_id}` (the platform's own log only) is
+  unchanged and returns all fields, as it did before.
 
 ### Business Date
 
