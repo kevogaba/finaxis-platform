@@ -8,8 +8,12 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
 import org.springframework.http.HttpHeaders
 import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.options
 import org.springframework.test.web.servlet.post
+import java.net.URI
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest(
@@ -90,5 +94,52 @@ class CorsEnabledSecurityIntegrationTests {
                     )
                 }
             }
+    }
+
+    @Test
+    fun `a firewall rejection answers an allowed origin with its cors headers`() {
+        // URIs, not templates: a template string would collapse the `//`.
+        listOf("/api/v1/auth/me;evil=reflected", "/api//v1/auth/me").forEach { path ->
+            val response =
+                mockMvc
+                    .get(URI.create(path)) {
+                        header(HttpHeaders.ORIGIN, "https://app.finaxis.example")
+                    }.andExpect {
+                        status { isBadRequest() }
+                        jsonPath("$.code") { value("request_rejected") }
+                        header {
+                            string(
+                                HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN,
+                                "https://app.finaxis.example",
+                            )
+                        }
+                        header { string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true") }
+                        header {
+                            string(
+                                HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS,
+                                "Idempotency-Key, Idempotency-Replayed",
+                            )
+                        }
+                    }.andReturn()
+                    .response
+            assertTrue(response.getHeaders(HttpHeaders.VARY).contains(HttpHeaders.ORIGIN))
+            assertFalse("reflected" in response.contentAsString, response.contentAsString)
+        }
+    }
+
+    @Test
+    fun `a firewall rejection gives an origin outside the list no cors headers`() {
+        val response =
+            mockMvc
+                .get(URI.create("/api/v1/auth/me;evil=reflected")) {
+                    header(HttpHeaders.ORIGIN, "https://evil.example")
+                }.andExpect {
+                    status { isBadRequest() }
+                    jsonPath("$.code") { value("request_rejected") }
+                    header { doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN) }
+                    header { doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS) }
+                }.andReturn()
+                .response
+        assertTrue(response.headerNames.none { it.startsWith("Access-Control-") })
     }
 }

@@ -18,12 +18,16 @@ import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
 import com.finaxis.platform.iam.domain.allowsLogin
 import com.finaxis.platform.lifecycle.UserFirstLoginActivation
+import io.micrometer.observation.ObservationRegistry
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
+import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpStatus
+import org.springframework.http.server.ServerHttpResponse
 import org.springframework.security.access.AccessDeniedException
 import org.springframework.security.authentication.InsufficientAuthenticationException
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity
@@ -41,10 +45,22 @@ import org.springframework.security.oauth2.server.resource.web.authentication.Be
 import org.springframework.security.web.AuthenticationEntryPoint
 import org.springframework.security.web.SecurityFilterChain
 import org.springframework.security.web.access.AccessDeniedHandler
+import org.springframework.security.web.firewall.CompositeRequestRejectedHandler
+import org.springframework.security.web.firewall.ObservationMarkingRequestRejectedHandler
+import org.springframework.security.web.firewall.RequestRejectedException
+import org.springframework.security.web.firewall.RequestRejectedHandler
+import org.springframework.security.web.header.HeaderWriter
+import org.springframework.security.web.header.writers.CacheControlHeadersWriter
+import org.springframework.security.web.header.writers.ContentSecurityPolicyHeaderWriter
+import org.springframework.security.web.header.writers.HstsHeaderWriter
+import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy
+import org.springframework.security.web.header.writers.XContentTypeOptionsHeaderWriter
+import org.springframework.security.web.header.writers.frameoptions.XFrameOptionsHeaderWriter
 import org.springframework.stereotype.Service
 import org.springframework.web.cors.CorsConfiguration
 import org.springframework.web.cors.CorsConfigurationSource
+import org.springframework.web.cors.DefaultCorsProcessor
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource
 import org.springframework.web.filter.OncePerRequestFilter
 
@@ -145,6 +161,26 @@ class SecurityConfiguration(
                 add("/swagger-ui/**")
             }
         }
+
+    /**
+     * Answers a request the firewall refuses with the public problem contract. Spring Security
+     * uses this bean in place of its default, so the default's observation marking is kept here.
+     */
+    @Bean
+    fun requestRejectedHandler(
+        observationRegistry: ObjectProvider<ObservationRegistry>,
+        corsConfigurationSource: CorsConfigurationSource,
+    ): RequestRejectedHandler =
+        CompositeRequestRejectedHandler(
+            ObservationMarkingRequestRejectedHandler(
+                observationRegistry.getIfAvailable { ObservationRegistry.NOOP },
+            ),
+            ApiRequestRejectedHandler(
+                problemWriter,
+                securityHeadersProperties.hstsEnabled,
+                corsConfigurationSource,
+            ),
+        )
 
     /**
      * Provides no registered CORS mapping until a deployment explicitly enables one.
@@ -275,6 +311,97 @@ class ApiAccessDeniedHandler(
             "access_denied",
             "Access is denied.",
         )
+    }
+}
+
+/**
+ * Writes a request Spring Security's firewall refuses (a header value carrying CR or LF or a C1
+ * control, an unnormalised path) as the public `400` problem `request_rejected`, instead of an
+ * empty `400`. The body names nothing from the request: its `instance` is the fixed [INSTANCE],
+ * never the request URI (for a refused path, the URI is the refused value), and it carries only
+ * the resolved request id, which is generated whenever the client's `X-Request-Id` is the value
+ * that was refused.
+ *
+ * A path is refused before `HeaderWriterFilter` runs, so the browser-hardening headers it would
+ * have written are written here: `nosniff`, `no-store`, `DENY` framing, the referrer policy, a
+ * fixed [CONTENT_SECURITY_POLICY] (the body is JSON and never needs to load anything) and HSTS on
+ * a secure request when [hstsEnabled]. A header already present is left as it is. For the same
+ * reason `CorsFilter` never ran, so the configured policy is applied here through the same
+ * [corsConfigurationSource] and Spring's processor, as `IdempotencyKeyFilter` does for its early
+ * errors: an allowed origin gets its `Access-Control-*` headers, any other origin none, and the
+ * answer stays this problem (never the processor's own `403`).
+ *
+ * The firewall checks a header value when it is read, so a rejection can arrive after the
+ * controller wrote its response (the access log reads `Referer` last). A committed response is
+ * left exactly as it is, with one message-free `WARN` naming the request id; an uncommitted one
+ * has its buffered body discarded first, so the client never receives the original body with a
+ * problem appended.
+ */
+class ApiRequestRejectedHandler(
+    private val problemWriter: ApiProblemWriter,
+    hstsEnabled: Boolean = false,
+    private val corsConfigurationSource: CorsConfigurationSource? = null,
+) : RequestRejectedHandler {
+    private val logger = LoggerFactory.getLogger(javaClass)
+
+    private val headerWriters: List<HeaderWriter> =
+        listOfNotNull(
+            XContentTypeOptionsHeaderWriter(),
+            CacheControlHeadersWriter(),
+            XFrameOptionsHeaderWriter(XFrameOptionsHeaderWriter.XFrameOptionsMode.DENY),
+            ReferrerPolicyHeaderWriter(ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN),
+            ContentSecurityPolicyHeaderWriter(CONTENT_SECURITY_POLICY),
+            HstsHeaderWriter().takeIf { hstsEnabled },
+        )
+
+    override fun handle(
+        request: HttpServletRequest,
+        response: HttpServletResponse,
+        requestRejectedException: RequestRejectedException,
+    ) {
+        // The status line and part of the body are already on the wire: nothing written now
+        // could make the response a problem, only a corrupt one. The observation is marked, and
+        // this line (never the exception's message, which holds the refused value) stands in
+        // for the access-log line the rejection cost.
+        if (response.isCommitted) {
+            logger.warn(
+                "Firewall refused request {} after its response was committed; left as written",
+                ApiProblemFactory.requestId(request),
+            )
+            return
+        }
+        response.resetBuffer()
+        headerWriters.forEach { writer -> writer.writeHeaders(request, response) }
+        corsConfigurationSource?.getCorsConfiguration(request)?.let { configuration ->
+            RejectionCorsProcessor.processRequest(configuration, request, response)
+        }
+        problemWriter.write(
+            request,
+            response,
+            HttpStatus.BAD_REQUEST,
+            "request_rejected",
+            "The request was rejected.",
+            instance = INSTANCE,
+        )
+    }
+
+    /** The fixed values a rejected request's problem carries in place of anything it sent. */
+    companion object {
+        /** The problem's `instance`: RFC 9457 allows any URI, and this one names nothing. */
+        const val INSTANCE = "about:blank"
+
+        /** Lets the problem load nothing and be framed nowhere. */
+        const val CONTENT_SECURITY_POLICY = "default-src 'none'; frame-ancestors 'none'"
+    }
+}
+
+/**
+ * Spring's CORS processor without its own refusal: an origin outside the list (or a malformed one)
+ * gets no CORS headers, and the rejection's `400` problem is still written instead of `403`.
+ */
+private object RejectionCorsProcessor : DefaultCorsProcessor() {
+    override fun rejectRequest(response: ServerHttpResponse) {
+        // Nothing: the caller writes the request_rejected problem whatever the origin.
     }
 }
 
@@ -439,13 +566,12 @@ class ActiveOrganisationContextFilter(
      * nothing is claimed for a caller whose principal has not been verified yet.
      */
     private fun requestMetadata(request: HttpServletRequest): RequestContext {
+        // The correlation id resolves like the request id (#252): the client's X-Correlation-Id
+        // only if ClientRequestIds accepts it, otherwise this request id, never the raw header.
         val requestId = ApiProblemFactory.requestId(request)
         return RequestContext(
             correlation =
-                CorrelationContext(
-                    requestId,
-                    request.getHeader(CORRELATION_ID_HEADER) ?: requestId,
-                ),
+                CorrelationContext(requestId, ApiProblemFactory.correlationId(request)),
             userAgent = request.getHeader(USER_AGENT_HEADER),
             clientIp = clientIpResolver.resolve(request),
         )
@@ -460,7 +586,6 @@ class ActiveOrganisationContextFilter(
     }
 
     private companion object {
-        const val CORRELATION_ID_HEADER = "X-Correlation-Id"
         const val USER_AGENT_HEADER = "User-Agent"
     }
 }

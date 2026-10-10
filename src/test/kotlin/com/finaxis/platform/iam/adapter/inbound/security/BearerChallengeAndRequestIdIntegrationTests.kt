@@ -200,7 +200,7 @@ class BearerChallengeAndRequestIdIntegrationTests {
 
     @ParameterizedTest
     @MethodSource("controlCharacterIds")
-    fun `a request id carrying CR or LF is refused by the firewall and never echoed or logged`(
+    fun `a CR or LF request id is refused by the firewall with a problem and never echoed`(
         hostile: String,
     ) {
         listOf("/api/v1/auth/me", "/actuator/health").forEach { path ->
@@ -211,8 +211,13 @@ class BearerChallengeAndRequestIdIntegrationTests {
                         header("X-Request-Id", hostile)
                     }.andExpect {
                         status { isBadRequest() }
+                        content { contentTypeCompatibleWith("application/problem+json") }
+                        jsonPath("$.code") { value("request_rejected") }
                     }.andReturn()
                     .response
+            val generated = requireNotNull(response.getHeader("X-Request-Id"))
+            assertEquals(UUID_V7, UUID.fromString(generated).version())
+            assertTrue(response.contentAsString.contains("\"request_id\":\"$generated\""))
             val echoed = response.headerNames.flatMap { response.getHeaders(it) }
             assertFalse(echoed.any { "forged" in it })
             assertFalse("forged" in response.contentAsString)

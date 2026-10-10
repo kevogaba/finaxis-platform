@@ -12,15 +12,19 @@ class ApiProblemWriter(
     private val problemFactory: ApiProblemFactory,
     private val apiJsonCodec: ApiJsonCodec,
 ) {
-    /** Writes a safe RFC 9457 response for a failure outside MVC exception handling. */
+    /**
+     * Writes a safe RFC 9457 response for a failure outside MVC exception handling. [instance]
+     * is the request path unless the caller must not echo it (a path the firewall refused).
+     */
     fun write(
         request: HttpServletRequest,
         response: HttpServletResponse,
         status: HttpStatus,
         code: String,
         detail: String,
+        instance: String = request.requestURI,
     ) {
-        val problem = problemFactory.problem(status, code, detail, request)
+        val problem = problemFactory.problem(status, code, detail, request, instance = instance)
         response.status = problem.status
         response.contentType = MediaType.APPLICATION_PROBLEM_JSON_VALUE
         response.characterEncoding = Charsets.UTF_8.name()

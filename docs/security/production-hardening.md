@@ -7,7 +7,11 @@ security decisions explicit while preserving bearer-JWT authentication for every
 
 CORS is a browser policy, not a bearer-token authentication mechanism. It is disabled by default
 and enabled in production with explicit origins from `FINAXIS_CORS_ALLOWED_ORIGINS`. It never
-affects native or mobile clients that send bearer tokens directly.
+affects native or mobile clients that send bearer tokens directly. A request the firewall refuses
+before `CorsFilter` runs (a `400` `request_rejected`, see "Cookies and headers") gets the same
+policy applied by its handler, through the same `CorsConfigurationSource` and Spring's
+`DefaultCorsProcessor`: an allowed origin gets its `Access-Control-*` headers and `Vary: Origin`,
+any other origin none, and the problem stays a `400` either way.
 
 ## CSRF and session context
 
@@ -97,6 +101,13 @@ entry fails startup, and so does a range of every address (`0.0.0.0/0`, `::/0`).
 append the address it received the request from to `X-Forwarded-For` and set `X-Forwarded-Proto`
 and `X-Forwarded-Host`, which Traefik does by default; the application must not be reachable on
 `8081` except through it.
+
+A request Spring Security's firewall refuses never reaches the header writer, so its `400`
+`request_rejected` problem sets the same headers itself, with a fixed `default-src 'none';
+frame-ancestors 'none'` CSP in every profile and HSTS when it is enabled (see
+[`foundation-api.md`](../api/foundation-api.md)). The rejection still marks the request's
+observation with the firewall's exception, whose message embeds the refused header value or path:
+with a trace exporter configured, the span records it.
 
 ## Client address behind a reverse proxy
 

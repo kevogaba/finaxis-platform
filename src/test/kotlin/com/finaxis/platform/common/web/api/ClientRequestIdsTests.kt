@@ -83,6 +83,62 @@ class ClientRequestIdsTests {
         assertEquals(UUID_V7, UUID.fromString(resolved).version())
     }
 
+    @Test
+    fun `an acceptable client correlation id is kept apart from the request id`() {
+        val request =
+            MockHttpServletRequest().apply {
+                addHeader("X-Request-Id", "client-req-1")
+                addHeader("X-Correlation-Id", "saga.step_01-AZ")
+            }
+
+        assertEquals("saga.step_01-AZ", ApiProblemFactory.correlationId(request))
+        assertEquals("client-req-1", ApiProblemFactory.requestId(request))
+    }
+
+    @Test
+    fun `an absent correlation id defaults to the resolved request id`() {
+        val request = MockHttpServletRequest()
+
+        val correlationId = ApiProblemFactory.correlationId(request)
+
+        assertEquals(ApiProblemFactory.requestId(request), correlationId)
+        assertEquals(UUID_V7, UUID.fromString(correlationId).version())
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+        strings = [
+            "saga-1",
+            "has spaces in it",
+            "bad\r\ncorrelation",
+            "ünïcödé-correlation",
+            "\"quoted-correlation\"",
+            "01234567890123456789012345678901234567890123456789012345678901234",
+        ],
+    )
+    fun `a rejected correlation id is replaced by the resolved request id`(hostile: String) {
+        val withClientId =
+            MockHttpServletRequest().apply {
+                addHeader("X-Request-Id", "client-req-1")
+                addHeader("X-Correlation-Id", hostile)
+            }
+        val withoutClientId =
+            MockHttpServletRequest().apply { addHeader("X-Correlation-Id", hostile) }
+
+        assertEquals("client-req-1", ApiProblemFactory.correlationId(withClientId))
+        val generated = ApiProblemFactory.correlationId(withoutClientId)
+        assertEquals(ApiProblemFactory.requestId(withoutClientId), generated)
+        assertEquals(UUID_V7, UUID.fromString(generated).version())
+    }
+
+    @Test
+    fun `a 500-character correlation id is replaced`() {
+        val request =
+            MockHttpServletRequest().apply { addHeader("X-Correlation-Id", "a".repeat(500)) }
+
+        assertEquals(ApiProblemFactory.requestId(request), ApiProblemFactory.correlationId(request))
+    }
+
     private companion object {
         const val UUID_V7 = 7
     }

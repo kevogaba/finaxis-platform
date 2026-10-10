@@ -1,11 +1,12 @@
 package com.finaxis.platform.common.web.api
 
 /**
- * The only shape of client-supplied `X-Request-Id` the platform carries: 8 to 64 characters of
- * `[A-Za-z0-9._-]`. Anything else (CR/LF, spaces, quotes, non-ASCII, too short or too long) is
- * dropped without being inspected further, so the application never puts it in a log line, the
- * MDC, a stored row or a response; [ApiProblemFactory.requestId] then generates an id instead.
- * (An error monitor such as Sentry may still attach the raw request headers to an event.)
+ * The only shape of client-supplied `X-Request-Id` and `X-Correlation-Id` the platform carries:
+ * 8 to 64 characters of `[A-Za-z0-9._-]`. Anything else (CR/LF, spaces, quotes, non-ASCII, too
+ * short or too long) is dropped without being inspected further, so the application never puts it
+ * in a log line, the MDC, a stored row or a response; [ApiProblemFactory.requestId] then generates
+ * an id instead, and [ApiProblemFactory.correlationId] falls back to that request id. (An error
+ * monitor such as Sentry may still attach the raw request headers to an event.)
  */
 object ClientRequestIds {
     /** Shortest accepted client request id. */
