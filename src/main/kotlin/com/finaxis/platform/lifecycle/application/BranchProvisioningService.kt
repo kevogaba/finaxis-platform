@@ -192,6 +192,11 @@ class BranchProvisioningService(
      * maker-checker rule as a tenant user (ADR 0028), and so is anyone who amended it
      * (see [requireApproverIsNotBranchMaker]). `branch.activate` is deprecated (V21) and no
      * longer checked.
+     *
+     * Either scope takes the tenant's organisation row lock before it judges the maker rule: a
+     * platform checker before it counts the tenant's own branches, the tenant's own checker
+     * because its activation can close that window, so the two are serialised and a platform
+     * checker that follows a tenant activation counts what it committed (#250, ADR 0028 point 8).
      */
     @Transactional
     fun activate(command: ActivateBranchCommand) {
@@ -202,10 +207,9 @@ class BranchProvisioningService(
             "branch.approve",
             command.scope,
         )
-        if (command.scope ==
-            ActingScope.PLATFORM
-        ) {
-            requirePlatformCheckerOpen(command.organisationId)
+        when (command.scope) {
+            ActingScope.PLATFORM -> requirePlatformCheckerOpen(command.organisationId)
+            ActingScope.TENANT -> lifecycleStore.lockOrganisation(command.organisationId)
         }
         requireApproverIsNotBranchMaker(command)
         conflictUnless(
@@ -544,7 +548,8 @@ class BranchProvisioningService(
      * bootstrap seeds (the head office, created by the system actor), so it is the way out of the
      * first-approval deadlock and not a standing approver (ADR 0028). The tenant's organisation
      * row is locked before the count, so two platform checkers acting on two branches of one
-     * tenant at once are serialised and the second counts the first's commit (ADR 0028 point 8).
+     * tenant at once are serialised and the second counts the first's commit, and so is a tenant
+     * activation, which takes the same lock (ADR 0028 point 8, #250).
      */
     private fun requirePlatformCheckerOpen(organisationId: java.util.UUID) {
         lifecycleStore.lockOrganisation(organisationId)

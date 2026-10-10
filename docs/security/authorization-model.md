@@ -692,9 +692,14 @@ otherwise): a pending membership can be checked by the platform only while the t
 `ACTIVE` membership beyond its bootstrap administrator, and a pending branch only while it has no
 `ACTIVE` branch beyond the bootstrap head office (the ones the system actor created). Only `ACTIVE`
 rows count, so suspending or revoking them reopens the route. The count is taken under the
-tenant's organisation row lock, so two platform checkers acting at once are serialised and the
-second sees the first's approval once it has made the item `ACTIVE`; an approval still waiting on
-the Keycloak job (202) leaves the window open until the job activates it (#223, ADR 0028 point 8).
+tenant's organisation row lock, which the tenant's own membership approval and branch activation
+take first as well, so a platform checker is serialised with another platform checker or with the
+tenant's own approver: serialised after an approval that made an item `ACTIVE`, it counts it and
+is refused; serialised before a tenant approval, it passes and the tenant's approval commits after
+it, so both commit. The gain is that lock, commit and audit order agree. An approval still waiting
+on the Keycloak job (202) leaves the window open until the job activates it, and a tenant-route
+reactivation of a suspended membership or branch takes no lock, so a platform checker racing one
+can still pass (#223, #250, ADR 0028 point 8).
 A tenant draft that names the
 approving platform user's own account as its initial administrator cannot be approved by that user
 (403 `lifecycle.approver_is_initial_administrator`).
