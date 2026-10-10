@@ -207,6 +207,22 @@ caller *does*; it no longer narrows what the target-aware reads may *see* (it is
 default for an unfiltered list when the caller may view that branch, for every tenant caller
 alike).
 
+**Amended by issue #242: a branch-scope grant counts only while its branch is `ACTIVE`.** After #170
+a branch that is not `ACTIVE` can no longer be selected, but a role scoped to it still made it
+visible here. Such a grant is real: one made while the branch was `ACTIVE` outlives its suspension
+or closure (and the role-assignment route checks the branch assignment, not the branch status). On a
+`DRAFT` or `PENDING_APPROVAL` branch none can exist, since a branch assignment is made only on an
+`ACTIVE` branch and no branch returns to those states.
+`PermissionResolutionQueries.branchIdsGranting` now returns only `ACTIVE` branches, and that
+projection is the one place the rule lives: the target-branch check (`requireBranchPermission`, made
+by `GET /branches/{id}` and every branch mutation) is the same visibility asked about one branch, so
+the reads, the mutation pre-check, the read-back and the assignment-id lookups cannot disagree. A
+tenant-wide holder still sees and acts on a branch in any state. A branch-scoped holder neither sees
+nor, since the mutation implies the view at that branch (point 4), acts on a suspended or closed
+branch; a `BRANCH_MANAGER` that suspends its `ACTIVE` branch A still reads A back (the read-back
+decides from the answer its pre-check memoised), and then needs a tenant-wide holder to reactivate
+it. See `docs/security/authorization-model.md` ("Target-aware reads of branch resources").
+
 ### 6. The permission-free read-backs go away
 
 All seven routes that read back permission-free before the rollout, which include the platform

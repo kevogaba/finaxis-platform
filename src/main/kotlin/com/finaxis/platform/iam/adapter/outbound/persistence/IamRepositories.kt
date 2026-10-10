@@ -377,13 +377,19 @@ class JooqPermissionResolutionQueries(
             .and(ROLE_PERMISSION.ORGANISATION_ID.eq(ROLE.ORGANISATION_ID))
             .join(PERMISSION)
             .on(PERMISSION.ID.eq(ROLE_PERMISSION.PERMISSION_ID))
+            // Issue #242: a branch-scope grant counts only while its branch is ACTIVE. This is
+            // the one place the rule lives: every target-aware read, every target-branch check
+            // and every assignment-id lookup decides from this projection.
+            .join(BRANCH)
+            .on(BRANCH.ID.eq(USER_ROLE_ASSIGNMENT.BRANCH_ID))
+            .and(BRANCH.ORGANISATION_ID.eq(USER_ROLE_ASSIGNMENT.ORGANISATION_ID))
             .where(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
             .and(PERMISSION.PERMISSION_CODE.eq(permissionCode))
             .and(USER_ROLE_ASSIGNMENT.SCOPE_TYPE.eq(BRANCH_SCOPE))
-            .and(USER_ROLE_ASSIGNMENT.BRANCH_ID.isNotNull)
             .and(USER_ROLE_ASSIGNMENT.STATUS.eq(ACTIVE))
             .and(ROLE.STATUS.eq(ACTIVE))
             .and(PERMISSION.STATUS.eq(ACTIVE))
+            .and(BRANCH.STATUS.eq(ACTIVE))
             .fetchSet(USER_ROLE_ASSIGNMENT.BRANCH_ID)
             .filterNotNull()
             .toSet()

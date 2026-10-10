@@ -565,6 +565,14 @@ and a caller with no grant at all still gets `403`.
 - The selected branch keeps its meaning for what the caller *does*; it does not narrow what these
   reads see. A caller pinned to branch A whose only `branch.view` is scoped to branch B lists and
   gets B, and sees nothing of A unless granted.
+- A grant scoped to a branch counts only while that branch is `ACTIVE` (issue #242). A
+  branch-scoped holder no longer sees a `SUSPENDED`, `CLOSED` (or otherwise non-`ACTIVE`) branch:
+  it is absent from `GET /branches` and `GET /branches/{branch_id}` answers `403`, as for any
+  branch the caller holds nothing on; it is visible again once reactivated. A tenant-wide holder
+  sees every branch whatever its status. The mutation routes apply the same target-branch check,
+  so a branch-scoped holder cannot act on such a branch either (a reactivate is `403`
+  `Missing permission: branch.view.`), while one that suspends or closes its `ACTIVE` branch still
+  gets the branch back in the response.
 - Platform routes (`/platform/tenants/{tenant_id}/branches`) are unchanged: the platform
   `branch.view` is checked in the platform organisation.
 
@@ -1358,6 +1366,9 @@ and the application layer is the only authorisation.
   is `403`. Without `branch_id`, one rule applies to every tenant caller: the list defaults to the
   selected branch when the caller may view it, and is every viewable branch otherwise (clear the
   selection to list across all).
+- A grant scoped to a branch counts only while the branch is `ACTIVE` (issue #242): the
+  assignments of a suspended or closed branch are visible to a tenant-wide holder only, and to a
+  branch-scoped holder they are absent from the list and `403` by id or by `branch_id`.
 
 - `POST /` reads the assignment it wrote **by its id**, gated like `GET /{assignment_id}` at that
   assignment's branch, so a branch with more than a page of assignments can no longer answer `404`
@@ -1526,6 +1537,10 @@ row's branch; `TENANT`-scope rows need the tenant-wide view.
   explicit `branch_id` outside that set is `403`. `scope_type` is matched exactly like every
   enum-like filter, so for such a holder any value other than `BRANCH` (`TENANT`, `tenant`, an
   unknown value) is an empty page. No grant: `403`.
+- A grant scoped to a branch counts only while the branch is `ACTIVE` (issue #242): the rows on a
+  suspended or closed branch are visible to a tenant-wide holder only. To a branch-scoped holder
+  they are absent from the list and `403` by id or by `branch_id`, and the revoke below treats
+  them as rows it may not touch.
 
 **Revoke is an authorised combined lookup.** `DELETE /{assignment_id}` takes only the assignment
 id, and the permission check depends on the assignment's scope, so the service resolves that scope
