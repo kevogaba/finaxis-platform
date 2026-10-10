@@ -462,8 +462,10 @@ Do not invent accounting tables or columns outside those documents.
 ## API governance
 
 - All public endpoints versioned under `/api/v1`, `/api/v2`, … — never add an unversioned
-  public endpoint. Document all public APIs with Springdoc/OpenAPI; route API errors through
-  centralized exception handling.
+  public endpoint. The one intentional exception is RFC 9728's fixed-path, public
+  `GET /.well-known/oauth-protected-resource`, served by Spring Security, not a controller (see
+  `docs/api/foundation-api.md`). Document all public APIs with Springdoc/OpenAPI; route API
+  errors through centralized exception handling.
 - All listing APIs must paginate; never return unbounded collections.
 - Use DTOs at API boundaries unless explicitly documented otherwise. Use Bean Validation for
   request DTOs and typed configuration properties. Every `@RequestBody` DTO carrying
@@ -482,7 +484,9 @@ Do not invent accounting tables or columns outside those documents.
   exceptions are auth organisation/branch selection, checked inside `AuthSelectionService`, tenant
   settings, checked per setting key inside `TenantSettingsService.authorize()`, and `GET
   /api/v1/auth/me`, gated only by `@PreAuthorize("hasAuthority('iam.profile.read')")` and served
-  from the authenticated principal (`UserProfileService` makes no check of its own).
+  from the authenticated principal (`UserProfileService` makes no check of its own), and the
+  public RFC 9728 `GET /.well-known/oauth-protected-resource`, served by Spring Security's filter
+  from configuration.
 - Every collection endpoint is paginated, and every query must stay bounded and tenant-filtered.
 - Every mutation is idempotent with optional/generated UUID `Idempotency-Key` handling.
 - Tenant and branch context must be enforced before returning or mutating tenant data.

@@ -56,3 +56,8 @@ finaxis:
     headers:
       hsts-enabled: true
       content-security-policy: "default-src 'none'"
+    protected-resource:
+      # The public https origin (recommended). Unset: one startup WARN, and the metadata names the
+      # origin each request arrived with (through the trusted-proxy list); never the local
+      # http://localhost default. A set but invalid value fails startup.
+      resource: ${FINAXIS_PROTECTED_RESOURCE_URL:}
