@@ -687,6 +687,14 @@ the window (409), the maker-checker rule (403), then the tenant state (409) and 
 - `409 lifecycle.platform_checker_closed`, `409 conflict` (tenant not `ACTIVE`, branch not
   `PENDING_APPROVAL`) as before.
 
+Each of the two maker-checker refusals writes a `DENIED`, `HIGH` audit row (action
+`branch.activate`, resource the branch, `branch_id` the target branch rather than the caller's
+pinned one, reason the response code: `forbidden` or `lifecycle.approver_is_branch_modifier`) in
+its own transaction, so the request's rollback does not take it (#251, as the tenant decisions
+do). A refusal earlier in the order (permission, 404, window) writes none. Until #251 these
+refusals left no audit row. An audit search on `action=branch.activate` therefore also returns
+refused attempts; add `outcome=SUCCESS` for activations only.
+
 `opened_on` and `closed_on` are business dates (`dd-MM-yyyy`) taken from the tenant's current
 business date, never the wall clock, and are `null` until they apply:
 
@@ -1001,7 +1009,8 @@ characters, otherwise 400 `validation_failed`). The caller needs the mutation pe
 `branch.view`**, both in the platform organisation (the named 403 above). Submit needs an `ACTIVE`
 or `PROVISIONING` tenant (409 otherwise); activation needs an `ACTIVE` tenant and a platform actor
 that neither created, submitted nor amended the
-branch (403; `lifecycle.approver_is_branch_modifier` for an amender).
+branch (403; `lifecycle.approver_is_branch_modifier` for an amender; each refusal is audited
+`DENIED` as on the tenant route, see [Approving a branch](#approving-a-branch-activate)).
 Submit and activate are also bounded: **409 `lifecycle.platform_checker_closed`** once the tenant
 has an `ACTIVE` branch that the system actor did not create (the bootstrap head office does not
 count). See

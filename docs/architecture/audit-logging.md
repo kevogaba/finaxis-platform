@@ -53,14 +53,23 @@ adapter, backed by the append-only `audit_event` table; the logging-only reposit
 registered. Domain modules call the application-level audit service directly — that is the only
 mechanism; there is no annotation-driven alternative.
 
-Audit rows are also a **control input**, not only evidence: branch approval refuses anyone with a
-successful `branch.update` event on the branch (`lifecycle.approver_is_branch_modifier`, ADR 0028).
-Any future audit retention or purge job (the `audit_retention_days` setting) must therefore exclude
-the `branch.update` events of branches that are not `ACTIVE` or terminal, or the rule fails open. A
-durable column on `branch` is the long-term alternative. The same holds for tenants (#221):
-approving or rejecting a pending tenant refuses anyone with a successful `organisation.amend_draft`
-event on it (`lifecycle.approver_is_tenant_modifier`), so a purge must also keep those events of
-every tenant that is not `ACTIVE` or terminal.
+### Retention (#255)
+
+Audit rows are also a **control input**, not only evidence. The maker-checker amender rules read
+them: branch approval refuses anyone with a successful `branch.update` event on the branch
+(`lifecycle.approver_is_branch_modifier`, ADR 0028), and approving or rejecting a pending tenant
+refuses anyone with a successful `organisation.amend_draft` event on it
+(`lifecycle.approver_is_tenant_modifier`, #221). A purged amendment row makes its amender eligible
+again, so the rule fails open.
+
+- **Today nothing purges.** The `audit_retention_days` setting has no job behind it (#164), so no
+  code changes with this note.
+- **Any future retention or purge job must keep** the `branch.update` events of every branch, and
+  the `organisation.amend_draft` events of every tenant, that is still in progress (not yet
+  `ACTIVE` or terminal), or first move the amender fact into a dedicated table the rules read
+  instead (a durable column or table on `branch` and `organisation` is the long-term alternative).
+- **That job's tests must prove it**: a purge run past the retention window leaves those rows of an
+  in-progress branch and tenant in place, and the amender is still refused afterwards.
 
 ## Request Correlation
 
@@ -149,7 +158,10 @@ parameter, never a 500). The owner delegated these defaults to the builder; they
   `min_severity` is that value or above in the order `INFO` < `LOW` < `MEDIUM` < `HIGH` <
   `CRITICAL`. Supplying both is a 400.
 - **`branch_id`**: the row's branch. It only narrows: `audit.view` is checked tenant-wide, as
-  before, so no caller sees a row it could not already read.
+  before, so no caller sees a row it could not already read. A row whose `AuditCommand` names no
+  branch takes the request context's (the caller's pinned branch, none on a platform route), so a
+  row about a branch names it explicitly: a refused branch approval's `DENIED` row (#251) has
+  `branch_id` the target branch.
 - **`action_prefix`**: a literal prefix of `action` (LIKE wildcards escaped), 2 to 64 characters.
   It is the event-type filter, because `event_type` is the action (rows from before #187 keep the
   resource type in `event_type`, and filtering on `action` finds them too). `action` stays exact.
