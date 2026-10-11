@@ -21,6 +21,10 @@ with tenant-named codes `lifecycle.approver_is_tenant_maker` and
 from returning) and a `DENIED` audit row per refusal. A tenant is not a platform-checker item, so
 decision 7's window does not apply to it; see ADR 0029's matching amendment.
 
+Amended by #251: the branch maker and amender refusals of decision 5 now also write a `DENIED`,
+`HIGH` audit row each (action `branch.activate`, in its own transaction), as the tenant refusals
+do since #221; the codes and their order are unchanged.
+
 Amended by #223: the window count of decision 7 now runs under the tenant's organisation row
 lock, so two platform checkers can no longer both pass it in the same instant when the first
 activates its item at once (decision 8, first bullet). An approval that waits for its identity

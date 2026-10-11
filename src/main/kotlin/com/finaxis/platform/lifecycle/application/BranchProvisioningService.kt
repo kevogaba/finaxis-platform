@@ -8,6 +8,7 @@ import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.audit.AuditSeverity
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
@@ -502,6 +503,13 @@ class BranchProvisioningService(
      * successful `branch.update` on it) may not approve it either, so nobody can amend, resubmit
      * and approve another person's draft, however many later amends follow theirs. A returning
      * checker is none of these, so may still approve.
+     *
+     * A refusal is audited `DENIED` (HIGH, action `branch.activate`, `branch_id` the target
+     * branch, the response code as reason) through [AuditService.recordIndependently] before it
+     * is raised, because the caller's transaction then rolls back and would take a row written
+     * inside it (#251, the branch mirror of the tenant rule's `TenantCheckerRule`). The maker's
+     * code stays the generic `forbidden` until #156 gives it a dedicated one, and its audit reason
+     * follows the code.
      */
     private fun requireApproverIsNotBranchMaker(command: ActivateBranchCommand) {
         val actedAsMaker =
@@ -511,15 +519,45 @@ class BranchProvisioningService(
                 command.branchId,
                 includeSubmitter = command.scope == ActingScope.PLATFORM,
             )
-        if (actedAsMaker) throw ForbiddenOperationException()
-        if (command.actorId != SystemActor.ID &&
-            lifecycleStore.hasAmended(command.organisationId, command.branchId, command.actorId)
-        ) {
-            throw ForbiddenOperationException(
-                LifecycleErrorCodes.APPROVER_IS_BRANCH_MODIFIER,
-                LifecycleErrorCodes.APPROVER_IS_BRANCH_MODIFIER_DETAIL,
-            )
-        }
+        val refusal =
+            when {
+                actedAsMaker -> {
+                    ForbiddenOperationException()
+                }
+
+                command.actorId != SystemActor.ID &&
+                    lifecycleStore.hasAmended(
+                        command.organisationId,
+                        command.branchId,
+                        command.actorId,
+                    ) -> {
+                    ForbiddenOperationException(
+                        LifecycleErrorCodes.APPROVER_IS_BRANCH_MODIFIER,
+                        LifecycleErrorCodes.APPROVER_IS_BRANCH_MODIFIER_DETAIL,
+                    )
+                }
+
+                else -> {
+                    return
+                }
+            }
+        auditService.recordIndependently(
+            AuditCommand(
+                actorType = "USER",
+                actorId = command.actorId.toString(),
+                tenantId = command.organisationId.toString(),
+                action = BRANCH_ACTIVATE_AUDIT_ACTION,
+                resourceType = BRANCH_AUDIT_ENTITY_TYPE,
+                resourceId = command.branchId.toString(),
+                // Explicit: left null, the adapter would record the caller's pinned branch, or
+                // none on the platform route, and a branch_id search would miss the refusal.
+                branchId = command.branchId.toString(),
+                outcome = AuditOutcome.DENIED,
+                severity = AuditSeverity.HIGH,
+                reason = refusal.code,
+            ),
+        )
+        throw refusal
     }
 
     /**
@@ -640,6 +678,15 @@ class BranchProvisioningService(
         const val CHECKER_SCOPE = "checkerScope"
         const val BRANCH_ASSIGNED_TARGET = "finaxis.lifecycle.branch.user-assigned"
         const val BRANCH_ASSIGNMENT_REVOKED_TARGET = "finaxis.lifecycle.branch.user-revoked"
+
+        /**
+         * The action of the FSM's activation row, composed as the FSM composes it (aggregate type
+         * and transition, lower case), so a refused attempt sits beside the successful one and no
+         * literal can drift from it.
+         */
+        val BRANCH_ACTIVATE_AUDIT_ACTION =
+            "${BRANCH_AUDIT_ENTITY_TYPE.lowercase()}." +
+                BranchLifecycleTransition.ACTIVATE.name.lowercase()
     }
 }
 

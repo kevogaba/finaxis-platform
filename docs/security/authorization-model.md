@@ -630,8 +630,10 @@ row (action `organisation.approve`, `organisation.reject` or `organisation.retur
 reason the code) through `AuditService.recordIndependently`, so the request's rollback cannot take
 it. The rule reads `organisation.amend_draft` rows of the audit trail, so, as for
 `branch.update`, any future audit retention or purge job must keep those events of every tenant
-that is not `ACTIVE` or terminal, or the rule fails open. The cost is the branch rule's: an amender
-whose edit was later overwritten still cannot decide, so the platform may need a third person.
+that is not `ACTIVE` or terminal, or the rule fails open (see
+[Retention](../architecture/audit-logging.md#retention-255)). The cost is the branch rule's: an
+amender whose edit was later overwritten still cannot decide, so the platform may need a third
+person.
 
 ## Bootstrap failure code
 
@@ -675,9 +677,12 @@ permissions. `UserProvisioningService.approveUser` refuses the actor that invite
 `branch.update` and one person must not amend, resubmit and approve another's draft. The checker who
 merely returned a draft is not an amender and may approve its resubmission. An amender whose edit
 was later overwritten is still refused, so a tiny tenant may need a third person or the platform
-checker. Both compare user ids, so switching organisation context does not get round them. A
-pending tenant follows the same rule on its platform decision routes: its requester, its submitter
-and anyone who amended it cannot approve or reject it (see
+checker. Both compare user ids, so switching organisation context does not get round them. Each
+branch refusal, on the tenant and the platform route, is recorded as a `DENIED`, `HIGH`
+`branch.activate` audit row (reason the response code, `forbidden` for the maker until #156 gives
+it its own) through `AuditService.recordIndependently`, so the request's rollback cannot take it
+(#251, as for the tenant). A pending tenant follows the same rule on its platform decision
+routes: its requester, its submitter and anyone who amended it cannot approve or reject it (see
 [Tenant checker rule](#tenant-checker-rule)).
 
 A freshly approved tenant has one user, the bootstrap `TENANT_ADMIN`, who is the maker of everything

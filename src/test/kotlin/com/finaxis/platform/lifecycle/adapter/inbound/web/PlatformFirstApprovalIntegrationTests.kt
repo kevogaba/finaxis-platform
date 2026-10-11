@@ -189,6 +189,18 @@ class PlatformFirstApprovalIntegrationTests
                 outboxRecords("finaxis.lifecycle.branch.activated", branchId.toString()),
             )
 
+            // The tenant maker's refused activation left its own DENIED row (#251).
+            assertEquals(
+                listOf(s.tenantAdmin.toString()),
+                platformAuditActors(
+                    s.tenantId,
+                    "branch.activate",
+                    branchId,
+                    s.platformChecker,
+                    outcome = "DENIED",
+                ),
+            )
+
             // Both checker steps are audited with the platform actor and the tenant id, and the
             // rows are readable in the tenant's own log and through the platform tenant log.
             val userId = idOf(membershipBody(s, membershipId), "user_id")
@@ -205,6 +217,7 @@ class PlatformFirstApprovalIntegrationTests
                 mockMvc
                     .get(ApiPaths.AUDIT_EVENTS) {
                         param("action", action)
+                        param("outcome", "SUCCESS")
                         with(authentication(tenantToken(s.tenantAdmin, s.tenantId)))
                     }.andExpect {
                         status { isOk() }
@@ -1056,11 +1069,13 @@ class PlatformFirstApprovalIntegrationTests
             action: String,
             resourceId: UUID,
             platformActor: UUID,
+            outcome: String = "SUCCESS",
         ): List<String> {
             val body =
                 mockMvc
                     .get("${ApiPaths.PLATFORM_TENANTS}/$tenantId/audit-events") {
                         param("action", action)
+                        param("outcome", outcome)
                         with(
                             authentication(
                                 token(platformActor, PlatformOrganisation.ID, COARSE_AUTHORITIES),

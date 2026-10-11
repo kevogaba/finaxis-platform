@@ -79,7 +79,8 @@ Normal tenant settings require `settings.update` scoped to the target organisati
 Platform-only settings require `tenant_setting.manage_platform` scoped to the reserved platform
 organisation, not to the tenant organisation:
 
-- `audit_retention_days`
+- `audit_retention_days` (a future purge job must keep the amend rows the maker-checker rules
+  read: see [audit logging](../architecture/audit-logging.md), "Retention (#255)")
 
 The permission check is dependency-inverted. `lifecycle` defines the `PermissionGuard` port, and
 `iam` implements it with `LifecyclePermissionGuardAdapter`, avoiding a direct
