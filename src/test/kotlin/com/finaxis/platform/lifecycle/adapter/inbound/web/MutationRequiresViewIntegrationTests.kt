@@ -141,18 +141,64 @@ class MutationRequiresViewIntegrationTests
         }
 
         @Test
-        fun `a branch scoped mutation needs the view at that branch and nothing is changed`() {
-            // The target is already SUSPENDED: without the pre-check the service would answer a
-            // state-conflict 409, and the gated read-back alone would roll back with the same
-            // named 403, so only a 403 here proves the refusal comes BEFORE the change.
-            val branchId = suspendedBranch()
-            val noView = seedUser("branch-no-view")
+        fun `a branch scoped mutation without its view is refused before the change`() {
+            // The target is ACTIVE: without the pre-check the service would answer a
+            // state-conflict 409 for a reactivate, so only a 403 here proves the refusal comes
+            // BEFORE the change.
+            val branchId = activeBranch()
+            val noView = seedUser("branch-reactivator-no-view")
             fixture.grantBranchPermissionsExactly(
                 organisationId,
                 branchId,
                 noView,
-                "branch.suspend",
+                "branch.reactivate",
             )
+            val before = footprint(noView)
+
+            reactivateBranch(branchId, tenantToken(noView, "branch.reactivate", branchId))
+                .andExpect { forbiddenNaming("branch.view") }
+
+            assertEquals(before, footprint(noView))
+            assertEquals("ACTIVE", branchStatus(branchId))
+        }
+
+        @Test
+        fun `a grant made while a branch was active confers nothing once it is suspended`() {
+            // Issue #242: the grant is made through the role while the branch is ACTIVE, which
+            // is what a real branch manager holds, and outlives the suspension. Scoped to a
+            // branch that is no longer ACTIVE, the mutation and its view count for nothing, so
+            // the mutation code itself is the one named, and the branch stays SUSPENDED.
+            val branchId = activeBranch()
+            val manager = seedUser("branch-manager-of-suspended")
+            fixture.grantBranchPermissionsWithViews(
+                organisationId,
+                branchId,
+                manager,
+                "branch.reactivate",
+            )
+            suspendBranch(branchId, tenantToken(admin, "branch.suspend"))
+                .andExpect { status { isOk() } }
+            val before = footprint(manager)
+
+            reactivateBranch(branchId, tenantToken(manager, "branch.reactivate", branchId))
+                .andExpect { forbiddenNaming("branch.reactivate") }
+
+            assertEquals(before, footprint(manager))
+            assertEquals("SUSPENDED", branchStatus(branchId))
+            reactivateBranch(branchId, tenantToken(admin, "branch.reactivate"))
+                .andExpect { status { isOk() } }
+        }
+
+        @Test
+        fun `a branch scoped mutation needs the view at that branch and nothing is changed`() {
+            // The target is already SUSPENDED: without the pre-check the service would answer a
+            // state-conflict 409, and the gated read-back alone would roll back with the same
+            // named 403, so only a 403 here proves the refusal comes BEFORE the change.
+            // The mutation code is held tenant-wide: a grant scoped to a branch that is not
+            // ACTIVE counts for nothing (issue #242), so it could not isolate the view here.
+            val branchId = suspendedBranch()
+            val noView = seedUser("branch-no-view")
+            fixture.grantTenantPermissionsExactly(organisationId, noView, "branch.suspend")
             val before = footprint(noView)
 
             suspendBranch(branchId, tenantToken(noView, "branch.suspend", branchId))
@@ -164,12 +210,7 @@ class MutationRequiresViewIntegrationTests
             // The view must be held at the TARGET branch: one held at another does not count.
             val elsewhere = activeBranch()
             val viewElsewhere = seedUser("branch-view-elsewhere")
-            fixture.grantBranchPermissionsExactly(
-                organisationId,
-                branchId,
-                viewElsewhere,
-                "branch.suspend",
-            )
+            fixture.grantTenantPermissionsExactly(organisationId, viewElsewhere, "branch.suspend")
             fixture.grantBranchPermissionsExactly(
                 organisationId,
                 elsewhere,
@@ -1073,6 +1114,16 @@ class MutationRequiresViewIntegrationTests
             token,
             """{"reason":"Audit hold"}""",
             key,
+        )
+
+        private fun reactivateBranch(
+            branchId: UUID,
+            token: AppPrincipalAuthenticationToken,
+        ) = post(
+            "${ApiPaths.BRANCHES}/$branchId/reactivate",
+            token,
+            """{"reason":"Audit complete"}""",
+            uuidV7(),
         )
 
         private fun platformSuspend(

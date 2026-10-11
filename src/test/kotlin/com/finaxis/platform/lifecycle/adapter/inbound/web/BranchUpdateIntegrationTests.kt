@@ -246,6 +246,19 @@ class BranchUpdateIntegrationTests
                 branchMaker,
                 "branch.update",
             )
+            // A grant scoped to a branch counts only while it is ACTIVE (issue #242): on the
+            // draft the branch-scoped editor is refused, so the branch is activated first.
+            patch(
+                branchId,
+                """{"branch_name":"Draft Edit"}""",
+                token(branchMaker, organisationId, "branch.update"),
+            ).andExpect {
+                status { isForbidden() }
+                jsonPath("$.detail") { value("Missing permission: branch.update.") }
+            }
+            post("submit", branchId, makerToken())
+            post("activate", branchId, checkerToken("branch.approve"))
+            val activatedVersion = requireNotNull(branchColumn(branchId, BRANCH.ROW_VERSION))
 
             listOf(
                 "Tenant Maker Edit" to tenantMaker,
@@ -261,7 +274,10 @@ class BranchUpdateIntegrationTests
                     jsonPath("$.branch_name") { value(name) }
                 }
                 assertEquals(name, branchColumn(branchId, BRANCH.BRANCH_NAME))
-                assertEquals(index + 1L, branchColumn(branchId, BRANCH.ROW_VERSION))
+                assertEquals(
+                    activatedVersion + index + 1L,
+                    branchColumn(branchId, BRANCH.ROW_VERSION),
+                )
                 assertEquals(index + 1, updateAudits(branchId).size)
             }
         }

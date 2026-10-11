@@ -340,14 +340,18 @@ class BranchReturnIntegrationTests
             )
 
             // Each holds branch.view with its mutation code (ADR 0030), at the scope it is
-            // checked at: tenant-wide, or at the branch for the branch-scoped role.
+            // checked at: tenant-wide, or at the branch for the branch-scoped role. A grant
+            // scoped to a branch counts only while it is ACTIVE (issue #242), so the role scoped
+            // to this pending branch confers nothing on it. Such a grant cannot be made through
+            // the API (a branch-scope role needs a branch assignment, made only on an ACTIVE
+            // branch, and a branch never returns to PENDING_APPROVAL); the fixture writes it.
             submit(first, makerToken())
             returnTenant(first, tenantToken(branchScoped, "branch.approve", headOfficeId()))
                 .andExpect {
-                    status { isOk() }
-                    jsonPath("$.status") { value("DRAFT") }
+                    status { isForbidden() }
+                    jsonPath("$.detail") { value("Missing permission: branch.approve.") }
                 }
-            assertEquals("DRAFT", branchColumn(first, "status"))
+            assertEquals("PENDING_APPROVAL", branchColumn(first, "status"))
 
             val second = createBranch()
             submit(second, makerToken())
