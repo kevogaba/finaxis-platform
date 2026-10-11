@@ -138,7 +138,8 @@ Foundation REST rules:
 The base configuration is for local development. Activate production settings with
 `SPRING_PROFILES_ACTIVE=production`. Production enables secure, strict session cookies, explicit
 CORS origins, HSTS and CSP, disables development tooling and API documentation, and requires the
-active-organisation HMAC secret without a default. See
+active-organisation HMAC secret without a default. `FINAXIS_PROTECTED_RESOURCE_URL` (the public
+origin in the OAuth protected-resource metadata) is recommended; unset, startup logs a warning. See
 [production hardening](docs/security/production-hardening.md).
 
 ## Deployment image

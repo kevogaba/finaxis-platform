@@ -9,6 +9,8 @@ import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.skyscreamer.jsonassert.JSONAssert
+import org.skyscreamer.jsonassert.JSONCompareMode
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment.RANDOM_PORT
@@ -31,6 +33,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -46,6 +49,8 @@ import kotlin.test.assertTrue
  * `X-Forwarded-Prefix` are ignored in both. Both contexts also try to widen the trust through
  * `server.tomcat.remoteip.*` (which must have no effect) and enable HSTS and CORS as production
  * does, so the consequence of the list for HSTS and same-origin browser requests is pinned too.
+ * The protected-resource metadata the challenge advertises (#253) is fetched in both: its
+ * `resource` is the configured one, never what a forwarded header says.
  */
 @Import(PostgresTestConfiguration::class, ForwardedHeadersIntegrationTests.Probe::class)
 abstract class ForwardedHeadersIntegrationTests {
@@ -119,6 +124,41 @@ abstract class ForwardedHeadersIntegrationTests {
         val status = send("X-Forwarded-For" to oversize, observe = false).status
         assertNotEquals(SERVER_ERROR, status)
         assertTrue(status in CLIENT_ERRORS, "status $status")
+    }
+
+    @Test
+    fun `the advertised metadata URL serves the configured resource whatever is forwarded`() {
+        val advertised = assertNotNull(send().resourceMetadata)
+        assertEquals(directMetadata, advertised)
+        observations.clear()
+
+        val response =
+            client.send(
+                HttpRequest
+                    .newBuilder(URI.create(advertised))
+                    .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS))
+                    .header("Authorization", "Bearer not-a-jwt")
+                    .header("X-Forwarded-For", "203.0.113.70")
+                    .header("X-Forwarded-Proto", "https")
+                    .header("X-Forwarded-Host", "forged.example.test")
+                    .header("X-Forwarded-Port", "8443")
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString(),
+            )
+
+        assertEquals(OK, response.statusCode())
+        assertTrue(
+            response
+                .headers()
+                .firstValue("Content-Type")
+                .orElse("")
+                .startsWith(JSON),
+            response.headers().map().toString(),
+        )
+        JSONAssert.assertEquals(METADATA_JSON, response.body(), JSONCompareMode.STRICT)
+        // Served ahead of the rate limiter: no bucket is consulted for it.
+        assertNull(observations.rateLimitKey)
     }
 
     /** Sends an anonymous rate-limited request and returns what the application saw. */
@@ -244,6 +284,7 @@ abstract class ForwardedHeadersIntegrationTests {
         const val METADATA_PATH = "/.well-known/oauth-protected-resource"
         const val RATE_LIMITED_PATH = "/api/v1/auth/select-organisation"
         const val UNAUTHORIZED = 401
+        const val OK = 200
         const val FORBIDDEN = 403
 
         /** What a browser on the public HTTPS origin sends behind a TLS-terminating proxy. */
@@ -262,6 +303,21 @@ abstract class ForwardedHeadersIntegrationTests {
         const val CORS_ORIGINS = "finaxis.security.cors.allowed-origins=https://app.example.test"
         const val WIDEN_INTERNAL = "server.tomcat.remoteip.internal-proxies=.*"
         const val WIDEN_TRUSTED = "server.tomcat.remoteip.trusted-proxies=.*"
+
+        /** The configured protected-resource identifier, which no forwarded header changes. */
+        const val RESOURCE =
+            "finaxis.security.protected-resource.resource=https://api.finaxis.example"
+        const val ISSUER =
+            "spring.security.oauth2.resourceserver.jwt.issuer-uri=https://id.example.test/realms/x"
+        private const val JSON = "application/json"
+        private val METADATA_JSON =
+            """
+            {
+              "resource": "https://api.finaxis.example",
+              "authorization_servers": ["https://id.example.test/realms/x"],
+              "bearer_methods_supported": ["header"]
+            }
+            """.trimIndent()
         private const val SERVER_ERROR = 500
         private val CLIENT_ERRORS = 400..431
         private const val REQUEST_TIMEOUT_SECONDS = 30L
@@ -281,6 +337,8 @@ abstract class ForwardedHeadersIntegrationTests {
         ForwardedHeadersIntegrationTests.CORS_ORIGINS,
         ForwardedHeadersIntegrationTests.WIDEN_INTERNAL,
         ForwardedHeadersIntegrationTests.WIDEN_TRUSTED,
+        ForwardedHeadersIntegrationTests.RESOURCE,
+        ForwardedHeadersIntegrationTests.ISSUER,
     ],
 )
 class UntrustedPeerForwardedHeadersTests : ForwardedHeadersIntegrationTests() {
@@ -335,6 +393,8 @@ class UntrustedPeerForwardedHeadersTests : ForwardedHeadersIntegrationTests() {
         ForwardedHeadersIntegrationTests.CORS_ORIGINS,
         ForwardedHeadersIntegrationTests.WIDEN_INTERNAL,
         ForwardedHeadersIntegrationTests.WIDEN_TRUSTED,
+        ForwardedHeadersIntegrationTests.RESOURCE,
+        ForwardedHeadersIntegrationTests.ISSUER,
     ],
 )
 class TrustedLoopbackForwardedHeadersTests : ForwardedHeadersIntegrationTests() {
