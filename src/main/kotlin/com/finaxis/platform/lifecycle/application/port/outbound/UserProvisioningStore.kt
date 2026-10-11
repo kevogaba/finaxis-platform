@@ -24,8 +24,9 @@ interface UserProvisioningAccountStore {
      * Takes the organisation row's `FOR NO KEY UPDATE` lock to the end of the calling
      * transaction, so a platform checker's window count read after it
      * ([UserProvisioningMembershipStore.hasActiveMembershipBeyondBootstrap]) sees whatever a rival
-     * platform checker committed first (ADR 0028 point 8). Requires an active transaction and
-     * does nothing for an unknown organisation, whose absence the caller's next read reports.
+     * platform checker or tenant approval committed first (ADR 0028 point 8). Requires an active
+     * transaction and does nothing for an unknown organisation, whose absence the caller's next
+     * read reports.
      */
     fun lockOrganisation(organisationId: UUID)
 

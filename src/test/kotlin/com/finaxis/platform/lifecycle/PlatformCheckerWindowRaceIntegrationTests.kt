@@ -63,6 +63,12 @@ import kotlin.test.assertTrue
  * while the rival is still open, passes, and is held only at its own write on the item row, which
  * the rival's second lock stands in for; it then approves too, and the tenant ends up with two
  * platform-checked items. That is the failure these tests show on the old shape.
+ *
+ * The tenant's own approval takes the same lock first (#250), so a platform checker racing it is
+ * serialised too. In those tests the rival takes no organisation lock of its own: it holds only
+ * the item row and runs the tenant-route approval, whose own lock is what holds the platform
+ * decision. Without it the decision counts while the tenant's approval is uncommitted, passes,
+ * and both commit.
  */
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -145,10 +151,66 @@ class PlatformCheckerWindowRaceIntegrationTests(
         assertEquals("PENDING_APPROVAL", branchStatus(second), "the late one changed nothing")
     }
 
-    /** An ACTIVE tenant whose only member is a bootstrap-style administrator (system-created). */
+    @Test
+    fun `a platform checker racing the tenant's own membership approval cannot pass the window`() {
+        val tenant = Tenant()
+        val first = tenant.pendingMembership()
+        val second = tenant.pendingMembership()
+
+        val outcome =
+            raceBehindTenantApproval(
+                itemLock = MEMBERSHIP_LOCK to second,
+                decide = { approveMembership(tenant.id, second, lateChecker) },
+            ) {
+                users.approveUser(ApproveUserCommand(tenant.id, first, tenant.approver))
+            }
+
+        assertEquals(
+            LifecycleErrorCodes.PLATFORM_CHECKER_CLOSED,
+            assertIs<ConflictException>(outcome).code,
+        )
+        assertEquals("ACTIVE", membershipStatus(first), "the tenant's approval committed")
+        assertEquals("PENDING_APPROVAL", membershipStatus(second), "the platform one did not")
+    }
+
+    @Test
+    fun `a platform checker racing the tenant's own branch activation cannot pass the window`() {
+        val tenant = Tenant()
+        val first = tenant.pendingBranch()
+        val second = tenant.pendingBranch()
+
+        val outcome =
+            raceBehindTenantApproval(
+                itemLock = BRANCH_LOCK to second,
+                decide = { activateBranch(tenant.id, second, lateChecker) },
+            ) {
+                branches.activate(
+                    ActivateBranchCommand(
+                        organisationId = tenant.id,
+                        branchId = first,
+                        actorId = tenant.approver,
+                        requestId = uuidV7(),
+                    ),
+                )
+            }
+
+        assertEquals(
+            LifecycleErrorCodes.PLATFORM_CHECKER_CLOSED,
+            assertIs<ConflictException>(outcome).code,
+        )
+        assertEquals("ACTIVE", branchStatus(first), "the tenant's activation committed")
+        assertEquals("PENDING_APPROVAL", branchStatus(second), "the platform one did not")
+    }
+
+    /**
+     * An ACTIVE tenant whose members are bootstrap-style (system-created), so the window is open:
+     * the administrator who makes the items, and a second administrator who approves them on the
+     * tenant route.
+     */
     private inner class Tenant {
         val admin = seedUser("tenant-admin")
         val id: UUID = fixture.createActiveOrganisation("window-race", admin)
+        val approver: UUID = seedUser("tenant-approver").also { fixture.grantTenantAdmin(id, it) }
         private val headOffice: UUID =
             requireNotNull(
                 dsl
@@ -253,12 +315,32 @@ class PlatformCheckerWindowRaceIntegrationTests(
         itemLock: Pair<String, UUID>,
         decide: () -> Unit,
         rival: () -> Unit,
+    ): Throwable? =
+        race(itemLock, decide, beforeDecision = { dsl.fetch(ORGANISATION_LOCK, tenantId) }, rival)
+
+    /**
+     * Runs [tenantApproval] in a rival transaction that holds the row lock named by [itemLock] and
+     * takes no organisation lock of its own, then runs [decide] on its own thread, waits until it
+     * is observed blocked behind the rival, commits, and returns what [decide] threw.
+     */
+    private fun raceBehindTenantApproval(
+        itemLock: Pair<String, UUID>,
+        decide: () -> Unit,
+        tenantApproval: () -> Unit,
+    ): Throwable? =
+        race(itemLock, decide, beforeDecision = { withRequestContext { tenantApproval() } }) {}
+
+    private fun race(
+        itemLock: Pair<String, UUID>,
+        decide: () -> Unit,
+        beforeDecision: () -> Unit,
+        rival: () -> Unit,
     ): Throwable? {
         var decision: CompletableFuture<Throwable?>? = null
         val decisionPid = CompletableFuture<String>()
         transaction.executeWithoutResult {
-            dsl.fetch(ORGANISATION_LOCK, tenantId)
             dsl.fetch(itemLock.first, itemLock.second)
+            beforeDecision()
             val rivalPid = requireNotNull(dsl.fetchValue("SELECT pg_backend_pid()")).toString()
             decision =
                 CompletableFuture.supplyAsync(

@@ -419,9 +419,10 @@ interface BranchLifecycleStore {
     /**
      * Takes the organisation row's `FOR NO KEY UPDATE` lock to the end of the calling
      * transaction, so a platform checker's window count ([hasActiveBranchBeyondBootstrap]) read
-     * after it sees whatever a rival platform checker committed first (ADR 0028 point 8). The
-     * same lock as [OrganisationLifecycleProvisioningStore.lockOrganisation]; requires an active
-     * transaction and does nothing for an unknown organisation.
+     * after it sees whatever a rival platform checker or tenant activation committed first
+     * (ADR 0028 point 8). The same lock as
+     * [OrganisationLifecycleProvisioningStore.lockOrganisation]; requires an active transaction
+     * and does nothing for an unknown organisation.
      */
     fun lockOrganisation(organisationId: UUID)
 
