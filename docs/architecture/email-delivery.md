@@ -69,6 +69,10 @@ Finaxis-specific settings live under `finaxis.email.*` (`EmailProperties`):
 | `finaxis.email.from-display-name`| `FINAXIS_EMAIL_FROM_DISPLAY_NAME` | `Finaxis`                        |
 | `finaxis.email.app-base-url`     | `FINAXIS_EMAIL_APP_BASE_URL`      | `http://localhost:5173`         |
 
+While `finaxis.email.enabled` is `false`, the application logs one `WARN` at startup
+(`EmailDisabledStartupWarning`): welcome and application-invite emails fail permanently until the
+flag is set. The line carries no address or secret.
+
 Production (`application-production.yaml`) gives `FINAXIS_SMTP_HOST`/`PORT`/`USERNAME`/`PASSWORD`
 and `FINAXIS_EMAIL_FROM_ADDRESS`/`APP_BASE_URL` the same defaults as the base file, so a deployment
 still boots and answers `/actuator/health` before a mail provider is acquired and none of those

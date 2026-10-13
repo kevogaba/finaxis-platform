@@ -675,18 +675,26 @@ frames of the exception and its causes, never `getMessage()` of any of them (the
 passed to the logger, as its message and its causes' would print an email, SQL or identity-provider
 output). The bootstrap, Keycloak-provisioning and application-invite job handlers rethrow a
 `SanitisedJobFailureException` to JobRunr for the failures they catch (every `Exception` in the
-first two, four listed types in the invite handler): message = the closed code, or the class name
-for the invite; no cause, except a message-free `InterruptedException` when the original chain held
+first two, four listed types in the invite handler): message = the closed code, or the simple class
+name for the invite; no cause, except a message-free `InterruptedException` when the original chain held
 one, because JobRunr detects a stopped server or deleted job by it. So JobRunr's log lines and the
 failed state it stores in `jobrunr_jobs` hold no message of the original, and retries are unchanged.
 The bootstrap and invite handlers always, and the Keycloak handler for a failure it does not record,
 log a message-free `WARN` with the class names and frames. The synchronous `bootstrap/retry` route
 still raises the original to `ApiExceptionHandler`, which maps it and logs only its class and
 message-free frames; Sentry's MVC resolver runs after Spring's own, so it never sees an exception
-that handler resolves. **Still stored or not covered:** the raw message of a failed Keycloak or
-invite job in `identity_dispatch_log.last_error` (database only, no API returns it; accepted by
-the owner as the operator diagnostic); the job request's input (the administrator's email and
-username) in `jobrunr_jobs`; an exception type the invite handler does not catch reaches JobRunr as
+that handler resolves. The welcome-email handler (`SendWelcomeEmailJobRequestHandler`) follows the
+same rule: a permanent failure throws `JobRunrException` with `doNotRetry` and the simple class
+name as its message, with no cause; a retryable failure throws a message-free exception named by the
+failure's class, with no cause, so JobRunr still retries it; each logs a message-free `WARN` with the
+exception and root-cause classes and frames first. A failed Keycloak or invite job stores the closed
+code and the exception class name (`<CODE>:<ExceptionClass>`) in `identity_dispatch_log.last_error`,
+never the message. **Still stored or not covered:** the welcome-email handler's recipient lookup or
+audit write raising a `DataAccessException` (or any other exception) is not caught and reaches
+JobRunr raw, with its message; the rows of `identity_dispatch_log.last_error` written before that
+change, which keep the raw message of a failed Keycloak or invite job (database only, no API returns
+it, not rewritten); the job request's input (the administrator's email and username) in
+`jobrunr_jobs`; an exception type the invite handler does not catch reaches JobRunr as
 raised. A failed `tenant.bootstrap_retry` also writes an audit row with the code and the exception
 class name, never the message; the failed `user.keycloak_provisioning` audit row carries the class
 name but no code.

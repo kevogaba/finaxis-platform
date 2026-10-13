@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.adapter.inbound.messaging
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.finaxis.platform.common.jobs.deterministicJobId
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.lifecycle.application.ApplicationInviteJobRequest
@@ -72,9 +73,6 @@ class IdentityProvisioningListener(
             ),
         )
     }
-
-    private fun deterministicJobId(dispatchKey: String): UUID =
-        UUID.nameUUIDFromBytes(dispatchKey.toByteArray())
 
     private companion object {
         const val USER_PROVISIONING_QUEUE = "finaxis.lifecycle.user-provisioning-events"

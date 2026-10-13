@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.adapter.inbound.messaging
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.finaxis.platform.common.jobs.deterministicJobId
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapJobRequest
@@ -28,7 +29,7 @@ class InitialAdministratorBootstrapListener(
             val organisationId = UUID.fromString(event.aggregateId)
             val dispatchKey = "$organisationId:BOOTSTRAP"
             jobRequestScheduler.enqueue(
-                UUID.nameUUIDFromBytes(dispatchKey.toByteArray()),
+                deterministicJobId(dispatchKey),
                 InitialAdministratorBootstrapJobRequest(organisationId),
             )
         } else {

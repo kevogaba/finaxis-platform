@@ -22,6 +22,9 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class SendWelcomeEmailJobRequestHandlerTests {
     private val userId = uuidV7()
@@ -61,22 +64,62 @@ class SendWelcomeEmailJobRequestHandlerTests {
     }
 
     @Test
-    fun `permanent failure audits failure and throws a do-not-retry JobRunrException`() {
-        val gateway = EmailGateway { throw PermanentEmailDeliveryException("bad address") }
+    fun `permanent failure audits failure and throws a message-free do-not-retry exception`() {
+        val gateway =
+            EmailGateway {
+                throw PermanentEmailDeliveryException(
+                    "bad address $SENTINEL",
+                    IllegalStateException("smtp rejected $SENTINEL"),
+                )
+            }
 
         val exception = assertFailsWith<JobRunrException> { handler(gateway).run(request()) }
 
         assertEquals(true, exception.isProblematicAndDoNotRetry())
+        assertNoSentinel(exception)
+        assertNull(exception.cause)
         assertEquals(AuditOutcome.FAILURE, audits.items.single().outcome)
     }
 
     @Test
-    fun `retryable failure audits failure and rethrows the original exception`() {
-        val gateway = EmailGateway { throw RetryableEmailDeliveryException("timeout") }
+    fun `retryable failure audits failure and throws a message-free retryable exception`() {
+        val gateway =
+            EmailGateway {
+                throw RetryableEmailDeliveryException(
+                    "smtp timeout for $SENTINEL",
+                    IllegalStateException("connect $SENTINEL"),
+                )
+            }
 
-        assertFailsWith<RetryableEmailDeliveryException> { handler(gateway).run(request()) }
+        val exception = assertFailsWith<RuntimeException> { handler(gateway).run(request()) }
 
+        assertFalse(exception is JobRunrException && exception.isProblematicAndDoNotRetry())
+        assertNoSentinel(exception)
+        assertNull(exception.cause)
         assertEquals(AuditOutcome.FAILURE, audits.items.single().outcome)
+    }
+
+    @Test
+    fun `retryable failure that holds an interruption keeps a message-free interruption cause`() {
+        val gateway =
+            EmailGateway {
+                throw RetryableEmailDeliveryException(
+                    "smtp interrupted for $SENTINEL",
+                    IllegalStateException(
+                        "wrapped $SENTINEL",
+                        InterruptedException("stop $SENTINEL"),
+                    ),
+                )
+            }
+
+        val exception = assertFailsWith<RuntimeException> { handler(gateway).run(request()) }
+
+        assertFalse(exception is JobRunrException && exception.isProblematicAndDoNotRetry())
+        assertNoSentinel(exception)
+        val cause = exception.cause
+        assertTrue(cause is InterruptedException, "JobRunr must still see the interruption")
+        assertNull(cause.message)
+        assertNull(cause.cause)
     }
 
     @Test
@@ -111,6 +154,18 @@ class SendWelcomeEmailJobRequestHandlerTests {
         handler(gateway, stepGuard).run(request())
 
         assertEquals(1, sentMessages.size)
+    }
+
+    /** Fails if [SENTINEL] appears in the message of the throwable or of any cause below it. */
+    private fun assertNoSentinel(thrown: Throwable) {
+        generateSequence(thrown) { it.cause }.take(MAX_CHAIN).forEach {
+            assertFalse(it.message.orEmpty().contains(SENTINEL), "leaked in ${it.javaClass.name}")
+        }
+    }
+
+    private companion object {
+        const val SENTINEL = "leak-victim@example.test"
+        const val MAX_CHAIN = 20
     }
 }
 

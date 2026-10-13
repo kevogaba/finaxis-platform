@@ -1,5 +1,8 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.jobs.FailedJobRequeuer
+import com.finaxis.platform.common.jobs.JobRequeueOutcome
+import com.finaxis.platform.common.jobs.deterministicJobId
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
@@ -35,6 +38,7 @@ class InitialAdministratorBootstrapServiceTests {
     private val userProvisioningService = mock<UserProvisioningService>()
     private val eventPublisher = mock<TransitionEventPublisher>()
     private val failureRecorder = mock<InitialAdministratorBootstrapFailureRecorder>()
+    private val requeuer = mock<FailedJobRequeuer>()
     private val asynchronousApproval =
         UserApprovalResult(
             UUID.randomUUID(),
@@ -53,6 +57,7 @@ class InitialAdministratorBootstrapServiceTests {
             eventPublisher,
             failureRecorder,
             clock,
+            requeuer,
         )
 
     private val orgId = UUID.randomUUID()
@@ -189,7 +194,39 @@ class InitialAdministratorBootstrapServiceTests {
     }
 
     @Test
-    fun `republishes event when identity dispatch exists but is not succeeded`() {
+    fun `a failed dispatch whose job is requeued runs again and is not republished`() {
+        val existingUserId = UUID.randomUUID()
+        val record = failedProvisioningRecord(existingUserId)
+        val inviteKey = "$orgId:$existingUserId:KEYCLOAK_PROVISIONING"
+        whenever(userProvisioningStore.dispatchStatus(inviteKey)).thenReturn("FAILED")
+        whenever(requeuer.requeueIfFailed(deterministicJobId(inviteKey)))
+            .thenReturn(JobRequeueOutcome.REQUEUED)
+
+        service.bootstrap(orgId)
+
+        verify(requeuer).requeueIfFailed(deterministicJobId(inviteKey))
+        verify(userProvisioningStore).markDispatchPending(inviteKey)
+        verifyNoInteractions(eventPublisher)
+        verifyNoInteractions(userProvisioningService)
+    }
+
+    @Test
+    fun `a failed dispatch whose job is still scheduled is left alone`() {
+        val existingUserId = UUID.randomUUID()
+        failedProvisioningRecord(existingUserId)
+        val inviteKey = "$orgId:$existingUserId:KEYCLOAK_PROVISIONING"
+        whenever(userProvisioningStore.dispatchStatus(inviteKey)).thenReturn("FAILED")
+        whenever(requeuer.requeueIfFailed(deterministicJobId(inviteKey)))
+            .thenReturn(JobRequeueOutcome.NOT_FAILED)
+
+        service.bootstrap(orgId)
+
+        verify(userProvisioningStore, never()).markDispatchPending(inviteKey)
+        verifyNoInteractions(eventPublisher)
+    }
+
+    @Test
+    fun `republishes event when a failed dispatch's job is gone`() {
         val existingUserId = UUID.randomUUID()
         val existingMembershipId = UUID.randomUUID()
         val branchId = UUID.randomUUID()
@@ -207,6 +244,8 @@ class InitialAdministratorBootstrapServiceTests {
 
         val inviteKey = "$orgId:$existingUserId:KEYCLOAK_PROVISIONING"
         whenever(userProvisioningStore.dispatchStatus(inviteKey)).thenReturn("FAILED")
+        whenever(requeuer.requeueIfFailed(deterministicJobId(inviteKey)))
+            .thenReturn(JobRequeueOutcome.NOT_FOUND)
 
         service.bootstrap(orgId)
 
@@ -356,6 +395,20 @@ class InitialAdministratorBootstrapServiceTests {
         verifyNoMoreInteractions(adminBootstrapStore)
         verifyNoInteractions(userProvisioningService)
         verifyNoInteractions(eventPublisher)
+    }
+
+    /** A FAILED bootstrap whose administrator is already invited, with its dispatch. */
+    private fun failedProvisioningRecord(userId: UUID): InitialAdministratorBootstrapRecord {
+        val record =
+            createRecord(
+                status = InitialAdministratorBootstrapStatus.FAILED,
+                userId = userId,
+                membershipId = UUID.randomUUID(),
+                headOfficeId = UUID.randomUUID(),
+                roleId = UUID.randomUUID(),
+            )
+        whenever(adminBootstrapStore.find(orgId)).thenReturn(record)
+        return record
     }
 
     private fun createRecord(

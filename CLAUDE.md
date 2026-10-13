@@ -37,7 +37,8 @@ coverage verification is scoped to `iam` and `accounting`, each with its own 95%
 `BUNDLE` rule cannot be scoped by package; the 18 Spring Data JDBC entities in
 `FoundationJdbcEntities.kt` are convention scaffolding, not live write paths (all production
 writes use jOOQ) — see `docs/adr/0014-spring-data-jdbc-auditing.md`. `notifications` sends real
-welcome and organisation-invite emails over SMTP; see
+welcome and organisation-invite emails over SMTP. Email delivery is OFF by default
+(`finaxis.email.enabled=false`), and a startup WARN says so while it is off; see
 `docs/adr/0016-email-delivery-transport-and-retry-classification.md` and
 `docs/architecture/email-delivery.md`.
 
@@ -262,12 +263,21 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   first for a failure it records); and `ApiExceptionHandler` logs the class and message-free frames,
   never the throwable (so Sentry's MVC resolver, which runs after Spring's own, never sees an
   exception that handler resolves; for these failures the Sentry logback appender receives the
-  message-free lines). Not covered: `identity_dispatch_log.last_error` still keeps the raw message
-  of a failed Keycloak or invite job (database only; no API returns it), `jobrunr_jobs` keeps the
-  job request's input (the administrator's email and username), an exception type the invite handler
-  does not catch reaches JobRunr as raised, and the Keycloak handler's uncaught types and
-  already-succeeded branch are sanitised and logged but not recorded as a failure. Only a failed
-  retry's audit row holds the code and the exception class name (the
+  message-free lines). The welcome-email handler (`SendWelcomeEmailJobRequestHandler`) follows the
+  same rule: a permanent failure throws `JobRunrException` (do-not-retry) with the simple class
+  name as its message and no cause; a retryable one throws a message-free exception named by the
+  failure's class with no cause (except a message-free `InterruptedException` when one was in the
+  chain, which JobRunr uses to detect a stopped server), so JobRunr still retries it; each logs a message-free `WARN` with the
+  exception and root-cause classes and frames before it throws. A failed Keycloak or invite job's
+  `identity_dispatch_log.last_error` holds the closed code and the exception class name
+  (`<CODE>:<ExceptionClass>`, e.g. `INVALID_STATE:IllegalStateException`), never the message; rows
+  written before that change keep the raw message (database only; no API returns it). Not covered:
+  `jobrunr_jobs` keeps the job request's input (the administrator's email and username), an
+  exception type the invite handler does not catch reaches JobRunr as raised, and the Keycloak
+  handler's uncaught types and already-succeeded branch are sanitised and logged but not recorded as
+  a failure. The welcome-email handler does not catch a `DataAccessException` (or any other
+  exception) from its recipient lookup or audit write: it reaches JobRunr raw, with its message.
+  Only a failed retry's audit row holds the code and the exception class name (the
   Keycloak-job row has the class name only). **A new failure kind needs a new enum member and a
   forward migration that widens the CHECK in the same change.** Idempotent, with pre- and
   post-condition asserts in-file — see `docs/operations/tenant-provisioning.md` ("Failed

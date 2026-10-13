@@ -9,7 +9,7 @@ and core-banking modular monolith. It uses hexagonal architecture and Spring Mod
 | --- | --- | --- |
 | `iam` | Identity, authorization, and tenant context | REST: auth, users, roles, permissions. |
 | `lifecycle` | Organisation, branch, setup FSMs | REST: tenants, branches, dates, audit. |
-| `notifications` | RabbitMQ listener and JobRunr welcome-email stub | Reference event pipeline. |
+| `notifications` | RabbitMQ listener and JobRunr email over SMTP | Reference event pipeline. |
 | `common` | Transitions, audit, context, persistence, and web infrastructure | Shared interfaces. |
 | `config` | Application configuration | Infrastructure wiring, not a domain module. |
 
@@ -108,7 +108,8 @@ on `organisation_id`, so do not expect a `TABLE.ID` field for either. See
 ## Reference event pipeline
 
 Membership activation is the pattern for future domain events: membership activation → Modulith
-event → Namastack outbox → RabbitMQ → notifications listener → JobRunr welcome-email stub.
+event → Namastack outbox → RabbitMQ → notifications listener → JobRunr welcome email, which is
+sent over SMTP only when `finaxis.email.enabled=true` (default `false`).
 
 ## API
 
@@ -201,7 +202,8 @@ the top of the stack. Merge bottom-up, rebasing the remainder after each merge.
 
 ## Project status and follow-ups
 
-- The welcome-email provider integration is pending; the current JobRunr handler is a stub.
+- Email delivery is over SMTP and off by default (`finaxis.email.enabled=false`); a startup WARN
+  says so while it is off.
 - `config` intentionally does not declare `@ApplicationModule`; it is infrastructure wiring
   rather than a domain module.
 - JaCoCo's enforced coverage rule is scoped to `iam` only.

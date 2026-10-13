@@ -190,6 +190,12 @@ interface UserProvisioningDispatchStore {
 
     /** Resolves the current dispatch status for idempotent worker skip decisions. */
     fun dispatchStatus(dispatchKey: String): String?
+
+    /**
+     * Returns a FAILED dispatch to PENDING when its job has been requeued under the same id. Any
+     * other status is left as it is, so a SUCCEEDED dispatch is never reopened.
+     */
+    fun markDispatchPending(dispatchKey: String)
 }
 
 /** Snapshot used by the local provisioning workflow before approval or revocation. */

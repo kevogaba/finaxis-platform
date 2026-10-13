@@ -8,6 +8,15 @@ import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
 
 /**
+ * The failure detail a failed dispatch keeps in `identity_dispatch_log.last_error`: the closed
+ * [InitialAdministratorBootstrapFailureCode] for this failure's type, a colon, and the exception
+ * class name, for example `INVALID_STATE:IllegalStateException`. The message is never used, since
+ * it can carry an email address or identity-provider output. Historic rows keep what they stored.
+ */
+fun Throwable.toDispatchFailureDetail(): String =
+    "${InitialAdministratorBootstrapFailureCode.from(this).name}:${javaClass.simpleName}"
+
+/**
  * Wraps a dispatch-state update and its audit record in one transaction. Without this, a crash or
  * failure between the two writes could leave a dispatch marked succeeded/failed with no matching
  * audit row - and a JobRunr retry's idempotent `SUCCEEDED`/`FAILED` guard would then skip the
@@ -44,10 +53,11 @@ class DispatchOutcomeAuditor(
     }
 
     /**
-     * Marks the dispatch failed and records its audit event atomically. [detail] is the raw
-     * failure detail, kept only in the operational dispatch-tracking table for support/ops
-     * debugging; [reason] is the bounded, content-free value persisted to the audit trail, which
-     * `AuditEventController` returns to audit API callers verbatim.
+     * Marks the dispatch failed and records its audit event atomically. [detail] is the failure
+     * detail kept in the dispatch-tracking table (`identity_dispatch_log.last_error`): the closed
+     * failure code and the exception class name, from [toDispatchFailureDetail], never the
+     * exception message. [reason] is the bounded, content-free value persisted to the audit trail,
+     * which `AuditEventController` returns to audit API callers verbatim.
      */
     @Transactional
     fun recordFailure(
