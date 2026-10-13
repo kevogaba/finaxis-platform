@@ -29,9 +29,11 @@ Every audit event maps to one row in `audit_event` (`public` schema; there is no
 - `metadata_jsonb` — everything else, including `sourceModule`, `commandName`, and
   `externalSystemReference` (see `AuditMetadataKeys` in `common.audit`).
 
-`tenant_id`/`branch_id`/`actor_id`/`correlation_id`/`request_id`/`user_agent`/`ip_address` are
-filled from an explicit `AuditCommand` field when the caller supplies one, and otherwise fall back
-to the ambient `RequestContexts` snapshot installed by `ActiveOrganisationContextFilter`.
+`tenant_id`/`actor_id`/`correlation_id`/`request_id`/`user_agent`/`ip_address` are filled from an
+explicit `AuditCommand` field when the caller supplies one, and otherwise fall back to the ambient
+`RequestContexts` snapshot installed by `ActiveOrganisationContextFilter`. `branch_id` is never
+filled from that snapshot: it comes ONLY from `AuditCommand.branchId`, the branch the event is about
+(#186), so a row about no branch carries none whatever branch the caller has selected.
 `ip_address` is the client address that `ClientIpResolver` resolves: the direct peer, or the
 `X-Forwarded-For` client only when the peer is listed in
 `finaxis.security.client-ip.trusted-proxies` (empty by default, so the header is ignored). It is
@@ -196,7 +198,8 @@ and returns every field, as it did before.
 
 ## What must be audited
 
-- every lifecycle transition (success and guard/policy rejection);
+- every lifecycle transition (success and guard/policy rejection), as its FSM row keyed by the
+  aggregate it acts on, with any companion row ADR 0031 Decision 1 names;
 - role, permission, membership, and branch-assignment changes;
 - organisation settings changes and business-date advances;
 - Keycloak provisioning success and failure;

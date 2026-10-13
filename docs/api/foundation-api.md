@@ -1838,7 +1838,11 @@ and is paginated (#183):
 
 - `action`: the action, exactly (`branch.update`).
 - `action_prefix`: a literal prefix of the action, 2 to 64 characters (`branch.`); `%` and `_`
-  match themselves. This is the event type filter: `event_type` is the action.
+  match themselves. This is the event type filter: `event_type` is the action. Every membership
+  revocation after the cut-over of ADR 0031 is `action_prefix=membership.revoke&outcome=SUCCESS`:
+  it matches `membership.revoke`, `membership.revoke_pending` and `membership.revoke_suspended`,
+  and not the cascade row `membership.assignments_revoked`. Before the cut-over the same search
+  also matches the old service `membership.revoke` row, which has no `from` or `to` in its metadata.
 - `outcome`: `SUCCESS`, `FAILURE` or `DENIED`, exactly.
 - `severity`: `INFO`, `LOW`, `MEDIUM`, `HIGH` or `CRITICAL`, exactly.
 - `min_severity`: that severity or above, in the order `INFO` < `LOW` < `MEDIUM` < `HIGH` <
@@ -1864,7 +1868,11 @@ upper-case form is canonical and is the enum the OpenAPI document publishes.
   `metadata_json`, `user_agent` or `ip_address`, and the platform searches refuse `actor_subject`
   because they withhold `actor_external_subject`.
 - `branch_id` only narrows: `audit.view` is checked tenant-wide, as before, and the filter adds no
-  way to see rows the caller could not already read.
+  way to see rows the caller could not already read. A row's `branch_id` is the branch the event is
+  about, never the branch the caller has selected: a branch's own events, its assignments and the
+  branch-scoped role assignments name that branch, and tenant-wide events carry none. Rows written
+  before #186 may carry the selected branch, and are not rewritten
+  (`docs/architecture/audit-logging.md`).
 - **Behaviour change:** the audit searches used to ignore `sort_dir`; a value other than `ASC` or
   `DESC` is now a 400. `action` stays an exact match.
 

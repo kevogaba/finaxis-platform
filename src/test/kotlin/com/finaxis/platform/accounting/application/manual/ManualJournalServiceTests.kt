@@ -611,12 +611,13 @@ abstract class ManualJournalServiceTestFixture {
         organisationId: UUID = ORGANISATION,
         rowVersion: Long = 0,
         lines: List<ManualJournalLine> = balancedLines(),
+        branchId: UUID? = BRANCH,
     ): ManualJournal {
         val journal =
             ManualJournal(
                 id = uuidV7(),
                 organisationId = organisationId,
-                branchId = BRANCH,
+                branchId = branchId,
                 title = "Adjustment",
                 externalReference = "ADV-4471",
                 narrative = NARRATIVE,

@@ -1129,22 +1129,30 @@ class JooqOrganisationAccessStore(
         }
 
     override fun revokeActiveAssignments(organisationId: UUID): List<DeprovisionedAssignment> {
-        val branchAssignmentIds =
+        val branchAssignments =
             dsl
-                .select(USER_BRANCH_ASSIGNMENT.ID)
+                .select(USER_BRANCH_ASSIGNMENT.ID, USER_BRANCH_ASSIGNMENT.BRANCH_ID)
                 .from(USER_BRANCH_ASSIGNMENT)
                 .where(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID.eq(organisationId))
                 .and(USER_BRANCH_ASSIGNMENT.STATUS.eq("ACTIVE"))
-                .fetch(USER_BRANCH_ASSIGNMENT.ID)
-                .filterNotNull()
-        val roleAssignmentIds =
+                .fetch()
+                .mapNotNull { row ->
+                    row.value1()?.let {
+                        DeprovisionedAssignment(it, "USER_BRANCH_ASSIGNMENT", row.value2())
+                    }
+                }
+        val roleAssignments =
             dsl
-                .select(USER_ROLE_ASSIGNMENT.ID)
+                .select(USER_ROLE_ASSIGNMENT.ID, USER_ROLE_ASSIGNMENT.BRANCH_ID)
                 .from(USER_ROLE_ASSIGNMENT)
                 .where(USER_ROLE_ASSIGNMENT.ORGANISATION_ID.eq(organisationId))
                 .and(USER_ROLE_ASSIGNMENT.STATUS.eq("ACTIVE"))
-                .fetch(USER_ROLE_ASSIGNMENT.ID)
-                .filterNotNull()
+                .fetch()
+                .mapNotNull { row ->
+                    row.value1()?.let {
+                        DeprovisionedAssignment(it, "USER_ROLE_ASSIGNMENT", row.value2())
+                    }
+                }
         val now = clock.instant().atOffset(ZoneOffset.UTC)
         dsl
             .update(USER_BRANCH_ASSIGNMENT)
@@ -1168,8 +1176,7 @@ class JooqOrganisationAccessStore(
             .where(USER_ROLE_ASSIGNMENT.ORGANISATION_ID.eq(organisationId))
             .and(USER_ROLE_ASSIGNMENT.STATUS.eq("ACTIVE"))
             .execute()
-        return branchAssignmentIds.map { DeprovisionedAssignment(it, "USER_BRANCH_ASSIGNMENT") } +
-            roleAssignmentIds.map { DeprovisionedAssignment(it, "USER_ROLE_ASSIGNMENT") }
+        return branchAssignments + roleAssignments
     }
 
     private fun hasOperationalSettings(organisationId: UUID): Boolean =

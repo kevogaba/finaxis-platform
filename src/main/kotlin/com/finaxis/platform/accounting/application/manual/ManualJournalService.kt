@@ -247,7 +247,7 @@ class ManualJournalService(
                 journalEntryId = { receipt.journalEntryId },
             )
         audit(
-            command.context,
+            command.context.copy(branchId = posted.branchId),
             AccountingAuditActions.JOURNAL_APPROVE,
             posted.id,
             command.reason,

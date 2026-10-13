@@ -427,7 +427,20 @@ class JooqFoundationLifecyclePersistenceTests(
         }
 
         assertDeprovisionedAccess(organisationId, branchId, membershipId)
+        // The branch assignment's row names its branch; the tenant-scoped role's row names none.
+        assertEquals(
+            listOf(branchId, null),
+            deprovisionAssignmentBranches(organisationId).sortedBy { it == null },
+        )
     }
+
+    private fun deprovisionAssignmentBranches(organisationId: UUID): List<UUID?> =
+        dsl
+            .select(AUDIT_EVENT.BRANCH_ID)
+            .from(AUDIT_EVENT)
+            .where(AUDIT_EVENT.ORGANISATION_ID.eq(organisationId))
+            .and(AUDIT_EVENT.ACTION.eq("organisation.deprovision_assignment_revoked"))
+            .fetch(AUDIT_EVENT.BRANCH_ID)
 
     private fun assertApprovalSetup(organisationId: UUID) {
         assertEquals(

@@ -6,6 +6,7 @@ import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContextService
+import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.BRANCH_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
@@ -16,6 +17,7 @@ import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
 import com.jayway.jsonpath.JsonPath
+import org.assertj.core.api.Assertions.assertThat
 import org.hamcrest.Matchers.containsString
 import org.hamcrest.Matchers.equalTo
 import org.hamcrest.Matchers.everyItem
@@ -114,6 +116,9 @@ class BranchPinningIntegrationTests {
         createdRoleIds.clear()
         restoreLocalAdminGrants()
         createdBranchIds.forEach { branchId ->
+            // Audit rows about a test branch name it by foreign key, so they go with it (test data
+            // only; production never deletes an audit row).
+            dsl.deleteFrom(AUDIT_EVENT).where(AUDIT_EVENT.BRANCH_ID.eq(branchId)).execute()
             dsl
                 .deleteFrom(USER_BRANCH_ASSIGNMENT)
                 .where(USER_BRANCH_ASSIGNMENT.BRANCH_ID.eq(branchId))
@@ -241,6 +246,64 @@ class BranchPinningIntegrationTests {
         org.assertj.core.api.Assertions
             .assertThat(listOf(stored.scopeType, stored.branchId, stored.roleId, stored.status))
             .containsExactly("BRANCH", branchId, roleId, "ACTIVE")
+        // Both rows are about the branch acted on, though the caller selected another branch.
+        assertThat(auditBranchIds("user.assign_role", assignmentId)).containsExactly(branchId)
+        assertThat(auditBranchIds("branch.assign_user", branchId)).containsExactly(branchId)
+    }
+
+    @Test
+    fun `a tenant-wide role assignment made while pinned to a branch is not stamped with it`() {
+        val roleId = createRole("pin-tenant-role")
+
+        val body =
+            mockMvc
+                .post(ApiPaths.ROLE_ASSIGNMENTS) {
+                    with(localJwt())
+                    header(
+                        ActiveOrganisationContextService.HEADER,
+                        contextToken(HEAD_OFFICE_BRANCH_ID),
+                    )
+                    contentType = MediaType.APPLICATION_JSON
+                    content =
+                        """{"user_id":"$USER_ID","role_id":"$roleId","scope_type":"TENANT"}"""
+                }.andExpect { status { isCreated() } }
+                .andReturn()
+                .response.contentAsString
+
+        val assignmentId = UUID.fromString(JsonPath.read<String>(body, "$.id"))
+        assertThat(auditBranchIds("user.assign_role", assignmentId)).hasSize(1).containsOnlyNulls()
+    }
+
+    @Test
+    fun `a pinned administrator's branch audit rows name the branch each change is about`() {
+        val branchId = branchApprovedWhilePinned()
+        val pinned = contextToken(HEAD_OFFICE_BRANCH_ID)
+        listOf("suspend", "reactivate", "close").forEach { transition ->
+            mockMvc
+                .post("/api/v1/branches/$branchId/$transition") {
+                    with(localJwt())
+                    header(ActiveOrganisationContextService.HEADER, pinned)
+                    contentType = MediaType.APPLICATION_JSON
+                    content = REASON
+                }.andExpect { status { isOk() } }
+        }
+
+        val rows =
+            dsl
+                .select(AUDIT_EVENT.EVENT_TYPE, AUDIT_EVENT.BRANCH_ID)
+                .from(AUDIT_EVENT)
+                .where(AUDIT_EVENT.ENTITY_TYPE.eq("BRANCH"))
+                .and(AUDIT_EVENT.ENTITY_ID.eq(branchId))
+                .fetch { it.value1() to it.value2() }
+        assertThat(rows.map { it.first }).contains(
+            "branch.create_draft",
+            "branch.submit",
+            "branch.activate",
+            "branch.suspend",
+            "branch.reactivate",
+            "branch.close",
+        )
+        assertThat(rows.map { it.second }).containsOnly(branchId)
     }
 
     /**
@@ -618,6 +681,18 @@ class BranchPinningIntegrationTests {
                 ?.id,
         ).also { createdRoleIds += it }
     }
+
+    /** The branch_id of every audit row of [action] about [entityId] (its entity_id). */
+    private fun auditBranchIds(
+        action: String,
+        entityId: UUID,
+    ): List<UUID?> =
+        dsl
+            .select(AUDIT_EVENT.BRANCH_ID)
+            .from(AUDIT_EVENT)
+            .where(AUDIT_EVENT.EVENT_TYPE.eq(action))
+            .and(AUDIT_EVENT.ENTITY_ID.eq(entityId))
+            .fetch(AUDIT_EVENT.BRANCH_ID)
 
     private fun contextToken(branchId: UUID?): String =
         contextService.issue(

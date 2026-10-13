@@ -31,7 +31,8 @@ import kotlin.test.assertTrue
  * What this does NOT do is execute each operation and assert a persisted row — that would need
  * ~40 end-to-end flows with full maker-checker setup. Per-operation audit persistence is proven by
  * the focused integration tests instead (`JooqFoundationLifecyclePersistenceTests`,
- * `HeadOfficeBootstrapIntegrationTests`, `UserProvisioningServiceTests`, and the outbox suites).
+ * `HeadOfficeBootstrapIntegrationTests`, `UserMembershipTransitionAuditIntegrationTests`, and the
+ * outbox suites).
  * This test's job is to stop the *registry* and the *call sites* drifting apart.
  */
 @Import(PostgresTestConfiguration::class)
@@ -221,7 +222,6 @@ class HighRiskOperationAuditCoverageTests(
             add("organisation", OrganisationLifecycleTransition.entries.toTypedArray())
             add("branch", BranchLifecycleTransition.entries.toTypedArray())
             add("user_account", UserLifecycleTransition.entries.toTypedArray())
-            add("user", UserLifecycleTransition.entries.toTypedArray())
             add("membership", MembershipLifecycleTransition.entries.toTypedArray())
         }
 
@@ -376,15 +376,15 @@ class HighRiskOperationAuditCoverageTests(
                 "tenant.suspend" to "organisation.suspend",
                 "tenant.update_draft" to "organisation.amend_draft",
                 "tenant_setting.manage_platform" to "settings.update",
-                "user.activate" to "user.reactivate",
+                "user.activate" to "user_account.reactivate",
                 "user.approve" to "user.approve",
                 "user.assign_branch" to "branch.assign_user",
                 "user.assign_role" to "user.assign_role",
-                "user.deactivate" to "user.deactivate",
+                "user.deactivate" to "user_account.complete_deactivation",
                 "user.invite" to "user.invite",
                 "user.revoke_branch" to "branch.revoke_user",
                 "user.revoke_role" to "user.revoke_role",
-                "user.suspend" to "user.suspend",
+                "user.suspend" to "user_account.suspend",
             )
     }
 }

@@ -515,8 +515,10 @@ Do not invent accounting tables or columns outside those documents.
 - Preserve request correlation via `X-Request-Id` with MDC cleanup. Never log secrets, bearer
   tokens, passwords, authorization headers, session cookies, API keys, or sensitive PII.
 - Audit admin actions and all critical state-changing operations through the common audit
-  service or event listeners — not scattered in controllers. See
-  `docs/architecture/audit-logging.md`.
+  service or event listeners — not scattered in controllers. A transition's record is its FSM
+  row, keyed by the aggregate it acts on. A service row never repeats it; one may only add a
+  fact the FSM row cannot carry (a checker marker, an approval intent, cascade counts), under its
+  own action name (ADR 0031). See `docs/architecture/audit-logging.md`.
 - The `production` profile (`SPRING_PROFILES_ACTIVE=production`) turns on browser hardening:
   CORS (explicit origins), secure/strict session cookie, HSTS + CSP, and a fail-fast
   active-organisation secret (no default). API-docs (Scalar UI, OpenAPI document) unauthenticated

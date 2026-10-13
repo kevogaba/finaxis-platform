@@ -233,7 +233,11 @@ class AuditService(
             ).copy(severity = severity, sourceIp = sourceIp),
         )
 
-    /** Records an IAM administration change: role, permission, membership, or assignment. */
+    /**
+     * Records an IAM administration change: role, permission, membership, or assignment. [branchId]
+     * is the branch the change is about (a branch-scoped assignment's), or null for a tenant-wide
+     * one. It is never the caller's selected branch.
+     */
     fun recordIamChange(
         actorId: UUID?,
         tenantId: UUID,
@@ -241,6 +245,7 @@ class AuditService(
         resourceType: String,
         resourceId: String?,
         actorType: String? = null,
+        branchId: UUID? = null,
         before: Map<String, Any?>? = null,
         after: Map<String, Any?>? = null,
         reason: String? = null,
@@ -252,7 +257,7 @@ class AuditService(
                 actorId = actorId,
                 actorType = actorType,
                 tenantId = tenantId,
-                branchId = null,
+                branchId = branchId,
                 action = action,
                 resourceType = resourceType,
                 resourceId = resourceId,

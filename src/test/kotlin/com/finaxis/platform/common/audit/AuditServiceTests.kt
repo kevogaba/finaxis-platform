@@ -234,6 +234,38 @@ class AuditServiceTests {
     }
 
     @Test
+    fun `recordIamChange stamps the branch the change is about`() {
+        val service = service()
+        val branchId = UUID.fromString("44444444-4444-4444-4444-444444444444")
+
+        service.recordIamChange(
+            actorId = UUID.randomUUID(),
+            tenantId = UUID.randomUUID(),
+            action = "user.assign_role",
+            resourceType = "USER_ROLE_ASSIGNMENT",
+            resourceId = "assignment-1",
+            branchId = branchId,
+        )
+
+        assertEquals(branchId.toString(), repository.events.single().branchId)
+    }
+
+    @Test
+    fun `recordIamChange leaves the branch empty for a tenant-wide change`() {
+        val service = service()
+
+        service.recordIamChange(
+            actorId = UUID.randomUUID(),
+            tenantId = UUID.randomUUID(),
+            action = "role.update",
+            resourceType = "ROLE",
+            resourceId = "role-1",
+        )
+
+        assertNull(repository.events.single().branchId)
+    }
+
+    @Test
     fun `recordExternalDispatch records the external system reference`() {
         val service = service()
         val tenantId = UUID.randomUUID()

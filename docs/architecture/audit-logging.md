@@ -45,6 +45,24 @@ bearer tokens, session cookies, API keys, raw authorization headers, or sensitiv
 metadata regardless — see [audit logging](../security/audit-logging.md) for the full redaction
 policy, the seven `AuditService` methods, and the query service.
 
+### One row per transition (#186, ADR 0031)
+
+A user or membership transition writes one audit row, the lifecycle FSM's row. It is keyed by the
+aggregate the transition acts on: `USER_ACCOUNT` with the account id for a user, `MEMBERSHIP` with
+the membership id for a membership. Its action is `<aggregate>.<transition>` (for example
+`user_account.suspend`, `membership.suspend`, `membership.revoke_pending`) and it carries the
+from-state and to-state. An application service never repeats that row. It may add a companion
+row under its own action name, only for a fact the FSM row cannot carry (a checker marker, an
+approval intent, cascade counts); ADR 0031 Decision 1 lists them.
+
+A membership revoke also writes `membership.assignments_revoked` (`MEMBERSHIP`, the membership id),
+after the FSM row. It carries `userId`, `branchAssignmentsRevoked` and `roleAssignmentsRevoked` in
+`metadata_jsonb`, the number of assignments the revoke ended.
+
+These rows are about a user or a membership, so `branch_id` is null on each of them (see "Reading
+the log" for the branch rule). Rows written before this release keep the older shape and are not
+rewritten; ADR 0031 lists the old and new keys for every consumer that must switch.
+
 ## Current Adapter
 
 `AuditService` writes to an `AuditEventRepository` port. `JooqAuditEventRepository` is the durable
@@ -76,12 +94,15 @@ again, so the rule fails open.
 `HttpAccessLogFilter` preserves an inbound `X-Request-Id` of 8 to 64 characters of
 `[A-Za-z0-9._-]` or generates one (a rejected value is never logged or stored). It returns the
 header to clients and stores `requestId` in MDC for request logs. `ActiveOrganisationContextFilter`
-separately installs `RequestContexts`, which carries tenant/branch/actor/correlation/user-agent
-and the client address for the audit adapter to fall back on when a caller does not supply them
-explicitly. Its correlation id is the client's `X-Correlation-Id` only when it has the same 8 to
-64 character `[A-Za-z0-9._-]` shape (#252); otherwise, as when the header is absent, it is the
-request id, so `audit_event.correlation_id` and the `correlationId` MDC field never hold a
-rejected value. The same holds for the request metadata made ambient while the principal loads.
+separately installs `RequestContexts`, which carries tenant, branch, actor, correlation, user-agent
+and the client address. The audit adapter falls back on the tenant, actor, correlation, user-agent
+and client address when a caller does not supply them explicitly. It never falls back on the
+branch: the context still holds the selected branch (for MDC), but `branch_id` comes only from
+`AuditCommand.branchId` (#186). The correlation id is the client's `X-Correlation-Id` only when it
+has the same 8 to 64 character `[A-Za-z0-9._-]` shape (#252); otherwise, as when the header is
+absent, it is the request id, so `audit_event.correlation_id` and the `correlationId` MDC field
+never hold a rejected value. The same holds for the request metadata made ambient while the
+principal loads.
 
 ### Client address (#185)
 
@@ -157,11 +178,27 @@ parameter, never a 500). The owner delegated these defaults to the builder; they
 - **`severity` and `min_severity`**: both, as `AuditSeverity`; `severity` is exact and
   `min_severity` is that value or above in the order `INFO` < `LOW` < `MEDIUM` < `HIGH` <
   `CRITICAL`. Supplying both is a 400.
-- **`branch_id`**: the row's branch. It only narrows: `audit.view` is checked tenant-wide, as
-  before, so no caller sees a row it could not already read. A row whose `AuditCommand` names no
-  branch takes the request context's (the caller's pinned branch, none on a platform route), so a
-  row about a branch names it explicitly: a refused branch approval's `DENIED` row (#251) has
-  `branch_id` the target branch.
+- **`branch_id`**: the branch the event is **about**, and nothing else. It comes ONLY from
+  `AuditCommand.branchId`; the audit adapter never reads a branch from the ambient
+  `RequestContexts` (#186), so the caller's selected branch is never stamped. A row about one
+  branch carries that branch even when the caller has another branch selected: its lifecycle,
+  amendment or refusal (a refused branch approval's `DENIED` row, #251, names the target branch),
+  its assignments, the head office draft, a branch-scoped role assignment, and each assignment a
+  user deactivation or organisation deprovisioning revokes that is a branch assignment or a
+  branch-scoped role; a journal reversal (the original journal's branch); a control-account
+  reconciliation resolve (the reconciliation run's branch); and a daily-balance rebuild that names
+  one branch (a rebuild of every branch carries none). Rows about a branch name it, so a
+  branch-scoped `branch_id` search finds them.
+  Every other row carries none: user, membership, organisation settings or lifecycle, tenant-scoped
+  role, business date, external dispatch, and a tenant-scoped role assignment revoked by either
+  cascade. A manual journal created without an explicit branch takes the caller's selected branch
+  as its own branch, so its audit rows carry that branch; the writer itself still never stamps the
+  caller's context. Rows written before #186 may carry the selected branch, stamped by the old
+  request-context fallback; they are not rewritten, so a `branch_id` search can return a tenant-wide
+  row from that period. Known limit: the prior-period posting authority audit written by
+  `PostingPeriodResolver` carries no branch, because its resource is the fiscal period. The filter
+  only narrows: `audit.view` is checked tenant-wide, as before, so no caller sees a row it could not
+  already read.
 - **`action_prefix`**: a literal prefix of `action` (LIKE wildcards escaped), 2 to 64 characters.
   It is the event-type filter, because `event_type` is the action (rows from before #187 keep the
   resource type in `event_type`, and filtering on `action` finds them too). `action` stays exact.
