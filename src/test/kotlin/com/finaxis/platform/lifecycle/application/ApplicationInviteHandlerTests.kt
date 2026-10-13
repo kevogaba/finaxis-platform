@@ -48,8 +48,9 @@ class ApplicationInviteHandlerTests {
     fun `application invite marks dispatch succeeded`() {
         val dispatchKey = "user-1:org-1:APPLICATION_INVITE"
         store.dispatches[dispatchKey] = InviteDispatchState("PENDING")
+        val userId = uuidV7()
 
-        handler.run(applicationInviteRequest(dispatchKey))
+        handler.run(applicationInviteRequest(dispatchKey, userId))
 
         val dispatch = store.dispatches.getValue(dispatchKey)
         assertEquals("SUCCEEDED", dispatch.status)
@@ -58,6 +59,7 @@ class ApplicationInviteHandlerTests {
         val dispatchAudit = audits.items.single { it.action == "user.application_invite" }
         assertEquals(AuditOutcome.SUCCESS, dispatchAudit.outcome)
         assertEquals(SystemActor.ID.toString(), dispatchAudit.actorId)
+        assertEquals(userId.toString(), dispatchAudit.subjectUserId)
     }
 
     @Test
@@ -75,6 +77,7 @@ class ApplicationInviteHandlerTests {
         val dispatchKey = "user-1:org-1:APPLICATION_INVITE"
         store.dispatches[dispatchKey] = InviteDispatchState("PENDING")
         store.failure = IllegalStateException("provider unavailable")
+        val userId = uuidV7()
 
         val appender =
             ch.qos.logback.core.read
@@ -87,7 +90,7 @@ class ApplicationInviteHandlerTests {
         val failure =
             try {
                 assertFailsWith<SanitisedJobFailureException> {
-                    handler.run(applicationInviteRequest(dispatchKey))
+                    handler.run(applicationInviteRequest(dispatchKey, userId))
                 }
             } finally {
                 sanitisedLogger.detachAppender(appender)
@@ -107,6 +110,8 @@ class ApplicationInviteHandlerTests {
         assertEquals(AuditOutcome.FAILURE, dispatchAudit.outcome)
         assertEquals("IllegalStateException", dispatchAudit.reason)
         assertEquals(SystemActor.ID.toString(), dispatchAudit.actorId)
+        // The failed row is about the invitee too, on the failure path as on success.
+        assertEquals(userId.toString(), dispatchAudit.subjectUserId)
     }
 
     @Test
@@ -239,11 +244,14 @@ class ApplicationInviteHandlerTests {
         assertEquals(1, sentMessages.size)
     }
 
-    private fun applicationInviteRequest(dispatchKey: String): ApplicationInviteJobRequest =
+    private fun applicationInviteRequest(
+        dispatchKey: String,
+        userId: UUID = uuidV7(),
+    ): ApplicationInviteJobRequest =
         ApplicationInviteJobRequest(
             organisationId = uuidV7(),
             membershipId = uuidV7(),
-            userId = uuidV7(),
+            userId = userId,
             email = "member@example.test",
             dispatchKey = dispatchKey,
         )

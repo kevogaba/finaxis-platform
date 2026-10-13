@@ -12,6 +12,8 @@ data class AuditCommand(
     val resourceId: String?,
     val outcome: AuditOutcome,
     val branchId: String? = null,
+    /** The user the event is ABOUT, never the actor by default; null when it is about no user. */
+    val subjectUserId: String? = null,
     val severity: AuditSeverity = AuditSeverity.INFO,
     val reason: String? = null,
     val requestId: String? = null,

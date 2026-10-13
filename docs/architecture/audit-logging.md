@@ -27,6 +27,8 @@ The common audit foundation records:
 
 - actor type and actor ID;
 - tenant/organisation ID and branch ID;
+- the subject user ID: the user the event is about, never the actor by default (see
+  "The subject user" below);
 - action, and the event type derived from it (`event_type` is the action itself, the domain
   event name such as `organisation.activate`; it no longer repeats the resource type);
 - resource type and resource ID (stored as `entity_type`/`entity_id`; the ID only when it is a
@@ -62,6 +64,80 @@ after the FSM row. It carries `userId`, `branchAssignmentsRevoked` and `roleAssi
 These rows are about a user or a membership, so `branch_id` is null on each of them (see "Reading
 the log" for the branch rule). Rows written before this release keep the older shape and are not
 rewritten; ADR 0031 lists the old and new keys for every consumer that must switch.
+
+### The subject user (#186)
+
+An event about a user names that user in `subject_user_id`. The writer sets it from the typed
+`AuditCommand.subjectUserId`, never from metadata. The column is nullable and has no foreign key,
+because an audit row outlives the user it names (`V29`; its partial index is `V30`). The user is
+an identity Keycloak owns and `user_account` mirrors, so the column is a plain reference to
+`user_account.id`, indexed only where it is not `NULL` (owner ruling). The subject
+query returns the events the writers name as being about one user, one row per transition
+(ADR 0031). It is not a complete history of a user; the exclusion below and "Subject and actor"
+say where it stops.
+
+**Known exclusion (pre-existing, a follow-up).** The roles that `user.invite` grants to the
+invitee are written through the store (`store.assignRole`) and write no audit row. The
+`user.invite` row (subject = the invitee) records the membership id only, not the role ids
+granted, so those grants appear in no subject query. The invitee's branch assignments are
+audited (`branch.assign_user`, subject = the invitee). Auditing the invitation's role grants as
+`user.assign_role` rows is a follow-up change, not part of this one.
+
+The rule:
+
+- **The subject is the user the event is about, and never the actor by default.** When an
+  administrator assigns a role, the row's actor is the administrator and its subject is the
+  assignee. A revocation names the user whose access it ends.
+- **A user-account row names the account; a membership row names the member.** A membership row
+  is keyed by the membership, but the member is its subject, so the member's history is one query
+  on the subject.
+- **An event about no user carries `NULL`.** That covers organisations, branches (their
+  lifecycle, amendments and refusals), tenant settings, business dates, role definitions, and the
+  accounting records (fiscal periods, GL accounts, posting rules, journals, reconciliations and
+  balance rebuilds).
+- **A subject that is not a UUID is stored as `NULL`**, like a non-UUID branch or entity id.
+
+**Subject and actor are different questions.** The actor (`actor_user_id`, and
+`actor_external_subject`, which the `actor_subject` search filter matches) answers "who did it".
+The subject answers "who is it about". A user's own manual-journal activity (create, amend,
+approve, reject) carries no subject, because each of those events is about a journal; it is found
+by the actor filter, not by the subject query. `tenant.bootstrap_retry` is about the organisation,
+so it carries no subject either. The administrator that bootstrap invites has their own
+`user.invite` row, whose subject is that administrator.
+
+The writers, by event family (the action names are the ones the writer records):
+
+| Event family | Actions | Subject |
+| --- | --- | --- |
+| User account transitions (FSM, `USER_ACCOUNT`) | `user_account.submit`, `.start_idp_provisioning`, `.invite`, `.activate`, `.suspend`, `.reactivate`, `.start_deactivation`, `.complete_deactivation`, and their `DENIED` or `FAILURE` rows | the account (its id) |
+| Membership transitions (FSM, `MEMBERSHIP`) | `membership.activate`, `.suspend`, `.reactivate`, `.revoke`, `.revoke_pending`, `.revoke_suspended`, and their `DENIED` or `FAILURE` rows | the member (the membership's user) |
+| Membership revoke cascade | `membership.assignments_revoked` | the member |
+| Invitation and approval | `user.invite`, `user.approve` | the invitee or approved user (the invite's role grants: see the exclusion) |
+| Identity and invitation dispatch (success and failure) | `user.keycloak_provisioning`, `user.application_invite`, `user.welcome_email` | the user the dispatch is for |
+| First login | `user.first_login_activation` (and the `user_account.activate` row beside it) | the user |
+| Branch assignment | `branch.assign_user`, `branch.revoke_user` | the target user, not the actor |
+| Role assignment | `user.assign_role`, `user.revoke_role` | the target user, not the actor (not the roles `user.invite` grants: see the exclusion) |
+| Deactivation cascade | `user.deactivation_assignment_revoked` | the deactivated user |
+| Deprovisioning cascade | `organisation.deprovision_assignment_revoked` | the user whose assignment was revoked |
+| Organisation, branch lifecycle, role definitions, tenant settings, business date, accounting, bootstrap | every other action | none (`NULL`) |
+
+A deprovisioning revocation keeps the organisation as its resource, as before. Its row also names
+the user whose assignment it ended, so that user's rows are found by the subject query.
+
+Rows written before `V29` keep a `NULL` `subject_user_id`, and nothing is backfilled: a subject
+recovered from metadata would be a guess, not evidence. A query by subject therefore finds only
+the rows written from the release that contains `V29`. Older user rows are still found by their
+older keys (`entity_id` for the account and membership rows, `metadata_jsonb.userId` for the
+cascades, by SQL: no API filter reads metadata), and ADR 0031 lists the old shapes. The cut-over is
+recorded in
+[audit index migrations](../operations/audit-index-migrations.md). The `subject_user_id` search
+filter answers that query on the tenant route and on both platform routes (see
+[search filters](#search-filters-183)). A user's platform lifecycle rows (`user_account.suspend`,
+`.reactivate`,
+`.start_deactivation`, `.complete_deactivation`) are written under the PLATFORM organisation, so
+the tenant log never holds them and the subject query finds them on the platform log only. The
+onboarding rows (`user_account.submit`, `.start_idp_provisioning`, `.invite`, `.activate`) are
+written under the tenant and are found by a tenant subject search.
 
 ## Current Adapter
 
@@ -158,6 +234,25 @@ JobRunr handler, a listener) has no context, so its address is the command's or 
   withhold it (owner ruling, #247). How long rows, and with them addresses, are kept is not yet
   defined: the `audit_retention_days` setting has no purge job behind it (#164).
 
+### User agent (#185)
+
+`audit_event.user_agent` is the `User-Agent` header of the request that wrote the row. It is read
+in `ActiveOrganisationContextFilter` (`requestMetadata`) into `RequestContext.userAgent`, and
+`JooqAuditEventRepository` stores the command's value when one is set and the context's otherwise,
+as it does for the address. No caller sets the command's value today.
+
+- **Capped at 512 characters.** V1 declares the column unbounded `TEXT`, so the cap is an
+  application rule, `JooqAuditEventRepository.MAX_USER_AGENT_LENGTH`. A longer agent is cut to 512
+  characters silently: the audited action is never refused or failed for it, and nothing is
+  logged. `UserAgentAuditIntegrationTests` proves that a 614-character agent sent through a real
+  mutation is stored as its first 512 characters while the request succeeds.
+- **Known limit: no principal, no context.** `installRequestContext` installs the request metadata
+  only when the request carries an `AppPrincipal`. A request without one (anonymous, a JWT with no
+  resolved active-organisation context, or any point before the principal is loaded) runs with the
+  context cleared, so a row written during it has `ip_address` and `user_agent` `NULL`. Nothing
+  else fills them. The one exception is the first-login activation, which runs inside the load:
+  the loader makes the metadata ambient for it, so that row keeps both.
+
 ## Reading the log
 
 Audit events are read through `GET /api/v1/tenant/audit-events` (tenant users, active tenant
@@ -210,21 +305,31 @@ parameter, never a 500). The owner delegated these defaults to the builder; they
 - **`actor_type`**: `USER` or `SYSTEM` (`AuditActorType`), the two values the application
   writes, so system actors are findable. **`actor_subject`**: exact match on
   `actor_external_subject`, 1 to 255 characters.
+- **`subject_user_id`** (#186): exact match on `audit_event.subject_user_id`, the user the event is
+  about (see [the subject user](#the-subject-user-186)), a UUID bound like `actor_id`. It is
+  accepted on the tenant route and on both platform routes, because it reveals no withheld
+  field. A malformed value is a 400 naming `subject_user_id`. Rows written before `V29` keep a
+  `NULL` subject and are not found by it.
 - **`sort_dir`**: `ASC` or `DESC` on `event_time`, with the id as tie-break; `DESC` by default.
 - **No side channel.** There is no filter over `before_jsonb`, `after_jsonb`, `metadata_jsonb`,
   `user_agent` or `ip_address`, and the platform searches refuse `actor_subject` with a 400,
   because their pages withhold `actor_external_subject` and a filter would reveal it one guess at
   a time.
 
-Index support (`V25`-`V28`, one migration per index): the selective filters (`branch_id`,
-`actor_subject`, an `outcome` other than `SUCCESS`, a severity above `INFO`) each have a partial
-index after `organisation_id`, so their page count is an index-only scan of the matching rows rather
-than a pass over the tenant's log. `actor_type`, `action_prefix`, `SUCCESS` and `INFO` match too
-much of the log for an index to help and use `idx_audit_event_organisation_time`.
+Index support (`V25`-`V28` and `V30`, one migration per index): the selective filters (`branch_id`,
+`actor_subject`, `subject_user_id`, an `outcome` other than `SUCCESS`, a severity above `INFO`) each
+have a partial index after `organisation_id`, so their page count is an index-only scan of the
+matching rows rather than a pass over the tenant's log. `actor_type`, `action_prefix`, `SUCCESS` and
+`INFO` match too much of the log for an index to help and use `idx_audit_event_organisation_time`.
 `JooqAuditEventQueries` renders the outcome and severity values as SQL literals, so the planner can
-prove the partial predicates in a cached generic plan as well.
+prove the partial predicates in a cached generic plan as well. `V30` (#186) adds the subject-user
+index on `(organisation_id, subject_user_id, event_time DESC)`, partial on `subject_user_id IS NOT
+NULL`, for the subject user the event is about. The subject filter's equality is a strict operator,
+so the planner proves the partial predicate from it in a cached generic plan as well
+(`AuditQueryPlanTests`). A row written before `V29` has no subject and is not in it; see the [audit
+index migrations](../operations/audit-index-migrations.md) cut-over.
 
-The four indexes are built `CONCURRENTLY` by non-transactional migrations (owner ruling), so
+The five indexes are built `CONCURRENTLY` by non-transactional migrations (owner ruling), so
 deploying them never blocks the audited writes of the running instances; the convention and the
 recovery from a failed build are in
 [audit index migrations](../operations/audit-index-migrations.md).

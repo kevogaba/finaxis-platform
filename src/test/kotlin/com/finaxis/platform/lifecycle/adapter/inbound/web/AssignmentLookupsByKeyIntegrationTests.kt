@@ -12,6 +12,7 @@ import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationTo
 import com.finaxis.platform.iam.application.query.IamQueryService
 import com.finaxis.platform.iam.application.role.RevokeRoleAssignment
 import com.finaxis.platform.iam.application.role.RoleManagementService
+import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
@@ -161,6 +162,11 @@ class AssignmentLookupsByKeyIntegrationTests
             val revoked = revokeBranchAssignment(ownRow, token)
             assertEquals(200, revoked.status)
             assertEquals("REVOKED", branchAssignmentStatus(ownRow))
+            // The revocation is about the user whose assignment it ended, not the revoker.
+            assertEquals(
+                listOf<UUID?>(branchAssignmentHolder(ownRow)),
+                subjectsOf(branchA, "branch.revoke_user"),
+            )
         }
 
         @Test
@@ -419,6 +425,43 @@ class AssignmentLookupsByKeyIntegrationTests
             assertEquals(200, revokeRoleAssignment(tenantRow, token).status)
             assertEquals("REVOKED", roleAssignmentStatus(branchRow))
             assertEquals("REVOKED", roleAssignmentStatus(tenantRow))
+            // Each revocation is about the holder whose role it ends, not the revoker.
+            assertEquals(
+                listOf<UUID?>(roleAssignmentHolder(branchRow)),
+                subjectsOf(branchRow, "user.revoke_role"),
+            )
+            assertEquals(
+                listOf<UUID?>(roleAssignmentHolder(tenantRow)),
+                subjectsOf(tenantRow, "user.revoke_role"),
+            )
+            assertTrue(roleAssignmentHolder(tenantRow) != revoker)
+        }
+
+        @Test
+        fun `assigning a role makes the assignee the subject, the administrator only the actor`() {
+            val assignee = seedUser("role-assignee")
+            insertMembership(assignee)
+            val assignment =
+                post(
+                    ApiPaths.ROLE_ASSIGNMENTS,
+                    tenantToken(admin, "user.assign_role"),
+                    """{"user_id":"$assignee","role_id":"${roleIdOf("TENANT_ADMIN")}",""" +
+                        """"scope_type":"TENANT"}""",
+                ).andExpect { status { isCreated() } }
+                    .andReturn()
+                    .response.contentAsString
+            val assignmentId = UUID.fromString(JsonPath.read<String>(assignment, "$.id"))
+
+            assertEquals(listOf<UUID?>(assignee), subjectsOf(assignmentId, "user.assign_role"))
+            assertEquals(
+                listOf<UUID?>(admin),
+                dsl
+                    .select(AUDIT_EVENT.ACTOR_USER_ID)
+                    .from(AUDIT_EVENT)
+                    .where(AUDIT_EVENT.ENTITY_ID.eq(assignmentId))
+                    .and(AUDIT_EVENT.ACTION.eq("user.assign_role"))
+                    .fetch(AUDIT_EVENT.ACTOR_USER_ID),
+            )
         }
 
         @Test
@@ -823,6 +866,28 @@ class AssignmentLookupsByKeyIntegrationTests
             dsl
                 .fetchOne("SELECT id FROM branch WHERE organisation_id = ? LIMIT 1", organisation)!!
                 .get(0, UUID::class.java)
+
+        private fun roleAssignmentHolder(id: UUID): UUID =
+            dsl
+                .fetchOne("SELECT user_id FROM user_role_assignment WHERE id = ?", id)!!
+                .get(0, UUID::class.java)
+
+        private fun branchAssignmentHolder(id: UUID): UUID =
+            dsl
+                .fetchOne("SELECT user_id FROM user_branch_assignment WHERE id = ?", id)!!
+                .get(0, UUID::class.java)
+
+        /** The subject of every audit row of [action] whose entity is [entityId], in row order. */
+        private fun subjectsOf(
+            entityId: UUID,
+            action: String,
+        ): List<UUID?> =
+            dsl
+                .select(AUDIT_EVENT.SUBJECT_USER_ID)
+                .from(AUDIT_EVENT)
+                .where(AUDIT_EVENT.ENTITY_ID.eq(entityId))
+                .and(AUDIT_EVENT.ACTION.eq(action))
+                .fetch(AUDIT_EVENT.SUBJECT_USER_ID)
 
         private fun roleIdOf(code: String): UUID =
             dsl

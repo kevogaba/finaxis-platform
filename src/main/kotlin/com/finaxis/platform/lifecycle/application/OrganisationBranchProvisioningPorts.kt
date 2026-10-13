@@ -170,6 +170,7 @@ data class DeprovisionedAssignment(
     val assignmentId: UUID,
     val assignmentType: String,
     val branchId: UUID?,
+    val userId: UUID,
 )
 
 /** Organisation settings persistence port for post-provisioning configuration changes. */

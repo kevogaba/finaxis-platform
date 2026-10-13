@@ -20,12 +20,13 @@ import org.springframework.test.context.TestConstructor
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
 import java.time.OffsetDateTime
+import java.util.UUID
 import kotlin.test.assertTrue
 
 /**
- * The contract V25-V28 and [JooqAuditEventQueries] make (#183), asserted by a plan rather
- * than a paragraph: the count behind a selective audit filter uses that filter's partial index
- * even in a **generic** plan, the plan a cached prepared statement falls back to.
+ * The contract V25-V28, V30 and [JooqAuditEventQueries] make (#183, #186), asserted by a plan
+ * rather than a paragraph: the count behind a selective audit filter uses that filter's partial
+ * index even in a **generic** plan, the plan a cached prepared statement falls back to.
  *
  * The SQL planned is the adapter's own (`searchCondition`), rendered by jOOQ, so replacing the
  * inlined outcome or severity literal with a bind value fails here: a partial index's
@@ -77,11 +78,15 @@ class AuditQueryPlanTests(
         dsl.execute(
             """
             INSERT INTO audit_event (organisation_id, event_time, actor_external_subject,
-              actor_type, branch_id, event_type, entity_type, action, outcome, severity)
+              actor_type, branch_id, subject_user_id, event_type, entity_type, action, outcome,
+              severity)
             SELECT ?, now() - g * interval '1 minute',
               CASE WHEN g % 5 = 0 THEN 'kc-plan-' || (g % 400) END,
               'USER',
               CASE WHEN g % 50 = 0 THEN ?::uuid END,
+              CASE WHEN g % 200 = 0 THEN
+                ('00000000-0000-7000-8000-' || lpad(to_hex((g / 200) % 20), 12, '0'))::uuid
+              END,
               'plan.update', 'PLAN', 'plan.update',
               CASE WHEN g % 100 = 0 THEN 'DENIED' WHEN g % 100 = 1 THEN 'FAILURE'
                    ELSE 'SUCCESS' END,
@@ -112,6 +117,14 @@ class AuditQueryPlanTests(
         assertGenericPlanUses(
             AuditEventFilter(organisationId, minSeverity = AuditSeverity.HIGH),
             "idx_audit_event_organisation_severity_time",
+        )
+    }
+
+    @Test
+    fun `a subject user filter uses the subject user partial index in a generic plan`() {
+        assertGenericPlanUses(
+            AuditEventFilter(organisationId, subjectUserId = SEEDED_SUBJECT_USER),
+            "idx_audit_event_organisation_subject_user_time",
         )
     }
 
@@ -183,5 +196,8 @@ class AuditQueryPlanTests(
 
     private companion object {
         const val SEEDED_ROWS = 20_000
+
+        /** One of the 20 subjects the seed spreads over about 100 rows (`g / 200 mod 20 = 7`). */
+        val SEEDED_SUBJECT_USER: UUID = UUID.fromString("00000000-0000-7000-8000-000000000007")
     }
 }

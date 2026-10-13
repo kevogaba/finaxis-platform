@@ -109,6 +109,42 @@ class JooqAuditEventQueriesTests(
     }
 
     @Test
+    fun `search filters by the user the event is about, not by the actor`() {
+        val organisationId = insertOrganisation()
+        val subjectUserId = uuidV7()
+        val actorId = insertUserAccount()
+        val about =
+            insertAuditEvent(
+                organisationId,
+                actorId = actorId,
+                action = "branch.assign_user",
+                subjectUserId = subjectUserId,
+            )
+        insertAuditEvent(
+            organisationId,
+            actorId = actorId,
+            action = "branch.assign_user",
+            subjectUserId = uuidV7(),
+        )
+        insertAuditEvent(organisationId, actorId = actorId, action = "user.invite")
+        insertAuditEvent(
+            insertOrganisation(),
+            actorId = null,
+            action = "branch.assign_user",
+            subjectUserId = subjectUserId,
+        )
+
+        val page =
+            queries.search(
+                AuditEventFilter(organisationId = organisationId, subjectUserId = subjectUserId),
+            )
+
+        assertEquals(listOf(about), page.items.map { it.id })
+        assertEquals(subjectUserId, page.items.single().subjectUserId)
+        assertEquals(1, page.totalItems)
+    }
+
+    @Test
     fun `search orders results by event time descending and paginates`() {
         val organisationId = insertOrganisation()
         val base = Instant.parse("2026-07-01T00:00:00Z")
@@ -468,6 +504,7 @@ class JooqAuditEventQueriesTests(
         branchId: UUID? = null,
         actorSubject: String? = null,
         reason: String? = null,
+        subjectUserId: UUID? = null,
     ): UUID {
         val id = uuidV7()
         dsl
@@ -476,6 +513,7 @@ class JooqAuditEventQueriesTests(
             .set(AUDIT_EVENT.ORGANISATION_ID, organisationId)
             .set(AUDIT_EVENT.EVENT_TIME, eventTime.atOffset(ZoneOffset.UTC))
             .set(AUDIT_EVENT.ACTOR_USER_ID, actorId)
+            .set(AUDIT_EVENT.SUBJECT_USER_ID, subjectUserId)
             .set(AUDIT_EVENT.ACTOR_EXTERNAL_SUBJECT, actorSubject)
             .set(AUDIT_EVENT.ACTOR_TYPE, if (actorId == null) "SYSTEM" else "USER")
             .set(AUDIT_EVENT.BRANCH_ID, branchId)

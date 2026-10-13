@@ -106,6 +106,7 @@ class UserProvisioningService(
             resourceId = userId,
             requestId = command.requestId,
             metadata = mapOf(MEMBERSHIP_ID to membershipId.toString()),
+            subjectUserId = userId,
         )
         return UserInvitationResult(userId, membershipId, snapshot.userStatus, snapshot.status)
     }
@@ -230,6 +231,7 @@ class UserProvisioningService(
                     MEMBERSHIP_ID to snapshot.id.toString(),
                     "membershipActivated" to membershipActivated.toString(),
                 ) + checkerScopeMetadata(command.scope),
+            subjectUserId = snapshot.userId,
         )
         val approved = requireMembership(command.organisationId, command.membershipId)
         return UserApprovalResult(
@@ -352,6 +354,7 @@ class UserProvisioningService(
                     "branchAssignmentsRevoked" to branchRevocations.toString(),
                     "roleAssignmentsRevoked" to roleRevocations.toString(),
                 ),
+            subjectUserId = snapshot.userId,
         )
     }
 
@@ -583,6 +586,7 @@ class UserProvisioningService(
         reason: String? = null,
         requestId: String? = null,
         metadata: Map<String, String> = emptyMap(),
+        subjectUserId: UUID? = null,
     ) {
         auditService.record(
             AuditCommand(
@@ -596,6 +600,7 @@ class UserProvisioningService(
                 reason = reason,
                 requestId = requestId,
                 metadata = metadata,
+                subjectUserId = subjectUserId?.toString(),
             ),
         )
     }

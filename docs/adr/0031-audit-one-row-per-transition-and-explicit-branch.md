@@ -168,8 +168,47 @@ count of revocations.
 - Rows from before the cut-over still say `user.suspend` with `USER`. A report spanning the cut-over
   reads both shapes. Nothing purges audit rows yet (`audit_retention_days` has no job, #164), so
   the old shape stays readable for as long as the rows are kept.
-- **Until PR5, a user's membership suspensions cannot be found from the user.** The old rows were
-  keyed `USER` with the user id, so `entity_id=<userId>` found them. The FSM membership rows carry
+- **Until the subject column (#186), a user's membership suspensions cannot be found from the
+  user.** The old rows were keyed `USER` with the user id, so `entity_id=<userId>` found them. The
+  FSM membership rows carry
   no user id (only the from and to states), so the same search no longer finds them. The revoke
-  cascade row names the user in its metadata, but it is keyed by the membership. PR5's typed
+  cascade row names the user in its metadata, but it is keyed by the membership. The typed
   `subject_user_id` column and filter are the fix; this change does not add them.
+
+## Addendum (2026-10-13): the subject user (#186)
+
+The open item above is closed by a typed column, not by metadata. An event about a user names that
+user in `audit_event.subject_user_id`, written from `AuditCommand.subjectUserId`. The subject query
+returns the events the writers name as about that user. It is not a complete history of a user:
+item 3 states the exclusion.
+
+1. **The subject is the user an event is about, never the actor by default.** A membership
+   transition's row is keyed `MEMBERSHIP`, and its subject is the member. A user-account row's
+   subject is the account. A branch or role assignment, and its revocation, names the target user.
+   A deactivation or deprovisioning revocation names the user whose assignment it ended. An event
+   about no user (an organisation, branch lifecycle, tenant setting, business date, role
+   definition, accounting record) carries `NULL`. The writer table and the event families are in
+   `docs/architecture/audit-logging.md` ("The subject user").
+2. **The FSM rows carry the subject too.** The membership transition's subject is the user the
+   transition already reads once, so no extra lookup is made. Failure and `DENIED` rows carry the
+   same subject as the success row.
+3. **Exclusion, and a cut-over.** Roles that `user.invite` grants are written through the store
+   with no audit row. The invite's `user.invite` row (subject = the invitee) records the membership
+   id only, so those grants appear in no subject query. This is pre-existing and not changed here;
+   auditing the invitation's role grants as `user.assign_role` is a follow-up. Rows written before
+   the release containing `V29` keep a `NULL` subject. They are not rewritten, and a subject is not
+   recovered from metadata, because that would be a guess. The older rows are still found by the
+   keys this ADR lists (`entity_id`, `metadata_jsonb.userId`, by SQL:
+   no API filter reads metadata).
+4. **No foreign key.** An audit row outlives the user it names, so `subject_user_id` has none
+   (`V29`), and the partial index that serves the subject query is `V30`. Owner ruling: the user
+   is an identity Keycloak owns and `user_account` mirrors, so the column is a plain reference to
+   `user_account.id`, indexed only where it is not `NULL`.
+5. **Subject and actor differ.** The actor answers "who did it", and the subject "who is it
+   about". A user's manual-journal activity carries no subject (the event is about a journal) and
+   is found by the actor filter.
+
+The Open item "Until the subject column (#186), a user's membership suspensions cannot be found from
+the user" is
+resolved by this change: a membership's rows carry the member as their subject. The
+`subject_user_id` search filter is added by #186.

@@ -61,6 +61,7 @@ class SendWelcomeEmailJobRequestHandler(
                 externalSystemRef = WELCOME_EMAIL,
                 resourceType = USER_RESOURCE,
                 resourceId = jobRequest.userId.toString(),
+                subjectUserId = jobRequest.userId,
             )
         } catch (ex: IllegalStateException) {
             recordFailureAndFailPermanently(jobRequest, ex)
@@ -125,6 +126,7 @@ class SendWelcomeEmailJobRequestHandler(
             externalSystemRef = WELCOME_EMAIL,
             resourceType = USER_RESOURCE,
             resourceId = jobRequest.userId.toString(),
+            subjectUserId = jobRequest.userId,
             reason = cause.toAuditFailureReason(),
         )
     }

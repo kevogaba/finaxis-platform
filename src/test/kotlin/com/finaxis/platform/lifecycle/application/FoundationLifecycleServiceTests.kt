@@ -36,6 +36,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class FoundationLifecycleServiceTests {
@@ -81,6 +82,7 @@ class FoundationLifecycleServiceTests {
         assertEquals(OrganisationLifecycleState.PROVISIONING, result.aggregate.state)
         assertEquals("START_PROVISIONING", logs.items.single().transition)
         assertEquals("organisation.start_provisioning", audits.items.single().action)
+        assertNull(audits.items.single().subjectUserId)
         val event = events.published.single() as InternalTransitionEvent
         assertEquals(ORGANISATION, event.aggregateType)
         assertEquals(organisationId.toString(), event.aggregateId)
@@ -229,6 +231,7 @@ class FoundationLifecycleServiceTests {
         assertEquals("TransitionGuardException", audit.reason)
         assertEquals("N/A", audit.metadata["to"])
         assertEquals("PENDING_APPROVAL", audit.metadata["from"])
+        assertEquals(userId.toString(), audit.subjectUserId)
     }
 
     @Test
@@ -254,6 +257,7 @@ class FoundationLifecycleServiceTests {
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, audit.outcome)
         assertEquals("N/A", audit.metadata["to"])
         assertEquals("ACTIVE", audit.metadata["from"])
+        assertEquals(userId.toString(), audit.subjectUserId)
     }
 
     @Test
@@ -327,6 +331,10 @@ class FoundationLifecycleServiceTests {
             ),
         )
 
+        assertEquals(
+            userId.toString(),
+            audits.items.single { it.action == "membership.activate" }.subjectUserId,
+        )
         val event = events.published.single() as ExternalizedTransitionEvent
         assertEquals("finaxis.lifecycle.membership.activated", event.target)
         assertEquals(MEMBERSHIP, event.aggregateType)
@@ -368,6 +376,10 @@ class FoundationLifecycleServiceTests {
         assertTrue(persistence.revokedUsers.isEmpty())
         assertFalse(audits.items.isEmpty())
         assertEquals(
+            userId.toString(),
+            audits.items.single { it.action == "user_account.complete_deactivation" }.subjectUserId,
+        )
+        assertEquals(
             "DEACTIVATED",
             persistence.users
                 .getValue(userId)
@@ -391,6 +403,10 @@ class FoundationLifecycleServiceTests {
         assertEquals(UserLifecycleState.ACTIVE, persistence.users.getValue(userId).state)
         assertEquals(listOf(userId), persistence.lastLoginUsers)
         assertTrue(audits.items.any { event -> event.action == "user.first_login_activation" })
+        assertEquals(
+            listOf(userId.toString(), userId.toString()),
+            audits.items.map { it.subjectUserId },
+        )
     }
 
     @Test

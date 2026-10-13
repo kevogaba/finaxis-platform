@@ -330,6 +330,11 @@ class JooqOrganisationBranchProvisioningStoreTests(
         assertEquals(branchId, revoked.getValue(branchAssignmentId).branchId)
         assertEquals(branchId, revoked.getValue(branchRoleAssignmentId).branchId)
         assertNull(revoked.getValue(tenantRoleAssignmentId).branchId)
+        // Every row names the user whose assignment it ends, for the deprovision audit rows.
+        assertEquals(
+            setOf(userId),
+            revoked.values.map { it.userId }.toSet(),
+        )
     }
 
     @Test
@@ -354,6 +359,7 @@ class JooqOrganisationBranchProvisioningStoreTests(
         assertEquals(branchId, revoked.getValue(branchAssignmentId).branchId)
         assertEquals(branchId, revoked.getValue(branchRoleAssignmentId).branchId)
         assertNull(revoked.getValue(tenantRoleAssignmentId).branchId)
+        assertEquals(setOf(userId), revoked.values.map { it.userId }.toSet())
     }
 
     @Test

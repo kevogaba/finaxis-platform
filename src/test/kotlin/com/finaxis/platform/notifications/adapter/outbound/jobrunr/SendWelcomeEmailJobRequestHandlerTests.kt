@@ -61,6 +61,7 @@ class SendWelcomeEmailJobRequestHandlerTests {
         assertEquals("user.welcome_email", audit.action)
         assertEquals(AuditOutcome.SUCCESS, audit.outcome)
         assertEquals(SystemActor.ID.toString(), audit.actorId)
+        assertEquals(userId.toString(), audit.subjectUserId)
     }
 
     @Test
@@ -79,6 +80,7 @@ class SendWelcomeEmailJobRequestHandlerTests {
         assertNoSentinel(exception)
         assertNull(exception.cause)
         assertEquals(AuditOutcome.FAILURE, audits.items.single().outcome)
+        assertEquals(userId.toString(), audits.items.single().subjectUserId)
     }
 
     @Test
@@ -97,6 +99,7 @@ class SendWelcomeEmailJobRequestHandlerTests {
         assertNoSentinel(exception)
         assertNull(exception.cause)
         assertEquals(AuditOutcome.FAILURE, audits.items.single().outcome)
+        assertEquals(userId.toString(), audits.items.single().subjectUserId)
     }
 
     @Test

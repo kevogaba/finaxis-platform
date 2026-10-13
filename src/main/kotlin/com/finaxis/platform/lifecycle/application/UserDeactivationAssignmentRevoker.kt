@@ -47,6 +47,8 @@ class UserDeactivationAssignmentRevoker(
                         reason = command.reason.value,
                         requestId = command.requestId,
                         metadata = mapOf(USER_ID to command.userId.toString()),
+                        // The deactivated user whose assignment this ends, not the administrator.
+                        subjectUserId = command.userId.toString(),
                     ),
                 )
                 eventPublisher.publish(

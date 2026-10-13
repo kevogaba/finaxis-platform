@@ -69,6 +69,9 @@ class JooqAuditEventQueries(
         filter.entityType?.let { condition = condition.and(AUDIT_EVENT.ENTITY_TYPE.eq(it)) }
         filter.entityId?.let { condition = condition.and(AUDIT_EVENT.ENTITY_ID.eq(it)) }
         filter.actorId?.let { condition = condition.and(AUDIT_EVENT.ACTOR_USER_ID.eq(it)) }
+        filter.subjectUserId?.let {
+            condition = condition.and(AUDIT_EVENT.SUBJECT_USER_ID.eq(it))
+        }
         filter.action?.let { condition = condition.and(AUDIT_EVENT.ACTION.eq(it)) }
         filter.occurredFrom?.let {
             condition = condition.and(AUDIT_EVENT.EVENT_TIME.ge(it.atOffset(ZoneOffset.UTC)))
@@ -128,6 +131,7 @@ class JooqAuditEventQueries(
                 AUDIT_EVENT.ORGANISATION_ID,
                 AUDIT_EVENT.EVENT_TIME,
                 AUDIT_EVENT.ACTOR_USER_ID,
+                AUDIT_EVENT.SUBJECT_USER_ID,
                 AUDIT_EVENT.ACTOR_EXTERNAL_SUBJECT,
                 AUDIT_EVENT.ACTOR_TYPE,
                 AUDIT_EVENT.BRANCH_ID,
@@ -153,6 +157,7 @@ class JooqAuditEventQueries(
                 organisationId = requireNotNull(record.get(AUDIT_EVENT.ORGANISATION_ID)),
                 occurredAt = requireNotNull(record.get(AUDIT_EVENT.EVENT_TIME)).toInstant(),
                 actorUserId = record.get(AUDIT_EVENT.ACTOR_USER_ID),
+                subjectUserId = record.get(AUDIT_EVENT.SUBJECT_USER_ID),
                 actorExternalSubject = record.get(AUDIT_EVENT.ACTOR_EXTERNAL_SUBJECT),
                 actorType = requireNotNull(record.get(AUDIT_EVENT.ACTOR_TYPE)),
                 branchId = record.get(AUDIT_EVENT.BRANCH_ID),

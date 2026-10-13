@@ -27,7 +27,10 @@ class DispatchOutcomeAuditor(
     private val store: UserProvisioningDispatchStore,
     private val auditService: AuditService,
 ) {
-    /** Marks the dispatch succeeded and records its audit event atomically. */
+    /**
+     * Marks the dispatch succeeded and records its audit event atomically. [subjectUserId] is the
+     * user the dispatch is for (the dispatch's own user, never the actor).
+     */
     @Transactional
     fun recordSuccess(
         dispatchKey: String,
@@ -37,6 +40,7 @@ class DispatchOutcomeAuditor(
         tenantId: UUID,
         action: String,
         resourceId: String,
+        subjectUserId: UUID,
         metadata: Map<String, Any?> = emptyMap(),
     ) {
         store.markDispatchSucceeded(dispatchKey, dispatchRef)
@@ -49,6 +53,7 @@ class DispatchOutcomeAuditor(
             resourceType = USER_RESOURCE,
             resourceId = resourceId,
             metadata = metadata,
+            subjectUserId = subjectUserId,
         )
     }
 
@@ -67,6 +72,7 @@ class DispatchOutcomeAuditor(
         tenantId: UUID,
         action: String,
         resourceId: String,
+        subjectUserId: UUID,
         reason: String,
         detail: String = reason,
         metadata: Map<String, Any?> = emptyMap(),
@@ -82,6 +88,7 @@ class DispatchOutcomeAuditor(
             resourceId = resourceId,
             reason = reason,
             metadata = metadata,
+            subjectUserId = subjectUserId,
         )
     }
 

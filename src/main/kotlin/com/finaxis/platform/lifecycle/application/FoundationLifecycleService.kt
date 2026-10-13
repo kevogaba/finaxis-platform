@@ -57,6 +57,7 @@ class FoundationLifecycleService(
             command = contextualise(command.command, command.organisationId, null),
             persist = writer::saveOrganisation,
             organisationId = command.organisationId,
+            subjectUserId = null,
         )
     }
 
@@ -81,6 +82,7 @@ class FoundationLifecycleService(
             command = contextualise(command.command, command.organisationId, command.branchId),
             persist = writer::saveBranch,
             organisationId = command.organisationId,
+            subjectUserId = null,
         )
     }
 
@@ -98,6 +100,8 @@ class FoundationLifecycleService(
             command = contextualise(command.command, command.organisationId, command.branchId),
             persist = writer::saveUser,
             organisationId = command.organisationId,
+            // A USER_ACCOUNT aggregate's id is the user (#186): the account is the subject.
+            subjectUserId = command.userId,
         )
     }
 
@@ -124,6 +128,8 @@ class FoundationLifecycleService(
                 contextualise(command.command, command.organisationId, command.branchId, userId),
             persist = writer::saveMembership,
             organisationId = command.organisationId,
+            // The member is the subject of the membership's row, though it is keyed by membership.
+            subjectUserId = userId,
         )
     }
 
@@ -147,6 +153,7 @@ class FoundationLifecycleService(
         command: TransitionCommand,
         persist: (LifecycleAggregate<S>) -> LifecycleAggregate<S>,
         organisationId: UUID,
+        subjectUserId: UUID?,
     ): TransitionResult<S, T, LifecycleAggregate<S>> {
         val fromState = aggregate.state.name
         val result =
@@ -167,12 +174,13 @@ class FoundationLifecycleService(
                     transition,
                     fromState,
                     organisationId,
+                    subjectUserId,
                     command,
                     ex,
                 )
                 throw mapTransitionFailure(ex)
             }
-        recordOutcome(result, organisationId)
+        recordOutcome(result, organisationId, subjectUserId)
         return result
     }
 
@@ -218,6 +226,7 @@ class FoundationLifecycleService(
         transition: T,
         fromState: String,
         organisationId: UUID,
+        subjectUserId: UUID?,
         command: TransitionCommand,
         ex: TransitionException,
     ) {
@@ -234,6 +243,7 @@ class FoundationLifecycleService(
                 fromState = fromState,
                 toState = TRANSITION_NOT_REACHED,
                 branchId = aggregateBranchId(aggregate.aggregateType, aggregate.aggregateId),
+                subjectUserId = subjectUserId,
                 outcome =
                     if (ex is TransitionGuardException) {
                         AuditOutcome.DENIED
@@ -249,6 +259,7 @@ class FoundationLifecycleService(
     private fun <S : Enum<S>, T : Enum<T>> recordOutcome(
         result: TransitionResult<S, T, LifecycleAggregate<S>>,
         organisationId: UUID,
+        subjectUserId: UUID?,
     ) {
         auditService.recordLifecycleTransition(
             actorId = RequestContexts.actor()?.userId ?: SystemActor.ID,
@@ -261,6 +272,7 @@ class FoundationLifecycleService(
             outcome = AuditOutcome.SUCCESS,
             branchId =
                 aggregateBranchId(result.aggregate.aggregateType, result.aggregate.aggregateId),
+            subjectUserId = subjectUserId,
             reason = result.log.reason,
             requestId = result.log.requestId,
         )

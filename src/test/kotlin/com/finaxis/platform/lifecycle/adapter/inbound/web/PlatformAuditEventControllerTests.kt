@@ -229,6 +229,69 @@ class PlatformAuditEventControllerTests
         }
 
         @Test
+        fun `both platform searches accept the subject user filter, which is not withheld`() {
+            val callerId = uuidV7()
+            val tenantId = uuidV7()
+            val subjectUserId = uuidV7()
+            val filterCaptor = argumentCaptor<AuditEventFilter>()
+            whenever(auditQueryService.searchForPlatform(filterCaptor.capture(), eq(callerId)))
+                .thenReturn(
+                    AuditEventPage(listOf(summary().copy(subjectUserId = subjectUserId)), 1),
+                )
+
+            listOf(
+                ApiPaths.PLATFORM_AUDIT_EVENTS,
+                "${ApiPaths.PLATFORM_TENANTS}/$tenantId/audit-events",
+            ).forEach { path ->
+                mockMvc
+                    .get(path) {
+                        param("subject_user_id", subjectUserId.toString())
+                        with(authentication(platformToken(setOf("audit.view"), callerId)))
+                    }.andExpect {
+                        status { isOk() }
+                        jsonPath("$.items[0].subject_user_id") { value(subjectUserId.toString()) }
+                    }
+            }
+
+            assertEquals(
+                listOf(
+                    AuditEventFilter(
+                        organisationId = PlatformOrganisation.ID,
+                        subjectUserId = subjectUserId,
+                        page = 0,
+                        size = 25,
+                    ),
+                    AuditEventFilter(
+                        organisationId = tenantId,
+                        subjectUserId = subjectUserId,
+                        page = 0,
+                        size = 25,
+                    ),
+                ),
+                filterCaptor.allValues,
+            )
+        }
+
+        @Test
+        fun `platform searches refuse a malformed subject user id with 400`() {
+            listOf(
+                ApiPaths.PLATFORM_AUDIT_EVENTS,
+                "${ApiPaths.PLATFORM_TENANTS}/${uuidV7()}/audit-events",
+            ).forEach { path ->
+                mockMvc
+                    .get(path) {
+                        param("subject_user_id", "sideways")
+                        with(authentication(platformToken(setOf("audit.view"))))
+                    }.andExpect {
+                        status { isBadRequest() }
+                        jsonPath("$.code") { value("invalid_parameter") }
+                        jsonPath("$.violations[0].field") { value("subject_user_id") }
+                    }
+            }
+            verify(auditQueryService, never()).searchForPlatform(any(), any())
+        }
+
+        @Test
         fun `get platform audit event reads from the platform organisation`() {
             val callerId = uuidV7()
             val eventId = uuidV7()
@@ -350,6 +413,7 @@ class PlatformAuditEventControllerTests
                 organisationId = PlatformOrganisation.ID,
                 occurredAt = Instant.parse("2026-07-21T10:15:30Z"),
                 actorUserId = uuidV7(),
+                subjectUserId = uuidV7(),
                 actorExternalSubject = "keycloak:external-subject",
                 actorType = "USER",
                 branchId = null,

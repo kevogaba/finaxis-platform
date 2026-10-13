@@ -237,6 +237,8 @@ class RoleManagementService(
             ),
             "USER_ROLE_ASSIGNMENT",
             branchId = assignmentBranchId(command.scopeType, command.branchId),
+            // The assignee is the subject, not the administrator who assigned the role (#186).
+            subjectUserId = command.userId,
         )
         publishAssignment(command, ASSIGN, INACTIVE, ACTIVE, ROLE_ASSIGNED_TARGET)
         return RoleAssignmentResult(assignmentId, ACTIVE)
@@ -288,6 +290,7 @@ class RoleManagementService(
             ),
             "USER_ROLE_ASSIGNMENT",
             branchId = assignmentBranchId(command.scopeType, command.branchId),
+            subjectUserId = command.userId,
         )
         publishRevocation(command)
     }
@@ -437,6 +440,7 @@ class RoleManagementService(
         metadata: Map<String, String> = emptyMap(),
         resourceType: String = "ROLE",
         branchId: UUID? = null,
+        subjectUserId: UUID? = null,
     ) {
         auditService.record(
             AuditCommand(
@@ -447,6 +451,7 @@ class RoleManagementService(
                 resourceType = resourceType,
                 resourceId = resourceId.toString(),
                 branchId = branchId?.toString(),
+                subjectUserId = subjectUserId?.toString(),
                 outcome = AuditOutcome.SUCCESS,
                 requestId = requestId,
                 metadata = metadata,

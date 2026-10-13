@@ -12,6 +12,11 @@ private const val EVENT_TYPE_DOC =
 private const val RESOURCE_TYPE_DOC = "Deprecated alias of entity_type, always the same value."
 private const val RESOURCE_ID_DOC =
     "Deprecated alias of entity_id as a string, always the same value."
+private const val SUBJECT_USER_ID_DOC =
+    "The user this event is about (#186): the account a lifecycle transition changed, the member " +
+        "a membership change names, the user an assignment is for. Null for an event about no " +
+        "user, and for rows written before the subject was recorded (not backfilled), which " +
+        "subject_user_id does not find. Not the actor: actor_user_id is who did it."
 private const val ENTITY_ID_DOC =
     "Id of the resource acted on. UUIDs only: a resource id that is not a UUID (for example a " +
         "setting key) is not stored, so it reads as null here and in resource_id."
@@ -38,6 +43,8 @@ data class AuditEventSummaryResponse(
     val actorId: UUID?,
     @field:Schema(description = ACTOR_USER_ID_DOC)
     val actorUserId: UUID?,
+    @field:Schema(description = SUBJECT_USER_ID_DOC)
+    val subjectUserId: UUID?,
     @field:Schema(description = WITHHELD_DOC)
     val actorExternalSubject: String?,
     val branchId: UUID?,
@@ -82,6 +89,8 @@ data class AuditEventDetailResponse(
     val actorId: UUID?,
     @field:Schema(description = ACTOR_USER_ID_DOC)
     val actorUserId: UUID?,
+    @field:Schema(description = SUBJECT_USER_ID_DOC)
+    val subjectUserId: UUID?,
     val actorExternalSubject: String?,
     val branchId: UUID?,
     @field:Schema(description = EVENT_TYPE_DOC)

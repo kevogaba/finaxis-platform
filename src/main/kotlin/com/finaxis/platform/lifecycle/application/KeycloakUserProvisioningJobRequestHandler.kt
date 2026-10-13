@@ -98,6 +98,7 @@ class KeycloakUserProvisioningJobRequestHandler(
                 tenantId = jobRequest.organisationId,
                 action = KEYCLOAK_PROVISIONING_ACTION,
                 resourceId = jobRequest.userId.toString(),
+                subjectUserId = jobRequest.userId,
                 metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
             )
         } catch (ex: IdentityProvisioningException) {
@@ -126,6 +127,7 @@ class KeycloakUserProvisioningJobRequestHandler(
             tenantId = jobRequest.organisationId,
             action = KEYCLOAK_PROVISIONING_ACTION,
             resourceId = jobRequest.userId.toString(),
+            subjectUserId = jobRequest.userId,
             reason = ex.toAuditFailureReason(),
             detail = ex.toDispatchFailureDetail(),
             metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),

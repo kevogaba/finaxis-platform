@@ -182,6 +182,42 @@ class JooqAuditEventRepositoryTests(
     }
 
     @Test
+    fun `save truncates a user agent over 512 characters and keeps one of exactly 512`() {
+        val organisationId = insertOrganisation()
+        val overLimit = uuidV7()
+        val atLimit = uuidV7()
+        val longAgent = "finaxis-probe/" + "x".repeat(600)
+        val exactAgent = "y".repeat(512)
+
+        repository.save(baseEvent(overLimit, organisationId).copy(userAgent = longAgent))
+        repository.save(baseEvent(atLimit, organisationId).copy(userAgent = exactAgent))
+
+        assertEquals(longAgent.take(512), userAgentOf(overLimit))
+        assertEquals(512, userAgentOf(overLimit)?.length)
+        assertEquals(exactAgent, userAgentOf(atLimit))
+    }
+
+    @Test
+    fun `save truncates the request context user agent the same way`() {
+        val organisationId = insertOrganisation()
+        val eventId = uuidV7()
+        val longAgent = "finaxis-probe/" + "x".repeat(600)
+
+        RequestContexts.with(RequestContext(userAgent = longAgent)) {
+            repository.save(baseEvent(eventId, organisationId))
+        }
+
+        assertEquals(longAgent.take(512), userAgentOf(eventId))
+    }
+
+    private fun userAgentOf(eventId: UUID): String? =
+        dsl
+            .select(AUDIT_EVENT.USER_AGENT)
+            .from(AUDIT_EVENT)
+            .where(AUDIT_EVENT.ID.eq(eventId))
+            .fetchOne(AUDIT_EVENT.USER_AGENT)
+
+    @Test
     fun `save falls back to the platform organisation when tenant id is missing`() {
         val eventId = uuidV7()
 
@@ -252,6 +288,45 @@ class JooqAuditEventRepositoryTests(
         assertEquals(SEEDED_HEAD_OFFICE_BRANCH_ID, branchIdOf(eventId))
     }
 
+    @Test
+    fun `save persists the user the event is about`() {
+        val eventId = uuidV7()
+        val subject = uuidV7()
+
+        repository.save(
+            baseEvent(eventId, SEEDED_ORGANISATION_ID).copy(subjectUserId = subject.toString()),
+        )
+
+        assertEquals(subject, subjectUserIdOf(eventId))
+    }
+
+    @Test
+    fun `save leaves subject_user_id empty for an event about no user`() {
+        val eventId = uuidV7()
+
+        repository.save(baseEvent(eventId, SEEDED_ORGANISATION_ID))
+
+        assertNull(subjectUserIdOf(eventId))
+    }
+
+    @Test
+    fun `save stores a subject that is not a UUID as a null subject_user_id`() {
+        val eventId = uuidV7()
+
+        repository.save(
+            baseEvent(eventId, SEEDED_ORGANISATION_ID).copy(subjectUserId = "not-a-user-id"),
+        )
+
+        assertNull(subjectUserIdOf(eventId))
+    }
+
+    private fun subjectUserIdOf(eventId: UUID): UUID? =
+        dsl
+            .select(AUDIT_EVENT.SUBJECT_USER_ID)
+            .from(AUDIT_EVENT)
+            .where(AUDIT_EVENT.ID.eq(eventId))
+            .fetchOne(AUDIT_EVENT.SUBJECT_USER_ID)
+
     private fun branchIdOf(eventId: UUID): UUID? =
         dsl
             .select(AUDIT_EVENT.BRANCH_ID)
@@ -272,6 +347,7 @@ class JooqAuditEventRepositoryTests(
             actorId = actorId,
             tenantId = organisationId?.toString(),
             branchId = null,
+            subjectUserId = null,
             action = "organisation.activate",
             resourceType = "ORGANISATION",
             resourceId = organisationId?.toString(),

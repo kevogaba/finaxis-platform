@@ -70,6 +70,7 @@ class UserMembershipTransitionAuditIntegrationTests
 
             assertEquals(listOf("user_account.suspend USER_ACCOUNT"), auditRows(userId))
             assertEquals(platformAdmin, actorOf(userId, "user_account.suspend"))
+            assertEquals(listOf<UUID?>(userId), subjectsOf(userId, "user_account.suspend"))
         }
 
         @Test
@@ -82,6 +83,7 @@ class UserMembershipTransitionAuditIntegrationTests
 
             assertEquals(listOf("user_account.reactivate USER_ACCOUNT"), auditRows(userId))
             assertEquals(platformAdmin, actorOf(userId, "user_account.reactivate"))
+            assertEquals(listOf<UUID?>(userId), subjectsOf(userId, "user_account.reactivate"))
         }
 
         @Test
@@ -110,6 +112,23 @@ class UserMembershipTransitionAuditIntegrationTests
                         .and(AUDIT_EVENT.ACTION.eq("user.deactivation_assignment_revoked")),
                 ),
             )
+            // The deactivated user is the subject of every row about the account and of every
+            // revoked assignment, and the platform administrator is only the actor.
+            assertEquals(
+                listOf<UUID?>(userId, userId),
+                subjectsOf(userId, "user_account.start_deactivation") +
+                    subjectsOf(userId, "user_account.complete_deactivation"),
+            )
+            assertEquals(
+                assignments.first + assignments.second,
+                dsl.fetchCount(
+                    AUDIT_EVENT,
+                    AUDIT_EVENT.ORGANISATION_ID
+                        .eq(organisationId)
+                        .and(AUDIT_EVENT.ACTION.eq("user.deactivation_assignment_revoked"))
+                        .and(AUDIT_EVENT.SUBJECT_USER_ID.eq(userId)),
+                ),
+            )
         }
 
         @Test
@@ -126,6 +145,8 @@ class UserMembershipTransitionAuditIntegrationTests
 
             assertEquals(listOf("membership.suspend MEMBERSHIP"), auditRows(membershipId))
             assertEquals(emptyList(), auditRows(memberId).filter { it.startsWith("membership.") })
+            // Keyed by the membership, but about the member: the subject is the member's user.
+            assertEquals(listOf<UUID?>(memberId), subjectsOf(membershipId, "membership.suspend"))
         }
 
         @Test
@@ -147,6 +168,7 @@ class UserMembershipTransitionAuditIntegrationTests
 
             assertEquals(listOf("membership.reactivate MEMBERSHIP"), auditRows(membershipId))
             assertEquals(emptyList(), auditRows(memberId).filter { it.startsWith("membership.") })
+            assertEquals(listOf<UUID?>(memberId), subjectsOf(membershipId, "membership.reactivate"))
         }
 
         @Test
@@ -171,6 +193,11 @@ class UserMembershipTransitionAuditIntegrationTests
             assertEquals(
                 assignments,
                 cascadeCounts(membershipId),
+            )
+            assertEquals(listOf<UUID?>(memberId), subjectsOf(membershipId, "membership.revoke"))
+            assertEquals(
+                listOf<UUID?>(memberId),
+                subjectsOf(membershipId, "membership.assignments_revoked"),
             )
         }
 
@@ -211,6 +238,48 @@ class UserMembershipTransitionAuditIntegrationTests
                 auditRows(membershipId),
             )
             assertEquals(assignments, cascadeCounts(membershipId))
+            assertEquals(
+                listOf<UUID?>(inviteeId),
+                subjectsOf(membershipId, "membership.assignments_revoked"),
+            )
+        }
+
+        @Test
+        fun `inviting a user makes the invitee the subject, the administrator only the actor`() {
+            val inviteeEmail = "invitee-${uuidV7()}@audit-rows.test"
+            val headOffice = headOfficeId()
+            val adminRole = adminRoleId()
+            tenantPost(
+                ApiPaths.TENANT_USERS,
+                """{"email":"$inviteeEmail","username":"invitee-${uuidV7()}",""" +
+                    """"display_name":"Invitee","membership_type":"STAFF",""" +
+                    """"primary_branch_id":"$headOffice",""" +
+                    """"branch_assignments":[{"branch_id":"$headOffice",""" +
+                    """"assignment_type":"HOME"}],""" +
+                    """"role_assignments":[{"role_id":"$adminRole","scope_type":"TENANT"}]}""",
+                "user.invite",
+            ).andExpect { status { isCreated() } }
+            val inviteeId =
+                requireNotNull(
+                    dsl
+                        .select(USER_ACCOUNT.ID)
+                        .from(USER_ACCOUNT)
+                        .where(USER_ACCOUNT.EMAIL.eq(inviteeEmail))
+                        .fetchOne(USER_ACCOUNT.ID),
+                )
+
+            assertEquals(listOf<UUID?>(inviteeId), subjectsOf(inviteeId, "user.invite"))
+            assertEquals(admin, actorOf(inviteeId, "user.invite"))
+            // The branch assignment the invitation made names the invitee, not the administrator.
+            assertEquals(
+                listOf(admin to inviteeId),
+                dsl
+                    .select(AUDIT_EVENT.ACTOR_USER_ID, AUDIT_EVENT.SUBJECT_USER_ID)
+                    .from(AUDIT_EVENT)
+                    .where(AUDIT_EVENT.ACTION.eq("branch.assign_user"))
+                    .and(AUDIT_EVENT.SUBJECT_USER_ID.eq(inviteeId))
+                    .fetch { it.value1() to it.value2() },
+            )
         }
 
         /** The `action entity_type` of every audit row whose entity is [entityId], sorted. */
@@ -233,6 +302,18 @@ class UserMembershipTransitionAuditIntegrationTests
                 .where(AUDIT_EVENT.ENTITY_ID.eq(entityId))
                 .and(AUDIT_EVENT.ACTION.eq(action))
                 .fetchOne(AUDIT_EVENT.ACTOR_USER_ID)
+
+        /** The subject of every row of [action] whose entity is [entityId], in row order. */
+        private fun subjectsOf(
+            entityId: UUID,
+            action: String,
+        ): List<UUID?> =
+            dsl
+                .select(AUDIT_EVENT.SUBJECT_USER_ID)
+                .from(AUDIT_EVENT)
+                .where(AUDIT_EVENT.ENTITY_ID.eq(entityId))
+                .and(AUDIT_EVENT.ACTION.eq(action))
+                .fetch(AUDIT_EVENT.SUBJECT_USER_ID)
 
         /** The branch and role assignment counts the cascade row of [membershipId] carries. */
         private fun cascadeCounts(membershipId: UUID): Pair<Int, Int> {
