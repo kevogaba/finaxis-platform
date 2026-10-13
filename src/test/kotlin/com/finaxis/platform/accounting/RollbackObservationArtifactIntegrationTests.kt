@@ -63,7 +63,7 @@ class RollbackObservationArtifactIntegrationTests(
 
         assertFailsWith<IllegalStateException> {
             transactions.execute {
-                withRequestContext { updateSetting(organisationId, "USD") }
+                withRequestContext { updateSetting(organisationId, "UTC") }
                 error("simulated failure after a successful settings write")
             }
         }
@@ -82,7 +82,7 @@ class RollbackObservationArtifactIntegrationTests(
 
         assertFailsWith<IllegalStateException> {
             transactions.execute {
-                withRequestContext { updateSetting(organisationId, "USD") }
+                withRequestContext { updateSetting(organisationId, "UTC") }
 
                 // The failure the caller would see, swallowed here so the assertion below can run
                 // while the transaction is still open and marked for rollback.
@@ -114,7 +114,7 @@ class RollbackObservationArtifactIntegrationTests(
         assertTrue(
             requireNotNull(
                 transactions.execute {
-                    withRequestContext { updateSetting(organisationId, "KES") }
+                    withRequestContext { updateSetting(organisationId, "Africa/Nairobi") }
                     TransactionSynchronizationManager.isActualTransactionActive()
                 },
             ),
@@ -139,6 +139,6 @@ class RollbackObservationArtifactIntegrationTests(
 
     private companion object {
         val ACTOR_ID: UUID = UUID.fromString("11111111-1111-1111-1111-111111111111")
-        const val SETTING_KEY = "base_currency"
+        const val SETTING_KEY = "default_timezone"
     }
 }

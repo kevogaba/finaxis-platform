@@ -14,6 +14,7 @@ import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationTo
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.AmendInitialAdminDto
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.AmendTenantDraftRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateTenantDraftRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.InitialAdminDto
@@ -254,7 +255,7 @@ class TenantCodeConflictIntegrationTests
                             countryCode = "KE",
                             baseCurrencyCode = "KES",
                             timezone = "Africa/Nairobi",
-                            admin = adminDto(),
+                            admin = amendAdminDto(),
                         ),
                     )
                 with(authentication(token("tenant.update_draft", "tenant.view")))
@@ -262,6 +263,15 @@ class TenantCodeConflictIntegrationTests
 
         private fun adminDto() =
             InitialAdminDto(
+                email = "admin-${shortId()}@tenant-code.test",
+                username = "admin-${shortId()}",
+                displayName = "Initial Admin",
+                phoneE164 = "+254700000000",
+                sendApplicationInvite = false,
+            )
+
+        private fun amendAdminDto() =
+            AmendInitialAdminDto(
                 email = "admin-${shortId()}@tenant-code.test",
                 username = "admin-${shortId()}",
                 displayName = "Initial Admin",

@@ -55,7 +55,7 @@ class TenantSettingIdempotentPutIntegrationTests
             val replay = putSetting(organisationId, idempotencyKey)
 
             val expectedBody =
-                """{"key":"base_currency","value":"KES","value_type":"CURRENCY",""" +
+                """{"key":"default_timezone","value":"Africa/Nairobi","value_type":"TIMEZONE",""" +
                     """"sensitive":false,"platform_admin_only":false}"""
             assertEquals(expectedBody, first)
             assertEquals(first, replay, "a replay must return the identical stored response")
@@ -77,15 +77,15 @@ class TenantSettingIdempotentPutIntegrationTests
             idempotencyKey: String,
         ): String =
             mockMvc
-                .put("${ApiPaths.TENANT_SETTINGS}/base_currency") {
+                .put("${ApiPaths.TENANT_SETTINGS}/default_timezone") {
                     header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, idempotencyKey)
                     contentType = MediaType.APPLICATION_JSON
-                    content = """{"value":"KES"}"""
+                    content = """{"value":"Africa/Nairobi"}"""
                     with(authentication(tenantToken(organisationId)))
                 }.andExpect {
                     status { isOk() }
-                    jsonPath("$.key") { value("base_currency") }
-                    jsonPath("$.value") { value("KES") }
+                    jsonPath("$.key") { value("default_timezone") }
+                    jsonPath("$.value") { value("Africa/Nairobi") }
                 }.andReturn()
                 .response
                 .contentAsString
@@ -95,7 +95,7 @@ class TenantSettingIdempotentPutIntegrationTests
                 .selectCount()
                 .from(ORGANISATION_SETTING)
                 .where(ORGANISATION_SETTING.ORGANISATION_ID.eq(organisationId))
-                .and(ORGANISATION_SETTING.SETTING_KEY.eq("base_currency"))
+                .and(ORGANISATION_SETTING.SETTING_KEY.eq("default_timezone"))
                 .and(ORGANISATION_SETTING.EFFECTIVE_TO.isNull)
                 .fetchOne(0, Int::class.java) ?: 0
 

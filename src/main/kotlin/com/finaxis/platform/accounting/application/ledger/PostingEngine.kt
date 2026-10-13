@@ -117,10 +117,11 @@ fun interface LegProvider {
  * (`FOR SHARE`, ascending id), and finally the tenant's `reference_sequence` row, which the
  * gapless allocator updates. No cycle is introduced by the organisation row, and the reason is
  * worth writing down rather than assuming: nothing that takes the tenant-currency advisory lock
- * ever locks the organisation row exclusively. The `base_currency` *setting* change takes that
- * advisory lock exclusively and then writes `organisation_setting`, never `organisation`; the only
- * writer of `organisation.base_currency_code` is the draft amendment, which refuses any
- * organisation that is not `DRAFT` and so can never overlap a posting at all.
+ * ever locks the organisation row exclusively. No production path takes the currency advisory lock
+ * exclusively today: the `base_currency` setting that once did is a read-only mirror that lifecycle
+ * refuses to write, and the only writer of `organisation.base_currency_code` is the draft
+ * amendment, which refuses any organisation that is not `DRAFT` and so can never overlap a posting
+ * at all.
  */
 class PostingEngine(
     private val contextLookup: AccountingContextLookup,
@@ -401,9 +402,11 @@ class PostingEngine(
      * **The advisory lock stays, and is not made redundant by the row lock.** They close different
      * halves of the same race and neither subsumes the other. The row lock closes the *posting's*
      * read: it stops this transaction acting on a currency another transaction has already
-     * replaced. The advisory lock closes the *change's* read: it makes a `base_currency` change
-     * wait for in-flight first postings before it asks "has this tenant posted", which is the
-     * adjacency [com.finaxis.platform.accounting.application.FunctionalCurrencyLock] calls the fix.
+     * replaced. The advisory lock closes the *change's* read: a currency change takes it
+     * exclusively before it asks "has this tenant posted", which is the adjacency
+     * [com.finaxis.platform.accounting.application.FunctionalCurrencyLock] calls the fix. No
+     * production path makes such a change today, so the exclusive side is dormant; it stays the fix
+     * for any route added later that changes the currency while a tenant can post.
      * Remove it and a change would read an empty `journal_entry`, commit, and leave the tenant
      * declaring a currency its first journal was never written under - a race the row lock never
      * sees, because the two transactions never touch the same row in conflicting modes.
@@ -413,7 +416,7 @@ class PostingEngine(
      * reached. It is kept because it states the invariant legibly at the point the invariant is
      * decided, and because it *would* fire below `SERIALIZABLE`, which [SnapshotIsolationGuard]
      * forbids this path from running at. Reachable only for a tenant's first posting in any case -
-     * after that the currency is frozen and a change is refused outright.
+     * after that the currency is frozen: no route changes it while a tenant can post.
      */
     private fun requireFunctionalCurrencyUnchanged(
         organisationId: UUID,

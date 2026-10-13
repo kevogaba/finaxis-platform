@@ -1,8 +1,8 @@
 package com.finaxis.platform.lifecycle.application
 
-import com.finaxis.platform.accounting.AccountingLedgerActivity
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.GatedRead
+import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.audit.Redacted
 import com.finaxis.platform.common.context.PlatformOrganisation
@@ -29,11 +29,11 @@ import java.util.UUID
 class TenantSettingsService(
     private val lifecycleStore: OrganisationLifecycleProvisioningStore,
     private val settingsStore: OrganisationSettingsStore,
+    private val organisations: OrganisationBootstrapStore,
     private val permissionGuard: PermissionGuard,
     private val auditService: AuditService,
     private val eventPublisher: TransitionEventPublisher,
     private val clock: Clock,
-    private val ledgerActivity: AccountingLedgerActivity,
 ) {
     /** Creates or updates one tenant setting for an active organisation. */
     @Transactional
@@ -41,8 +41,8 @@ class TenantSettingsService(
         requireActive(command.organisationId)
         val definition = TenantSettingCatalog.require(command.key)
         authorize(definition, command.organisationId, command.actorId)
+        refuseMirroredKey(command.key)
         val canonical = TenantSettingCatalog.canonicalize(command.key, command.value)
-        requireFunctionalCurrencyNotFrozen(command.organisationId, command.key)
 
         val before =
             settingsStore.upsertSetting(
@@ -67,18 +67,15 @@ class TenantSettingsService(
     }
 
     /**
-     * Deactivates one tenant setting for an active organisation.
-     *
-     * Deactivation changes the setting's effective value as surely as an update does, so the
-     * functional-currency freeze applies here too: a tenant that has posted a journal cannot be
-     * left with no base currency at all.
+     * Deactivates one tenant setting for an active organisation. `base_currency` is refused, as
+     * [createOrUpdate] refuses it: it mirrors the organisation's own column.
      */
     @Transactional
     fun deactivate(command: DeactivateTenantSettingCommand) {
         requireActive(command.organisationId)
         val definition = TenantSettingCatalog.require(command.key)
         authorize(definition, command.organisationId, command.actorId)
-        requireFunctionalCurrencyNotFrozen(command.organisationId, command.key)
+        refuseMirroredKey(command.key)
 
         val before = settingsStore.currentSetting(command.organisationId, command.key)
         val deactivated =
@@ -118,11 +115,16 @@ class TenantSettingsService(
                 SETTING_READ_PERMISSION,
             )
         }
-        val stored = settingsStore.currentSetting(query.organisationId, query.key)
+        val stored = storedSetting(query.organisationId, query.key)
         if (definition == null && stored == null) {
             TenantSettingCatalog.require(query.key)
         }
-        return view(query.key, definition, stored, rawValue = stored?.value)
+        return view(
+            query.key,
+            definition,
+            stored,
+            rawValue = effectiveValue(query.organisationId, query.key, stored),
+        )
     }
 
     /**
@@ -144,6 +146,7 @@ class TenantSettingsService(
         val stored =
             settingsStore
                 .currentSettingsList(query.organisationId)
+                .filterNot { it.key in TenantSettingCatalog.internalKeys }
                 .associateBy { it.key }
         val catalogViews =
             TenantSettingCatalog.definitions.map { definition ->
@@ -151,7 +154,7 @@ class TenantSettingsService(
                     definition.key,
                     definition,
                     stored[definition.key],
-                    stored[definition.key]?.value,
+                    effectiveValue(query.organisationId, definition.key, stored[definition.key]),
                 )
             }
         val extraViews =
@@ -170,7 +173,8 @@ class TenantSettingsService(
                 .toInt()
         val paginatedItems =
             sortedList.subList(fromIndex, toIndex).map { setting ->
-                if (setting.platformAdminOnly && !canManagePlatformSettings) {
+                val masked = setting.platformAdminOnly && !canManagePlatformSettings
+                if (masked && setting.value != null) {
                     setting.copy(value = MASK)
                 } else {
                     setting
@@ -179,53 +183,50 @@ class TenantSettingsService(
         return TenantSettingPage(paginatedItems, total)
     }
 
+    /**
+     * The stored row for [key], or null. The internal key has no tenant-visible row, so the caller
+     * refuses it as an unknown key; the mirror answers from the organisation column instead, so
+     * neither stored row is read.
+     */
+    private fun storedSetting(
+        organisationId: UUID,
+        key: String,
+    ): StoredSetting? =
+        if (key in TenantSettingCatalog.internalKeys ||
+            key == TenantSettingCatalog.BASE_CURRENCY_KEY
+        ) {
+            null
+        } else {
+            settingsStore.currentSetting(organisationId, key)
+        }
+
+    /**
+     * The value a read reports. `base_currency` is a read-only mirror of the organisation's own
+     * column, the one the ledger reads, so the column answers and any stored row is ignored.
+     */
+    private fun effectiveValue(
+        organisationId: UUID,
+        key: String,
+        stored: StoredSetting?,
+    ): String? =
+        if (key == TenantSettingCatalog.BASE_CURRENCY_KEY) {
+            organisations.baseCurrencyCode(organisationId)
+        } else {
+            stored?.value
+        }
+
+    /** Refuses a write to the read-only `base_currency` mirror, before anything is touched. */
+    private fun refuseMirroredKey(key: String) {
+        if (key == TenantSettingCatalog.BASE_CURRENCY_KEY) {
+            throw InvalidOperationException(safeDetail = BASE_CURRENCY_MIRROR_DETAIL)
+        }
+    }
+
     private fun requireActive(organisationId: UUID) {
         if (lifecycleStore.lifecycleState(organisationId) != OrganisationLifecycleState.ACTIVE) {
             throw ConflictException()
         }
     }
-
-    /**
-     * The functional currency is frozen once the tenant has posted a journal.
-     *
-     * Journal lines are immutable, so a later line in a different unit would make every balance,
-     * header total and daily projection a sum of incompatible units, and no approval repairs that.
-     * Accounting owns the answer; lifecycle only asks - and asks under accounting's own lock, so
-     * the answer cannot go stale between the question and this transaction's write. See
-     * `docs/architecture/accounting-foundation.md`, *"The functional currency is frozen once the
-     * tenant has posted"*.
-     */
-    private fun requireFunctionalCurrencyNotFrozen(
-        organisationId: UUID,
-        key: String,
-    ) {
-        if (key != BASE_CURRENCY_SETTING) {
-            return
-        }
-        // "Has posted" only ever goes from false to true, so an unlocked read that says true is
-        // already final and no lock can change it. Answering that case here keeps the exclusive
-        // lock off the common path entirely - an administrator retrying against a tenant that has
-        // been trading for years never queues, and so never makes that tenant's postings queue
-        // behind them.
-        if (ledgerActivity.hasPostedJournals(organisationId)) {
-            throw frozen()
-        }
-        // An unlocked false, on the other hand, may simply be stale: the tenant's first posting
-        // could be in flight right now. So take the lock and ask again, in that order - adjacency
-        // is the whole fix, and a re-read after the lock is the only answer this transaction may
-        // act on.
-        ledgerActivity.lockFunctionalCurrencyForChange(organisationId)
-        if (ledgerActivity.hasPostedJournals(organisationId)) {
-            throw frozen()
-        }
-    }
-
-    private fun frozen() =
-        ConflictException(
-            code = FUNCTIONAL_CURRENCY_FROZEN,
-            safeDetail =
-                "The base currency cannot change once the organisation has posted a journal.",
-        )
 
     private fun authorize(
         definition: TenantSettingDefinition,
@@ -329,12 +330,9 @@ class TenantSettingsService(
     }
 
     private companion object {
-        const val BASE_CURRENCY_SETTING = "base_currency"
-
-        /** Aliases the accounting contract so the two published codes cannot drift. */
-        const val FUNCTIONAL_CURRENCY_FROZEN =
-            com.finaxis.platform.accounting.application.posting.PostingErrorCodes
-                .FUNCTIONAL_CURRENCY_FROZEN
+        const val BASE_CURRENCY_MIRROR_DETAIL =
+            "base_currency is derived from the organisation's base currency " +
+                "and cannot be changed here."
 
         const val SETTINGS_UPDATED_TARGET = "finaxis.lifecycle.organisation.settings-updated"
         const val ORGANISATION_SETTING = "ORGANISATION_SETTING"

@@ -38,10 +38,10 @@ interface AccountingTenantLookup {
      * Returns the organisation's functional currency - `organisation.base_currency_code` - or null
      * when the organisation does not exist.
      *
-     * The column, not the `base_currency` tenant setting: the column is set at provisioning,
-     * carries the ISO 4217 check, and can only be amended while the organisation is still a draft,
-     * so it is fixed before a journal can exist. The setting is a tenant preference that lifecycle
-     * refuses to change once accounting reports a posted journal.
+     * The column, not the `base_currency` tenant setting, which is a read-only mirror of it. The
+     * column is written only at draft creation and by a draft-only amendment, and a journal can be
+     * posted only by an `ACTIVE` organisation, so once a journal can exist the column can no longer
+     * change.
      *
      * Non-locking, and its answer may be stale by the time the caller acts on it. Never use it to
      * decide the currency a posting is denominated in once that posting holds the tenant-currency

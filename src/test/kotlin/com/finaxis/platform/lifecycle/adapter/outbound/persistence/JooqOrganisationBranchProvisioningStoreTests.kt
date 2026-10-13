@@ -11,6 +11,7 @@ import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
+import com.finaxis.platform.lifecycle.application.AmendOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.BranchAssignmentType
 import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapStatus
@@ -75,6 +76,94 @@ class JooqOrganisationBranchProvisioningStoreTests(
         val decoded = objectMapper.readValue(requireNotNull(rawJson).data(), String::class.java)
 
         assertEquals(trickyValue, decoded)
+    }
+
+    // ── amendDraft: legal name and registration number ────────────────────────
+
+    @Test
+    fun `an amend that omits legal name and registration number keeps the stored values`() {
+        val organisationId = createDraftWithLegalIdentity("Kept Legal Ltd", "REG-KEPT-1")
+
+        store.amendDraft(amendCommand(organisationId))
+
+        assertEquals(Pair("Kept Legal Ltd", "REG-KEPT-1"), storedLegalIdentity(organisationId))
+    }
+
+    @Test
+    fun `an amend that sends null clears legal name and registration number`() {
+        val organisationId = createDraftWithLegalIdentity("Cleared Legal Ltd", "REG-CLEAR-1")
+
+        store.amendDraft(
+            amendCommand(organisationId).copy(
+                changesLegalName = true,
+                changesRegistrationNumber = true,
+            ),
+        )
+
+        assertEquals(Pair(null, null), storedLegalIdentity(organisationId))
+    }
+
+    @Test
+    fun `an amend that sends a value sets only the field it changes`() {
+        val organisationId = createDraftWithLegalIdentity("Old Legal Ltd", "REG-OLD-1")
+
+        store.amendDraft(
+            amendCommand(organisationId).copy(
+                changesLegalName = true,
+                legalName = "New Legal Ltd",
+            ),
+        )
+
+        assertEquals(Pair("New Legal Ltd", "REG-OLD-1"), storedLegalIdentity(organisationId))
+    }
+
+    private fun createDraftWithLegalIdentity(
+        legalName: String,
+        registrationNumber: String,
+    ): UUID =
+        store.createDraft(
+            CreateOrganisationDraftCommand(
+                tenantCode = "legal-${uuidV7()}",
+                displayName = "Legal Org",
+                legalName = legalName,
+                registrationNumber = registrationNumber,
+                countryCode = "KE",
+                baseCurrencyCode = "KES",
+                timezone = "Africa/Nairobi",
+                requestedBy = uuidV7(),
+            ),
+        )
+
+    private fun amendCommand(organisationId: UUID): AmendOrganisationDraftCommand =
+        AmendOrganisationDraftCommand(
+            organisationId = organisationId,
+            tenantCode = "amended-${uuidV7()}",
+            displayName = "Amended Org",
+            legalName = null,
+            registrationNumber = null,
+            countryCode = "KE",
+            baseCurrencyCode = "KES",
+            timezone = "Africa/Nairobi",
+            actorId = uuidV7(),
+            requestId = uuidV7(),
+            admin =
+                InitialAdministratorDraft(
+                    email = "amend.admin@test.com",
+                    username = "amendadmin",
+                    displayName = "Amend Admin",
+                    phoneE164 = null,
+                    sendApplicationInvite = false,
+                ),
+        )
+
+    private fun storedLegalIdentity(organisationId: UUID): Pair<String?, String?> {
+        val row =
+            dsl
+                .select(ORGANISATION.LEGAL_NAME, ORGANISATION.REGISTRATION_NUMBER)
+                .from(ORGANISATION)
+                .where(ORGANISATION.ID.eq(organisationId))
+                .fetchSingle()
+        return row.get(ORGANISATION.LEGAL_NAME) to row.get(ORGANISATION.REGISTRATION_NUMBER)
     }
 
     // ── bootstrap projection ──────────────────────────────────────────────────

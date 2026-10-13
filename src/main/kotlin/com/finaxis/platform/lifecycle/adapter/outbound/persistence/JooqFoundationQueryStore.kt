@@ -107,6 +107,8 @@ class JooqFoundationQueryStore(
                 ORGANISATION.STATUS_REASON,
                 ORGANISATION.CREATED_AT,
                 ORGANISATION.UPDATED_AT,
+                ORGANISATION.LEGAL_NAME,
+                ORGANISATION.REGISTRATION_NUMBER,
                 bootstrap.STATUS,
                 bootstrap.LAST_FAILURE_CODE,
             ).from(ORGANISATION)
@@ -130,6 +132,8 @@ class JooqFoundationQueryStore(
                         InitialAdministratorBootstrapFailureCode.fromStored(
                             record.get(bootstrap.LAST_FAILURE_CODE),
                         ),
+                    legalName = record.get(ORGANISATION.LEGAL_NAME),
+                    registrationNumber = record.get(ORGANISATION.REGISTRATION_NUMBER),
                 )
             }
     }

@@ -54,7 +54,7 @@ class OutboxTransactionRollbackIntegrationTests(
         // below throws for this exact target, so the service cannot be used to establish a
         // committed starting row. Without a committed row there is nothing for the update to
         // close, which is why the closing UPDATE was never exercised before.
-        seedEffectiveSetting(organisationId, "KES")
+        seedEffectiveSetting(organisationId, "Africa/Nairobi")
 
         withRequestContext {
             assertFailsWith<IllegalStateException> {
@@ -62,7 +62,7 @@ class OutboxTransactionRollbackIntegrationTests(
                     CreateOrUpdateTenantSettingCommand(
                         organisationId = organisationId,
                         key = SETTING_KEY,
-                        value = "USD",
+                        value = "UTC",
                         actorId = LOCAL_USER_ID,
                     ),
                 )
@@ -76,7 +76,7 @@ class OutboxTransactionRollbackIntegrationTests(
             "the closing UPDATE must roll back too, leaving exactly one effective row",
         )
         assertEquals(
-            "KES",
+            "Africa/Nairobi",
             effectiveSettingValue(organisationId),
             "the surviving effective row must still hold the seeded value",
         )
@@ -98,8 +98,8 @@ class OutboxTransactionRollbackIntegrationTests(
                 tenantSettingsService.createOrUpdate(
                     CreateOrUpdateTenantSettingCommand(
                         organisationId = organisationId,
-                        key = "base_currency",
-                        value = "USD",
+                        key = SETTING_KEY,
+                        value = "UTC",
                         actorId = LOCAL_USER_ID,
                     ),
                 )
@@ -167,7 +167,7 @@ class OutboxTransactionRollbackIntegrationTests(
             .set(ORGANISATION_SETTING.ORGANISATION_ID, organisationId)
             .set(ORGANISATION_SETTING.SETTING_KEY, SETTING_KEY)
             .set(ORGANISATION_SETTING.SETTING_VALUE, JSONB.jsonb("\"$value\""))
-            .set(ORGANISATION_SETTING.VALUE_TYPE, "CURRENCY")
+            .set(ORGANISATION_SETTING.VALUE_TYPE, "TIMEZONE")
             .set(ORGANISATION_SETTING.IS_SENSITIVE, false)
             .set(ORGANISATION_SETTING.EFFECTIVE_FROM, now)
             .set(ORGANISATION_SETTING.CREATED_AT, now)
@@ -178,7 +178,7 @@ class OutboxTransactionRollbackIntegrationTests(
     private companion object {
         val LOCAL_USER_ID: UUID = UUID.fromString("11111111-1111-1111-1111-111111111111")
         const val ROLLBACK_TARGET = "finaxis.lifecycle.organisation.settings-updated"
-        const val SETTING_KEY = "base_currency"
+        const val SETTING_KEY = "default_timezone"
     }
 }
 

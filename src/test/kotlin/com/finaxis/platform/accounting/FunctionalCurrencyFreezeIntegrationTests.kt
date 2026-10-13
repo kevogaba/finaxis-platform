@@ -8,10 +8,14 @@ import com.finaxis.platform.accounting.support.LockOverlapProbe
 import com.finaxis.platform.accounting.support.PostingTenantFixture
 import com.finaxis.platform.accounting.support.PostingTenantFixture.Tenant
 import com.finaxis.platform.common.application.ConflictException
+import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.AdvisoryLockNamespace
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
 import com.finaxis.platform.jooq.tables.references.JOURNAL_ENTRY
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
+import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
+import com.finaxis.platform.lifecycle.application.AmendOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.CreateOrUpdateTenantSettingCommand
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.application.TenantSettingsService
@@ -22,6 +26,8 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.dao.ConcurrencyFailureException
 import org.springframework.test.context.TestConstructor
+import org.springframework.transaction.PlatformTransactionManager
+import org.springframework.transaction.support.TransactionTemplate
 import java.sql.SQLException
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -37,9 +43,11 @@ import kotlin.test.assertTrue
 /**
  * A tenant's functional currency against a ledger that exists, and against one being created.
  *
- * Two properties, and they are not the same one. The *freeze* is settled: once a journal exists,
- * `base_currency` is refused outright, because immutable lines were written under a currency the
- * tenant would otherwise be re-declaring. The *race* is the window before that, where a tenant has
+ * Two properties, and they are not the same one. The *freeze* is settled: once a journal exists the
+ * currency cannot change, because immutable lines were written under it. Lifecycle no longer
+ * writes the currency through the settings endpoint at all (`base_currency` is a read-only mirror
+ * of the organisation column), so the freeze now holds by refusal at the endpoint and by the
+ * organisation's draft-only amendment. The *race* is the window before that, where a tenant has
  * no journal yet and a first posting and a currency change are both in flight; it is closed by the
  * shared advisory lock the posting takes, which the change must wait behind.
  *
@@ -76,9 +84,11 @@ import kotlin.test.assertTrue
 class FunctionalCurrencyFreezeIntegrationTests(
     private val postingTransactions: PostingTransactionBoundary,
     private val tenantSettings: TenantSettingsService,
+    private val ledgerActivity: AccountingLedgerActivity,
+    private val transactions: PlatformTransactionManager,
     private val dsl: DSLContext,
     engine: PostingEngine,
-    organisationProvisioningService: OrganisationProvisioningService,
+    private val organisationProvisioningService: OrganisationProvisioningService,
 ) {
     private val posting =
         PostingTenantFixture(dsl, organisationProvisioningService, engine, ACTOR)
@@ -89,24 +99,29 @@ class FunctionalCurrencyFreezeIntegrationTests(
      * The freeze is a check-then-write across two transactions, and this proves the lock closes it.
      *
      * A tenant's very first posting is held open, past the point where it has taken the shared
-     * tenant-currency lock. A base-currency change is then started and proved - out of PostgreSQL's
-     * own lock catalogue - to be parked on that exact key rather than sailing past a ledger it
-     * cannot yet see. Only when the posting commits is the change allowed to proceed, and it now
-     * finds the journal and is refused.
+     * tenant-currency lock. The ledger's own change-side call - the one a currency change must make
+     * before it reads `journal_entry` - is then started and proved, out of PostgreSQL's own lock
+     * catalogue, to be parked on that exact key rather than sailing past a ledger it cannot yet
+     * see. Only when the posting commits is the call allowed to proceed, and it then reports the
+     * journal.
+     *
+     * Lifecycle no longer reaches this call (its settings endpoint refuses the mirror write before
+     * any lock), so the test calls the port directly, in a transaction as the production caller
+     * is. The ledger-side guarantee it protects is unchanged.
      *
      * Without the lock the change would read `journal_entry`, find nothing, and commit alongside a
      * posting it never saw, leaving the tenant declaring a currency its immutable lines were never
      * written under.
      */
     @Test
-    fun `a base-currency change waits for a tenant's first posting rather than racing it`() {
+    fun `the currency-change lock waits behind a tenant's first posting`() {
         val tenant = posting.provisionTenant("engine-currency-race")
         val currencyKey = AdvisoryLockNamespace.objectId(tenant.organisationId.toString())
         val postingApplied = CountDownLatch(1)
         val releasePosting = CountDownLatch(1)
         val changeReturned = AtomicBoolean()
 
-        val failure =
+        val postedAfterWaiting =
             Executors.newVirtualThreadPerTaskExecutor().use { executor ->
                 val first =
                     executor.submit {
@@ -121,9 +136,10 @@ class FunctionalCurrencyFreezeIntegrationTests(
                 assertTrue(postingApplied.await(LATCH_TIMEOUT, TimeUnit.SECONDS))
 
                 val change =
-                    executor.submit<ConflictException> {
-                        assertFailsWith<ConflictException> {
-                            withRequestContext { setBaseCurrency(tenant, "USD") }
+                    executor.submit<Boolean> {
+                        inTransaction {
+                            ledgerActivity.lockFunctionalCurrencyForChange(tenant.organisationId)
+                            ledgerActivity.hasPostedJournals(tenant.organisationId)
                         }.also { changeReturned.set(true) }
                     }
 
@@ -142,30 +158,73 @@ class FunctionalCurrencyFreezeIntegrationTests(
                 change.get(FUTURE_TIMEOUT, TimeUnit.SECONDS)
             }
 
-        assertEquals(PostingErrorCodes.FUNCTIONAL_CURRENCY_FROZEN, failure.code)
+        assertTrue(
+            postedAfterWaiting,
+            "the change's lock returned, but the ledger did not report the first posting",
+        )
     }
 
     @Test
-    fun `the functional currency is frozen once a journal is posted`() {
+    fun `a base-currency setting write is refused once a journal is posted`() {
         val tenant = posting.provisionTenant("engine-currency-freeze")
-
-        // Before any journal, the setting may change.
-        withRequestContext { setBaseCurrency(tenant, "KES") }
 
         posting.inContext(tenant) {
             postingTransactions.execute("A posting") { posting.post(tenant) }
         }
+        assertTrue(ledgerActivity.hasPostedJournals(tenant.organisationId))
 
-        val failure =
-            assertFailsWith<ConflictException> {
-                withRequestContext {
-                    setBaseCurrency(
-                        tenant,
-                        "USD",
-                    )
-                }
+        // The setting endpoint refuses the mirror before it reaches the column, so the currency the
+        // posted journal was written in is the one the organisation still declares.
+        assertFailsWith<InvalidOperationException> {
+            withRequestContext { setBaseCurrency(tenant, "USD") }
+        }
+        assertEquals(PROVISIONED_CURRENCY, currentBaseCurrency(tenant))
+    }
+
+    /**
+     * The column the ledger reads is fixed once a journal can exist. Its only writer is the draft
+     * amendment, which refuses any organisation that is not a `DRAFT`, and a journal needs an
+     * `ACTIVE` organisation. A tenant that has posted is therefore ACTIVE, so an amendment of it
+     * must be refused and must leave the column as it was. Nothing else in the suite proves that:
+     * the setting path is refused before it reaches the column.
+     */
+    @Test
+    fun `an amend of an active tenant that has posted cannot change its base currency`() {
+        val tenant = posting.provisionTenant("engine-currency-amend")
+        posting.inContext(tenant) {
+            postingTransactions.execute("A posting") { posting.post(tenant) }
+        }
+        val operator =
+            TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
+                .createPlatformOperator("amend-after-posting")
+        val tenantCode =
+            requireNotNull(
+                dsl
+                    .select(ORGANISATION.TENANT_CODE)
+                    .from(ORGANISATION)
+                    .where(ORGANISATION.ID.eq(tenant.organisationId))
+                    .fetchOne(ORGANISATION.TENANT_CODE),
+            )
+
+        assertFailsWith<ConflictException> {
+            withRequestContext {
+                organisationProvisioningService.amendDraft(
+                    AmendOrganisationDraftCommand(
+                        organisationId = tenant.organisationId,
+                        tenantCode = tenantCode,
+                        displayName = "Amended After Posting",
+                        countryCode = "KE",
+                        baseCurrencyCode = SUPERSEDING,
+                        timezone = "Africa/Nairobi",
+                        actorId = operator,
+                        requestId = uuidV7(),
+                        admin = null,
+                    ),
+                )
             }
-        assertEquals(PostingErrorCodes.FUNCTIONAL_CURRENCY_FROZEN, failure.code)
+        }
+
+        assertEquals(PROVISIONED_CURRENCY, currentBaseCurrency(tenant))
     }
 
     /**
@@ -294,6 +353,10 @@ class FunctionalCurrencyFreezeIntegrationTests(
             generateSequence(failure) { it.cause.takeIf { cause -> cause !== it } }
                 .any { it is SQLException && it.sqlState == SERIALIZATION_FAILURE }
 
+    /** Runs [block] in one transaction at the default isolation, as lifecycle's callers do. */
+    private fun <T> inTransaction(block: () -> T): T =
+        requireNotNull(TransactionTemplate(transactions).execute { block() })
+
     private fun setBaseCurrency(
         tenant: Tenant,
         value: String,
@@ -316,6 +379,9 @@ class FunctionalCurrencyFreezeIntegrationTests(
 
         /** The currency the concurrent change commits, distinct from the provisioned `KES`. */
         const val SUPERSEDING = "USD"
+
+        /** The currency [PostingTenantFixture.provisionTenant] creates every tenant in. */
+        const val PROVISIONED_CURRENCY = "KES"
 
         /** `serialization_failure`; both of its messages map to `ConcurrencyFailureException`. */
         const val SERIALIZATION_FAILURE = "40001"

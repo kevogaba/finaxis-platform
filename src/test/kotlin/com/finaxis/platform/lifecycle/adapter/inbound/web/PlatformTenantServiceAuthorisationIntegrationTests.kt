@@ -376,7 +376,8 @@ class PlatformTenantServiceAuthorisationIntegrationTests
             """{"tenant_code":"$TENANT_CODE","display_name":"S6d Tenant","country_code":"KE",""" +
                 """"base_currency_code":"KES","timezone":"Africa/Nairobi","admin":""" +
                 """{"email":"admin@s6d.test","username":"s6d-admin",""" +
-                """"display_name":"S6d Admin","phone_e164":"+254700000000"}}"""
+                """"display_name":"S6d Admin","phone_e164":"+254700000000",""" +
+                """"send_application_invite":false}}"""
 
         private fun newTenant(label: String): UUID =
             fixture.createActiveOrganisation(label, seedUser("$label-owner"))

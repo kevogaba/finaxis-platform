@@ -331,7 +331,7 @@ class FoundationLifecycleWebIntegrationTests
         }
 
         @Test
-        fun `an accepted initial setting is stored under its catalog value type`() {
+        fun `an accepted initial setting is stored by catalog type, base_currency is not`() {
             val tenantCode = "settings-tenant-" + shortSuffix()
             val makerId = seedPlatformMaker(tenantCode)
 
@@ -348,7 +348,11 @@ class FoundationLifecycleWebIntegrationTests
                                 draftRequest(
                                     tenantCode,
                                     "KES",
-                                    initialSettings = mapOf("base_currency" to "KES"),
+                                    initialSettings =
+                                        mapOf(
+                                            "base_currency" to "KES",
+                                            "default_timezone" to "Africa/Nairobi",
+                                        ),
                                 ),
                             )
                         with(authentication(platformToken(makerId, setOf("tenant.create"))))
@@ -366,13 +370,56 @@ class FoundationLifecycleWebIntegrationTests
             // The row must be indistinguishable from one the settings endpoint would have written:
             // the catalog's declared value type, not the hard-coded STRING the store used to stamp.
             assertEquals(
-                "CURRENCY",
+                "TIMEZONE",
                 dsl
                     .select(ORGANISATION_SETTING.VALUE_TYPE)
                     .from(ORGANISATION_SETTING)
                     .where(ORGANISATION_SETTING.ORGANISATION_ID.eq(organisationId))
-                    .and(ORGANISATION_SETTING.SETTING_KEY.eq("base_currency"))
+                    .and(ORGANISATION_SETTING.SETTING_KEY.eq("default_timezone"))
                     .fetchOne(ORGANISATION_SETTING.VALUE_TYPE),
+            )
+            // The organisation's base_currency_code carries the currency, so no row is stored.
+            assertEquals(
+                0,
+                dsl.fetchCount(
+                    ORGANISATION_SETTING,
+                    ORGANISATION_SETTING.ORGANISATION_ID
+                        .eq(organisationId)
+                        .and(ORGANISATION_SETTING.SETTING_KEY.eq("base_currency")),
+                ),
+            )
+        }
+
+        @Test
+        fun `an initial base_currency that differs from the draft's base currency is a 422`() {
+            val tenantCode = "settings-mismatch-" + shortSuffix()
+            val makerId = seedPlatformMaker(tenantCode)
+
+            mockMvc
+                .post(ApiPaths.PLATFORM_TENANTS) {
+                    header(
+                        IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER,
+                        UUID.randomUUID().toString(),
+                    )
+                    contentType = MediaType.APPLICATION_JSON
+                    content =
+                        apiJsonCodec.mapper.writeValueAsString(
+                            draftRequest(
+                                tenantCode,
+                                "KES",
+                                initialSettings = mapOf("base_currency" to "USD"),
+                            ),
+                        )
+                    with(authentication(platformToken(makerId, setOf("tenant.create"))))
+                }.andExpect {
+                    status { isUnprocessableContent() }
+                    jsonPath("$.code") { value("invalid_operation") }
+                }
+
+            assertEquals(
+                0,
+                dsl.fetchCount(ORGANISATION, ORGANISATION.TENANT_CODE.eq(tenantCode)),
+                "a refused base currency must leave no organisation row behind",
             )
         }
 

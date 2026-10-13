@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
+import com.finaxis.platform.common.application.InvalidRequestException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
@@ -318,7 +319,11 @@ class PlatformTenantController(
     @PreAuthorize("hasAuthority('tenant.update_draft')")
     @Operation(
         summary = "Amend tenant draft",
-        description = "Amends an unsubmitted tenant organisation draft.",
+        description =
+            "Amends an unsubmitted tenant organisation draft. `admin` is optional: absent leaves " +
+                "the administrator draft unchanged; when sent it replaces it and " +
+                "`send_application_invite` is required. A non-empty `initial_settings` or a " +
+                "`business_date` is refused with 422.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -386,20 +391,40 @@ class PlatformTenantController(
                 ),
             ],
         ),
+        ApiResponse(
+            responseCode = "422",
+            description =
+                "A non-empty initial_settings or a business_date is refused on amend, or a " +
+                    "tenant setting key or value is invalid",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
     )
     fun amendDraft(
         @PathVariable("tenant_id") tenantId: UUID,
         @RequestBody @Valid request: AmendTenantDraftRequest,
     ): TenantDetailResponse {
         val caller = CallerContextResolver.getPlatformCaller()
+        requireAtMost("legal_name", request.legalName?.orElse(null), LEGAL_NAME_MAX_LENGTH)
+        requireAtMost(
+            "registration_number",
+            request.registrationNumber?.orElse(null),
+            REGISTRATION_NUMBER_MAX_LENGTH,
+        )
 
         val command =
             AmendOrganisationDraftCommand(
                 organisationId = tenantId,
                 tenantCode = request.tenantCode,
                 displayName = request.displayName,
-                legalName = request.legalName,
-                registrationNumber = request.registrationNumber,
+                changesLegalName = request.legalName != null,
+                legalName = request.legalName?.orElse(null),
+                changesRegistrationNumber = request.registrationNumber != null,
+                registrationNumber = request.registrationNumber?.orElse(null),
                 countryCode = request.countryCode,
                 baseCurrencyCode = request.baseCurrencyCode,
                 timezone = request.timezone,
@@ -407,7 +432,7 @@ class PlatformTenantController(
                 businessDate = request.businessDate,
                 actorId = caller.actorId,
                 requestId = uuidV7(),
-                admin = request.admin.toDomain(),
+                admin = request.admin?.toDomain(),
             )
         organisationProvisioningService.amendDraft(command)
         return foundationQueryService.getTenant(tenantId, caller).toResponse()
@@ -1197,6 +1222,8 @@ class PlatformTenantController(
             id = id,
             tenantCode = tenantCode,
             displayName = displayName,
+            legalName = legalName,
+            registrationNumber = registrationNumber,
             countryCode = countryCode,
             baseCurrencyCode = baseCurrencyCode,
             timezone = timezone,
@@ -1208,8 +1235,28 @@ class PlatformTenantController(
             updatedAt = updatedAt,
         )
 
+    /**
+     * Refuses a value over [max] characters with `400 validation_failed`, the same problem a
+     * bean-validation `@Size` would give, but without its `violations` array: Bean Validation
+     * cannot see the limit on an `Optional`'s value (see `AmendTenantDraftRequest`).
+     */
+    private fun requireAtMost(
+        field: String,
+        value: String?,
+        max: Int,
+    ) {
+        if (value != null && value.length > max) {
+            throw InvalidRequestException(
+                "validation_failed",
+                "$field must be at most $max characters.",
+            )
+        }
+    }
+
     private companion object {
         const val MAXIMUM_PAGE_SIZE = 100L
+        const val LEGAL_NAME_MAX_LENGTH = 100
+        const val REGISTRATION_NUMBER_MAX_LENGTH = 50
 
         // The 409 every tenant action answers for the reserved platform organisation (issue #205),
         // appended to each route's own 409 description.

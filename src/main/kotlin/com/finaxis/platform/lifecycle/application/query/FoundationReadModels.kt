@@ -32,6 +32,10 @@ data class TenantDetail(
     val bootstrapStatus: String? = null,
     /** The closed-set failure code of the last bootstrap attempt, or null when none failed. */
     val bootstrapFailureCode: InitialAdministratorBootstrapFailureCode? = null,
+    /** The tenant's legal name, or null when none is recorded. */
+    val legalName: String? = null,
+    /** The tenant's registration number, or null when none is recorded. */
+    val registrationNumber: String? = null,
 )
 
 /** Summary projection of an operating branch. */

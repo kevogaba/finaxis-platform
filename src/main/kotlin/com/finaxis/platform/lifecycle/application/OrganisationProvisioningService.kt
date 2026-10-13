@@ -21,6 +21,7 @@ import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleTransition
+import com.finaxis.platform.lifecycle.domain.TenantSettingCatalog
 import com.finaxis.platform.lifecycle.domain.TenantSettingValueType
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -56,17 +57,15 @@ class OrganisationProvisioningService(
         validateCreate(command)
         validateAdmin(command.admin)
         errorUnless(command.requestedBy != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
-        // Initial settings are a tenant-setting supply point, so they answer to the catalog the
-        // `/settings` endpoint answers to. This used to hand the caller's map straight to the
-        // store, which stamped every row STRING and consulted nothing: `base_currency` could be
-        // set to `XAU` here even though `TenantSettingsService.createOrUpdate` refuses it, leaving
-        // a tenant whose declared base currency no amount can be settled in. Resolved before the
-        // first write, alongside the other validations, so a rejected setting never depends on the
-        // transaction rolling back a draft that should not exist.
+        // Initial settings answer to the catalogue, as the `/settings` endpoint does, so each one
+        // is validated and typed by it before the first write: an unknown key, or a value its type
+        // rule refuses, rejects the whole draft. `base_currency` is the exception to storage: it
+        // is checked against the draft's own currency in `validateCreate` and then not stored,
+        // because the organisation's `base_currency_code` is the one copy the ledger reads.
         val settings =
-            command.initialSettings.map { (key, rawValue) ->
-                StoredSetting.fromCatalog(key, rawValue)
-            }
+            command.initialSettings
+                .map { (key, rawValue) -> StoredSetting.fromCatalog(key, rawValue) }
+                .filterNot { it.key == TenantSettingCatalog.BASE_CURRENCY_KEY }
         queryStore.requireTenantCodeFree(command.tenantCode, except = null)
         val organisationId = translatingDuplicateTenantCode { lifecycleStore.createDraft(command) }
         adminBootstrapStore.createDraft(organisationId, command.admin, command.requestedBy)
@@ -93,9 +92,9 @@ class OrganisationProvisioningService(
             "organisation.amend_draft",
             command.actorId,
         )
-        // Lock before reading the state: an amendment writes the draft's own columns and the
-        // administrator block unconditionally, so it must not be judged a draft by a read that a
-        // concurrent submission has since made untrue.
+        // Lock before reading the state: an amendment writes the draft's own columns and, when
+        // `admin` is sent, the administrator block, so it must not be judged a draft by a read that
+        // a concurrent submission has since made untrue.
         lifecycleStore.lockOrganisation(command.organisationId)
         val state =
             lifecycleStore
@@ -103,12 +102,12 @@ class OrganisationProvisioningService(
                 .orResourceNotFound()
         errorUnless(state == OrganisationLifecycleState.DRAFT, SafeError.CONFLICT)
         validateAmend(command)
-        validateAdmin(command.admin)
+        command.admin?.let(::validateAdmin)
         errorUnless(command.actorId != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
 
         queryStore.requireTenantCodeFree(command.tenantCode, except = command.organisationId)
         translatingDuplicateTenantCode { lifecycleStore.amendDraft(command) }
-        adminBootstrapStore.amendDraft(command.organisationId, command.admin)
+        command.admin?.let { adminBootstrapStore.amendDraft(command.organisationId, it) }
 
         audit(
             organisationId = command.organisationId,
@@ -601,16 +600,43 @@ private fun validateCreate(command: CreateOrganisationDraftCommand) {
     errorUnless(command.tenantCode.isNotBlank(), SafeError.INVALID_OPERATION)
     errorUnless(command.displayName.isNotBlank(), SafeError.INVALID_OPERATION)
     errorUnless(COUNTRY_CODE.matches(command.countryCode), SafeError.INVALID_OPERATION)
-    MoneyPolicy.requireSettlementCurrency(command.baseCurrencyCode)
+    val draftCurrency = MoneyPolicy.requireSettlementCurrency(command.baseCurrencyCode).currencyCode
     validateTimezone(command.timezone)
+    // The draft's own base_currency_code is the column the ledger reads, and a setting naming
+    // another currency could only disagree with it. The supplied value is canonicalised first, so
+    // an unpostable code still answers with accounting's own currency error, as before.
+    command.initialSettings[TenantSettingCatalog.BASE_CURRENCY_KEY]?.let { supplied ->
+        val canonical =
+            TenantSettingCatalog.canonicalize(TenantSettingCatalog.BASE_CURRENCY_KEY, supplied)
+        if (canonical != draftCurrency) {
+            throw InvalidOperationException(
+                safeDetail =
+                    "initial_settings.base_currency must equal base_currency: " +
+                        "the base currency is set once, on the draft.",
+            )
+        }
+    }
 }
 
+/**
+ * Validates an amend, and refuses input it would discard (#164): `initial_settings` and
+ * `business_date` are creation inputs an amend does not apply, so a non-empty settings map or a
+ * business date is refused with 422 before any write. An empty map is harmless and accepted.
+ */
 private fun validateAmend(command: AmendOrganisationDraftCommand) {
     errorUnless(command.tenantCode.isNotBlank(), SafeError.INVALID_OPERATION)
     errorUnless(command.displayName.isNotBlank(), SafeError.INVALID_OPERATION)
     errorUnless(COUNTRY_CODE.matches(command.countryCode), SafeError.INVALID_OPERATION)
     MoneyPolicy.requireSettlementCurrency(command.baseCurrencyCode)
     validateTimezone(command.timezone)
+    if (command.initialSettings.isNotEmpty()) {
+        throw InvalidOperationException(
+            safeDetail = "initial_settings cannot be changed by an amend.",
+        )
+    }
+    if (command.businessDate != null) {
+        throw InvalidOperationException(safeDetail = "business_date cannot be changed by an amend.")
+    }
 }
 
 private fun validateAdmin(admin: InitialAdministratorDraft) {

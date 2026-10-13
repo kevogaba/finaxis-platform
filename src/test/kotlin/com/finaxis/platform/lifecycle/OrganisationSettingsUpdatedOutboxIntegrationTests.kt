@@ -37,8 +37,8 @@ class OrganisationSettingsUpdatedOutboxIntegrationTests(
             tenantSettingsService.createOrUpdate(
                 CreateOrUpdateTenantSettingCommand(
                     organisationId = organisationId,
-                    key = "base_currency",
-                    value = "KES",
+                    key = "default_timezone",
+                    value = "Africa/Nairobi",
                     actorId = LOCAL_USER_ID,
                 ),
             )

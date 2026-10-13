@@ -125,12 +125,18 @@ class JooqOrganisationBranchProvisioningStore(
 
     override fun amendDraft(command: AmendOrganisationDraftCommand) {
         val now = now()
+        // A legal name or registration number the amend does not send is left as stored; only a
+        // sent one is written, and a sent null clears it.
+        val changes = mutableMapOf<Field<*>, Any?>()
+        if (command.changesLegalName) changes[ORGANISATION.LEGAL_NAME] = command.legalName
+        if (command.changesRegistrationNumber) {
+            changes[ORGANISATION.REGISTRATION_NUMBER] = command.registrationNumber
+        }
         dsl
             .update(ORGANISATION)
+            .set(changes)
             .set(ORGANISATION.TENANT_CODE, command.tenantCode)
             .set(ORGANISATION.DISPLAY_NAME, command.displayName)
-            .set(ORGANISATION.LEGAL_NAME, command.legalName)
-            .set(ORGANISATION.REGISTRATION_NUMBER, command.registrationNumber)
             .set(ORGANISATION.COUNTRY_CODE, command.countryCode)
             .set(ORGANISATION.BASE_CURRENCY_CODE, command.baseCurrencyCode)
             .set(ORGANISATION.TIMEZONE, command.timezone)

@@ -23,7 +23,7 @@ unknown keys instead of accepting arbitrary key/value pairs.
 | Key | Type | Sensitive | Platform-only | Default |
 |---|---|---:|---:|---|
 | `default_timezone` | `TIMEZONE` | no | no | none |
-| `base_currency` | `CURRENCY` | no | no | none |
+| `base_currency` | `CURRENCY` | no | no | read-only mirror (see below) |
 | `require_maker_checker_for_user_invites` | `BOOLEAN` | no | no | `false` |
 | `require_maker_checker_for_branch_creation` | `BOOLEAN` | no | no | `false` |
 | `business_date_auto_advance_enabled` | `BOOLEAN` | no | no | `false` |
@@ -54,6 +54,46 @@ Validation and canonicalization are catalog-owned:
 
 Blank values are rejected before type validation. Currency values are stored uppercase.
 
+Two keys are internal and deliberately outside the catalogue. `settings.operational` is the marker
+the platform writes when a tenant is approved, and it is not a tenant setting: `ListTenantSettings`
+leaves it out, and `GetTenantSetting` refuses it as an unknown key, exactly as a `PUT` does. After
+approval a list therefore totals the catalogue's six keys and no more.
+
+## The base currency is a read-only mirror
+
+`base_currency` shows the organisation's `base_currency_code`, the column the ledger reads for every
+journal line. The setting is not a second copy that can be changed:
+
+- `GetTenantSetting` and `ListTenantSettings` report the column's value. A row stored under the key
+  is ignored.
+- `PUT /{key}` and `DELETE /{key}` for `base_currency` answer `422 invalid_operation` with the
+  detail `base_currency is derived from the organisation's base currency and cannot be changed
+  here.` The refusal comes after the caller's permission check and before any value check, so
+  nothing is stored, audited or published.
+- The column is written only at draft creation and draft amendment, and an amendment is refused
+  unless the organisation is a `DRAFT`. A journal can be posted only once the organisation has left
+  `DRAFT`, so after a posting no route reaches the column and the base currency is frozen. See
+  [accounting foundation](../architecture/accounting-foundation.md), "The functional currency is
+  frozen once the tenant has posted".
+- On draft creation, `initial_settings.base_currency` is accepted only when it equals
+  `base_currency_code` after canonicalisation. A different currency is `422 invalid_operation`.
+  An equal value is accepted and not stored: the organisation's column carries it.
+
+## Setup values at draft creation and amendment
+
+The setup values a tenant draft takes are set on create and cannot be changed by an amend:
+
+- `initial_settings` is a create input. A draft amend with a non-empty `initial_settings` is
+  `422 invalid_operation`; an empty `{}` is accepted and changes nothing. Later changes to a
+  setting go through `PUT /{key}`.
+- `business_date` is a create input. An amend that sends a value is `422 invalid_operation`; an
+  absent key or an explicit `null` is accepted and changes nothing.
+- A refused amend writes nothing: the draft, its administrator, its settings and the audit log are
+  as they were.
+
+The amend's `admin` block is optional. An amend without it leaves the stored administrator draft
+alone. See the [foundation API contract](../api/foundation-api.md#amend-tenant-draft).
+
 ## Effective dating
 
 Settings are never overwritten destructively. `OrganisationSettingsStore` serializes writes for
@@ -68,10 +108,10 @@ setting effective again.
 
 Only active organisations can be changed.
 
-Normal tenant settings require `settings.update` scoped to the target organisation:
+Normal tenant settings require `settings.update` scoped to the target organisation. `base_currency`
+is not writable through them (see above):
 
 - `default_timezone`
-- `base_currency`
 - `require_maker_checker_for_user_invites`
 - `require_maker_checker_for_branch_creation`
 - `business_date_auto_advance_enabled`
@@ -86,9 +126,13 @@ The permission check is dependency-inverted. `lifecycle` defines the `Permission
 `iam` implements it with `LifecyclePermissionGuardAdapter`, avoiding a direct
 `lifecycle -> iam` module dependency.
 
-`GetTenantSetting` and `ListTenantSettings` require `settings.update` scoped to the target
-organisation. List results mask platform-only values unless the caller also has
-`tenant_setting.manage_platform` scoped to the platform organisation.
+`GetTenantSetting` and `ListTenantSettings` require `settings.view` scoped to the target
+organisation. A read of a platform-only key also requires `tenant_setting.manage_platform` scoped
+to the platform organisation, so a single `GET /audit_retention_days` without it is `403`.
+
+`ListTenantSettings` does not refuse a platform-only key to a caller without that permission. It
+masks a set value as `***REDACTED***` and reports an unset value as `null`. A mask is applied only
+to a value that is present, so an unset key never looks set.
 
 ## Sensitivity and redaction
 
@@ -110,7 +154,8 @@ That fallback keeps historical rows readable after a catalog change.
 - `DeactivateTenantSetting`: require the same permission, close the current row, audit, and
   publish an externalized event with no replacement row.
 - `GetTenantSetting`: return one current setting view, masking sensitive values.
-- `ListTenantSettings`: return all catalog settings plus stored-only current settings.
+- `ListTenantSettings`: return all catalog settings plus stored-only current settings, leaving out
+  the internal `settings.operational` marker.
 
 These are exposed by `TenantSettingsController` under `/api/v1/tenant/settings`:
 

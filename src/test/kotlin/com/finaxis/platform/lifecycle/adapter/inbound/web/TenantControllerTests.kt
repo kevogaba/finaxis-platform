@@ -123,12 +123,47 @@ class TenantControllerTests
                 }
         }
 
+        @Test
+        fun `the tenant detail carries legal name and registration number, null when unset`() {
+            val tenantId = uuidV7()
+            stubTenant(
+                tenantId,
+                "ACTIVE",
+                null,
+                legalName = "Acme Legal Ltd",
+                registrationNumber = "REG-ACME-1",
+            )
+
+            mockMvc
+                .get(ApiPaths.TENANT) {
+                    with(authentication(tenantToken(tenantId)))
+                }.andExpect {
+                    status { isOk() }
+                    jsonPath("$.legal_name") { value("Acme Legal Ltd") }
+                    jsonPath("$.registration_number") { value("REG-ACME-1") }
+                }
+
+            stubTenant(tenantId, "ACTIVE", null)
+
+            mockMvc
+                .get(ApiPaths.TENANT) {
+                    with(authentication(tenantToken(tenantId)))
+                }.andExpect {
+                    status { isOk() }
+                    // `doesNotExist` would also pass for null, so assert the key on the wire.
+                    content { string(containsString("\"legal_name\":null")) }
+                    content { string(containsString("\"registration_number\":null")) }
+                }
+        }
+
         private fun stubTenant(
             tenantId: UUID,
             status: String,
             statusReason: String?,
             bootstrapStatus: String? = null,
             bootstrapFailureCode: InitialAdministratorBootstrapFailureCode? = null,
+            legalName: String? = null,
+            registrationNumber: String? = null,
         ) {
             whenever(foundationQueryService.getTenant(eq(tenantId), any()))
                 .thenReturn(
@@ -145,6 +180,8 @@ class TenantControllerTests
                         bootstrapFailureCode = bootstrapFailureCode,
                         createdAt = Instant.parse("2026-07-18T10:00:00Z"),
                         updatedAt = Instant.parse("2026-07-18T10:00:00Z"),
+                        legalName = legalName,
+                        registrationNumber = registrationNumber,
                     ),
                 )
         }
