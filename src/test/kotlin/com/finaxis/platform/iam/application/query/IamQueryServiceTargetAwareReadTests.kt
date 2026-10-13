@@ -2,6 +2,7 @@ package com.finaxis.platform.iam.application.query
 
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
+import com.finaxis.platform.common.web.api.InvalidPageRequestException
 import com.finaxis.platform.lifecycle.TenantCaller
 import org.junit.jupiter.api.Test
 import java.util.UUID
@@ -83,6 +84,40 @@ class IamQueryServiceTargetAwareReadTests {
             caller,
         )
         assertEquals(visible, queries.lastBranchAssignmentFilter?.branchId)
+    }
+
+    @Test
+    fun `a sorted branch assignment list of a branch scoped holder keeps its restriction`() {
+        val visible = UUID.randomUUID()
+        val outside = UUID.randomUUID()
+        permissionGuard.visibleOnly(tenantId, "branch_assignment.view", visible)
+        val caller = TenantCaller(actorId, tenantId)
+
+        service.searchBranchAssignments(
+            tenantId,
+            BranchAssignmentFilter(sortBy = "status", sortDir = "ASC"),
+            caller,
+        )
+        assertEquals(setOf(visible), queries.lastBranchAssignmentRestriction)
+        assertEquals("status", queries.lastBranchAssignmentFilter?.sortBy)
+        assertEquals("ASC", queries.lastBranchAssignmentFilter?.sortDir)
+
+        // A bad sort is a 400 for a holder who may see the list at all.
+        assertFailsWith<InvalidPageRequestException> {
+            service.searchBranchAssignments(
+                tenantId,
+                BranchAssignmentFilter(sortBy = "bogus"),
+                caller,
+            )
+        }
+        // An explicit branch outside the visible set is refused as 403 before the sort is read.
+        assertFailsWith<ForbiddenOperationException> {
+            service.searchBranchAssignments(
+                tenantId,
+                BranchAssignmentFilter(branchId = outside, sortBy = "bogus"),
+                caller,
+            )
+        }
     }
 
     @Test

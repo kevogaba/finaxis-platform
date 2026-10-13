@@ -35,6 +35,8 @@ import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
 import org.jooq.Condition
 import org.jooq.DSLContext
+import org.jooq.Field
+import org.jooq.SortField
 import org.jooq.impl.DSL
 import org.springframework.stereotype.Component
 import java.util.UUID
@@ -95,8 +97,10 @@ class JooqIamAdministrationQueries(
                 .join(USER_ACCOUNT)
                 .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID))
                 .where(condition)
-                .orderBy(USER_ACCOUNT.CREATED_AT.desc(), USER_ACCOUNT.ID.desc())
-                .limit(filter.size)
+                .orderBy(
+                    userSortOrder(filter),
+                    USER_ACCOUNT.ID.desc(),
+                ).limit(filter.size)
                 .offset(offset)
                 .fetch { record ->
                     UserInTenantSummary(
@@ -246,7 +250,7 @@ class JooqIamAdministrationQueries(
                 .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID))
                 .where(condition)
                 .orderBy(
-                    USER_ORGANISATION_MEMBERSHIP.CREATED_AT.desc(),
+                    membershipSortOrder(filter),
                     USER_ORGANISATION_MEMBERSHIP.ID.desc(),
                 ).limit(filter.size)
                 .offset(offset)
@@ -327,7 +331,7 @@ class JooqIamAdministrationQueries(
                 ).from(USER_BRANCH_ASSIGNMENT)
                 .where(condition)
                 .orderBy(
-                    USER_BRANCH_ASSIGNMENT.ASSIGNED_AT.desc(),
+                    assignmentSortOrder(filter),
                     USER_BRANCH_ASSIGNMENT.ID.desc(),
                 ).limit(filter.size)
                 .offset(offset)
@@ -681,3 +685,49 @@ class JooqIamAdministrationQueries(
 }
 
 private const val BRANCH_SCOPE = "BRANCH"
+
+private fun userSortOrder(filter: UserInTenantFilter): SortField<*> =
+    tenantListSortOrder(
+        when (filter.sortBy) {
+            "username" -> USER_ACCOUNT.USERNAME
+            "displayName" -> USER_ACCOUNT.DISPLAY_NAME
+            "email" -> USER_ACCOUNT.EMAIL
+            "userStatus" -> USER_ACCOUNT.STATUS
+            "membershipStatus" -> USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS
+            else -> USER_ACCOUNT.CREATED_AT
+        },
+        filter.sortBy,
+        filter.sortDir,
+    )
+
+private fun membershipSortOrder(filter: MembershipFilter): SortField<*> =
+    tenantListSortOrder(
+        when (filter.sortBy) {
+            "membershipStatus" -> USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS
+            "membershipType" -> USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE
+            else -> USER_ORGANISATION_MEMBERSHIP.CREATED_AT
+        },
+        filter.sortBy,
+        filter.sortDir,
+    )
+
+private fun assignmentSortOrder(filter: BranchAssignmentFilter): SortField<*> =
+    tenantListSortOrder(
+        when (filter.sortBy) {
+            "assignmentType" -> USER_BRANCH_ASSIGNMENT.ASSIGNMENT_TYPE
+            "status" -> USER_BRANCH_ASSIGNMENT.STATUS
+            else -> USER_BRANCH_ASSIGNMENT.ASSIGNED_AT
+        },
+        filter.sortBy,
+        filter.sortDir,
+    )
+
+/**
+ * The primary order of a tenant list. `sort_dir` applies only with a `sort_by`: without one the
+ * list keeps its default key, newest first, whatever `sort_dir` says.
+ */
+private fun tenantListSortOrder(
+    field: Field<*>,
+    sortBy: String?,
+    sortDir: String?,
+): SortField<*> = if (sortBy != null && sortDir?.uppercase() == "ASC") field.asc() else field.desc()

@@ -157,11 +157,6 @@ class OpenApiWireNamingContractTests
                 ).describedAs("GET %s sort_by enum", path)
                     .containsExactlyElementsOf(expected)
             }
-            IGNORED_SORT_PATHS.forEach { path ->
-                assertThat(queryParameterNames(path))
-                    .describedAs("GET %s ignores sorting, so it must not advertise it", path)
-                    .doesNotContain("sort_by", "sort_dir")
-            }
         }
 
         @Test
@@ -241,16 +236,6 @@ class OpenApiWireNamingContractTests
                         it.path("in").asString() == "query"
                 }
                 ?: error("GET $path has no $name query parameter")
-
-        private fun queryParameterNames(path: String): List<String> =
-            document
-                .path("paths")
-                .path(path)
-                .path("get")
-                .path("parameters")
-                .toList()
-                .filter { it.path("in").asString() == "query" }
-                .map { it.path("name").asString() }
 
         private fun exampleFor(schemaName: String): ObjectNode {
             val example = JsonNodeFactory.instance.objectNode()
@@ -334,11 +319,20 @@ class OpenApiWireNamingContractTests
                         listOf("tenantCode", "displayName", "countryCode", "createdAt"),
                     "/api/v1/branches" to BRANCH_SORTS,
                     "/api/v1/platform/tenants/{tenant_id}/branches" to BRANCH_SORTS,
+                    "/api/v1/tenant/memberships" to
+                        listOf("createdAt", "membershipStatus", "membershipType"),
+                    "/api/v1/tenant/branch-assignments" to
+                        listOf("assignedAt", "assignmentType", "status"),
+                    "/api/v1/tenant/users" to
+                        listOf(
+                            "createdAt",
+                            "username",
+                            "displayName",
+                            "email",
+                            "userStatus",
+                            "membershipStatus",
+                        ),
                 )
-
-            // Accepted by the controller but never applied, so hidden from the spec.
-            val IGNORED_SORT_PATHS =
-                listOf("/api/v1/tenant/memberships", "/api/v1/tenant/branch-assignments")
 
             val REQUEST_BODIES: Map<String, Class<*>> =
                 mapOf(

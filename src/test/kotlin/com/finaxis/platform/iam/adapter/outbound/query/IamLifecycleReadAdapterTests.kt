@@ -53,6 +53,8 @@ class IamLifecycleReadAdapterTests {
                 membershipType = "OPERATIONS_LEAD",
                 page = 3,
                 size = 17,
+                sortBy = "membershipType",
+                sortDir = "ASC",
             )
         val iamFilter =
             MembershipFilter(
@@ -61,6 +63,8 @@ class IamLifecycleReadAdapterTests {
                 membershipType = "OPERATIONS_LEAD",
                 page = 3,
                 size = 17,
+                sortBy = "membershipType",
+                sortDir = "ASC",
             )
         val pageMetadata =
             ApiPageMetadata(
@@ -158,6 +162,8 @@ class IamLifecycleReadAdapterTests {
                 status = "REVOKED",
                 page = 2,
                 size = 11,
+                sortBy = "assignedAt",
+                sortDir = "DESC",
             )
         val iamFilter =
             BranchAssignmentFilter(
@@ -166,6 +172,8 @@ class IamLifecycleReadAdapterTests {
                 status = "REVOKED",
                 page = 2,
                 size = 11,
+                sortBy = "assignedAt",
+                sortDir = "DESC",
             )
         val pageMetadata =
             ApiPageMetadata(

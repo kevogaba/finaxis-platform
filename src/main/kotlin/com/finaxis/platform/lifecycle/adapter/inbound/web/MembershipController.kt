@@ -61,13 +61,10 @@ class MembershipController(
     private val lifecycleIamReadService: LifecycleIamReadService,
 ) {
     /**
-     * Searches memberships in the active tenant organisation.
-     *
-     * Sort parameters are accepted for a stable list contract but Phase A's membership query
-     * filter does not yet expose sorting fields.
+     * Searches memberships in the active tenant organisation. Without `sort_by` the list is newest
+     * first; `sort_dir` applies only with a `sort_by`.
      */
     @GetMapping
-    @Suppress("UnusedParameter")
     @PreAuthorize("hasAuthority('membership.view')")
     @Operation(
         summary = "Search memberships",
@@ -80,7 +77,7 @@ class MembershipController(
         ),
         ApiResponse(
             responseCode = "400",
-            description = "Invalid page or filter",
+            description = "Invalid page, sort or filter",
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -115,9 +112,11 @@ class MembershipController(
         @RequestParam(required = false, name = "membership_type") membershipType: String?,
         @RequestParam(defaultValue = "0") @Min(0) page: Int,
         @RequestParam(defaultValue = "25") @Min(1) @Max(MAXIMUM_PAGE_SIZE) size: Int,
-        @Parameter(hidden = true)
+        @Parameter(
+            description = "Field to sort by. Values are camelCase, unlike other wire names.",
+            schema = Schema(allowableValues = ["createdAt", "membershipStatus", "membershipType"]),
+        )
         @RequestParam(required = false, name = "sort_by") sortBy: String?,
-        @Parameter(hidden = true)
         @RequestParam(required = false, name = "sort_dir") sortDir: String?,
     ): ApiPage<MembershipSummaryResponse> {
         val caller = CallerContextResolver.getTenantCaller()
@@ -130,6 +129,8 @@ class MembershipController(
                     membershipType = membershipType,
                     page = page,
                     size = size,
+                    sortBy = sortBy,
+                    sortDir = sortDir,
                 ),
                 caller,
             )

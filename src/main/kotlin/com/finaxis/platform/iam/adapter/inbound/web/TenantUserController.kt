@@ -57,7 +57,10 @@ class TenantUserController(
     private val userProvisioningService: UserProvisioningService,
     private val iamQueryService: IamQueryService,
 ) {
-    /** Searches users in the active tenant organisation. */
+    /**
+     * Searches users in the active tenant organisation. Without `sort_by` the list is newest
+     * first; `sort_dir` applies only with a `sort_by`.
+     */
     @GetMapping
     @PreAuthorize("hasAuthority('user.view')")
     @Operation(
@@ -69,6 +72,16 @@ class TenantUserController(
             responseCode = "200",
             description = "User page",
         ),
+        ApiResponse(
+            responseCode = "400",
+            description = "Invalid page, sort or filter",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
     )
     fun searchUsers(
         @RequestParam(required = false) q: String?,
@@ -76,6 +89,23 @@ class TenantUserController(
         @RequestParam(required = false, name = "membership_status") membershipStatus: String?,
         @RequestParam(defaultValue = "0") @Min(0) page: Int,
         @RequestParam(defaultValue = "25") @Min(1) @Max(MAXIMUM_PAGE_SIZE) size: Int,
+        @Parameter(
+            description = "Field to sort by. Values are camelCase, unlike other wire names.",
+            schema =
+                Schema(
+                    allowableValues =
+                        [
+                            "createdAt",
+                            "username",
+                            "displayName",
+                            "email",
+                            "userStatus",
+                            "membershipStatus",
+                        ],
+                ),
+        )
+        @RequestParam(required = false, name = "sort_by") sortBy: String?,
+        @RequestParam(required = false, name = "sort_dir") sortDir: String?,
     ): ApiPage<UserInTenantSummaryResponse> {
         val caller = CallerContextResolver.getTenantCaller()
         val pageResult =
@@ -87,6 +117,8 @@ class TenantUserController(
                     membershipStatus = membershipStatus,
                     page = page,
                     size = size,
+                    sortBy = sortBy,
+                    sortDir = sortDir,
                 ),
                 caller,
             )
