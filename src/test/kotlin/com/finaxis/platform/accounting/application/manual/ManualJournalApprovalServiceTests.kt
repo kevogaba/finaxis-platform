@@ -12,6 +12,7 @@ import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.audit.AuditSeverity
+import com.finaxis.platform.common.id.uuidV7
 import org.junit.jupiter.api.Test
 import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.util.UUID
@@ -152,6 +153,17 @@ class ManualJournalApprovalServiceTests : ManualJournalServiceTestFixture() {
         assertEquals(approval.receipt.journalEntryId.toString(), audited.metadata["journalEntryId"])
         assertEquals(approval.receipt.journalReference, audited.metadata["entryNumber"])
         assertEquals("ADV-4471", audited.metadata["externalReference"])
+    }
+
+    @Test
+    fun `approving a tenant-wide journal while a branch is selected audits it against no branch`() {
+        val journal = seed(status = ManualJournalStatus.PENDING_APPROVAL, branchId = null)
+        makers.performedBy(journal.id, ManualJournalTransition.SUBMIT, MAKER)
+
+        // The approver's context selects BRANCH; the journal itself belongs to no branch.
+        service.approve(move(journal, CHECKER, reason = "Reviewed"))
+
+        assertNull(auditEvents.single().branchId)
     }
 
     @Test

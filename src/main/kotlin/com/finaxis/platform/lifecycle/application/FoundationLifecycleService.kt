@@ -233,6 +233,7 @@ class FoundationLifecycleService(
                 transition = transition.name,
                 fromState = fromState,
                 toState = TRANSITION_NOT_REACHED,
+                branchId = aggregateBranchId(aggregate.aggregateType, aggregate.aggregateId),
                 outcome =
                     if (ex is TransitionGuardException) {
                         AuditOutcome.DENIED
@@ -258,10 +259,21 @@ class FoundationLifecycleService(
             fromState = result.fromState.name,
             toState = result.toState.name,
             outcome = AuditOutcome.SUCCESS,
+            branchId =
+                aggregateBranchId(result.aggregate.aggregateType, result.aggregate.aggregateId),
             reason = result.log.reason,
             requestId = result.log.requestId,
         )
     }
+
+    /**
+     * The branch an FSM row is about: the aggregate itself when it is a branch, and none for any
+     * other aggregate. It comes from the aggregate, never from the caller's selected branch (#186).
+     */
+    private fun aggregateBranchId(
+        aggregateType: String,
+        aggregateId: String,
+    ): UUID? = if (aggregateType == BRANCH_AUDIT_ENTITY_TYPE) UUID.fromString(aggregateId) else null
 
     private fun contextualise(
         command: TransitionCommand,

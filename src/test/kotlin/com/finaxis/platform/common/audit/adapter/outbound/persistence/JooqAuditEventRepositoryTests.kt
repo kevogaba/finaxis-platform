@@ -4,6 +4,7 @@ import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditSeverity
+import com.finaxis.platform.common.context.BranchContext
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.context.RequestContext
 import com.finaxis.platform.common.context.RequestContexts
@@ -215,6 +216,49 @@ class JooqAuditEventRepositoryTests(
         assertEquals(organisationId, persistedOrganisationId)
     }
 
+    @Test
+    fun `save leaves branch_id empty for a tenant-wide event while the request selects a branch`() {
+        val eventId = uuidV7()
+
+        RequestContexts.with(
+            RequestContext(
+                tenant = TenantContext(SEEDED_ORGANISATION_ID),
+                branch = BranchContext(SEEDED_OPERATIONS_BRANCH_ID),
+            ),
+        ) {
+            repository.save(baseEvent(eventId, SEEDED_ORGANISATION_ID))
+        }
+
+        assertNull(branchIdOf(eventId))
+    }
+
+    @Test
+    fun `save stamps the branch the event is about, never the branch the request selects`() {
+        val eventId = uuidV7()
+
+        RequestContexts.with(
+            RequestContext(
+                tenant = TenantContext(SEEDED_ORGANISATION_ID),
+                branch = BranchContext(SEEDED_OPERATIONS_BRANCH_ID),
+            ),
+        ) {
+            repository.save(
+                baseEvent(eventId, SEEDED_ORGANISATION_ID).copy(
+                    branchId = SEEDED_HEAD_OFFICE_BRANCH_ID.toString(),
+                ),
+            )
+        }
+
+        assertEquals(SEEDED_HEAD_OFFICE_BRANCH_ID, branchIdOf(eventId))
+    }
+
+    private fun branchIdOf(eventId: UUID): UUID? =
+        dsl
+            .select(AUDIT_EVENT.BRANCH_ID)
+            .from(AUDIT_EVENT)
+            .where(AUDIT_EVENT.ID.eq(eventId))
+            .fetchOne(AUDIT_EVENT.BRANCH_ID)
+
     private fun baseEvent(
         eventId: UUID,
         organisationId: UUID?,
@@ -259,5 +303,14 @@ class JooqAuditEventRepositoryTests(
             .set(ORGANISATION.UPDATED_AT, now)
             .execute()
         return id
+    }
+
+    private companion object {
+        /** The bootstrap tenant (V3) and its branches, present in every test database. */
+        val SEEDED_ORGANISATION_ID: UUID = UUID.fromString("22222222-2222-2222-2222-222222222222")
+        val SEEDED_HEAD_OFFICE_BRANCH_ID: UUID =
+            UUID.fromString("33333333-3333-3333-3333-333333333333")
+        val SEEDED_OPERATIONS_BRANCH_ID: UUID =
+            UUID.fromString("44444444-4444-4444-4444-444444444444")
     }
 }

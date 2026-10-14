@@ -161,10 +161,15 @@ data class MembershipLifecycleSnapshot(
     val status: MembershipLifecycleState,
 )
 
-/** Assignment revoked as part of organisation deprovisioning and retained for audit reporting. */
+/**
+ * Assignment revoked as part of a deprovisioning cascade and retained for audit reporting.
+ * [branchId] is the branch the assignment is on: a branch assignment's branch, or a branch-scoped
+ * role assignment's, and null for a tenant-scoped role assignment.
+ */
 data class DeprovisionedAssignment(
     val assignmentId: UUID,
     val assignmentType: String,
+    val branchId: UUID?,
 )
 
 /** Organisation settings persistence port for post-provisioning configuration changes. */

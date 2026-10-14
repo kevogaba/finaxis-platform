@@ -42,6 +42,7 @@ class UserDeactivationAssignmentRevoker(
                         action = "user.deactivation_assignment_revoked",
                         resourceType = assignment.assignmentType,
                         resourceId = assignment.assignmentId.toString(),
+                        branchId = assignment.branchId?.toString(),
                         outcome = AuditOutcome.SUCCESS,
                         reason = command.reason.value,
                         requestId = command.requestId,

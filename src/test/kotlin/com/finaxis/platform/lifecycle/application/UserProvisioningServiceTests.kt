@@ -1104,7 +1104,16 @@ class UserProvisioningServiceTests {
         )
         assertTrue(fake.branchAssignments.isEmpty())
         assertTrue(fake.roleAssignments.isEmpty())
-        assertTrue(audits.events.any { it.action == "membership.revoke" })
+        // One row for the transition (the FSM's) and one for the cascade, which carries the counts.
+        assertEquals(1, audits.events.count { it.action == "membership.revoke" })
+        val cascade = audits.events.filter { it.action == "membership.assignments_revoked" }
+        assertEquals(1, cascade.size)
+        assertEquals("MEMBERSHIP", cascade.first().resourceType)
+        assertEquals(membershipId.toString(), cascade.first().resourceId)
+        assertEquals(
+            mapOf("branchAssignmentsRevoked" to "1", "roleAssignmentsRevoked" to "1"),
+            cascade.first().metadata.filterKeys { it.endsWith("AssignmentsRevoked") },
+        )
     }
 
     @Test
@@ -1127,7 +1136,8 @@ class UserProvisioningServiceTests {
             MembershipLifecycleState.REVOKED,
             fake.memberships.getValue(context.org to membershipId).state,
         )
-        assertTrue(audits.events.none { it.action == "membership.revoke" })
+        // A refused revoke runs no cascade, so it writes no cascade row (ADR 0031).
+        assertTrue(audits.events.none { it.action == "membership.assignments_revoked" })
         assertTrue(logs.logs.isEmpty())
     }
 
@@ -1189,7 +1199,7 @@ class UserProvisioningServiceTests {
             MembershipLifecycleState.SUSPENDED,
             fake.memberships.getValue(context.org to membershipId).state,
         )
-        assertTrue(audits.events.any { it.action == "membership.suspend" })
+        assertEquals(1, audits.events.count { it.action == "membership.suspend" })
     }
 
     @Test
@@ -1216,7 +1226,7 @@ class UserProvisioningServiceTests {
             MembershipLifecycleState.ACTIVE,
             fake.memberships.getValue(context.org to membershipId).state,
         )
-        assertTrue(audits.events.any { it.action == "membership.reactivate" })
+        assertEquals(1, audits.events.count { it.action == "membership.reactivate" })
     }
 
     @Test
@@ -1465,7 +1475,7 @@ class UserProvisioningServiceTests {
     }
 
     @Test
-    fun `an authorised user lifecycle mutation audits the actor the command names`() {
+    fun `an authorised user suspension writes the one row its transition writes`() {
         val actor = uuidV7()
         val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
 
@@ -1474,10 +1484,8 @@ class UserProvisioningServiceTests {
         )
 
         verify(permissionGuard).requirePlatformPermission(actor, "user.suspend")
-        assertEquals(
-            listOf(actor.toString()),
-            audits.events.filter { it.action == "user.suspend" }.map { it.actorId },
-        )
+        // The FSM row is the only row: no service row repeats it (ADR 0031).
+        assertEquals(listOf("user_account.suspend"), audits.events.map { it.action })
     }
 
     private fun approve(
@@ -1888,10 +1896,13 @@ private class UserProvisioningFake :
             roleAssignments.filter { it.organisationId == organisationId && it.userId == userId }
         branchAssignments.removeAll(matchingBranch.toSet())
         roleAssignments.removeAll(matchingRole.toSet())
+        // This fake keeps no branch per assignment, so the branch is not modelled here.
         return matchingBranch.map {
-            DeprovisionedAssignment(uuidV7(), "USER_BRANCH_ASSIGNMENT")
+            DeprovisionedAssignment(uuidV7(), "USER_BRANCH_ASSIGNMENT", branchId = null)
         } +
-            matchingRole.map { DeprovisionedAssignment(uuidV7(), "USER_ROLE_ASSIGNMENT") }
+            matchingRole.map {
+                DeprovisionedAssignment(uuidV7(), "USER_ROLE_ASSIGNMENT", branchId = null)
+            }
     }
 
     override fun branchHasActiveAssignments(

@@ -40,6 +40,7 @@ class JooqOrganisationBranchProvisioningStoreTests(
     private val dsl: DSLContext,
     private val store: JooqOrganisationBranchProvisioningStore,
     private val accessStore: JooqOrganisationAccessStore,
+    private val persistence: JooqFoundationLifecyclePersistence,
     private val objectMapper: ObjectMapper,
 ) {
     @Test
@@ -310,6 +311,52 @@ class JooqOrganisationBranchProvisioningStoreTests(
     // ── end bootstrap projection ──────────────────────────────────────────────
 
     @Test
+    fun `each revoked row names the branch it is on, and a tenant-scoped role names none`() {
+        val organisationId = insertOrganisation()
+        val branchId = insertBranch(organisationId)
+        val userId = insertUserAccount()
+        insertMembership(organisationId, userId)
+        val tenantRoleId = insertRole(organisationId)
+        val branchRoleId = insertRole(organisationId)
+        val branchAssignmentId = insertActiveBranchAssignment(organisationId, userId, branchId)
+        val tenantRoleAssignmentId =
+            insertActiveRoleAssignment(organisationId, userId, tenantRoleId)
+        val branchRoleAssignmentId =
+            insertActiveRoleAssignment(organisationId, userId, branchRoleId, "BRANCH", branchId)
+
+        val revoked =
+            accessStore.revokeActiveAssignments(organisationId).associateBy { it.assignmentId }
+
+        assertEquals(branchId, revoked.getValue(branchAssignmentId).branchId)
+        assertEquals(branchId, revoked.getValue(branchRoleAssignmentId).branchId)
+        assertNull(revoked.getValue(tenantRoleAssignmentId).branchId)
+    }
+
+    @Test
+    fun `the foundation cascade names each revoked assignment's branch, a tenant role none`() {
+        val organisationId = insertOrganisation()
+        val branchId = insertBranch(organisationId)
+        val userId = insertUserAccount()
+        insertMembership(organisationId, userId)
+        val tenantRoleId = insertRole(organisationId)
+        val branchRoleId = insertRole(organisationId)
+        val branchAssignmentId = insertActiveBranchAssignment(organisationId, userId, branchId)
+        val tenantRoleAssignmentId =
+            insertActiveRoleAssignment(organisationId, userId, tenantRoleId)
+        val branchRoleAssignmentId =
+            insertActiveRoleAssignment(organisationId, userId, branchRoleId, "BRANCH", branchId)
+
+        val revoked =
+            persistence
+                .revokeActiveAssignments(organisationId, userId)
+                .associateBy { it.assignmentId }
+
+        assertEquals(branchId, revoked.getValue(branchAssignmentId).branchId)
+        assertEquals(branchId, revoked.getValue(branchRoleAssignmentId).branchId)
+        assertNull(revoked.getValue(tenantRoleAssignmentId).branchId)
+    }
+
+    @Test
     fun `revokes active branch and role assignments across users in bulk`() {
         val organisationId = insertOrganisation()
         val roleId = insertRole(organisationId)
@@ -491,6 +538,8 @@ class JooqOrganisationBranchProvisioningStoreTests(
         organisationId: UUID,
         userId: UUID,
         roleId: UUID,
+        scopeType: String = "TENANT",
+        branchId: UUID? = null,
     ): UUID {
         val id = uuidV7()
         val now = OffsetDateTime.now()
@@ -500,7 +549,8 @@ class JooqOrganisationBranchProvisioningStoreTests(
             .set(USER_ROLE_ASSIGNMENT.ORGANISATION_ID, organisationId)
             .set(USER_ROLE_ASSIGNMENT.USER_ID, userId)
             .set(USER_ROLE_ASSIGNMENT.ROLE_ID, roleId)
-            .set(USER_ROLE_ASSIGNMENT.SCOPE_TYPE, "TENANT")
+            .set(USER_ROLE_ASSIGNMENT.SCOPE_TYPE, scopeType)
+            .set(USER_ROLE_ASSIGNMENT.BRANCH_ID, branchId)
             .set(USER_ROLE_ASSIGNMENT.STATUS, "ACTIVE")
             .set(USER_ROLE_ASSIGNMENT.ASSIGNED_AT, now)
             .set(USER_ROLE_ASSIGNMENT.CREATED_AT, now)

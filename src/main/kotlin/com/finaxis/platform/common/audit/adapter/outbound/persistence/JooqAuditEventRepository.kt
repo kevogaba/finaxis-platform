@@ -42,10 +42,10 @@ class JooqAuditEventRepository(
             .set(AUDIT_EVENT.ACTOR_USER_ID, userActorId)
             .set(AUDIT_EVENT.ACTOR_EXTERNAL_SUBJECT, context?.actor?.externalSubject)
             .set(AUDIT_EVENT.ACTOR_TYPE, actorType)
-            .set(
-                AUDIT_EVENT.BRANCH_ID,
-                (event.branchId?.toUuidOrNull()) ?: context?.branch?.branchId,
-            ).set(AUDIT_EVENT.EVENT_TYPE, event.eventType)
+            // The branch the event is about, and only that: the request's selected branch is never
+            // stamped, so a tenant-wide event carries no branch whatever the caller has selected.
+            .set(AUDIT_EVENT.BRANCH_ID, event.branchId?.toUuidOrNull())
+            .set(AUDIT_EVENT.EVENT_TYPE, event.eventType)
             .set(AUDIT_EVENT.ENTITY_TYPE, event.resourceType)
             .set(AUDIT_EVENT.ENTITY_ID, event.resourceId?.toUuidOrNull())
             .set(AUDIT_EVENT.ACTION, event.action)

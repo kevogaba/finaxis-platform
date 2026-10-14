@@ -95,6 +95,7 @@ class HeadOfficeBootstrapIntegrationTests(
                         AUDIT_EVENT.ACTOR_USER_ID,
                         AUDIT_EVENT.ENTITY_TYPE,
                         AUDIT_EVENT.ENTITY_ID,
+                        AUDIT_EVENT.BRANCH_ID,
                         AUDIT_EVENT.METADATA_JSONB,
                     ).from(AUDIT_EVENT)
                     .where(AUDIT_EVENT.ORGANISATION_ID.eq(organisationId))
@@ -107,6 +108,8 @@ class HeadOfficeBootstrapIntegrationTests(
         assertNull(audit.get(AUDIT_EVENT.ACTOR_USER_ID))
         assertEquals(BRANCH_RESOURCE, audit.get(AUDIT_EVENT.ENTITY_TYPE))
         assertEquals(branchId, audit.get(AUDIT_EVENT.ENTITY_ID))
+        // The head office is the branch the row is about, so it carries that branch.
+        assertEquals(branchId, audit.get(AUDIT_EVENT.BRANCH_ID))
         val metadata = requireNotNull(audit.get(AUDIT_EVENT.METADATA_JSONB))
         val metadataJson = objectMapper.readTree(metadata.data())
         assertEquals("true", metadataJson.get("bootstrap").asText())

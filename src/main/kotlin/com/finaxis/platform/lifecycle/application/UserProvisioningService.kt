@@ -250,6 +250,7 @@ class UserProvisioningService(
     @Transactional
     fun suspendUser(command: SuspendUserCommand) {
         permissionGuard.requirePlatformPermission(command.actorId, "user.suspend")
+        // The FSM writes the transition's one audit row (ADR 0031); no service row repeats it.
         lifecycleService.transition(
             UserTransitionCommand(
                 command.organisationId,
@@ -257,15 +258,6 @@ class UserProvisioningService(
                 transition = UserLifecycleTransition.SUSPEND,
                 command = transitionCommand(command.reason.value, command.requestId),
             ),
-        )
-        audit(
-            command.organisationId,
-            "user.suspend",
-            command.actorId,
-            USER,
-            command.userId,
-            command.reason.value,
-            command.requestId,
         )
     }
 
@@ -283,15 +275,6 @@ class UserProvisioningService(
                 transition = UserLifecycleTransition.REACTIVATE,
                 command = transitionCommand(command.reason?.value, command.requestId),
             ),
-        )
-        audit(
-            command.organisationId,
-            "user.reactivate",
-            command.actorId,
-            USER,
-            command.userId,
-            command.reason?.value,
-            command.requestId,
         )
     }
 
@@ -317,15 +300,6 @@ class UserProvisioningService(
                 transition = UserLifecycleTransition.COMPLETE_DEACTIVATION,
                 command = transitionCommand(command.reason.value, command.requestId),
             ),
-        )
-        audit(
-            command.organisationId,
-            "user.deactivate",
-            command.actorId,
-            USER,
-            command.userId,
-            command.reason.value,
-            command.requestId,
         )
         deactivationAssignmentRevoker.revoke(command)
     }
@@ -362,9 +336,11 @@ class UserProvisioningService(
                 command.membershipId,
                 command.actorId,
             )
+        // The FSM row above is the transition's record. This row carries only what the cascade
+        // ended, so the revoke is not counted twice under one action (ADR 0031).
         audit(
             organisationId = command.organisationId,
-            action = "membership.revoke",
+            action = "membership.assignments_revoked",
             actorId = command.actorId,
             resourceType = MEMBERSHIP,
             resourceId = command.membershipId,
@@ -390,7 +366,8 @@ class UserProvisioningService(
             command.organisationId,
             "membership.suspend",
         )
-        val snapshot = requireMembership(command.organisationId, command.membershipId)
+        requireMembership(command.organisationId, command.membershipId)
+        // The FSM writes the transition's one audit row, keyed by the membership (ADR 0031).
         lifecycleService.transition(
             MembershipTransitionCommand(
                 command.organisationId,
@@ -398,15 +375,6 @@ class UserProvisioningService(
                 transition = MembershipLifecycleTransition.SUSPEND,
                 command = transitionCommand(command.reason.value, command.requestId),
             ),
-        )
-        audit(
-            command.organisationId,
-            "membership.suspend",
-            command.actorId,
-            USER,
-            snapshot.userId,
-            command.reason.value,
-            command.requestId,
         )
     }
 
@@ -421,7 +389,8 @@ class UserProvisioningService(
             command.organisationId,
             "membership.reactivate",
         )
-        val snapshot = requireMembership(command.organisationId, command.membershipId)
+        requireMembership(command.organisationId, command.membershipId)
+        // The FSM writes the transition's one audit row, keyed by the membership (ADR 0031).
         lifecycleService.transition(
             MembershipTransitionCommand(
                 command.organisationId,
@@ -429,15 +398,6 @@ class UserProvisioningService(
                 transition = MembershipLifecycleTransition.REACTIVATE,
                 command = transitionCommand(command.reason?.value, command.requestId),
             ),
-        )
-        audit(
-            command.organisationId,
-            "membership.reactivate",
-            command.actorId,
-            USER,
-            snapshot.userId,
-            command.reason?.value,
-            command.requestId,
         )
     }
 

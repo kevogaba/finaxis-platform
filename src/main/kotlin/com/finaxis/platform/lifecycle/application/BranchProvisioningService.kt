@@ -73,6 +73,7 @@ class BranchProvisioningService(
         audit(
             command.organisationId,
             branchId.toString(),
+            branchId,
             "branch.create_draft",
             command.requestedBy.toString(),
         )
@@ -110,6 +111,7 @@ class BranchProvisioningService(
         audit(
             command.organisationId,
             command.branchId.toString(),
+            command.branchId,
             BRANCH_UPDATE_AUDIT_ACTION,
             command.actorId.toString(),
             mapOf("changedFields" to command.changedFields.joinToString(",")),
@@ -180,6 +182,7 @@ class BranchProvisioningService(
             audit(
                 command.organisationId,
                 command.branchId.toString(),
+                command.branchId,
                 "branch.submit_as_platform_checker",
                 command.actorId.toString(),
                 mapOf(CHECKER_SCOPE to ActingScope.PLATFORM.name),
@@ -229,6 +232,7 @@ class BranchProvisioningService(
             audit(
                 command.organisationId,
                 command.branchId.toString(),
+                command.branchId,
                 "branch.activate_as_platform_checker",
                 command.actorId.toString(),
                 mapOf(CHECKER_SCOPE to ActingScope.PLATFORM.name),
@@ -281,6 +285,7 @@ class BranchProvisioningService(
             audit(
                 command.organisationId,
                 command.branchId.toString(),
+                command.branchId,
                 "branch.withdraw",
                 command.actorId.toString(),
                 reason = command.reason.value,
@@ -289,6 +294,7 @@ class BranchProvisioningService(
             audit(
                 command.organisationId,
                 command.branchId.toString(),
+                command.branchId,
                 "branch.return_for_changes_as_platform_checker",
                 command.actorId.toString(),
                 mapOf(CHECKER_SCOPE to ActingScope.PLATFORM.name),
@@ -406,6 +412,7 @@ class BranchProvisioningService(
             audit(
                 command.organisationId,
                 command.branchId.toString(),
+                command.branchId,
                 "branch.assign_user",
                 command.assignedBy.toString(),
             )
@@ -434,6 +441,7 @@ class BranchProvisioningService(
         audit(
             command.organisationId,
             command.branchId.toString(),
+            command.branchId,
             "branch.revoke_user",
             command.revokedBy.toString(),
         )
@@ -553,8 +561,7 @@ class BranchProvisioningService(
                 action = BRANCH_ACTIVATE_AUDIT_ACTION,
                 resourceType = BRANCH_AUDIT_ENTITY_TYPE,
                 resourceId = command.branchId.toString(),
-                // Explicit: left null, the adapter would record the caller's pinned branch, or
-                // none on the platform route, and a branch_id search would miss the refusal.
+                // The branch the refusal is about, whatever branch the caller has selected (#186).
                 branchId = command.branchId.toString(),
                 outcome = AuditOutcome.DENIED,
                 severity = AuditSeverity.HIGH,
@@ -651,9 +658,11 @@ class BranchProvisioningService(
         )
     }
 
+    /** Writes a tenant-scoped branch event, stamped with [branchId], the branch it is about. */
     private fun audit(
         organisationId: java.util.UUID,
         resourceId: String,
+        branchId: java.util.UUID,
         action: String,
         actorId: String,
         metadata: Map<String, String> = emptyMap(),
@@ -667,6 +676,7 @@ class BranchProvisioningService(
                 action = action,
                 resourceType = BRANCH_AUDIT_ENTITY_TYPE,
                 resourceId = resourceId,
+                branchId = branchId.toString(),
                 outcome = AuditOutcome.SUCCESS,
                 reason = reason,
                 metadata = metadata,

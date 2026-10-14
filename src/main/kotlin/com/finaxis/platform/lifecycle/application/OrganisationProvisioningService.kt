@@ -502,6 +502,8 @@ class OrganisationProvisioningService(
                         "assignmentType" to assignment.assignmentType,
                     ),
                 reason = command.reason.value,
+                // A branch assignment, or a branch-scoped role, is about its branch (#186).
+                branchId = assignment.branchId,
             )
         }
     }
@@ -539,6 +541,7 @@ class OrganisationProvisioningService(
         actorId: UUID,
         metadata: Map<String, String>,
         reason: String? = null,
+        branchId: UUID? = null,
     ) {
         auditService.record(
             AuditCommand(
@@ -548,6 +551,7 @@ class OrganisationProvisioningService(
                 action = action,
                 resourceType = ORGANISATION,
                 resourceId = organisationId.toString(),
+                branchId = branchId?.toString(),
                 outcome = AuditOutcome.SUCCESS,
                 reason = reason,
                 metadata = metadata,
@@ -723,6 +727,7 @@ private fun activateHeadOffice(
                 action = "branch.create_draft",
                 resourceType = BRANCH_RESOURCE,
                 resourceId = branchId.toString(),
+                branchId = branchId.toString(),
                 outcome = AuditOutcome.SUCCESS,
                 metadata =
                     mapOf(

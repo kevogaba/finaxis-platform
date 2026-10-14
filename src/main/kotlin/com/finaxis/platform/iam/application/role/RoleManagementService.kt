@@ -236,6 +236,7 @@ class RoleManagementService(
                 command.branchId,
             ),
             "USER_ROLE_ASSIGNMENT",
+            branchId = assignmentBranchId(command.scopeType, command.branchId),
         )
         publishAssignment(command, ASSIGN, INACTIVE, ACTIVE, ROLE_ASSIGNED_TARGET)
         return RoleAssignmentResult(assignmentId, ACTIVE)
@@ -286,6 +287,7 @@ class RoleManagementService(
                 command.branchId,
             ),
             "USER_ROLE_ASSIGNMENT",
+            branchId = assignmentBranchId(command.scopeType, command.branchId),
         )
         publishRevocation(command)
     }
@@ -434,6 +436,7 @@ class RoleManagementService(
         requestId: String?,
         metadata: Map<String, String> = emptyMap(),
         resourceType: String = "ROLE",
+        branchId: UUID? = null,
     ) {
         auditService.record(
             AuditCommand(
@@ -443,6 +446,7 @@ class RoleManagementService(
                 action = action,
                 resourceType = resourceType,
                 resourceId = resourceId.toString(),
+                branchId = branchId?.toString(),
                 outcome = AuditOutcome.SUCCESS,
                 requestId = requestId,
                 metadata = metadata,
@@ -462,6 +466,15 @@ class RoleManagementService(
             put("scopeType", scopeType.name)
             branchId?.let { put("branchId", it.toString()) }
         }
+
+    /**
+     * The branch a role assignment is about: its branch when the scope is BRANCH, and none for a
+     * tenant-scoped assignment, whatever branch the caller has selected (#186).
+     */
+    private fun assignmentBranchId(
+        scopeType: RoleScopeType,
+        branchId: UUID?,
+    ): UUID? = branchId.takeIf { scopeType == RoleScopeType.BRANCH }
 
     /** Scopes the event aggregate id by branch so branch-scoped assignments stay distinct. */
     private fun roleAssignmentAggregateId(
