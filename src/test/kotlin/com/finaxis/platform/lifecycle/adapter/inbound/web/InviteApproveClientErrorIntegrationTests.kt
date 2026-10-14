@@ -5,6 +5,8 @@ import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.jobs.FailedJobRequeuer
+import com.finaxis.platform.common.jobs.JobRequeueOutcome
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.common.web.idempotency.IdempotencyKeyFilter
@@ -223,6 +225,7 @@ class InviteApproveClientErrorIntegrationTests
                 eventPublisher,
                 clock,
                 permissionGuard,
+                FailedJobRequeuer { JobRequeueOutcome.NOT_FAILED },
             )
 
         private fun inviteCommand(
@@ -372,6 +375,16 @@ class InviteApproveClientErrorIntegrationTests
         @Test
         fun `an approval with its prerequisites met still queues provisioning`() {
             val membership = invitedMembership()
+
+            approve(membership, checker()).andExpect { status { isAccepted() } }
+
+            assertEquals("PROVISIONING_IDP", userStatus(membership.userId))
+        }
+
+        @Test
+        fun `repeating an approval whose provisioning is queued is a 202 that changes nothing`() {
+            val membership = invitedMembership()
+            approve(membership, checker()).andExpect { status { isAccepted() } }
 
             approve(membership, checker()).andExpect { status { isAccepted() } }
 
@@ -552,7 +565,7 @@ class InviteApproveClientErrorIntegrationTests
                     "created_at, created_by, updated_at, updated_by " +
                     "FROM branch WHERE organisation_id = ? LIMIT 1",
                 id,
-                "SPARE-${id.toString().take(8)}",
+                "SPARE-${id.toString().takeLast(8)}",
                 status,
                 organisation,
             )
@@ -635,7 +648,9 @@ class InviteApproveClientErrorIntegrationTests
             dsl
                 .insertInto(USER_ACCOUNT)
                 .set(USER_ACCOUNT.ID, id)
-                .set(USER_ACCOUNT.USERNAME, "$label-${id.toString().take(12)}")
+                // The random tail: a UUIDv7's leading characters are its millisecond timestamp, so
+                // two users seeded with one label in the same few milliseconds would collide.
+                .set(USER_ACCOUNT.USERNAME, "$label-${id.toString().takeLast(12)}")
                 .set(USER_ACCOUNT.EMAIL, "$label-$id@invite-error.test")
                 .set(USER_ACCOUNT.DISPLAY_NAME, label)
                 .set(USER_ACCOUNT.STATUS, "ACTIVE")

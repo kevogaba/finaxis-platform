@@ -127,7 +127,7 @@ class KeycloakUserProvisioningJobRequestHandler(
             action = KEYCLOAK_PROVISIONING_ACTION,
             resourceId = jobRequest.userId.toString(),
             reason = ex.toAuditFailureReason(),
-            detail = ex.message ?: ex.javaClass.name,
+            detail = ex.toDispatchFailureDetail(),
             metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
         )
         // Only the bootstrap administrator's own job can fail the bootstrap, as only its success

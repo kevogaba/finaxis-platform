@@ -125,7 +125,7 @@ Where to look for the cause, in order:
    values only is written instead. Search the log for the organisation id, then read the classes
    and frames. What else writes about the same failure:
    - **JobRunr.** The bootstrap, Keycloak-provisioning and application-invite job handlers rethrow a
-     `SanitisedJobFailureException` to JobRunr (message = the closed code, or the exception class
+     `SanitisedJobFailureException` to JobRunr (message = the closed code, or the simple class
      name for the invite; no cause, except a message-free `InterruptedException` when the original
      chain held one, because JobRunr recognises a stopped server or a deleted job by an
      `InterruptedException` in the cause chain, so that detection is unchanged) for the failures
@@ -142,12 +142,22 @@ Where to look for the cause, in order:
    - **The API error handler.** `ApiExceptionHandler` logs an unexpected failure at `ERROR` (and
      a handled one at `DEBUG`) as the request path, `exceptionClass=` and the message-free
      frames, never the throwable.
-   - **The dispatch table.** For a Keycloak (and an application-invite) job the raw message is
-     still kept in `identity_dispatch_log.last_error`, which no API returns: an operator
-     reading the database sees it, so treat that table as sensitive.
+   - **The dispatch table.** For a Keycloak (and an application-invite) job
+     `identity_dispatch_log.last_error` holds the closed code and the exception class name
+     (for example `INVALID_STATE:IllegalStateException`), never the message, and no API returns
+     it. Rows written before that change keep the raw message and are not rewritten, so an
+     operator reading the database may still see one: treat that table as sensitive.
+   - **The welcome-email handler.** `SendWelcomeEmailJobRequestHandler` follows the same rule with
+     its own exceptions: a permanent failure throws `JobRunrException` (do-not-retry) with the
+     simple class name as its message and no cause; a retryable failure throws a message-free
+     exception named by the failure's class, with no cause, so JobRunr retries it as before. Both
+     log a message-free `WARN` with the exception and root-cause classes and the frames before they
+     throw, and both write the `user.welcome_email` failure audit row first.
    - **Not covered.** `jobrunr_jobs` keeps the job request's input (for the Keycloak job the
      administrator's email and username). An exception type the invite handler does not catch
-     reaches JobRunr as raised. The Keycloak handler's uncaught types and its already-succeeded
+     reaches JobRunr as raised. The welcome-email handler does not catch a `DataAccessException` (or
+     any other exception) from its recipient lookup or audit write: it reaches JobRunr raw, with its
+     message. The Keycloak handler's uncaught types and its already-succeeded
      branch are logged and sanitised but not recorded as a failed dispatch. On the API side,
      Sentry's MVC exception resolver (default `sentry.exception-resolver-order` 1) runs after
      Spring's own (the composite, 0), so the global handler resolves a failure first and Sentry's
@@ -156,14 +166,72 @@ Where to look for the cause, in order:
 2. **The audit trail.** A retry that fails again writes a `FAILURE` audit event for
    `tenant.bootstrap_retry` whose `reason` is the exception class name and whose metadata carries
    `bootstrapFailureCode`. A failed Keycloak provisioning job also records a `FAILURE` audit event
-   (`user.keycloak_provisioning`, reason is the exception class, no code) and keeps the raw
-   detail in the dispatch-tracking table (`identity_dispatch_log`), which no API returns.
+   (`user.keycloak_provisioning`, reason is the exception class, no code) and records in the
+   dispatch-tracking table (`identity_dispatch_log.last_error`) the closed code and the exception
+   class name (`<CODE>:<ExceptionClass>`), never the message; rows written before that change keep
+   the raw message. No API returns that table.
 3. **Retry.** `POST /api/v1/platform/tenants/{tenant_id}/bootstrap/retry`
    (`tenant.bootstrap_retry`) clears the code and runs the bootstrap again; a failure records a
-   fresh code.
+   fresh code. A failed administrator provisioning job runs again under its existing job id (see
+   [Failed Keycloak provisioning](#failed-keycloak-provisioning)), so a retry never queues a second
+   job for the same administrator.
 
 `UNEXPECTED` is also what `V24` wrote over every free-text value stored before it. That rewrite is
 one-way, so the cause of a failure from before `V24` is only in the logs of the time.
+
+## Failed Keycloak provisioning
+
+Approving a pending membership whose user has no Keycloak identity queues one Keycloak provisioning
+job. Its dispatch key is `<organisation>:<user>:KEYCLOAK_PROVISIONING` and its JobRunr id is that
+key's name-based UUID, so every enqueue and requeue of the job uses the same id. The user is
+`PROVISIONING_IDP` and the membership stays `PENDING_APPROVAL` until the job succeeds. When the job
+fails (for example, Keycloak is unreachable), the job's dispatch row in `identity_dispatch_log`
+becomes `FAILED`, and the user stays `PROVISIONING_IDP`. The job's failure detail is the closed
+code and the exception class name, never the message (see the section above).
+
+**Recovery.** Approve the membership again on the same route as the first approval (tenant
+`POST /api/v1/tenant/memberships/{membership_id}/activate`, or the platform route). The repeat
+answers `202 Accepted` and does one of the following, according to the job's JobRunr state:
+
+| The job is | What the repeat does |
+|---|---|
+| `FAILED` (its retries are used up) | Enqueues the same job again under its existing id and sets the dispatch row back to `PENDING`. The job runs again. |
+| Scheduled for a JobRunr retry, enqueued or processing | Leaves it alone. Nothing is published, no second job is made, and the repeat still answers `202`. |
+| Deleted in JobRunr (kept for 72 hours by default, then permanently deleted) | Leaves it alone, as for a scheduled job: nothing is published, no second job is made, and the repeat answers `202`. A job deleted on purpose is not run again by a repeat; once it is permanently deleted, the next repeat falls under `Gone`. |
+| Gone | Records the dispatch again (a no-op on the existing row), sets it to `PENDING` and publishes the provisioning request under the same key. |
+
+**One attempt per repeat.** A requeued job gets exactly one attempt. JobRunr counts every failed
+attempt in the job's history against its retry limit, so when the retries are already used up, a
+failure of the requeued run goes straight to `FAILED`, with no backoff retry. Each repeat approval
+therefore buys one run.
+
+**A scheduled retry can be far away.** After a failure, JobRunr schedules the next attempt
+`3^n` seconds later (3 s, 9 s, 27 s and so on, about 16 hours at the tenth retry). Until that
+attempt runs, the job is `SCHEDULED`, and re-approving does nothing: the repeat answers `202` and
+publishes nothing. Wait for the scheduled attempt, or re-approve once the job is `FAILED`.
+
+**Use a fresh `Idempotency-Key`.** A repeat sent with the same `Idempotency-Key` as an earlier
+approval replays that stored `202` and requeues nothing. Send a new key, or omit the header so one
+is generated, for the repeat to run.
+
+**Requeue commits at once.** The requeue is an external write on JobRunr's own connection, so it
+commits immediately. If the approval's transaction later rolls back (for example, on the audit
+write), the job still runs without a committed `user.approve` row for that repeat. The handler
+tolerates this: it skips a job only when the dispatch has `SUCCEEDED`, and a `FAILED` row is harmless.
+
+A repeat whose dispatch has `SUCCEEDED`, or has no dispatch at all, still answers `409 conflict`:
+no job can resume it. The approval's maker-checker, window and prerequisite checks run exactly as
+on the first approval, and the repeat writes its own `user.approve` audit row. It requests no second
+application invitation.
+
+No attempt creates a new job id. Two jobs for one dispatch could create the same Keycloak user, so
+a retry always runs the one job the first approval enqueued.
+
+**Checking a stuck user.** `identity_dispatch_log` for the user's `KEYCLOAK_PROVISIONING` key shows
+`FAILED` with the closed code in `last_error`. JobRunr's `jobrunr_jobs` row for the job id (the
+name-based UUID of the dispatch key) shows the state the table above describes. A user still
+`PROVISIONING_IDP` with a `FAILED` job and the membership still `PENDING_APPROVAL` is what the
+repeat approval recovers.
 
 ## Metadata-only deprovisioning
 

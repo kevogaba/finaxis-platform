@@ -102,10 +102,26 @@ class ApplicationInviteHandlerTests {
         assertFalse(logged.contains("provider unavailable"))
         val dispatch = store.dispatches.getValue(dispatchKey)
         assertEquals("FAILED", dispatch.status)
+        assertEquals("INVALID_STATE:IllegalStateException", dispatch.lastError)
         val dispatchAudit = audits.items.single { it.action == "user.application_invite" }
         assertEquals(AuditOutcome.FAILURE, dispatchAudit.outcome)
         assertEquals("IllegalStateException", dispatchAudit.reason)
         assertEquals(SystemActor.ID.toString(), dispatchAudit.actorId)
+    }
+
+    @Test
+    fun `dispatch failure detail keeps the closed code and class name but never the message`() {
+        val dispatchKey = "user-1:org-1:APPLICATION_INVITE"
+        store.dispatches[dispatchKey] = InviteDispatchState("PENDING")
+        store.failure = IllegalStateException("provider rejected jane.doe@acme.test")
+
+        assertFailsWith<SanitisedJobFailureException> {
+            handler.run(applicationInviteRequest(dispatchKey))
+        }
+
+        val lastError = requireNotNull(store.dispatches.getValue(dispatchKey).lastError)
+        assertEquals("INVALID_STATE:IllegalStateException", lastError)
+        assertFalse(lastError.contains("jane.doe@acme.test"))
     }
 
     @Test
@@ -156,6 +172,10 @@ class ApplicationInviteHandlerTests {
         assertEquals("PermanentEmailDeliveryException", exception.message)
         assertNull(exception.cause)
         assertEquals("FAILED", store.dispatches.getValue(dispatchKey).status)
+        assertEquals(
+            "UNEXPECTED:PermanentEmailDeliveryException",
+            store.dispatches.getValue(dispatchKey).lastError,
+        )
     }
 
     @Test
@@ -180,6 +200,10 @@ class ApplicationInviteHandlerTests {
         assertNull(failure.cause)
 
         assertEquals("FAILED", store.dispatches.getValue(dispatchKey).status)
+        assertEquals(
+            "UNEXPECTED:RetryableEmailDeliveryException",
+            store.dispatches.getValue(dispatchKey).lastError,
+        )
     }
 
     @Test
@@ -245,6 +269,12 @@ private class ApplicationInviteStoreFake : UserProvisioningStore {
     var organisationName: String? = "Acme Bank"
 
     override fun dispatchStatus(dispatchKey: String): String? = dispatches[dispatchKey]?.status
+
+    override fun markDispatchPending(dispatchKey: String) {
+        dispatches[dispatchKey]?.let {
+            if (it.status == "FAILED") dispatches[dispatchKey] = it.copy(status = "PENDING")
+        }
+    }
 
     override fun markDispatchSucceeded(
         dispatchKey: String,

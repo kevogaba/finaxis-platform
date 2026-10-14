@@ -67,22 +67,27 @@ metadata and schedules a JobRunr job.
 Idempotency is implemented at several layers:
 
 - `identity_dispatch_log.dispatch_key` is unique;
-- Keycloak dispatch key is `${userId}:KEYCLOAK_PROVISIONING`;
+- Keycloak dispatch key is `<organisation>:<user>:KEYCLOAK_PROVISIONING`;
 - application-invite dispatch key is `${userId}:${organisationId}:APPLICATION_INVITE`;
 - JobRunr job id is deterministic from the dispatch key;
 - the worker returns immediately when the dispatch status is already `SUCCEEDED`;
 - `KeycloakAdminGateway` searches by email and username before creating a user;
 - local identity linking stores the Keycloak subject in `keycloak_identity_link`.
 
-Failures mark the dispatch `FAILED`, increment attempts in persistence, and rethrow so JobRunr or
-the broker can retry according to their runtime configuration. As of the real email transport (see
+Failures mark the dispatch `FAILED` and increment its attempts (`markDispatchFailed`). The handlers
+then throw a `SanitisedJobFailureException` to JobRunr for the failures they catch. It carries the
+closed code as its message (the invite handler's retryable failures carry the simple class name
+instead) and no cause, except a message-free `InterruptedException` when the original chain held
+one. JobRunr therefore retries under its runtime configuration, and the original message does not
+reach `jobrunr_jobs`. As of the real email transport (see
 [email-delivery.md](../architecture/email-delivery.md)), a *permanent* email-delivery failure for
 the organisation-invite email short-circuits that retry instead:
-`ApplicationInviteJobRequestHandler` catches `PermanentEmailDeliveryException` and rethrows it
-wrapped in `JobRunrException(reason, doNotRetry = true, cause)`, so JobRunr stops retrying
-immediately rather than exhausting its default retry policy against an address that will never
-succeed. A retryable delivery failure, a missing membership/organisation, or a persistence
-failure all still rethrow plainly and retry as before.
+`ApplicationInviteJobRequestHandler` throws `JobRunrException(<simple class name>, doNotRetry = true)`
+with no cause, so JobRunr stops retrying immediately rather than exhausting its default retry policy
+against an address that will never succeed. A retryable delivery failure, a missing
+membership/organisation, or a persistence failure all still retry as before. A failed Keycloak
+provisioning job is re-run on re-approval under its existing id: see
+[Failed Keycloak provisioning](../operations/tenant-provisioning.md#failed-keycloak-provisioning).
 
 ## Keycloak admin gateway
 

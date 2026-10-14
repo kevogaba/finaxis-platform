@@ -11,6 +11,9 @@ import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.jobs.FailedJobRequeuer
+import com.finaxis.platform.common.jobs.JobRequeueOutcome
+import com.finaxis.platform.common.jobs.deterministicJobId
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
@@ -77,6 +80,7 @@ class UserProvisioningServiceTests {
         )
     private val deactivationAssignmentRevoker =
         UserDeactivationAssignmentRevoker(fake, fake, AuditService(audits, clock), events, clock)
+    private val requeuer = FailedJobRequeuerFake()
     private val service =
         UserProvisioningService(
             lifecycle,
@@ -87,6 +91,7 @@ class UserProvisioningServiceTests {
             events,
             clock,
             permissionGuard,
+            requeuer,
         )
 
     @Test
@@ -426,6 +431,105 @@ class UserProvisioningServiceTests {
                     "${context.org}:${invitation.userId}:KEYCLOAK_PROVISIONING",
                 ),
             ),
+        )
+    }
+
+    @Test
+    fun `re-approving a requeued provisioning job answers true and publishes nothing`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        approve(context, invitation)
+        val key = keycloakDispatchKey(context, invitation.userId)
+        fake.dispatchStatuses[key] = "FAILED"
+        requeuer.outcome = JobRequeueOutcome.REQUEUED
+        val publishedBefore = events.externalTargets().size
+
+        val second = approve(context, invitation)
+
+        assertTrue(second.keycloakProvisioningRequested)
+        assertEquals(UserLifecycleState.PROVISIONING_IDP, second.userStatus)
+        assertEquals(MembershipLifecycleState.PENDING_APPROVAL, second.membershipStatus)
+        assertEquals(listOf(deterministicJobId(key)), requeuer.requested)
+        assertEquals("PENDING", fake.dispatchStatuses[key])
+        assertEquals(publishedBefore, events.externalTargets().size)
+    }
+
+    @Test
+    fun `re-approving while the provisioning job is still queued changes nothing`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        approve(context, invitation)
+        val key = keycloakDispatchKey(context, invitation.userId)
+        requeuer.outcome = JobRequeueOutcome.NOT_FAILED
+        val publishedBefore = events.externalTargets().size
+
+        val second = approve(context, invitation)
+
+        assertTrue(second.keycloakProvisioningRequested)
+        assertEquals(listOf(deterministicJobId(key)), requeuer.requested)
+        assertEquals("PENDING", fake.dispatchStatuses[key])
+        assertEquals(publishedBefore, events.externalTargets().size)
+        assertEquals(
+            UserLifecycleState.PROVISIONING_IDP,
+            fake.users.getValue(invitation.userId).state,
+        )
+    }
+
+    @Test
+    fun `re-approving when the job is gone republishes the request under the same key`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        approve(context, invitation)
+        val key = keycloakDispatchKey(context, invitation.userId)
+        fake.dispatchStatuses[key] = "FAILED"
+        requeuer.outcome = JobRequeueOutcome.NOT_FOUND
+        val publishedBefore = events.externalTargets().size
+
+        val second = approve(context, invitation)
+
+        assertTrue(second.keycloakProvisioningRequested)
+        assertEquals(publishedBefore + 1, events.externalTargets().size)
+        val republished = events.events.last() as ExternalizedTransitionEvent
+        assertEquals("finaxis.lifecycle.user.keycloak-provisioning-requested", republished.target)
+        assertEquals(key, republished.metadata["dispatchKey"])
+        assertEquals("PENDING", fake.dispatchStatuses[key])
+    }
+
+    @Test
+    fun `re-approving a user whose identity is already linked still resumes a failed job`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        approve(context, invitation)
+        val key = keycloakDispatchKey(context, invitation.userId)
+        // The job linked the Keycloak subject and then failed sending the required-actions email.
+        fake.identityLinks += invitation.userId
+        fake.dispatchStatuses[key] = "FAILED"
+        requeuer.outcome = JobRequeueOutcome.REQUEUED
+
+        val second = approve(context, invitation)
+
+        assertTrue(second.keycloakProvisioningRequested)
+        assertEquals(UserLifecycleState.PROVISIONING_IDP, second.userStatus)
+        assertEquals(listOf(deterministicJobId(key)), requeuer.requested)
+    }
+
+    @Test
+    fun `re-approving after the dispatch succeeded is still a 409 that requeues nothing`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        approve(context, invitation)
+        fake.dispatchStatuses[keycloakDispatchKey(context, invitation.userId)] = "SUCCEEDED"
+
+        val failure = assertFailsWith<ConflictException> { approve(context, invitation) }
+
+        assertEquals(
+            "The user account is not in a state that allows identity provisioning.",
+            failure.safeDetail,
+        )
+        assertTrue(requeuer.requested.isEmpty())
+        assertEquals(
+            UserLifecycleState.PROVISIONING_IDP,
+            fake.users.getValue(invitation.userId).state,
         )
     }
 
@@ -1411,6 +1515,11 @@ class UserProvisioningServiceTests {
         assertTrue(audits.events.none { it.action == "user.approve" })
     }
 
+    private fun keycloakDispatchKey(
+        context: InvitationContext,
+        userId: UUID,
+    ): String = "${context.org}:$userId:KEYCLOAK_PROVISIONING"
+
     private fun activeInvitationContext(): InvitationContext {
         val context =
             InvitationContext(
@@ -1470,6 +1579,7 @@ private class UserProvisioningFake :
     val branchAssignments = mutableSetOf<BranchAssignmentKey>()
     val roleAssignments = mutableSetOf<RoleAssignmentKey>()
     val dispatches = mutableSetOf<DispatchRecord>()
+    val dispatchStatuses = mutableMapOf<String, String>()
     var duplicateOnCreateUser = false
 
     /** The lock, the window count and membership reads in call order (lock comes first). */
@@ -1668,6 +1778,7 @@ private class UserProvisioningFake :
         actorId: UUID,
     ) {
         dispatches += DispatchRecord(userId, dispatchType, dispatchKey)
+        dispatchStatuses.putIfAbsent(dispatchKey, "PENDING")
     }
 
     override fun linkKeycloakIdentity(
@@ -1682,14 +1793,22 @@ private class UserProvisioningFake :
     override fun markDispatchSucceeded(
         dispatchKey: String,
         externalRef: String,
-    ) = Unit
+    ) {
+        dispatchStatuses[dispatchKey] = "SUCCEEDED"
+    }
 
     override fun markDispatchFailed(
         dispatchKey: String,
         error: String,
-    ) = Unit
+    ) {
+        dispatchStatuses[dispatchKey] = "FAILED"
+    }
 
-    override fun dispatchStatus(dispatchKey: String): String? = null
+    override fun markDispatchPending(dispatchKey: String) {
+        if (dispatchStatuses[dispatchKey] == "FAILED") dispatchStatuses[dispatchKey] = "PENDING"
+    }
+
+    override fun dispatchStatus(dispatchKey: String): String? = dispatchStatuses[dispatchKey]
 
     override fun revokeBranchAssignmentsForMembership(
         organisationId: UUID,
@@ -1881,6 +2000,17 @@ private class UserProvisioningFake :
     ) = true
 
     override fun lockBranchHierarchy(organisationId: UUID) = Unit
+}
+
+/** Answers the requeue outcome the test sets and records each job id it was asked about. */
+private class FailedJobRequeuerFake : FailedJobRequeuer {
+    var outcome = JobRequeueOutcome.NOT_FAILED
+    val requested = mutableListOf<UUID>()
+
+    override fun requeueIfFailed(jobId: UUID): JobRequeueOutcome {
+        requested += jobId
+        return outcome
+    }
 }
 
 private class UserProvisioningEventCapture : TransitionEventPublisher {

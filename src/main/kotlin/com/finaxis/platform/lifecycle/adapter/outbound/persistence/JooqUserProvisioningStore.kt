@@ -553,6 +553,17 @@ private class JooqUserProvisioningDispatchStore(
             .from(IDENTITY_DISPATCH_LOG)
             .where(IDENTITY_DISPATCH_LOG.DISPATCH_KEY.eq(dispatchKey))
             .fetchOne(IDENTITY_DISPATCH_LOG.STATUS)
+
+    override fun markDispatchPending(dispatchKey: String) {
+        dsl
+            .update(IDENTITY_DISPATCH_LOG)
+            .set(IDENTITY_DISPATCH_LOG.STATUS, PENDING)
+            .set(IDENTITY_DISPATCH_LOG.UPDATED_AT, now(clock))
+            .set(IDENTITY_DISPATCH_LOG.ROW_VERSION, IDENTITY_DISPATCH_LOG.ROW_VERSION.plus(1))
+            .where(IDENTITY_DISPATCH_LOG.DISPATCH_KEY.eq(dispatchKey))
+            .and(IDENTITY_DISPATCH_LOG.STATUS.eq(FAILED))
+            .execute()
+    }
 }
 
 private fun branchCondition(branchId: UUID?) =

@@ -38,15 +38,18 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.context.annotation.Primary
 import org.springframework.dao.TransientDataAccessResourceException
+import org.springframework.test.annotation.DirtiesContext
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 import org.springframework.test.context.TestConstructor
 import java.time.Instant
 import java.util.Properties
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -55,7 +58,12 @@ import kotlin.test.assertTrue
  * `ApplicationInviteJobRequestHandler` → the real [com.finaxis.platform.notifications
  * .adapter.outbound.email.SpringMailEmailGateway]) against a hermetic GreenMail SMTP/IMAP server,
  * including redelivery and job-retry idempotency.
+ *
+ * It closes its context with the class: its organisation's bootstrap and invite jobs fail on the
+ * unconfigured identity gateway and keep retrying under JobRunr's default policy, and a cached
+ * context would keep that server running into later tests (fix round 2).
  */
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @Import(
     TestcontainersConfiguration::class,
     ApplicationInvitePipelineIntegrationTests.FlakyDispatchStoreTestConfiguration::class,
@@ -152,7 +160,31 @@ class ApplicationInvitePipelineIntegrationTests(
                 assertEquals(StateName.SUCCEEDED, storageProvider.getJobById(invite.jobId).state)
             }
 
+        // Guard against a vacuous pass: the one-shot failure must have fired and been recorded,
+        // otherwise no retry ran and the assertions above prove nothing about retry.
+        assertNotNull(flakyDispatchStore.failureDetails[invite.dispatchKey])
         assertEquals(1, fetchInboxMessageCount(invitedEmail))
+    }
+
+    @Test
+    fun `a failed invite dispatch records the closed code and class name, not the message`() {
+        val invitedEmail = "invitee-detail-${uuidV7()}@example.test"
+        val invite = triggerInvite(invitedEmail, failDispatchSuccessOnce = true)
+
+        await()
+            .ignoreException(JobNotFoundException::class.java)
+            .atMost(60, TimeUnit.SECONDS)
+            .pollInterval(500, TimeUnit.MILLISECONDS)
+            .untilAsserted {
+                assertEquals(StateName.SUCCEEDED, storageProvider.getJobById(invite.jobId).state)
+            }
+
+        // The retry clears last_error when it succeeds, so the detail is read from the store call
+        // that marked the dispatch failed, before the retry ran.
+        assertEquals(
+            "DATABASE_ERROR:TransientDataAccessResourceException",
+            flakyDispatchStore.failureDetails[invite.dispatchKey],
+        )
     }
 
     /** Provisions an org/branch/role, invites and approves [email], returning the invite's keys. */
@@ -350,11 +382,25 @@ class ApplicationInvitePipelineIntegrationTests(
     ) : UserProvisioningDispatchStore by delegate {
         val dispatchKeyToFailOnce = AtomicReference<String?>(null)
 
+        /** The `detail` each dispatch key was last marked failed with, as the store received it. */
+        val failureDetails = ConcurrentHashMap<String, String>()
+
+        override fun markDispatchFailed(
+            dispatchKey: String,
+            error: String,
+        ) {
+            failureDetails[dispatchKey] = error
+            delegate.markDispatchFailed(dispatchKey, error)
+        }
+
         override fun markDispatchSucceeded(
             dispatchKey: String,
             externalRef: String,
         ) {
-            if (dispatchKeyToFailOnce.compareAndSet(dispatchKey, null)) {
+            // compareAndSet compares by reference: the armed key and the handler's key are equal
+            // strings but not the same instance, so the armed value itself is the expected one.
+            val armed = dispatchKeyToFailOnce.get()
+            if (armed == dispatchKey && dispatchKeyToFailOnce.compareAndSet(armed, null)) {
                 throw TransientDataAccessResourceException("Simulated transient dispatch failure")
             }
             delegate.markDispatchSucceeded(dispatchKey, externalRef)

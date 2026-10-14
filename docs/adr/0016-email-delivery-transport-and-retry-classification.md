@@ -45,6 +45,17 @@ catch `PermanentEmailDeliveryException` and rethrow it wrapped that way; a
 `IllegalStateException` from a missing membership/organisation or a `DataAccessException`)
 rethrows as-is so JobRunr's default retry policy applies.
 
+**Correction, 2026-10-13.** The paragraph above describes the handlers as first written; neither
+now rethrows the original exception or keeps its cause. `SendWelcomeEmailJobRequestHandler` throws
+`JobRunrException(<simple class name>, doNotRetry = true)` with no cause on a permanent failure,
+and a message-free exception named by the failure's class on a retryable one, with no cause
+(except a message-free `InterruptedException` when one was in the chain, which JobRunr uses to
+detect a stopped server); both log a message-free `WARN` first.
+`ApplicationInviteJobRequestHandler` throws a `SanitisedJobFailureException` (a closed code or the
+simple class name; no cause, except the same message-free `InterruptedException`) on a retryable
+failure and a `JobRunrException` with no cause on a permanent one. See
+`docs/operations/tenant-provisioning.md` ("The welcome-email handler").
+
 **Per-job send-once idempotency.** A JobRunr retry re-runs the handler from the top, so sending the
 email is wrapped in a step that must not repeat even though the audit/dispatch bookkeeping after it
 can still fail and legitimately trigger a retry. `common::jobs`' `JobStepGuard` (backed by
@@ -77,7 +88,11 @@ configuration classes).
 ## Consequences
 
 - Both stubbed handlers are gone; welcome and organisation-invite emails are delivered over real
-  SMTP, gated by `finaxis.email.enabled` (default `false`, `true` in production).
+  SMTP, gated by `finaxis.email.enabled` (default `false` in every profile).
+  **Correction, 2026-10-13:** this bullet previously said the default was `true` in production. It
+  is `false` in `application.yaml` and in `application-production.yaml`
+  (`${FINAXIS_EMAIL_ENABLED:false}`). While it is `false`, the application logs one startup `WARN`
+  (`EmailDisabledStartupWarning`).
 - A permanent delivery failure now stops JobRunr retries immediately instead of retrying forever;
   a transient one still retries under JobRunr's default backoff.
 - `lifecycle` gained one new allowed dependency, `notifications::email` (alongside `common::jobs`),

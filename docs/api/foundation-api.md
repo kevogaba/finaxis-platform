@@ -1373,7 +1373,8 @@ membership is not `PENDING_APPROVAL`; when the user has no active branch assignm
 `SYSTEM` and `AUDITOR` are exempt) or no active role assignment yet; or when the user account is not
 in a state that allows identity provisioning (a user without a linked identity must be `DRAFT` or
 `PENDING_APPROVAL`) or the membership activation (a user with a linked identity must be `ACTIVE` or
-`INVITED`). The detail names the missing prerequisite, for example `The membership cannot be
+`INVITED`), except a `PROVISIONING_IDP` user whose dispatch is unfinished, which answers `202` (see
+Repeating a 202 approval). The detail names the missing prerequisite, for example `The membership cannot be
 approved until the user has an active role assignment.` These were `500`s before #211. The
 permission check (`403`) and the unknown-membership check (`404`) still come first.
 
@@ -1413,6 +1414,22 @@ the membership itself:
 | Membership activate, **200** (invitee already has an identity) | membership `ACTIVATE` transition | `user.approve` and `membership.activate`  |
 | Membership activate, **202** (identity provisioning queued) | none; the membership stays `PENDING_APPROVAL` | `user.approve` only; the later job-driven `membership.activate` row carries no reason |
 | Tenant approve, **202**                                  | the organisation and its head office | the `START_PROVISIONING`, head office and organisation `ACTIVATE` transition rows |
+
+**Repeating a 202 approval (#162).** A membership whose user is `PROVISIONING_IDP` because an
+earlier approval queued identity provisioning answers the same route again with **`202`** and the
+membership detail, never `409` for that state. The repeat recovers a failed provisioning job: a
+`FAILED` job is enqueued again under its existing JobRunr id, so the same job runs again; a job
+still scheduled for a JobRunr retry, enqueued or processing is left alone, and nothing is published.
+A repeat requests no second application invitation, which the first approval already requested. A
+user whose provisioning dispatch has already `SUCCEEDED`, or has no dispatch, still answers
+**`409 conflict`** and changes nothing. Maker-checker, window and prerequisite checks run as on the
+first approval. Each repeat buys one attempt: a requeued job that fails again goes straight to
+`FAILED`. A job still `SCHEDULED` for its retry can be hours away (`3^n` seconds after the n-th
+failure), and a repeat before then answers `202` and changes nothing. A repeat sent with the same
+`Idempotency-Key` as an earlier approval replays that stored `202` and requeues nothing, so send a
+fresh key or omit the header. The requeue commits on JobRunr's connection at once, so a later
+rollback of the approval can leave the job running without a committed `user.approve` row. See
+[Failed Keycloak provisioning](../operations/tenant-provisioning.md#failed-keycloak-provisioning).
 
 The membership detail does not expose a status reason. The platform tenant detail does, as
 `status_reason` (see [Platform Tenant Administration](#platform-tenant-administration)), and so
@@ -2118,8 +2135,9 @@ can carry SQL, identity-provider output or an email address) is deliberately in 
 root-cause class names and the stack frames, never an exception message; the job handlers hand
 JobRunr, for the failures they catch, only the closed code or the exception class name (no message;
 no cause but a message-free `InterruptedException` where the original had one) and
-`ApiExceptionHandler` logs the class and frames only. The raw message of a failed Keycloak or invite
-job is still kept in `identity_dispatch_log.last_error`, which no API returns. A failed
+`ApiExceptionHandler` logs the class and frames only. A failed Keycloak or invite job stores the
+closed code and the exception class name in `identity_dispatch_log.last_error`, never the message.
+Rows written before that change keep the raw message; no API returns either. A failed
 `tenant.bootstrap_retry` also writes an audit row with the code and the exception class name only
 (never the message); the failed `user.keycloak_provisioning` audit row carries the exception class
 name but no code. See [tenant provisioning](../operations/tenant-provisioning.md).

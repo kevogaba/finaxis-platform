@@ -7,6 +7,9 @@ import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.context.PlatformOrganisation
+import com.finaxis.platform.common.jobs.FailedJobRequeuer
+import com.finaxis.platform.common.jobs.JobRequeueOutcome
+import com.finaxis.platform.common.jobs.deterministicJobId
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
@@ -40,6 +43,7 @@ class UserProvisioningService(
     private val eventPublisher: TransitionEventPublisher,
     private val clock: Clock,
     private val permissionGuard: PermissionGuard,
+    private val failedJobRequeuer: FailedJobRequeuer,
 ) {
     /**
      * Persists a local user invitation with branch and role prerequisites. The inviter must hold
@@ -196,6 +200,9 @@ class UserProvisioningService(
         if (snapshot.status != MembershipLifecycleState.PENDING_APPROVAL) throw ConflictException()
         store.requireActiveAccessPrerequisites(command.organisationId, snapshot)
 
+        // An earlier approval already queued this user's provisioning and any application invite,
+        // so a repeat resumes the queued job and requests no second invite.
+        val resumed = snapshot.userStatus == UserLifecycleState.PROVISIONING_IDP
         val keycloakRequested = requestKeycloakProvisioningIfNeeded(command, snapshot)
         val membershipActivated =
             if (keycloakRequested) {
@@ -204,7 +211,7 @@ class UserProvisioningService(
                 activateMembershipIfPossible(command, snapshot)
             }
         val applicationInviteRequested =
-            if (snapshot.sendApplicationInvite) {
+            if (snapshot.sendApplicationInvite && !resumed) {
                 publishApplicationInvite(command, snapshot)
                 true
             } else {
@@ -438,14 +445,43 @@ class UserProvisioningService(
         command: ApproveUserCommand,
         snapshot: MembershipProvisioningSnapshot,
     ): Boolean {
+        if (snapshot.userStatus == UserLifecycleState.PROVISIONING_IDP) {
+            // A user already in PROVISIONING_IDP has the job an earlier approval queued (#162). It
+            // runs again under its own id when FAILED; a job still scheduled, enqueued or
+            // processing is left alone; a job that is gone is queued again under the same key. A
+            // new job id is never made, since two jobs could create the same Keycloak user. A
+            // dispatch never recorded, or one that SUCCEEDED, is refused with the 409 of a first
+            // approval.
+            val dispatchKey = keycloakDispatchKey(command.organisationId, snapshot.userId)
+            val status = store.dispatchStatus(dispatchKey)
+            if (status == null || status == DISPATCH_SUCCEEDED) {
+                throw ConflictException(safeDetail = IDENTITY_PROVISIONING_REFUSED)
+            }
+            // The requeue is an external write on JobRunr's own connection and commits at once. If
+            // this approval's transaction rolls back later (for example, the audit write), the job
+            // still runs without a committed user.approve row for this repeat. That is tolerated:
+            // the job is skipped only when the dispatch SUCCEEDED, and a FAILED row is harmless.
+            when (failedJobRequeuer.requeueIfFailed(deterministicJobId(dispatchKey))) {
+                JobRequeueOutcome.REQUEUED -> {
+                    store.markDispatchPending(dispatchKey)
+                }
+
+                JobRequeueOutcome.NOT_FAILED -> {
+                    // nothing to do: the job is still scheduled or running
+                }
+
+                JobRequeueOutcome.NOT_FOUND -> {
+                    store.markDispatchPending(dispatchKey)
+                    publishKeycloakProvisioning(command, snapshot)
+                }
+            }
+            return true
+        }
         if (store.hasKeycloakIdentity(snapshot.userId)) return false
         if (snapshot.userStatus !in
             setOf(UserLifecycleState.DRAFT, UserLifecycleState.PENDING_APPROVAL)
         ) {
-            throw ConflictException(
-                safeDetail =
-                    "The user account is not in a state that allows identity provisioning.",
-            )
+            throw ConflictException(safeDetail = IDENTITY_PROVISIONING_REFUSED)
         }
         if (snapshot.userStatus == UserLifecycleState.DRAFT) {
             lifecycleService.transition(
@@ -495,7 +531,7 @@ class UserProvisioningService(
         command: ApproveUserCommand,
         snapshot: MembershipProvisioningSnapshot,
     ) {
-        val dispatchKey = "${command.organisationId}:${snapshot.userId}:KEYCLOAK_PROVISIONING"
+        val dispatchKey = keycloakDispatchKey(command.organisationId, snapshot.userId)
         store.recordDispatch(
             command.organisationId,
             snapshot.userId,
@@ -605,6 +641,9 @@ class UserProvisioningService(
     }
 
     private companion object {
+        const val IDENTITY_PROVISIONING_REFUSED =
+            "The user account is not in a state that allows identity provisioning."
+        const val DISPATCH_SUCCEEDED = "SUCCEEDED"
         const val KEYCLOAK_USER_PROVISIONING_REQUESTED_TARGET =
             "finaxis.lifecycle.user.keycloak-provisioning-requested"
         const val APPLICATION_INVITE_REQUESTED_TARGET =
@@ -621,6 +660,15 @@ class UserProvisioningService(
         const val DISPATCH_KEY = "dispatchKey"
     }
 }
+
+/**
+ * The identity dispatch key of a user's Keycloak provisioning in one organisation. Every writer and
+ * reader of that dispatch uses it, so the approval and the bootstrap retry name one job.
+ */
+internal fun keycloakDispatchKey(
+    organisationId: UUID,
+    userId: UUID,
+): String = "$organisationId:$userId:KEYCLOAK_PROVISIONING"
 
 private fun membershipRevocationTransition(
     status: MembershipLifecycleState,

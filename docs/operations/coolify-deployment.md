@@ -101,9 +101,10 @@ readiness-coolify-deployment-design.md` has the full empirical verification).
   one means setting the repo variable and re-running the workflow, not a Coolify environment
   change.
 [^keycloak-admin]: `finaxis.keycloak.admin.enabled` gates `KeycloakAdminGateway`, the client used
-  to provision an approved user into Keycloak; its no-op fallback silently no-ops that step
-  instead. Frozen the same way as the OTel switches, via the `FINAXIS_KEYCLOAK_ADMIN_ENABLED` repo
-  variable (default `'false'`, unchanged from this property's own default). **Deliberately not
+  to provision an approved user into Keycloak; its disabled fallback throws
+  `IdentityProvisioningException` on every call, so the step fails instead of silently no-opping.
+  Frozen the same way as the OTel switches, via the `FINAXIS_KEYCLOAK_ADMIN_ENABLED` repo variable
+  (default `'false'`, unchanged from this property's own default). **Deliberately not
   turned on by default here** — enabling it is a decision for whoever owns the Coolify inventory,
   because it also needs real credentials supplied at runtime: `FINAXIS_KEYCLOAK_ADMIN_SERVER_URL`,
   `FINAXIS_KEYCLOAK_ADMIN_REALM`, `FINAXIS_KEYCLOAK_ADMIN_CLIENT_ID`,

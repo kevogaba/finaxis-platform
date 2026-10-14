@@ -1,5 +1,8 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.common.jobs.FailedJobRequeuer
+import com.finaxis.platform.common.jobs.JobRequeueOutcome
+import com.finaxis.platform.common.jobs.deterministicJobId
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
@@ -23,6 +26,7 @@ class InitialAdministratorBootstrapService(
     private val eventPublisher: TransitionEventPublisher,
     private val failureRecorder: InitialAdministratorBootstrapFailureRecorder,
     private val clock: Clock,
+    private val failedJobRequeuer: FailedJobRequeuer,
 ) {
     /**
      * Executes the bootstrap process for the organisation's initial administrator.
@@ -125,7 +129,7 @@ class InitialAdministratorBootstrapService(
         membershipId: UUID,
     ) {
         val organisationId = record.organisationId
-        val dispatchKey = "$organisationId:$userId:KEYCLOAK_PROVISIONING"
+        val dispatchKey = keycloakDispatchKey(organisationId, userId)
         val dispatchStatus = userProvisioningStore.dispatchStatus(dispatchKey)
 
         if (dispatchStatus == null) {
@@ -148,32 +152,61 @@ class InitialAdministratorBootstrapService(
         } else if (dispatchStatus == "SUCCEEDED") {
             completeBootstrapIfCorrelated(organisationId, userId)
         } else {
-            eventPublisher.publish(
-                ExternalizedTransitionEvent(
-                    target = "finaxis.lifecycle.user.keycloak-provisioning-requested",
-                    aggregateType = "USER_ACCOUNT",
-                    aggregateId = userId.toString(),
-                    transition = "KEYCLOAK_PROVISIONING_REQUESTED",
-                    fromState = "PROVISIONING_IDP",
-                    toState = "PROVISIONING_IDP",
-                    actor = TransitionActor("USER", record.approvedBy.toString()),
-                    occurredAt = clock.instant(),
-                    metadata =
-                        mapOf(
-                            "organisationId" to organisationId.toString(),
-                            "membershipId" to membershipId.toString(),
-                            "userId" to userId.toString(),
-                            "email" to record.adminEmail,
-                            "username" to record.adminUsername,
-                            "displayName" to record.adminDisplayName,
-                            "sendKeycloakInvite" to "true",
-                            "dispatchKey" to dispatchKey,
-                            "bootstrapRequestId" to "BOOTSTRAP-$organisationId",
-                            "bootstrapAttempt" to (record.attempts + 1),
-                        ),
-                ),
-            )
+            // PENDING or FAILED: a FAILED job runs again under its own id (#162). One still
+            // scheduled, enqueued or processing is left alone, and a job that is gone is queued
+            // again under the same key, so the dispatch never has two jobs. The requeue is an
+            // external write on JobRunr's connection that commits at once, so a later rollback of
+            // this retry still leaves the job running; the handler tolerates that (it skips only
+            // SUCCEEDED).
+            when (failedJobRequeuer.requeueIfFailed(deterministicJobId(dispatchKey))) {
+                JobRequeueOutcome.REQUEUED -> {
+                    userProvisioningStore.markDispatchPending(dispatchKey)
+                }
+
+                JobRequeueOutcome.NOT_FAILED -> {
+                    // nothing to do: the job is still scheduled or running
+                }
+
+                JobRequeueOutcome.NOT_FOUND -> {
+                    userProvisioningStore.markDispatchPending(dispatchKey)
+                    republishKeycloakProvisioning(record, userId, membershipId, dispatchKey)
+                }
+            }
         }
+    }
+
+    private fun republishKeycloakProvisioning(
+        record: InitialAdministratorBootstrapRecord,
+        userId: UUID,
+        membershipId: UUID,
+        dispatchKey: String,
+    ) {
+        val organisationId = record.organisationId
+        eventPublisher.publish(
+            ExternalizedTransitionEvent(
+                target = "finaxis.lifecycle.user.keycloak-provisioning-requested",
+                aggregateType = "USER_ACCOUNT",
+                aggregateId = userId.toString(),
+                transition = "KEYCLOAK_PROVISIONING_REQUESTED",
+                fromState = "PROVISIONING_IDP",
+                toState = "PROVISIONING_IDP",
+                actor = TransitionActor("USER", record.approvedBy.toString()),
+                occurredAt = clock.instant(),
+                metadata =
+                    mapOf(
+                        "organisationId" to organisationId.toString(),
+                        "membershipId" to membershipId.toString(),
+                        "userId" to userId.toString(),
+                        "email" to record.adminEmail,
+                        "username" to record.adminUsername,
+                        "displayName" to record.adminDisplayName,
+                        "sendKeycloakInvite" to "true",
+                        "dispatchKey" to dispatchKey,
+                        "bootstrapRequestId" to "BOOTSTRAP-$organisationId",
+                        "bootstrapAttempt" to (record.attempts + 1),
+                    ),
+            ),
+        )
     }
 
     /**

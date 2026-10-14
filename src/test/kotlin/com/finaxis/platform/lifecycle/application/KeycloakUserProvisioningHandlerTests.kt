@@ -1,11 +1,15 @@
 package com.finaxis.platform.lifecycle.application
 
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.jobs.FailedJobRequeuer
+import com.finaxis.platform.common.jobs.JobRequeueOutcome
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
@@ -25,6 +29,7 @@ import com.finaxis.platform.lifecycle.domain.LifecyclePrerequisites
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
+import org.junit.jupiter.api.AfterEach
 import org.mockito.Mockito.mock
 import java.time.Clock
 import java.time.Instant
@@ -55,6 +60,7 @@ class KeycloakUserProvisioningHandlerTests {
             auditService,
         )
     private val dispatchOutcomeAuditor = DispatchOutcomeAuditor(store, auditService)
+    private val failedJobRequeuer = FailedJobRequeuer { JobRequeueOutcome.NOT_FAILED }
     private val deactivationAssignmentRevoker = mock(UserDeactivationAssignmentRevoker::class.java)
     private val branchProvisioningService = mock(BranchProvisioningService::class.java)
     private val userProvisioningService =
@@ -67,6 +73,7 @@ class KeycloakUserProvisioningHandlerTests {
             events,
             clock,
             mock(com.finaxis.platform.lifecycle.PermissionGuard::class.java),
+            failedJobRequeuer,
         )
     private val fakeBootstrapStore =
         object : InitialAdministratorBootstrapStore {
@@ -170,6 +177,7 @@ class KeycloakUserProvisioningHandlerTests {
             events,
             failureRecorder,
             clock,
+            failedJobRequeuer,
         )
     private val handler =
         KeycloakUserProvisioningJobRequestHandler(
@@ -245,7 +253,7 @@ class KeycloakUserProvisioningHandlerTests {
         val dispatch = store.dispatches.getValue(context.dispatchKey)
         assertEquals("FAILED", dispatch.status)
         assertEquals(1, dispatch.attempts)
-        assertTrue(requireNotNull(dispatch.lastError).contains("keycloak unavailable"))
+        assertEquals("INVALID_STATE:IllegalStateException", dispatch.lastError)
         assertEquals(
             InitialAdministratorBootstrapStatus.FAILED,
             fakeBootstrapStore.records.getValue(context.organisationId).status,
@@ -253,6 +261,21 @@ class KeycloakUserProvisioningHandlerTests {
         val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
         assertEquals("IllegalStateException", dispatchAudit.reason)
+    }
+
+    @Test
+    fun `dispatch failure detail keeps the closed code and class name but never the message`() {
+        val context = store.activePendingProvisioningContext()
+        fakeBootstrapStore.records[context.organisationId] = bootstrapRecord(context)
+        gateway.failure = IdentityProvisioningException("keycloak rejected jane.doe@acme.test")
+
+        assertFailsWith<SanitisedJobFailureException> {
+            handler.run(keycloakRequest(context, "member@example.test", "member"))
+        }
+
+        val lastError = requireNotNull(store.dispatches.getValue(context.dispatchKey).lastError)
+        assertEquals("IDENTITY_PROVIDER_FAILED:IdentityProvisioningException", lastError)
+        assertFalse(lastError.contains("jane.doe@acme.test"))
     }
 
     @Test
@@ -278,7 +301,7 @@ class KeycloakUserProvisioningHandlerTests {
         assertEquals("FAILED", store.dispatches.getValue(context.dispatchKey).status)
         val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
-        val warn = appender.list.single()
+        val warn = appender.eventsFor(context.dispatchKey).single()
         assertEquals(ch.qos.logback.classic.Level.WARN, warn.level)
         assertTrue(warn.formattedMessage.contains(context.dispatchKey))
         assertTrue(warn.formattedMessage.contains("exceptionClass=java.lang.IllegalStateException"))
@@ -330,7 +353,10 @@ class KeycloakUserProvisioningHandlerTests {
             InitialAdministratorBootstrapFailureCode.IDENTITY_PROVIDER_FAILED,
             record.lastFailureCode,
         )
-        assertTrue(appender.list.isEmpty(), "the recorder's own line is the only log")
+        assertTrue(
+            appender.eventsFor(context.dispatchKey).isEmpty(),
+            "the recorder's own line is the only log",
+        )
     }
 
     @Test
@@ -350,7 +376,7 @@ class KeycloakUserProvisioningHandlerTests {
         assertEquals(InitialAdministratorBootstrapStatus.COMPLETED, record.status)
         assertNull(record.lastFailureCode)
         assertEquals(listOf(context.organisationId), fakeBootstrapStore.failedWrites)
-        val warn = recorderLog.list.single()
+        val warn = recorderLog.eventsFor(context.organisationId.toString()).single()
         assertEquals(ch.qos.logback.classic.Level.WARN, warn.level)
         assertTrue(warn.formattedMessage.contains(context.organisationId.toString()))
         assertTrue(warn.formattedMessage.contains("IDENTITY_PROVIDER_FAILED"))
@@ -379,10 +405,7 @@ class KeycloakUserProvisioningHandlerTests {
         val dispatch = store.dispatches.getValue(context.dispatchKey)
         assertEquals("FAILED", dispatch.status)
         assertEquals(1, dispatch.attempts)
-        assertTrue(
-            requireNotNull(dispatch.lastError)
-                .contains("Membership requires an active branch assignment."),
-        )
+        assertEquals("CONFLICT:ConflictException", dispatch.lastError)
         val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
         assertEquals("ConflictException", dispatchAudit.reason)
@@ -421,7 +444,7 @@ class KeycloakUserProvisioningHandlerTests {
         assertEquals("UNEXPECTED", failure.message)
         assertNull(failure.cause)
         assertTrue(store.dispatches[context.dispatchKey]?.status != "FAILED")
-        val logged = appender.list.single().formattedMessage
+        val logged = appender.eventsFor(context.dispatchKey).single().formattedMessage
         assertTrue(logged.contains(context.dispatchKey))
         assertTrue(logged.contains("exceptionClass=java.lang.UnsupportedOperationException"))
         assertFalse(logged.contains("jane.doe@acme.test"))
@@ -472,39 +495,50 @@ class KeycloakUserProvisioningHandlerTests {
         assertEquals("DATABASE_ERROR", failure.message)
         assertNull(failure.cause)
         assertFalse(
-            appender.list
+            appender
+                .eventsFor(context.dispatchKey)
                 .single()
                 .formattedMessage
                 .contains("a@b.test"),
         )
     }
 
-    private fun captureSanitisedLog(): ch.qos.logback.core.read.ListAppender<
-        ch.qos.logback.classic.spi.ILoggingEvent,
-    > {
-        val appender =
-            ch.qos.logback.core.read
-                .ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>()
-                .also { it.start() }
-        (
-            org.slf4j.LoggerFactory.getLogger(SanitisedJobFailureException::class.java)
-                as ch.qos.logback.classic.Logger
-        ).addAppender(appender)
-        return appender
+    /** Every appender this test attached, so [detachLogAppenders] can remove it again. */
+    private val attachedAppenders =
+        mutableListOf<Pair<ch.qos.logback.classic.Logger, ListAppender<ILoggingEvent>>>()
+
+    /**
+     * Detaches the appenders this test attached. The loggers are JVM-global: an appender left
+     * behind keeps collecting from other threads, such as a background JobRunr retry in a cached
+     * context, and the next test would read those events.
+     */
+    @AfterEach
+    fun detachLogAppenders() {
+        attachedAppenders.forEach { (logger, appender) ->
+            logger.detachAppender(appender)
+            appender.stop()
+        }
+        attachedAppenders.clear()
     }
 
-    private fun captureRecorderLog(): ch.qos.logback.core.read.ListAppender<
-        ch.qos.logback.classic.spi.ILoggingEvent,
-    > {
-        val appender =
-            ch.qos.logback.core.read
-                .ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>()
-                .also { it.start() }
-        (
-            org.slf4j.LoggerFactory.getLogger(
-                InitialAdministratorBootstrapFailureRecorder::class.java,
-            ) as ch.qos.logback.classic.Logger
-        ).addAppender(appender)
+    /**
+     * This test's events only. Each assertion names the dispatch key or organisation of its own
+     * test, so an event another thread logged to the same shared logger cannot break it.
+     */
+    private fun ListAppender<ILoggingEvent>.eventsFor(key: String): List<ILoggingEvent> =
+        list.filter { it.formattedMessage.contains(key) }
+
+    private fun captureSanitisedLog(): ListAppender<ILoggingEvent> =
+        attachTo(SanitisedJobFailureException::class.java)
+
+    private fun captureRecorderLog(): ListAppender<ILoggingEvent> =
+        attachTo(InitialAdministratorBootstrapFailureRecorder::class.java)
+
+    private fun attachTo(loggerType: Class<*>): ListAppender<ILoggingEvent> {
+        val logger = org.slf4j.LoggerFactory.getLogger(loggerType) as ch.qos.logback.classic.Logger
+        val appender = ListAppender<ILoggingEvent>().also { it.start() }
+        logger.addAppender(appender)
+        attachedAppenders += logger to appender
         return appender
     }
 
@@ -639,6 +673,12 @@ private class ProvisioningWorkerStoreFake :
     }
 
     override fun dispatchStatus(dispatchKey: String): String? = dispatches[dispatchKey]?.status
+
+    override fun markDispatchPending(dispatchKey: String) {
+        dispatches[dispatchKey]?.let {
+            if (it.status == "FAILED") dispatches[dispatchKey] = it.copy(status = "PENDING")
+        }
+    }
 
     override fun organisationState(organisationId: UUID): OrganisationLifecycleState? =
         organisationStates[organisationId]
