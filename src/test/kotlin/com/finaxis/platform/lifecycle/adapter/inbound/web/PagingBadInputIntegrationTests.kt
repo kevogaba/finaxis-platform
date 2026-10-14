@@ -95,17 +95,17 @@ class PagingBadInputIntegrationTests
             family(Endpoint(ApiPaths.PLATFORM_TENANTS, platform = true), sortField = "tenantCode")
         }
 
-        // -- families that take paging only (sort_by / sort_dir are accepted and ignored) ------
-
         @Test
-        fun `memberships reject bad paging with 400 and still list valid requests`() {
-            family(Endpoint(ApiPaths.MEMBERSHIPS), sortField = null)
+        fun `memberships reject bad sort and paging with 400 and still list valid requests`() {
+            family(Endpoint(ApiPaths.MEMBERSHIPS), sortField = "membershipStatus")
         }
 
         @Test
-        fun `branch assignments reject bad paging with 400 and still list valid requests`() {
-            family(Endpoint(ApiPaths.BRANCH_ASSIGNMENTS), sortField = null)
+        fun `branch assignments reject bad sort and paging with 400 and list valid requests`() {
+            family(Endpoint(ApiPaths.BRANCH_ASSIGNMENTS), sortField = "assignedAt")
         }
+
+        // -- families that take paging only ------------------------------------------------------
 
         @Test
         fun `role assignments reject bad paging with 400 and still list valid requests`() {
@@ -118,8 +118,8 @@ class PagingBadInputIntegrationTests
         }
 
         @Test
-        fun `tenant users reject bad paging with 400 and still list valid requests`() {
-            family(Endpoint(ApiPaths.TENANT_USERS), sortField = null)
+        fun `tenant users reject bad sort and paging with 400 and still list valid requests`() {
+            family(Endpoint(ApiPaths.TENANT_USERS), sortField = "username")
         }
 
         @Test
@@ -209,7 +209,8 @@ class PagingBadInputIntegrationTests
                 }
                 checked++
             }
-            // roles, permissions, platform tenants, branches, platform tenant branches
+            // roles, permissions, platform tenants, branches, platform tenant branches,
+            // memberships, branch assignments, tenant users
             assertThat(checked).isGreaterThanOrEqualTo(MINIMUM_SORTING_ENDPOINTS)
         }
 
@@ -223,6 +224,14 @@ class PagingBadInputIntegrationTests
         fun `a bad sort direction is a 400 even when the sort field is valid or absent`() {
             assertBadRequest(Endpoint(ApiPaths.ROLES), "sort_dir=sideways", "sort_dir")
             assertBadRequest(Endpoint(ApiPaths.ROLES), "sort_by=roleCode&sort_dir=", "sort_dir")
+            listOf(
+                Endpoint(ApiPaths.MEMBERSHIPS),
+                Endpoint(ApiPaths.BRANCH_ASSIGNMENTS),
+                Endpoint(ApiPaths.TENANT_USERS),
+            ).forEach { endpoint ->
+                assertBadRequest(endpoint, "sort_dir=sideways", "sort_dir")
+                assertBadRequest(endpoint, "sort_by=bogus&sort_dir=sideways", "sort_by")
+            }
         }
 
         @Test
@@ -351,7 +360,7 @@ class PagingBadInputIntegrationTests
         )
 
         private companion object {
-            const val MINIMUM_SORTING_ENDPOINTS = 5
+            const val MINIMUM_SORTING_ENDPOINTS = 8
             val PAGING_FAILURES =
                 listOf("page=-1", "page=abc", "size=0", "size=101", "size=-5", "size=abc")
         }

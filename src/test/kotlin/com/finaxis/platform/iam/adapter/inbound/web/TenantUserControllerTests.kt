@@ -19,6 +19,7 @@ import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
 import com.finaxis.platform.iam.application.query.IamQueryService
 import com.finaxis.platform.iam.application.query.UserInTenantDetail
+import com.finaxis.platform.iam.application.query.UserInTenantFilter
 import com.finaxis.platform.iam.application.query.UserInTenantSummary
 import com.finaxis.platform.lifecycle.application.MembershipType
 import com.finaxis.platform.lifecycle.application.UserInvitationResult
@@ -28,6 +29,7 @@ import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argThat
+import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
@@ -160,6 +162,28 @@ class TenantUserControllerTests
                     jsonPath("$.items[0].id") { value(userId.toString()) }
                     jsonPath("$.page.number") { value(1) }
                 }
+        }
+
+        @Test
+        fun `searchUsers passes sort_by and sort_dir to the query`() {
+            val tenantId = uuidV7()
+            whenever(iamQueryService.searchUsers(eq(tenantId), any(), any())).thenReturn(
+                apiPageOf(emptyList(), number = 0, size = 25, totalItems = 0),
+            )
+
+            mockMvc
+                .get(ApiPaths.TENANT_USERS) {
+                    param("sort_by", "displayName")
+                    param("sort_dir", "desc")
+                    with(authentication(tenantToken(setOf("user.view"), tenantId)))
+                }.andExpect {
+                    status { isOk() }
+                }
+
+            val filterCaptor = argumentCaptor<UserInTenantFilter>()
+            verify(iamQueryService).searchUsers(eq(tenantId), filterCaptor.capture(), any())
+            kotlin.test.assertEquals("displayName", filterCaptor.firstValue.sortBy)
+            kotlin.test.assertEquals("desc", filterCaptor.firstValue.sortDir)
         }
 
         @Test

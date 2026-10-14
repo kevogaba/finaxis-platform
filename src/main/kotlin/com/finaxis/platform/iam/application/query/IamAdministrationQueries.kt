@@ -10,6 +10,8 @@ data class UserInTenantFilter(
     val membershipStatus: String? = null,
     val page: Int = 0,
     val size: Int = 25,
+    val sortBy: String? = null,
+    val sortDir: String? = null,
 )
 
 /** Filter parameters for organisation membership queries. */
@@ -19,6 +21,8 @@ data class MembershipFilter(
     val membershipType: String? = null,
     val page: Int = 0,
     val size: Int = 25,
+    val sortBy: String? = null,
+    val sortDir: String? = null,
 )
 
 /** Filter parameters for branch assignment queries. */
@@ -33,6 +37,8 @@ data class BranchAssignmentFilter(
      * it (every tenant caller alike); never a gate, it neither narrows nor widens what is visible.
      */
     val pinnedBranchId: UUID? = null,
+    val sortBy: String? = null,
+    val sortDir: String? = null,
 )
 
 /** Filter parameters for role queries. */

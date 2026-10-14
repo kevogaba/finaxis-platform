@@ -24,12 +24,14 @@ import com.finaxis.platform.lifecycle.application.UserApprovalResult
 import com.finaxis.platform.lifecycle.application.UserProvisioningService
 import com.finaxis.platform.lifecycle.application.query.LifecycleIamReadService
 import com.finaxis.platform.lifecycle.application.query.LifecycleMembershipDetail
+import com.finaxis.platform.lifecycle.application.query.LifecycleMembershipFilter
 import com.finaxis.platform.lifecycle.application.query.LifecycleMembershipSummary
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argThat
+import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.never
@@ -115,6 +117,32 @@ class MembershipControllerTests
 
         @MockitoBean
         private lateinit var lifecycleIamReadService: LifecycleIamReadService
+
+        @Test
+        fun `searchMemberships passes sort_by and sort_dir to the query`() {
+            val tenantId = uuidV7()
+            whenever(
+                lifecycleIamReadService.searchMemberships(eq(tenantId), any(), any()),
+            ).thenReturn(apiPageOf(emptyList(), number = 0, size = 25, totalItems = 0))
+
+            mockMvc
+                .get(ApiPaths.MEMBERSHIPS) {
+                    param("sort_by", "membershipType")
+                    param("sort_dir", "asc")
+                    with(authentication(tenantToken(setOf("membership.view"), tenantId)))
+                }.andExpect {
+                    status { isOk() }
+                }
+
+            val filterCaptor = argumentCaptor<LifecycleMembershipFilter>()
+            verify(lifecycleIamReadService).searchMemberships(
+                eq(tenantId),
+                filterCaptor.capture(),
+                any(),
+            )
+            kotlin.test.assertEquals("membershipType", filterCaptor.firstValue.sortBy)
+            kotlin.test.assertEquals("asc", filterCaptor.firstValue.sortDir)
+        }
 
         @Test
         fun `searchMemberships returns a bounded page`() {

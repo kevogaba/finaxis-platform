@@ -54,6 +54,8 @@ data class LifecycleMembershipFilter(
     val membershipType: String? = null,
     val page: Int = 0,
     val size: Int = 25,
+    val sortBy: String? = null,
+    val sortDir: String? = null,
 )
 
 /** Filter parameters for branch-assignment queries exposed to lifecycle adapters. */
@@ -68,6 +70,8 @@ data class LifecycleBranchAssignmentFilter(
      * (every tenant caller alike); never a gate.
      */
     val pinnedBranchId: UUID? = null,
+    val sortBy: String? = null,
+    val sortDir: String? = null,
 )
 
 /** Membership summary projection exposed to lifecycle adapters. */

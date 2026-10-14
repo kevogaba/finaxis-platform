@@ -41,6 +41,8 @@ class IamLifecycleReadAdapter(
                     membershipType = filter.membershipType,
                     page = filter.page,
                     size = filter.size,
+                    sortBy = filter.sortBy,
+                    sortDir = filter.sortDir,
                 ),
                 caller,
             ).let { page -> ApiPage(page.items.map { it.toLifecycle() }, page.page) }
@@ -69,6 +71,8 @@ class IamLifecycleReadAdapter(
                     filter.page,
                     filter.size,
                     filter.pinnedBranchId,
+                    filter.sortBy,
+                    filter.sortDir,
                 ),
                 caller,
             ).let { page -> ApiPage(page.items.map { it.toLifecycle() }, page.page) }

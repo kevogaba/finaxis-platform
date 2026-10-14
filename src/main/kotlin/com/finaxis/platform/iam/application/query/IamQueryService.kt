@@ -51,6 +51,7 @@ class IamQueryService(
                 )
             }
         }
+        requireValidSort(filter.sortBy, filter.sortDir, allowedUserSorts)
         return userQueries.searchUsers(organisationId, filter)
     }
 
@@ -162,6 +163,7 @@ class IamQueryService(
                 )
             }
         }
+        requireValidSort(filter.sortBy, filter.sortDir, allowedMembershipSorts)
         return userQueries.searchMemberships(organisationId, filter)
     }
 
@@ -203,6 +205,7 @@ class IamQueryService(
                 branchId = branchId ?: filter.pinnedBranchId
             }
         }
+        requireValidSort(filter.sortBy, filter.sortDir, allowedBranchAssignmentSorts)
         return assignmentQueries.searchBranchAssignments(
             organisationId,
             filter.copy(branchId = branchId),
@@ -544,8 +547,19 @@ class IamQueryService(
         }
     }
 
-    private companion object {
+    internal companion object {
         const val BRANCH_SCOPE = "BRANCH"
+
+        /** The `sort_by` values the tenant user list accepts; the store must order by each. */
+        internal val allowedUserSorts =
+            setOf("createdAt", "username", "displayName", "email", "userStatus", "membershipStatus")
+
+        /** The `sort_by` values the membership list accepts; the store must order by each. */
+        internal val allowedMembershipSorts =
+            setOf("createdAt", "membershipStatus", "membershipType")
+
+        /** The `sort_by` values the tenant branch-assignment list accepts. */
+        internal val allowedBranchAssignmentSorts = setOf("assignedAt", "assignmentType", "status")
         val allowedRoleSorts = setOf("roleCode", "roleName", "status", "createdAt")
         val allowedPermissionSorts =
             setOf(

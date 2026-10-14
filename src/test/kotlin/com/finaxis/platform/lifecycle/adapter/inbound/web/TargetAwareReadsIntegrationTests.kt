@@ -253,6 +253,33 @@ class TargetAwareReadsIntegrationTests {
     }
 
     @Test
+    fun `a sorted branch assignment list stays restricted to the held branch`() {
+        holdViewsOnlyAt(OPERATIONS_BRANCH_ID)
+        val pinned = contextToken(HEAD_OFFICE_BRANCH_ID)
+
+        get(ApiPaths.BRANCH_ASSIGNMENTS, pinned, "sort_by" to "assignedAt", "sort_dir" to "asc")
+            .andExpect {
+                status { isOk() }
+                jsonPath("$.items[*].branch_id") {
+                    value(everyItem(equalTo(OPERATIONS_BRANCH_ID.toString())))
+                }
+                jsonPath("$.page.total_items") { value(1) }
+            }
+        // A bad sort is a 400 for a holder who may see the list; the restriction is unchanged.
+        get(ApiPaths.BRANCH_ASSIGNMENTS, pinned, "sort_by" to "bogus")
+            .andExpect { status { isBadRequest() } }
+    }
+
+    @Test
+    fun `a caller with no grant gets 403 rather than 400 for a bad sort`() {
+        withholdFromLocalAdmin(*VIEW_CODES)
+        val pinned = contextToken(HEAD_OFFICE_BRANCH_ID)
+
+        get(ApiPaths.BRANCH_ASSIGNMENTS, pinned, "sort_by" to "bogus")
+            .andExpect { status { isForbidden() } }
+    }
+
+    @Test
     fun `a caller with no grant at all is forbidden on every read route`() {
         withholdFromLocalAdmin(*VIEW_CODES)
         val pinned = contextToken(HEAD_OFFICE_BRANCH_ID)

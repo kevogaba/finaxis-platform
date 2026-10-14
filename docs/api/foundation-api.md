@@ -123,10 +123,17 @@ every other wire name, and are published as an enum per endpoint:
 | `GET /tenant/permissions` | `permissionCode`, `permissionName`, `riskLevel`, `status`, `createdAt` |
 | `GET /platform/tenants` | `tenantCode`, `displayName`, `countryCode`, `createdAt` |
 | `GET /branches`, `GET /platform/tenants/{tenant_id}/branches` | `branchCode`, `branchName`, `branchType`, `status`, `createdAt` |
+| `GET /tenant/memberships` | `createdAt`, `membershipStatus`, `membershipType` |
+| `GET /tenant/branch-assignments` | `assignedAt`, `assignmentType`, `status` |
+| `GET /tenant/users` | `createdAt`, `username`, `displayName`, `email`, `userStatus`, `membershipStatus` |
 
-`GET /tenant/memberships` and `GET /tenant/branch-assignments` do not sort: they ignore
-`sort_by` and `sort_dir` like any unknown query parameter, and the OpenAPI document does not
-publish them. Other list endpoints do not accept sort parameters.
+On the three lists changed by #190 (`GET /tenant/memberships`, `GET /tenant/branch-assignments`
+and `GET /tenant/users`), `sort_dir` alone is ignored and the default order is kept, because these
+lists ignored both parameters until now: without `sort_by` the list is newest first. With a
+`sort_by`, an absent `sort_dir` sorts descending. On the other lists above, `sort_dir` alone sets
+the direction of the default key, `createdAt` (descending when absent). Every sort ends with the
+row id, descending, so rows that tie on the sort key keep a stable order across pages. Other list
+endpoints do not accept `sort_by`.
 
 **Invalid paging or sort input is a client error, never a 500.** A `page` that is negative or not
 an integer, a `size` outside `1` to `max-page-size` (`100` by default) or not an integer, a
@@ -136,6 +143,11 @@ an integer, a `size` outside `1` to `max-page-size` (`100` by default) or not an
 `sort_by` and `sort_dir` the problem carries one violation whose `field` is the parameter and whose
 `message` names the accepted values without echoing the rejected one; paging problems carry no
 violation. Absent parameters take their defaults, and valid requests are unaffected.
+
+**Behaviour change (#190):** the memberships, branch-assignments and tenant-users lists used to
+ignore `sort_by` and `sort_dir`, so an unknown `sort_by` on them answered `200`. It now answers
+`400 invalid_parameter`, and a bad `sort_dir` answers `400` on them too. A client that sent an
+unknown `sort_by` to one of these lists must correct the value.
 
 ### Errors
 
@@ -1258,7 +1270,7 @@ nullable `status_reason` of the tenant's last transition (see
 ### Tenant Users
 
 Base path: `/api/v1/tenant/users`. List filters: `q`, `user_status`, `membership_status`,
-`page`, `size`.
+`sort_by`, `sort_dir`, `page`, `size`. Sorting is described under [Pagination](#pagination).
 
 | Method | Path         | Summary                           | Permission    | Shape    |
 |--------|--------------|-----------------------------------|---------------|----------|
@@ -1332,7 +1344,8 @@ fails Bean Validation is a `400` before any permission check, as on every route)
 ### Memberships
 
 Base path: `/api/v1/tenant/memberships`. List filters: `q`, `membership_status`,
-`membership_type`, `page`, `size`. This list does not sort; see [Pagination](#pagination).
+`membership_type`, `sort_by`, `sort_dir`, `page`, `size`. Sorting is described under
+[Pagination](#pagination).
 
 | Method | Path                          | Summary                         | Permission              | Shape    |
 |--------|-------------------------------|---------------------------------|-------------------------|----------|
@@ -1484,7 +1497,7 @@ caller without the permission who sends an over-long `reason` receives `400`, no
 ### Branch Assignments
 
 Base path: `/api/v1/tenant/branch-assignments`. List filters: `branch_id`,
-`assignment_type`, `status`, `page`, `size`. This list does not sort; see
+`assignment_type`, `status`, `sort_by`, `sort_dir`, `page`, `size`. Sorting is described under
 [Pagination](#pagination).
 
 | Method | Path               | Summary                   | Permission               | Shape    |

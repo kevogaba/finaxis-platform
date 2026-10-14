@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.application.query
 
+import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.InvalidPageRequestException
@@ -219,6 +220,116 @@ class IamQueryServiceTests {
         }
         assertRejected(null) {
             service.searchPermissions(tenantId, PermissionFilter(size = 0), caller)
+        }
+    }
+
+    @Test
+    fun `searchMemberships validates sort_by and sort_dir after the permission check`() {
+        val caller = TenantCaller(actorId, tenantId)
+        assertRejected("sort_by") {
+            service.searchMemberships(tenantId, MembershipFilter(sortBy = "bogus"), caller)
+        }
+        assertRejected("sort_dir") {
+            service.searchMemberships(
+                tenantId,
+                MembershipFilter(sortBy = "createdAt", sortDir = "sideways"),
+                caller,
+            )
+        }
+        // 403 before 400: a caller without the view learns nothing from a bad sort.
+        permissionGuard.deny(tenantId, "membership.view")
+        assertFailsWith<SecurityException> {
+            service.searchMemberships(tenantId, MembershipFilter(sortBy = "bogus"), caller)
+        }
+    }
+
+    @Test
+    fun `searchMemberships accepts every allow-listed sort key`() {
+        val caller = TenantCaller(actorId, tenantId)
+        listOf("createdAt", "membershipStatus", "membershipType").forEach { sortBy ->
+            service.searchMemberships(
+                tenantId,
+                MembershipFilter(sortBy = sortBy, sortDir = "asc"),
+                caller,
+            )
+        }
+    }
+
+    @Test
+    fun `searchUsers validates sort_by and sort_dir after the permission check`() {
+        val caller = TenantCaller(actorId, tenantId)
+        assertRejected("sort_by") {
+            service.searchUsers(tenantId, UserInTenantFilter(sortBy = "bogus"), caller)
+        }
+        assertRejected("sort_dir") {
+            service.searchUsers(
+                tenantId,
+                UserInTenantFilter(sortBy = "username", sortDir = "up"),
+                caller,
+            )
+        }
+        permissionGuard.deny(tenantId, "user.view")
+        assertFailsWith<SecurityException> {
+            service.searchUsers(tenantId, UserInTenantFilter(sortBy = "bogus"), caller)
+        }
+    }
+
+    @Test
+    fun `searchUsers accepts every allow-listed sort key`() {
+        val caller = TenantCaller(actorId, tenantId)
+        listOf(
+            "createdAt",
+            "username",
+            "displayName",
+            "email",
+            "userStatus",
+            "membershipStatus",
+        ).forEach { sortBy ->
+            service.searchUsers(
+                tenantId,
+                UserInTenantFilter(sortBy = sortBy, sortDir = "DESC"),
+                caller,
+            )
+        }
+    }
+
+    @Test
+    fun `searchBranchAssignments validates sort_by and sort_dir after the visibility check`() {
+        val caller = TenantCaller(actorId, tenantId)
+        assertRejected("sort_by") {
+            service.searchBranchAssignments(
+                tenantId,
+                BranchAssignmentFilter(sortBy = "bogus"),
+                caller,
+            )
+        }
+        assertRejected("sort_dir") {
+            service.searchBranchAssignments(
+                tenantId,
+                BranchAssignmentFilter(sortBy = "status", sortDir = "sideways"),
+                caller,
+            )
+        }
+        // A caller with no branch view is refused before the sort is looked at.
+        permissionGuard.deny(tenantId, "branch_assignment.view")
+        assertFailsWith<ForbiddenOperationException> {
+            service.searchBranchAssignments(
+                tenantId,
+                BranchAssignmentFilter(sortBy = "bogus"),
+                caller,
+            )
+        }
+    }
+
+    @Test
+    fun `searchBranchAssignments accepts every allow-listed sort key`() {
+        val caller = TenantCaller(actorId, tenantId)
+        listOf("assignedAt", "assignmentType", "status").forEach { sortBy ->
+            service.searchBranchAssignments(
+                tenantId,
+                BranchAssignmentFilter(sortBy = sortBy, sortDir = "ASC"),
+                caller,
+            )
         }
     }
 

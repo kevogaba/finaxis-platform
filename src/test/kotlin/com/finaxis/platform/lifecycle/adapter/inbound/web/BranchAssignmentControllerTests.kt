@@ -205,6 +205,32 @@ class BranchAssignmentControllerTests
         }
 
         @Test
+        fun `searchBranchAssignments passes sort_by and sort_dir to the query`() {
+            val tenantId = uuidV7()
+            whenever(
+                lifecycleIamReadService.searchBranchAssignments(eq(tenantId), any(), any()),
+            ).thenReturn(apiPageOf(emptyList(), number = 0, size = 25, totalItems = 0))
+
+            mockMvc
+                .get(ApiPaths.BRANCH_ASSIGNMENTS) {
+                    param("sort_by", "assignedAt")
+                    param("sort_dir", "DESC")
+                    with(authentication(tenantToken(setOf("branch_assignment.view"), tenantId)))
+                }.andExpect {
+                    status { isOk() }
+                }
+
+            val filterCaptor = argumentCaptor<LifecycleBranchAssignmentFilter>()
+            verify(lifecycleIamReadService).searchBranchAssignments(
+                eq(tenantId),
+                filterCaptor.capture(),
+                any(),
+            )
+            kotlin.test.assertEquals("assignedAt", filterCaptor.firstValue.sortBy)
+            kotlin.test.assertEquals("DESC", filterCaptor.firstValue.sortDir)
+        }
+
+        @Test
         fun `getBranchAssignment returns assignment detail`() {
             val tenantId = uuidV7()
             val assignmentId = uuidV7()
