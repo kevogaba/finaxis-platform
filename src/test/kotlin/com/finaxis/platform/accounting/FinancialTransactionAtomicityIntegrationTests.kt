@@ -60,16 +60,16 @@ class FinancialTransactionAtomicityIntegrationTests(
     @Test
     fun `an application exception rolls back the write the audit row and the outbox record`() {
         val organisationId = fixture.createActiveOrganisation("atomicity-a", ACTOR_ID)
-        seedSetting(organisationId, "KES")
+        seedSetting(organisationId, "Africa/Nairobi")
 
         val harness = settingsHarness(organisationId)
         harness.assertRollsBackAtomically(IllegalStateException::class) {
-            withRequestContext { updateSetting(organisationId, "USD") }
+            withRequestContext { updateSetting(organisationId, "UTC") }
             error("simulated failure after a successful settings write")
         }
 
         assertEquals(
-            "KES",
+            "Africa/Nairobi",
             effectiveSettingValue(organisationId),
             "the previously effective row must still be the effective one: a settings update " +
                 "closes the old row and inserts a replacement, so the UPDATE half rolls back too",
@@ -79,13 +79,13 @@ class FinancialTransactionAtomicityIntegrationTests(
     @Test
     fun `a postgres constraint violation rolls back earlier writes in the same transaction`() {
         val organisationId = fixture.createActiveOrganisation("atomicity-b", ACTOR_ID)
-        seedSetting(organisationId, "KES")
+        seedSetting(organisationId, "Africa/Nairobi")
 
         val harness = settingsHarness(organisationId)
         // Violates uq_organisation_setting_effective (organisation_id, setting_key,
         // effective_from) by reusing the effective_from of the row written moments earlier.
         harness.assertRollsBackAtomically(org.springframework.dao.DataAccessException::class) {
-            withRequestContext { updateSetting(organisationId, "USD") }
+            withRequestContext { updateSetting(organisationId, "UTC") }
             val effectiveFrom =
                 requireNotNull(
                     dsl
@@ -99,7 +99,7 @@ class FinancialTransactionAtomicityIntegrationTests(
             insertDuplicateSetting(organisationId, effectiveFrom)
         }
 
-        assertEquals("KES", effectiveSettingValue(organisationId))
+        assertEquals("Africa/Nairobi", effectiveSettingValue(organisationId))
     }
 
     @Test
@@ -313,8 +313,8 @@ class FinancialTransactionAtomicityIntegrationTests(
             .insertInto(ORGANISATION_SETTING)
             .set(ORGANISATION_SETTING.ORGANISATION_ID, organisationId)
             .set(ORGANISATION_SETTING.SETTING_KEY, SETTING_KEY)
-            .set(ORGANISATION_SETTING.SETTING_VALUE, org.jooq.JSONB.jsonb("\"EUR\""))
-            .set(ORGANISATION_SETTING.VALUE_TYPE, "CURRENCY")
+            .set(ORGANISATION_SETTING.SETTING_VALUE, org.jooq.JSONB.jsonb("\"Europe/Paris\""))
+            .set(ORGANISATION_SETTING.VALUE_TYPE, "TIMEZONE")
             .set(ORGANISATION_SETTING.IS_SENSITIVE, false)
             .set(ORGANISATION_SETTING.EFFECTIVE_FROM, effectiveFrom)
             .set(ORGANISATION_SETTING.CREATED_AT, now)
@@ -344,7 +344,7 @@ class FinancialTransactionAtomicityIntegrationTests(
 
     private companion object {
         val ACTOR_ID: UUID = UUID.fromString("11111111-1111-1111-1111-111111111111")
-        const val SETTING_KEY = "base_currency"
+        const val SETTING_KEY = "default_timezone"
         const val SETTINGS_UPDATE_ACTION = "settings.update"
         const val BUSINESS_DATE_ADVANCE_ACTION = "business_date.advance"
         const val ORGANISATION_SUBMIT_ACTION = "organisation.submit"

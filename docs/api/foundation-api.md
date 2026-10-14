@@ -924,8 +924,7 @@ and amend validate it against the ledger's own currency authority and not only a
 beyond the `^[A-Z]{3}$` pattern the request body enforces as a `400`, it must be an ISO 4217 code
 the JDK knows **and** must have a minor unit, which refuses `XXX` and the metals `XAU`, `XAG`,
 `XPD` and `XPT`. A rejection is `422` with code `accounting.currency_invalid` - deliberately
-accounting's own code, so provisioning and the `base_currency` tenant setting refuse the same string
-identically.
+accounting's own code, so provisioning and a posting refuse the same string identically.
 
 A posting refuses these codes too, but not always under the same code: an unknown code such as
 `ZZZ` fails as `accounting.currency_invalid`, while `XXX` and the metals are known to the JDK and
@@ -935,9 +934,51 @@ reaching that state at all.
 
 `initial_settings` is the same tenant-setting surface as `PUT /api/v1/tenant/settings/{key}`, and
 answers to the same catalogue: each key must be one the catalogue defines, each value must satisfy
-that key's type rule, and the value is stored in the catalogue's canonical form under its declared
-`value_type`. An unknown key or an invalid value is `422`, with the key's own error code - so
-`{"base_currency": "XAU"}` is refused here exactly as it is on the settings endpoint.
+that key's type rule, and each value is stored in the catalogue's canonical form under its declared
+`value_type`, except a `base_currency` entry, which is checked and not stored (below). An unknown
+key or an invalid value is `422`, with the key's own error code - so
+`{"base_currency": "XAU"}` is refused here with `accounting.currency_invalid`, the code a posting
+gives the same string. A `base_currency` entry must also equal `base_currency_code` once
+canonicalised (`" kes "` matches `KES`); a different currency is `422 invalid_operation`, because
+the draft's own column is the one the ledger reads and no second currency can be chosen. An equal
+entry is accepted and not stored, because the column carries it. This is a
+create input only: an amend refuses a non-empty `initial_settings` with `422 invalid_operation`
+(see [Amend](#amend-tenant-draft)), and tenant settings after creation go through
+`PUT /api/v1/tenant/settings/{key}`, where `base_currency` is a read-only mirror and is refused.
+
+`legal_name` and `registration_number` have **presence semantics** on the amend route
+(`PATCH /{tenant_id}`): an absent key leaves the stored value unchanged, an explicit JSON `null`
+clears it, and a string sets it. `legal_name` is at most 100 characters and `registration_number`
+at most 50; a longer value is `400 validation_failed` and changes nothing. Create takes them as
+before. An amend that omits both keeps a tenant's legal identity, so a maker who corrects only the
+display name does not erase it.
+
+<a id="amend-tenant-draft"></a>
+
+**Amend (`PATCH /{tenant_id}`).** An amend does not need an administrator. Its request is the
+tenant's draft fields, and the rules for the optional parts are:
+
+- `admin` is **optional**. Absent (or an explicit `null`) leaves the stored administrator draft
+  (email, username, display name, phone and the invite flag) exactly as it is. When sent, it is a
+  **full replace** of that draft, and `send_application_invite` must be stated: omitting it inside
+  `admin` is `400 validation_failed`, so an omitted flag can never reset a stored `true` to `false`.
+- `initial_settings` is refused with `422 invalid_operation` when it holds any key. An empty `{}` is
+  accepted and changes nothing.
+- `business_date` is refused with `422 invalid_operation` when it holds a value. An explicit `null`
+  is accepted, like an absent key, and changes nothing. The business date is set on create only.
+
+A refused amend writes nothing: the draft, its administrator and its settings stay as they were.
+Amend without `admin`:
+
+```json
+{
+  "tenant_code": "acme-corp",
+  "display_name": "Acme Financial Services (renamed)",
+  "country_code": "KE",
+  "base_currency_code": "KES",
+  "timezone": "Africa/Nairobi"
+}
+```
 
 Tenant draft request and response:
 
@@ -978,6 +1019,8 @@ Tenant detail response:
   "id": "11111111-1111-7111-8111-111111111111",
   "tenant_code": "acme-corp",
   "display_name": "Acme Financial Services",
+  "legal_name": "Acme Financial Services Limited",
+  "registration_number": "REG-123456",
   "country_code": "KE",
   "base_currency_code": "KES",
   "timezone": "Africa/Nairobi",
@@ -998,6 +1041,11 @@ route that answers a `TenantDetailResponse` carries it: the platform tenant deta
 detail that each platform mutation other than create returns, and the tenant's own
 `GET /api/v1/tenant`, so the maker of a returned tenant and the tenant itself read the same value.
 Its OpenAPI schema is a required, nullable string.
+
+`legal_name` and `registration_number` are exposed on the same detail responses (the platform
+tenant detail and `GET /api/v1/tenant`) as additive, nullable strings. Like `status_reason` they are
+**always present**: `null` when no value is recorded, never omitted. The administrator's email and
+phone are not exposed on any tenant response.
 
 #### Return tenant for changes
 
@@ -1032,8 +1080,9 @@ is no `422`. Validation runs when the body is bound, before any permission or ex
 - **Bootstrap record.** The initial-administrator record becomes a draft again, as `reject` leaves
   it: status `DRAFT`, `submitted_by`/`submitted_at` and `approved_by`/`approved_at` cleared,
   `requested_by` and the administrator block untouched, in the same transaction.
-- **Amend and resubmit.** A returned tenant is a `DRAFT`: `PATCH /{tenant_id}` amends it, which
-  replaces the administrator block, and `POST /{tenant_id}/submit` resubmits it; `submit` is
+- **Amend and resubmit.** A returned tenant is a `DRAFT`: `PATCH /{tenant_id}` amends it, and
+  replaces the administrator block when `admin` is sent (optional on amend, see
+  [Amend](#amend-tenant-draft)), and `POST /{tenant_id}/submit` resubmits it; `submit` is
   unchanged, so the submitter of the new request is whoever resubmits. The maker-checker rule and
   the `lifecycle.approver_is_initial_administrator` refusal are read from the record at approval,
   so they hold across the loop: the requester and the new submitter cannot approve, and if the
@@ -1926,26 +1975,42 @@ Base path: `/api/v1/tenant/settings`. List filters: `page`, `size`.
 | PUT    | `/{key}` | Create or update tenant setting | per-key service authorization | mutation |
 | DELETE | `/{key}` | Deactivate tenant setting       | per-key service authorization | mutation |
 
-A write to a tenant setting requires `settings.update` and its view `settings.view`; the
-platform-only setting code `tenant_setting.manage_platform` is a context code with no view.
+A write to a catalogue setting requires `settings.update` and its view `settings.view`; a read
+requires `settings.view`. A platform-only key (`audit_retention_days`) is checked instead against
+`tenant_setting.manage_platform` in the platform organisation, for both reads and writes, and that
+code is a context code with no view. `GET /` masks a set platform-only value as `***REDACTED***`
+for a caller without that permission, and reports an unset one as `null`.
 `GET /{key}` authorises per key before it reads the stored row: an unknown key without
 `settings.view` answers 403 (it was 400 before ADR 0030 step 7), the same refusal as a known key,
-so it reveals nothing; with the permission it is still 400.
+so it reveals nothing; with the permission it is `422 invalid_operation`.
+
+`base_currency` is a **read-only mirror** of the organisation's `base_currency_code`, the column the
+ledger reads. Reads report that column; `PUT /{key}` and `DELETE /{key}` for it answer
+`422 invalid_operation` with the detail `base_currency is derived from the organisation's base
+currency and cannot be changed here.`, before anything is written. The base currency is set at
+draft creation and amended only while the tenant is a draft, so a tenant that has posted cannot
+change it.
+
+`settings.operational` is an internal marker the platform writes at approval. It is not a tenant
+setting: `GET /` leaves it out, and `GET /settings.operational` is refused as an unknown key is,
+after the `settings.view` check (403 without it, `422 invalid_operation` with it). A `PUT` of that
+key is `422 invalid_operation` before any permission check. After approval the list totals the
+catalogue's six keys.
 
 Setting update request and response:
 
 ```json
 {
-  "value": "17:00:00",
-  "reason": "Align cutoff with operating policy."
+  "value": "Africa/Nairobi",
+  "reason": "Align the operating timezone with head office."
 }
 ```
 
 ```json
 {
-  "key": "statement.cutoff_time",
-  "value": "17:00:00",
-  "value_type": "STRING",
+  "key": "default_timezone",
+  "value": "Africa/Nairobi",
+  "value_type": "TIMEZONE",
   "sensitive": false,
   "platform_admin_only": false
 }

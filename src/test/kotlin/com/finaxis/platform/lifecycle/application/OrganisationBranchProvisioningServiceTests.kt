@@ -44,6 +44,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @Suppress("LargeClass")
@@ -100,21 +101,28 @@ class OrganisationBranchProvisioningServiceTests {
                     countryCode = "KE",
                     baseCurrencyCode = "KES",
                     timezone = "Africa/Nairobi",
-                    initialSettings = mapOf("base_currency" to " kes "),
+                    initialSettings =
+                        mapOf("base_currency" to " kes ", "default_timezone" to "Africa/Nairobi"),
                     requestedBy = uuidV7(),
                 ),
             )
 
         assertEquals(OrganisationLifecycleState.DRAFT, result.status)
         assertEquals(LocalDate.of(2026, 7, 14), store.businessDates.getValue(result.organisationId))
-        val stored = store.settings.getValue(result.organisationId).getValue("base_currency")
-        assertEquals("KES", stored.value, "the catalog's canonical form must be what is persisted")
+        val stored = store.settings.getValue(result.organisationId)
+        assertNull(
+            stored["base_currency"],
+            "the organisation's base_currency_code carries the base currency, so no setting row " +
+                "is stored for it",
+        )
+        val timezone = stored.getValue("default_timezone")
+        assertEquals("Africa/Nairobi", timezone.value)
         assertEquals(
-            TenantSettingValueType.CURRENCY.name,
-            stored.valueType,
+            TenantSettingValueType.TIMEZONE.name,
+            timezone.valueType,
             "provisioning must persist the catalog's declared value type, not a hard-coded STRING",
         )
-        assertEquals(false, stored.sensitive)
+        assertEquals(false, timezone.sensitive)
         assertEquals("organisation.create_draft", audits.events.single().action)
     }
 
@@ -917,6 +925,61 @@ class OrganisationBranchProvisioningServiceTests {
         assertIs<DuplicateKeyException>(failure.cause)
     }
 
+    @Test
+    fun `an amend carrying initial settings is refused and writes nothing`() {
+        val organisationId = activeDraft()
+        store.organisationStates[organisationId] = OrganisationLifecycleState.DRAFT
+        val administratorBefore = adminBootstrapStore.records.getValue(organisationId)
+        val auditedBefore = audits.events.size
+
+        val failure =
+            assertFailsWith<InvalidOperationException> {
+                organisations.amendDraft(
+                    amendDraftCommand(organisationId, "KES").copy(
+                        initialSettings = mapOf("audit_retention_days" to "30"),
+                    ),
+                )
+            }
+
+        assertEquals("invalid_operation", failure.code)
+        assertTrue(failure.safeDetail.contains("initial_settings"))
+        assertEquals(administratorBefore, adminBootstrapStore.records.getValue(organisationId))
+        assertEquals(auditedBefore, audits.events.size)
+    }
+
+    @Test
+    fun `an amend carrying a business date is refused and writes nothing`() {
+        val organisationId = activeDraft()
+        store.organisationStates[organisationId] = OrganisationLifecycleState.DRAFT
+        val administratorBefore = adminBootstrapStore.records.getValue(organisationId)
+        val auditedBefore = audits.events.size
+
+        val failure =
+            assertFailsWith<InvalidOperationException> {
+                organisations.amendDraft(
+                    amendDraftCommand(organisationId, "KES").copy(
+                        businessDate = LocalDate.of(2026, 7, 20),
+                    ),
+                )
+            }
+
+        assertEquals("invalid_operation", failure.code)
+        assertTrue(failure.safeDetail.contains("business_date"))
+        assertEquals(administratorBefore, adminBootstrapStore.records.getValue(organisationId))
+        assertEquals(auditedBefore, audits.events.size)
+    }
+
+    @Test
+    fun `an amend without an administrator leaves the stored administrator draft unchanged`() {
+        val organisationId = activeDraft()
+        store.organisationStates[organisationId] = OrganisationLifecycleState.DRAFT
+        val administratorBefore = adminBootstrapStore.records.getValue(organisationId)
+
+        organisations.amendDraft(amendDraftCommand(organisationId, "KES").copy(admin = null))
+
+        assertEquals(administratorBefore, adminBootstrapStore.records.getValue(organisationId))
+    }
+
     private fun amendAdmin() =
         InitialAdministratorDraft(
             email = "admin@test.com",
@@ -949,7 +1012,9 @@ class OrganisationBranchProvisioningServiceTests {
             organisationId = organisationId,
             tenantCode = "acme-currency",
             displayName = "Acme SACCO",
+            changesLegalName = true,
             legalName = "Acme SACCO Limited",
+            changesRegistrationNumber = true,
             registrationNumber = "C-200",
             countryCode = "KE",
             baseCurrencyCode = baseCurrencyCode,
@@ -1026,7 +1091,7 @@ class OrganisationInitialSettingsProvisioningTests {
         )
 
     @Test
-    fun `an initial base_currency setting the ledger cannot post in is refused`() {
+    fun `an initial base_currency the ledger cannot post in is refused`() {
         // The `base_currency_code` column and the `base_currency` tenant setting are two doors
         // onto one decision. `initial_settings` used to go straight to the store, which stamped
         // every row STRING and asked the catalog nothing - so a single request could be refused
@@ -1052,13 +1117,33 @@ class OrganisationInitialSettingsProvisioningTests {
                     initialSettings = mapOf("base_currency" to "KES"),
                 ),
             )
-        assertEquals(
-            "KES",
-            store.settings
-                .getValue(result.organisationId)
-                .getValue("base_currency")
-                .value,
+        assertNull(
+            store.settings.getValue(result.organisationId)["base_currency"],
+            "an equal base_currency is accepted and not stored: the column carries it",
         )
+    }
+
+    @Test
+    fun `an initial base_currency that differs from the draft's base currency is refused`() {
+        // The organisation's base_currency_code is the one column the ledger reads, and it is
+        // written here. A setting that names a different currency could only disagree with it, so
+        // the draft is refused before anything is written. An equal value is accepted (see above).
+        val failure =
+            assertFailsWith<InvalidOperationException> {
+                organisations.createDraft(
+                    createDraftCommand(
+                        tenantCode = "acme-currency-mismatch",
+                        initialSettings = mapOf("base_currency" to "USD"),
+                    ),
+                )
+            }
+
+        assertEquals(
+            "initial_settings.base_currency must equal base_currency: the base currency is set " +
+                "once, on the draft.",
+            failure.safeDetail,
+        )
+        assertTrue(store.settings.isEmpty(), "a refused draft must persist nothing")
     }
 
     @Test

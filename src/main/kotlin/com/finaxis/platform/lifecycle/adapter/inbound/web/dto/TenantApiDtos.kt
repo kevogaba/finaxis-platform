@@ -15,6 +15,7 @@ import jakarta.validation.constraints.Pattern
 import jakarta.validation.constraints.Size
 import java.time.Instant
 import java.time.LocalDate
+import java.util.Optional
 import java.util.UUID
 
 /** Request payload for drafting a new tenant organisation. */
@@ -57,8 +58,10 @@ data class CreateTenantDraftRequest(
         description =
             "Tenant settings to seed, validated against the same catalogue as " +
                 "PUT /api/v1/tenant/settings/{key}: an unknown key or a value that fails its " +
-                "type rule is rejected with 422.",
-        example = """{"base_currency":"KES"}""",
+                "type rule is rejected with 422. A base_currency entry must equal " +
+                "base_currency_code, or the draft is rejected with 422; it is checked and not " +
+                "stored, because base_currency_code carries it.",
+        example = """{"default_timezone":"Africa/Nairobi"}""",
     )
     val initialSettings: Map<String, String> = emptyMap(),
     @field:JsonFormat(pattern = "dd-MM-yyyy")
@@ -66,7 +69,14 @@ data class CreateTenantDraftRequest(
     val businessDate: LocalDate? = null,
 )
 
-/** Request payload for amending an un-submitted tenant draft. */
+/**
+ * Request payload for amending an un-submitted tenant draft.
+ *
+ * Omitting a key means "unchanged" for `legal_name`, `registration_number` and `admin`. A Kotlin
+ * caller that leaves one at its default `null` serialises it as an explicit JSON `null`, which
+ * clears a legal identity field (and, for `admin`, leaves the administrator unchanged); build the
+ * request map-by-map when a key must be truly absent.
+ */
 data class AmendTenantDraftRequest(
     @field:NotBlank
     @field:Pattern(regexp = "^[a-z0-9-]{3,32}$")
@@ -76,12 +86,29 @@ data class AmendTenantDraftRequest(
     @field:Size(min = 2, max = 100)
     @field:Schema(example = "Acme Financial Services")
     val displayName: String,
-    @field:Size(max = 100)
-    @field:Schema(example = "Acme Financial Services Limited")
-    val legalName: String? = null,
-    @field:Size(max = 50)
-    @field:Schema(example = "REG-123456")
-    val registrationNumber: String? = null,
+    // The length limits (100 and 50) are checked in PlatformTenantController: Kotlin emits no JVM
+    // type annotations without -Xemit-jvm-type-annotations, so a @Size on the Optional's value is
+    // invisible to Bean Validation.
+    @field:Schema(
+        type = "string",
+        nullable = true,
+        maxLength = 100,
+        description =
+            "Absent leaves the legal name unchanged; an explicit null clears it; a string sets " +
+                "it (at most 100 characters).",
+        example = "Acme Financial Services Limited",
+    )
+    val legalName: Optional<String>? = null,
+    @field:Schema(
+        type = "string",
+        nullable = true,
+        maxLength = 50,
+        description =
+            "Absent leaves the registration number unchanged; an explicit null clears it; a " +
+                "string sets it (at most 50 characters).",
+        example = "REG-123456",
+    )
+    val registrationNumber: Optional<String>? = null,
     @field:NotBlank
     @field:Pattern(regexp = "^[A-Z]{2}$", message = "Country code must be 2 uppercase ISO letters.")
     @field:Schema(example = "KE")
@@ -96,14 +123,55 @@ data class AmendTenantDraftRequest(
     @field:NotBlank
     @field:Schema(example = "Africa/Nairobi")
     val timezone: String,
-    @field:NotNull
     @field:Valid
-    val admin: InitialAdminDto,
+    @field:Schema(
+        description =
+            "Absent leaves the administrator draft unchanged. When sent it replaces the draft in " +
+                "full, and send_application_invite must be stated.",
+    )
+    val admin: AmendInitialAdminDto? = null,
     val initialSettings: Map<String, String> = emptyMap(),
     @field:JsonFormat(pattern = "dd-MM-yyyy")
     @field:Schema(example = "18-07-2026", type = "string")
     val businessDate: LocalDate? = null,
 )
+
+/**
+ * Administrator draft details on amend. The same fields as [InitialAdminDto], but
+ * `send_application_invite` has no default: an amend that replaces the administrator must say
+ * whether to send the invite, so an omitted key cannot reset a stored `true` to `false`.
+ */
+data class AmendInitialAdminDto(
+    @field:NotBlank
+    @field:Email
+    @field:Schema(example = "admin@acme.test")
+    val email: String,
+    @field:NotBlank
+    @field:Pattern(regexp = "^[a-zA-Z0-9._-]{3,50}$")
+    @field:Schema(example = "admin")
+    val username: String,
+    @field:NotBlank
+    @field:Size(min = 2, max = 100)
+    @field:Schema(example = "Initial Administrator")
+    val displayName: String,
+    @field:NotBlank
+    @field:Pattern(regexp = "^\\+[1-9]\\d{1,14}$", message = "Phone must be in E.164 format.")
+    @field:Schema(example = "+254700000000")
+    val phoneE164: String? = null,
+    @field:NotNull
+    @field:Schema(example = "true")
+    val sendApplicationInvite: Boolean? = null,
+) {
+    /** Maps the validated administrator; `@NotNull` guarantees the invite flag is present. */
+    internal fun toDomain(): InitialAdministratorDraft =
+        InitialAdministratorDraft(
+            email = email,
+            username = username,
+            displayName = displayName,
+            phoneE164 = phoneE164,
+            sendApplicationInvite = requireNotNull(sendApplicationInvite),
+        )
+}
 
 /** Initial administrator draft details. */
 data class InitialAdminDto(
@@ -192,6 +260,23 @@ data class TenantDetailResponse(
     val id: UUID,
     val tenantCode: String,
     val displayName: String,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description = "The tenant's legal name, or `null` when none is recorded. Always present.",
+        example = "Acme Financial Services Limited",
+    )
+    val legalName: String? = null,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "The tenant's registration number, or `null` when none is recorded. Always present.",
+        example = "REG-123456",
+    )
+    val registrationNumber: String? = null,
     val countryCode: String,
     val baseCurrencyCode: String,
     val timezone: String,

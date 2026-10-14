@@ -15,6 +15,7 @@ import com.finaxis.platform.common.web.idempotency.IdempotencyProperties
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.AmendInitialAdminDto
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.AmendTenantDraftRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateTenantDraftRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.DeprovisionTenantRequest
@@ -22,6 +23,7 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.InitialAdminDto
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReactivateTenantRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.RejectTenantRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SuspendTenantRequest
+import com.finaxis.platform.lifecycle.application.AmendOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
 import com.finaxis.platform.lifecycle.application.DeprovisionOrganisationCommand
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
@@ -38,10 +40,12 @@ import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argThat
+import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.never
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.beans.factory.annotation.Autowired
@@ -224,6 +228,8 @@ class PlatformTenantControllerTests
                     statusReason = null,
                     createdAt = Instant.parse("2026-07-18T10:00:00Z"),
                     updatedAt = Instant.parse("2026-07-18T10:00:00Z"),
+                    legalName = "Acme Test Legal Ltd",
+                    registrationNumber = "REG-ACME-TEST",
                 )
             whenever(foundationQueryService.getTenant(eq(orgId), any())).thenReturn(detail)
 
@@ -235,8 +241,70 @@ class PlatformTenantControllerTests
                     jsonPath("$.id") { value(orgId.toString()) }
                     jsonPath("$.tenant_code") { value("acme-test") }
                     jsonPath("$.status") { value("ACTIVE") }
+                    jsonPath("$.legal_name") { value("Acme Test Legal Ltd") }
+                    jsonPath("$.registration_number") { value("REG-ACME-TEST") }
                 }
         }
+
+        @Test
+        fun `amendDraft keeps an absent legal identity, clears on null and sets a value`() {
+            val orgId = uuidV7()
+            stubTenantDetail(orgId, "DRAFT")
+            withPlatformContext {
+                listOf(
+                    emptyMap(),
+                    mapOf("legal_name" to null, "registration_number" to null),
+                    mapOf("legal_name" to "Acme Legal Ltd", "registration_number" to "REG-ACME-1"),
+                ).forEach { legalIdentity ->
+                    mockMvc
+                        .patch("${ApiPaths.PLATFORM_TENANTS}/$orgId") {
+                            contentType = MediaType.APPLICATION_JSON
+                            content =
+                                apiJsonCodec.mapper.writeValueAsString(
+                                    amendBody() + legalIdentity,
+                                )
+                            with(authentication(platformToken(setOf("tenant.update_draft"))))
+                        }.andExpect { status { isOk() } }
+                }
+            }
+
+            val captor = argumentCaptor<AmendOrganisationDraftCommand>()
+            verify(organisationProvisioningService, times(3)).amendDraft(captor.capture())
+            assertEquals(
+                listOf(false to null, true to null, true to "Acme Legal Ltd"),
+                captor.allValues.map { it.changesLegalName to it.legalName },
+            )
+            assertEquals(
+                listOf(false to null, true to null, true to "REG-ACME-1"),
+                captor.allValues.map { it.changesRegistrationNumber to it.registrationNumber },
+            )
+        }
+
+        private fun amendAdminDto() =
+            AmendInitialAdminDto(
+                email = "admin@acme.test",
+                username = "admin",
+                displayName = "Initial Admin",
+                phoneE164 = "+254700000000",
+                sendApplicationInvite = false,
+            )
+
+        private fun amendBody(): Map<String, Any?> =
+            mapOf(
+                "tenant_code" to "acme-test",
+                "display_name" to "Acme Test Updated",
+                "country_code" to "KE",
+                "base_currency_code" to "KES",
+                "timezone" to "Africa/Nairobi",
+                "admin" to
+                    mapOf(
+                        "email" to "admin@acme.test",
+                        "username" to "admin",
+                        "display_name" to "Initial Admin",
+                        "phone_e164" to "+254700000000",
+                        "send_application_invite" to false,
+                    ),
+            )
 
         @Test
         fun `searchTenants returns a bounded page`() {
@@ -284,13 +352,7 @@ class PlatformTenantControllerTests
                     countryCode = "KE",
                     baseCurrencyCode = "KES",
                     timezone = "Africa/Nairobi",
-                    admin =
-                        InitialAdminDto(
-                            email = "admin@acme.test",
-                            username = "admin",
-                            displayName = "Initial Admin",
-                            phoneE164 = "+254700000000",
-                        ),
+                    admin = amendAdminDto(),
                 )
 
             withPlatformContext {
@@ -340,7 +402,7 @@ class PlatformTenantControllerTests
                     countryCode = "KE",
                     baseCurrencyCode = "KES",
                     timezone = "Africa/Nairobi",
-                    admin = admin,
+                    admin = amendAdminDto(),
                 )
 
             withPlatformContext {

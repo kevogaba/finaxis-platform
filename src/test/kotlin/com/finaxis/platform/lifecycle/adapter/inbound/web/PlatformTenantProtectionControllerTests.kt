@@ -154,7 +154,7 @@ class PlatformTenantProtectionControllerTests
                 """{"tenant_code":"renamed","display_name":"Renamed","country_code":"KE",
                     "base_currency_code":"KES","timezone":"Africa/Nairobi","admin":
                     {"email":"a@example.test","username":"adminuser","display_name":"Admin User",
-                     "phone_e164":"+254700000000"}}"""
+                     "phone_e164":"+254700000000","send_application_invite":false}}"""
 
             val ACTIONS: List<Pair<String, String>> =
                 listOf(

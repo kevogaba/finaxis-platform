@@ -22,6 +22,12 @@ data class TenantSettingDefinition(
  * `docs/operations/tenant-settings.md` for what is deliberately not a tenant setting.
  */
 object TenantSettingCatalog {
+    /**
+     * The key of the read-only mirror of the organisation's `base_currency_code`. Lifecycle
+     * refuses every write to it and answers its reads from the organisation column.
+     */
+    const val BASE_CURRENCY_KEY = "base_currency"
+
     private val definitions0 =
         listOf(
             TenantSettingDefinition(
@@ -32,7 +38,7 @@ object TenantSettingCatalog {
                 null,
             ),
             TenantSettingDefinition(
-                "base_currency",
+                BASE_CURRENCY_KEY,
                 TenantSettingValueType.CURRENCY,
                 false,
                 false,
@@ -83,6 +89,12 @@ object TenantSettingCatalog {
 
     /** Returns every catalog key. */
     fun keys(): Set<String> = byKey.keys
+
+    /**
+     * Rows the platform writes for its own bookkeeping, never as tenant settings. Reads treat them
+     * as keys that do not exist, so the catalogue is the whole of what a tenant sees.
+     */
+    val internalKeys: Set<String> = setOf("settings.operational")
 
     /**
      * Validates [rawValue] for [key] and returns the canonical stored string form. Throws

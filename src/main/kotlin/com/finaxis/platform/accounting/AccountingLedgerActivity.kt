@@ -6,10 +6,12 @@ import java.util.UUID
  * Accounting-owned query port other foundation modules consult before changing something the
  * ledger has already committed to.
  *
- * The first consumer is the functional-currency freeze: once a tenant has a single posted journal
- * its functional currency cannot change, because journal lines are immutable and a later line in a
- * different unit would make every balance a sum of incompatible units. Lifecycle asks this before
- * accepting a `base_currency` change. See `docs/architecture/accounting-foundation.md`, *"The
+ * It answers the functional-currency freeze: once a tenant has a single posted journal its
+ * functional currency cannot change, because journal lines are immutable and a later line in a
+ * different unit would make every balance a sum of incompatible units. Lifecycle no longer asks
+ * it: the `base_currency` setting is a read-only mirror of the organisation column, which only a
+ * draft-only amendment writes, so no route changes the currency once a journal can exist. The port
+ * is kept and has no production caller. See `docs/architecture/accounting-foundation.md`, *"The
  * functional currency is frozen once the tenant has posted"*.
  *
  * Deliberately a boolean, not a count or a journal: the consumer needs a yes or no, and anything
@@ -24,10 +26,10 @@ interface AccountingLedgerActivity {
      * be called immediately before [hasPostedJournals] on any path going on to change the currency.
      *
      * Without it the freeze is a check-then-write across two transactions that cannot see each
-     * other: the settings transaction is told no journal exists, the posting transaction inserts
-     * the first one, and both commit - leaving an immutable ledger written under an answer about a
-     * currency the tenant no longer declares. The window is only ever a tenant's *first* posting,
-     * but the ledger is the one place the platform cannot go back and fix.
+     * other: a currency-change transaction is told no journal exists, the posting transaction
+     * inserts the first one, and both commit - leaving an immutable ledger written under an answer
+     * about a currency the tenant no longer declares. The window is only ever a tenant's *first*
+     * posting, but the ledger is the one place the platform cannot go back and fix.
      *
      * Blocks until postings in flight for this tenant have finished, and is released when the
      * caller's transaction ends, so a refused or failed change frees it with no unlock to forget.

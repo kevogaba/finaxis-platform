@@ -259,7 +259,9 @@ class TenantSettingsController(
         ),
         ApiResponse(
             responseCode = "422",
-            description = "Invalid setting operation",
+            description =
+                "Invalid setting operation: an unknown or internal key, an invalid value, or " +
+                    "base_currency, a read-only mirror of the organisation's base currency",
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -356,7 +358,9 @@ class TenantSettingsController(
         ),
         ApiResponse(
             responseCode = "422",
-            description = "Invalid setting operation",
+            description =
+                "Invalid setting operation: an unknown or internal key, an invalid value, or " +
+                    "base_currency, a read-only mirror of the organisation's base currency",
             content = [
                 Content(
                     mediaType = "application/problem+json",

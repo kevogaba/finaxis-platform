@@ -3,7 +3,9 @@ package com.finaxis.platform.lifecycle
 import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.jooq.tables.references.ORGANISATION_SETTING
 import com.finaxis.platform.lifecycle.application.CreateOrUpdateTenantSettingCommand
+import com.finaxis.platform.lifecycle.application.DeactivateTenantSettingCommand
 import com.finaxis.platform.lifecycle.application.GetTenantSettingQuery
 import com.finaxis.platform.lifecycle.application.ListTenantSettingsQuery
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
@@ -34,17 +36,8 @@ class TenantSettingQueryIntegrationTests(
     fun `tenant setting get and list return catalog-backed read views`() {
         val organisationId = fixture.createActiveOrganisation("setting-query", LOCAL_USER_ID)
 
-        withRequestContext {
-            tenantSettingsService.createOrUpdate(
-                CreateOrUpdateTenantSettingCommand(
-                    organisationId,
-                    key = "base_currency",
-                    value = "kes",
-                    actorId = LOCAL_USER_ID,
-                ),
-            )
-        }
-
+        // base_currency is a read-only mirror of the organisation's column, which the fixture set
+        // to KES at provisioning: both reads answer that column, and no write can change it.
         val baseCurrency =
             withRequestContext {
                 tenantSettingsService.get(
@@ -73,6 +66,70 @@ class TenantSettingQueryIntegrationTests(
         val makerChecker =
             catalogSettings.single { it.key == "require_maker_checker_for_user_invites" }
         assertEquals("false", makerChecker.value)
+    }
+
+    @Test
+    fun `base_currency write and deactivate are refused and its read stays the column`() {
+        val organisationId = fixture.createActiveOrganisation("setting-mirror", LOCAL_USER_ID)
+
+        assertFailsWith<InvalidOperationException> {
+            withRequestContext {
+                tenantSettingsService.createOrUpdate(
+                    CreateOrUpdateTenantSettingCommand(
+                        organisationId,
+                        key = "base_currency",
+                        value = "USD",
+                        actorId = LOCAL_USER_ID,
+                    ),
+                )
+            }
+        }
+        assertFailsWith<InvalidOperationException> {
+            withRequestContext {
+                tenantSettingsService.deactivate(
+                    DeactivateTenantSettingCommand(organisationId, "base_currency", LOCAL_USER_ID),
+                )
+            }
+        }
+
+        val baseCurrency =
+            withRequestContext {
+                tenantSettingsService.get(
+                    GetTenantSettingQuery(organisationId, "base_currency", LOCAL_USER_ID),
+                )
+            }
+        assertEquals("KES", baseCurrency.value)
+        assertEquals(
+            0,
+            dsl.fetchCount(
+                ORGANISATION_SETTING,
+                ORGANISATION_SETTING.ORGANISATION_ID
+                    .eq(organisationId)
+                    .and(ORGANISATION_SETTING.SETTING_KEY.eq("base_currency")),
+            ),
+            "a refused write must leave no base_currency settings row behind",
+        )
+    }
+
+    @Test
+    fun `the internal operational marker is not a setting, so list totals the catalogue alone`() {
+        // Approval writes `settings.operational`, so the tenant is past the point where it exists.
+        val organisationId = fixture.createActiveOrganisation("setting-operational", LOCAL_USER_ID)
+
+        val page =
+            withRequestContext {
+                tenantSettingsService.list(ListTenantSettingsQuery(organisationId, LOCAL_USER_ID))
+            }
+        assertEquals(TenantSettingCatalog.keys().size.toLong(), page.totalItems)
+        assertFalse(page.items.any { it.key == "settings.operational" })
+
+        assertFailsWith<InvalidOperationException> {
+            withRequestContext {
+                tenantSettingsService.get(
+                    GetTenantSettingQuery(organisationId, "settings.operational", LOCAL_USER_ID),
+                )
+            }
+        }
     }
 
     @Test

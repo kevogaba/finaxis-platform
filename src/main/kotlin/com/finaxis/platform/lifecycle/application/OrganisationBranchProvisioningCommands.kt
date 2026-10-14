@@ -36,8 +36,17 @@ data class AmendOrganisationDraftCommand(
     val organisationId: UUID,
     val tenantCode: String,
     val displayName: String,
-    val legalName: String?,
-    val registrationNumber: String?,
+    /**
+     * `false` leaves the stored legal name alone; `true` sets it to [legalName], null clears it.
+     */
+    val changesLegalName: Boolean = false,
+    val legalName: String? = null,
+    /**
+     * `false` leaves the stored registration number alone; `true` sets it to [registrationNumber],
+     * null clears it.
+     */
+    val changesRegistrationNumber: Boolean = false,
+    val registrationNumber: String? = null,
     val countryCode: String,
     val baseCurrencyCode: String,
     val timezone: String,
@@ -45,7 +54,11 @@ data class AmendOrganisationDraftCommand(
     val businessDate: LocalDate? = null,
     val actorId: UUID,
     val requestId: UUID,
-    val admin: InitialAdministratorDraft,
+    /**
+     * `null` leaves the stored administrator draft untouched; a value replaces it in full (the
+     * caller has already stated `send_application_invite`).
+     */
+    val admin: InitialAdministratorDraft?,
 )
 
 /** Submits an organisation draft to the approval workflow. */

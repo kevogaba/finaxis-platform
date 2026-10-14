@@ -178,10 +178,11 @@ schema already applies to `organisation.base_currency_code`.
 `java.util.Currency`, reached through `MoneyPolicy` - `requireCurrency` where a code merely has to
 be known, and `requireSettlementCurrency` where a code is being *chosen* as a unit for future
 postings and must therefore also have a minor unit. Both supply points for a tenant's functional
-currency use the latter: organisation provisioning (create and amend) and the `base_currency` tenant
-setting through `TenantSettingCatalog`. A second source of truth for currency codes is a bug factory — it
-has to be seeded, migrated, kept in step with a standard that already ships with the JDK, and
-reconciled with the JDK's view every time the two disagree.
+currency use the latter: organisation provisioning (create and amend). The `base_currency` tenant
+setting does not supply one: it mirrors the organisation's column and refuses writes. A second
+source of truth for currency codes is a bug factory — it has to be seeded, migrated, kept in step
+with a standard that already ships with the JDK, and reconciled with the JDK's view every time the
+two disagree.
 
 ### Multi-Currency Extension Points
 
@@ -728,28 +729,31 @@ currency leaves historical lines denominated in the old unit while later lines u
 every balance, header total and daily projection then sums incompatible units. No amount of
 approval repairs that, and this design ships no revaluation engine.
 
-So the rule is structural rather than procedural: once a tenant has a single posted journal, its
-functional currency cannot change. The enforcement point is **issue #40**, where `journal_entry`
-first exists — an earlier revision assigned it to issue #36, which creates the fiscal calendar and
-the chart of accounts and therefore has no table the predicate *"has posted"* can be read from.
-Within #40's stack the migration creates the table and the check itself ships with the posting
-engine (#41): lifecycle asks accounting, through an accounting-declared `AccountingLedgerActivity`
-query port, whether the tenant has posted, from the two places the functional currency can
-change — the organisation update and the `base_currency` tenant setting — and refuses the change
-when it has.
+So the rule is structural rather than procedural: once a tenant can post, its functional currency
+cannot change. Two structural facts enforce it, and neither is a check at a settings endpoint. The
+only writer of `organisation.base_currency_code` is the draft amendment, which is refused unless the
+organisation is a `DRAFT`. A journal can be posted only by an `ACTIVE` organisation, which
+`LifecycleAccountingTenantAdapter.isOrganisationPostable` answers. So the column is fixed before a
+journal can exist, and no route changes it afterwards.
 
-That question and the answer's use must be serialised against the posting it is asking about.
-Reading it and writing the setting are one transaction; a tenant's first posting is another; and
-nothing about snapshot visibility makes either see the other, so both could commit and leave the
-tenant declaring a currency its immutable lines were never written under. Lifecycle therefore calls
-`AccountingLedgerActivity.lockFunctionalCurrencyForChange` immediately *before* asking — the
-adjacency is the fix — and a posting takes the same tenant-scoped lock **shared** as the first thing
-it does. **The advisory lock is what makes this correct, and raising the posting path to
-`SERIALIZABLE` has not made it redundant.** An advisory lock does not participate in MVCC, so it
-carries neither an `EvalPlanQual` re-read nor a serialization failure with it: a serializable
-posting that takes the lock and then plainly re-reads the currency was measured returning its own
-snapshot's stale value and committing on it. The lock serialises the two sides; the isolation level
-does not.
+The `base_currency` tenant setting, which was a second route, is a read-only mirror of that column
+and refuses every write before it reaches the column (see
+[tenant settings](../operations/tenant-settings.md), "The base currency is a read-only mirror").
+Lifecycle therefore no longer asks accounting whether a tenant has posted, and no longer calls
+`AccountingLedgerActivity.lockFunctionalCurrencyForChange`.
+That port and its lock are unchanged and have no production caller, so the change-side half of the
+serialisation is dormant until a route that changes the currency while a tenant can post is added.
+A posting still takes the same tenant-scoped lock **shared** as the first thing it does.
+
+That serialisation exists for one race: a currency change and a tenant's first posting must not both
+commit, or the tenant would declare a currency its immutable lines were never written under.
+
+**The advisory lock is what makes this correct, and raising the posting path to `SERIALIZABLE` has
+not made it redundant.** An advisory lock does not participate in MVCC, so it carries neither an
+`EvalPlanQual` re-read nor a serialization failure with it: a serializable posting that takes the
+lock and then plainly re-reads the currency was measured returning its own snapshot's stale value
+and committing on it. The lock serialises a currency change against a first posting; the isolation
+level does not.
 
 The posting's own read of the currency is the other half, and it is **closed** rather than
 outstanding. Because the engine re-reads the currency under the lock and compares it with the

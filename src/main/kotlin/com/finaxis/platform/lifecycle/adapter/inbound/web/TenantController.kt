@@ -84,6 +84,8 @@ class TenantController(
             id = id,
             tenantCode = tenantCode,
             displayName = displayName,
+            legalName = legalName,
+            registrationNumber = registrationNumber,
             countryCode = countryCode,
             baseCurrencyCode = baseCurrencyCode,
             timezone = timezone,

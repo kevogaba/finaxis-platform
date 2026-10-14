@@ -34,7 +34,8 @@ stateDiagram-v2
 Implemented transitions and effects:
 
 - New to `DRAFT`: `createDraft` requires non-blank `tenantCode`, display name, ISO country and
-  currency codes, and a valid timezone. It saves initial settings and a business date.
+  currency codes, and a valid timezone. It saves initial settings, except `base_currency`, which
+  is checked against `base_currency_code` and not stored, and a business date.
 - `DRAFT` to `PENDING_APPROVAL`: `SUBMIT` requires mandatory metadata and emits
   `finaxis.lifecycle.organisation.approval-requested`.
 - `PENDING_APPROVAL` to `PROVISIONING`: `START_PROVISIONING` starts approval setup in the same

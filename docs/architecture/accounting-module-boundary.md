@@ -70,28 +70,30 @@ the same column - the only one a posting may decide its currency from once it ho
 tenant-currency lock. The paragraph below says why the distinction exists.
 
 Two ports run the other way, both declared in the accounting root package and implemented inside
-accounting, and both called by lifecycle — which already depends on `accounting` for the ports
-above, so neither creates a module edge.
+accounting. Lifecycle already depends on `accounting` for the ports above, so neither creates a
+module edge.
 
-`AccountingLedgerActivity` lets lifecycle ask *"has this tenant posted?"* before it accepts a
-`base_currency` setting change — the functional-currency freeze the accounting foundation requires.
-
-`AccountingDayRollover` lets lifecycle tell accounting that a tenant's business date has moved on,
-so accounting can settle the derived balances for the day just left. **This is the shape it is
-because of rule 4 below.** The natural implementation would have accounting consume the
-`BusinessDateAdvanced` event with its own listener and hand off to a JobRunr job; accounting may do
-neither, and no other module may write `gl_account_daily_balance` either. So lifecycle — which
-already holds `common::jobs` — enqueues the job inside the advance's transaction and calls this port
-from it after that transaction commits, outside the `business_date` row lock every current-dated
-posting queues behind. The ban stays absolute rather than being narrowed for a special case. See
+`AccountingDayRollover` is the one of them that lifecycle calls. It lets lifecycle tell accounting
+that a tenant's business date has moved on, so accounting can settle the derived balances for the
+day just left. **This is the shape it is because of rule 4 below.** The natural implementation would
+have accounting consume the `BusinessDateAdvanced` event with its own listener and hand off to a
+JobRunr job; accounting may do neither, and no other module may write `gl_account_daily_balance`
+either. So lifecycle — which already holds `common::jobs` — enqueues the job inside the advance's
+transaction and calls this port from it after that transaction commits, outside the
+`business_date` row lock every current-dated posting queues behind. The ban stays absolute rather
+than being narrowed for a special case. See
 [ADR 0027](../adr/0027-derived-balance-projection-and-its-build-trigger.md).
 
-The same port also hands lifecycle the lock that makes the answer usable. Asking and then writing
-are one transaction and the tenant's first posting is another, and nothing about MVCC makes either
-see the other - so `lockFunctionalCurrencyForChange` is taken immediately before the question, and
-a posting takes the same tenant-scoped lock shared as the first thing `postNew` does. Lifecycle
-still reasons about nothing but a boolean; the serialisation is accounting's, on accounting's side
-of the port.
+`AccountingLedgerActivity` is kept with no production caller: lifecycle no longer asks whether a
+tenant has posted, because the `base_currency` setting is a read-only mirror of the organisation
+column. See [accounting foundation](accounting-foundation.md), "The functional currency is frozen
+once the tenant has posted".
+
+The same port's `lockFunctionalCurrencyForChange` is the change-side half of that serialisation:
+a currency change takes it before asking, and a posting takes the same tenant-scoped lock shared as
+the first thing `postNew` does. No production path takes it today, because no route changes the
+currency while a tenant can post. The serialisation stays accounting's, on accounting's side of the
+port.
 
 Raising the posting path to `SERIALIZABLE` does **not** make that advisory lock redundant, and it
 is the one conclusion a reader is most likely to draw. An advisory lock does not participate in

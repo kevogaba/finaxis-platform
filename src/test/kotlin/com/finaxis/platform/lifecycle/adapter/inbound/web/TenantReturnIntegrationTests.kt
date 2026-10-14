@@ -11,6 +11,7 @@ import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.AmendInitialAdminDto
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.AmendTenantDraftRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateTenantDraftRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.InitialAdminDto
@@ -30,6 +31,7 @@ import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.patch
 import org.springframework.test.web.servlet.post
 import java.time.OffsetDateTime
+import java.util.Optional
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -472,6 +474,17 @@ class TenantReturnIntegrationTests
             sendApplicationInvite = false,
         )
 
+        private fun amendAdminDto(
+            email: String,
+            code: String,
+        ) = AmendInitialAdminDto(
+            email = email,
+            username = "admin-$code",
+            displayName = "Initial Admin",
+            phoneE164 = "+254700000000",
+            sendApplicationInvite = false,
+        )
+
         private fun amend(
             tenantId: UUID,
             actor: UUID,
@@ -485,12 +498,12 @@ class TenantReturnIntegrationTests
                         AmendTenantDraftRequest(
                             tenantCode = tenantColumn(tenantId, "tenant_code")!!,
                             displayName = "Return Tenant Amended",
-                            legalName = "Return Tenant Ltd",
-                            registrationNumber = "REG-${shortId()}",
+                            legalName = Optional.of("Return Tenant Ltd"),
+                            registrationNumber = Optional.of("REG-${shortId()}"),
                             countryCode = "KE",
                             baseCurrencyCode = "KES",
                             timezone = "Africa/Nairobi",
-                            admin = adminDto(adminEmail, "amended-${shortId()}"),
+                            admin = amendAdminDto(adminEmail, "amended-${shortId()}"),
                         ),
                     )
                 with(authentication(token(actor, PlatformOrganisation.ID, COARSE)))

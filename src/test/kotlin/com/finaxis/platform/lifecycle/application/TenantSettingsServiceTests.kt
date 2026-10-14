@@ -1,6 +1,5 @@
 package com.finaxis.platform.lifecycle.application
 
-import com.finaxis.platform.accounting.AccountingLedgerActivity
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.audit.AuditEvent
@@ -11,14 +10,18 @@ import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.lifecycle.BranchVisibility
 import com.finaxis.platform.lifecycle.PermissionGuard
+import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
+import com.finaxis.platform.lifecycle.domain.TenantSettingCatalog
 import java.time.Clock
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -30,16 +33,16 @@ class TenantSettingsServiceTests {
     private val auditEvents = RecordingAuditRepository()
     private val clock = Clock.fixed(Instant.parse("2026-07-17T10:15:30Z"), ZoneOffset.UTC)
     private val auditService = AuditService(auditEvents, clock)
-    private val ledger = FakeLedgerActivity()
+    private val organisations = FakeBootstrapStore()
     private val service =
         TenantSettingsService(
             lifecycleStore,
             settingsStore,
+            organisations,
             guard,
             auditService,
             events,
             clock,
-            ledger,
         )
 
     private val organisationId = uuidV7()
@@ -50,68 +53,15 @@ class TenantSettingsServiceTests {
     }
 
     @Test
-    fun `the base currency is frozen once the ledger reports a posted journal`() {
-        // The functional-currency freeze the accounting foundation requires: journal lines are
-        // immutable, so a later line in another unit would make every balance a sum of
-        // incompatible units. Lifecycle asks accounting and refuses; every other key is untouched.
+    fun `base_currency is a read-only mirror, so createOrUpdate refuses it before any write`() {
+        // The organisation's base_currency_code is the column the ledger reads. A setting row
+        // could only ever disagree with it, so the write is refused outright, with nothing stored,
+        // audited or published.
         activate()
-        ledger.posted = true
+        organisations.currency[organisationId] = "KES"
 
         val failure =
-            assertFailsWith<ConflictException> {
-                service.createOrUpdate(
-                    CreateOrUpdateTenantSettingCommand(
-                        organisationId,
-                        "base_currency",
-                        "USD",
-                        actorId,
-                    ),
-                )
-            }
-        assertEquals("accounting.functional_currency_frozen", failure.code)
-
-        service.createOrUpdate(
-            CreateOrUpdateTenantSettingCommand(organisationId, "default_timezone", "UTC", actorId),
-        )
-    }
-
-    @Test
-    fun `the currency lock is taken before the ledger is asked, on both mutation paths`() {
-        // The whole fix is the adjacency. Asking first and locking afterwards leaves exactly the
-        // window this closes: the tenant's first posting commits between the two, and a change the
-        // guard has already approved is written over a ledger that now exists.
-        activate()
-
-        service.createOrUpdate(
-            CreateOrUpdateTenantSettingCommand(organisationId, "base_currency", "USD", actorId),
-        )
-        assertEquals(
-            listOf("hasPostedJournals", "lockFunctionalCurrencyForChange", "hasPostedJournals"),
-            ledger.calls,
-            "unlocked read first - it can only short-circuit a definitive yes - then the lock, " +
-                "then the re-read this transaction may actually act on",
-        )
-
-        ledger.calls.clear()
-        service.deactivate(DeactivateTenantSettingCommand(organisationId, "base_currency", actorId))
-        assertEquals(
-            listOf("hasPostedJournals", "lockFunctionalCurrencyForChange", "hasPostedJournals"),
-            ledger.calls,
-            "deactivation changes the effective currency too, so it takes the same lock",
-        )
-    }
-
-    @Test
-    fun `an already frozen tenant is refused without ever taking the lock`() {
-        // The lock is only worth taking while the answer can still change. "Has posted" never goes
-        // back to false, so an unlocked yes is already final - and an administrator retrying
-        // against a tenant that has been trading for years must not queue an exclusive request,
-        // because while one is queued every new posting for that tenant queues behind it.
-        activate()
-        ledger.posted = true
-
-        val failure =
-            assertFailsWith<ConflictException> {
+            assertFailsWith<InvalidOperationException> {
                 service.createOrUpdate(
                     CreateOrUpdateTenantSettingCommand(
                         organisationId,
@@ -122,25 +72,95 @@ class TenantSettingsServiceTests {
                 )
             }
 
-        assertEquals("accounting.functional_currency_frozen", failure.code)
-        assertEquals(
-            listOf("hasPostedJournals"),
-            ledger.calls,
-            "a definitive unlocked answer must not queue an exclusive lock behind live postings",
+        assertEquals(BASE_CURRENCY_MIRROR_DETAIL, failure.safeDetail)
+        assertNull(settingsStore.stored(organisationId, "base_currency"))
+        assertEquals(0, auditEvents.saved.size)
+        assertEquals(0, events.published.size)
+    }
+
+    @Test
+    fun `base_currency is a read-only mirror, so deactivate refuses it and closes nothing`() {
+        activate()
+        organisations.currency[organisationId] = "KES"
+        settingsStore.put(organisationId, StoredSetting("base_currency", "KES", "CURRENCY", false))
+
+        val failure =
+            assertFailsWith<InvalidOperationException> {
+                service.deactivate(
+                    DeactivateTenantSettingCommand(organisationId, "base_currency", actorId),
+                )
+            }
+
+        assertEquals(BASE_CURRENCY_MIRROR_DETAIL, failure.safeDetail)
+        assertEquals("KES", settingsStore.stored(organisationId, "base_currency")?.value)
+        assertEquals(0, auditEvents.saved.size)
+        assertEquals(0, events.published.size)
+    }
+
+    @Test
+    fun `get of base_currency shows the organisation column, not a stale stored row`() {
+        activate()
+        organisations.currency[organisationId] = "USD"
+        settingsStore.put(organisationId, StoredSetting("base_currency", "KES", "CURRENCY", false))
+
+        val view = service.get(GetTenantSettingQuery(organisationId, "base_currency", actorId))
+
+        assertEquals("USD", view.value)
+        assertEquals("CURRENCY", view.valueType)
+    }
+
+    @Test
+    fun `get of base_currency does not read the stored row it ignores`() {
+        activate()
+        organisations.currency[organisationId] = "USD"
+        settingsStore.put(organisationId, StoredSetting("base_currency", "KES", "CURRENCY", false))
+
+        service.get(GetTenantSettingQuery(organisationId, "base_currency", actorId))
+
+        assertFalse(
+            settingsStore.readKeys.contains("base_currency"),
+            "a read of the mirror key must not touch the stored row it ignores",
         )
     }
 
     @Test
-    fun `a setting that is not the base currency neither locks nor asks the ledger`() {
-        // A tenant-wide lock on every setting write would serialise unrelated administration for
-        // no reason; only the one key the freeze governs pays for it.
+    fun `list shows base_currency from the organisation column`() {
         activate()
+        organisations.currency[organisationId] = "EUR"
+        settingsStore.put(organisationId, StoredSetting("base_currency", "KES", "CURRENCY", false))
 
-        service.createOrUpdate(
-            CreateOrUpdateTenantSettingCommand(organisationId, "default_timezone", "UTC", actorId),
+        val page = service.list(ListTenantSettingsQuery(organisationId, actorId))
+
+        assertEquals("EUR", page.items.single { it.key == "base_currency" }.value)
+    }
+
+    @Test
+    fun `settings operational is hidden from list and refused by get as an unknown key`() {
+        // The platform writes this marker at approval; it is not a tenant setting, so it counts
+        // toward nothing and reads as no key at all.
+        activate()
+        settingsStore.put(
+            organisationId,
+            StoredSetting("settings.operational", "true", "STRING", false),
         )
 
-        assertTrue(ledger.calls.isEmpty(), "no lock and no ledger question for an unrelated key")
+        val page = service.list(ListTenantSettingsQuery(organisationId, actorId))
+        assertEquals(TenantSettingCatalog.keys().size.toLong(), page.totalItems)
+        assertFalse(page.items.any { it.key == "settings.operational" })
+
+        assertFailsWith<InvalidOperationException> {
+            service.get(GetTenantSettingQuery(organisationId, "settings.operational", actorId))
+        }
+    }
+
+    @Test
+    fun `an unset platform-only setting lists as null, not as the redaction mask`() {
+        activate()
+        guard.deny(PLATFORM_ORG_ID, "tenant_setting.manage_platform")
+
+        val page = service.list(ListTenantSettingsQuery(organisationId, actorId))
+
+        assertNull(page.items.single { it.key == "audit_retention_days" }.value)
     }
 
     @Test
@@ -174,7 +194,33 @@ class TenantSettingsServiceTests {
         guard.deny(organisationId, "settings.update")
         assertFailsWith<SecurityException> {
             service.createOrUpdate(
-                CreateOrUpdateTenantSettingCommand(organisationId, "base_currency", "KES", actorId),
+                CreateOrUpdateTenantSettingCommand(
+                    organisationId,
+                    "default_timezone",
+                    "Africa/Nairobi",
+                    actorId,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `base_currency is forbidden without settings-update, before the mirror answer`() {
+        // The permission check precedes the mirror refusal on both write paths, so a caller who may
+        // not write learns nothing: it gets the same 403 it gets for any key, never the 422 that
+        // would tell it the key is a read-only mirror.
+        activate()
+        organisations.currency[organisationId] = "KES"
+        guard.deny(organisationId, "settings.update")
+
+        assertFailsWith<SecurityException> {
+            service.createOrUpdate(
+                CreateOrUpdateTenantSettingCommand(organisationId, "base_currency", "USD", actorId),
+            )
+        }
+        assertFailsWith<SecurityException> {
+            service.deactivate(
+                DeactivateTenantSettingCommand(organisationId, "base_currency", actorId),
             )
         }
     }
@@ -184,10 +230,18 @@ class TenantSettingsServiceTests {
         activate()
         val view =
             service.createOrUpdate(
-                CreateOrUpdateTenantSettingCommand(organisationId, "base_currency", "kes", actorId),
+                CreateOrUpdateTenantSettingCommand(
+                    organisationId,
+                    "default_timezone",
+                    " Africa/Nairobi ",
+                    actorId,
+                ),
             )
-        assertEquals("KES", view.value)
-        assertEquals("KES", settingsStore.stored(organisationId, "base_currency")?.value)
+        assertEquals("Africa/Nairobi", view.value)
+        assertEquals(
+            "Africa/Nairobi",
+            settingsStore.stored(organisationId, "default_timezone")?.value,
+        )
         assertEquals(1, auditEvents.saved.count { it.action == "settings.update" })
         assertEquals(1, events.published.size)
     }
@@ -220,7 +274,7 @@ class TenantSettingsServiceTests {
     fun `get returns null value for an unset catalog key`() {
         activate()
         assertNull(
-            service.get(GetTenantSettingQuery(organisationId, "base_currency", actorId)).value,
+            service.get(GetTenantSettingQuery(organisationId, "default_timezone", actorId)).value,
         )
     }
 
@@ -314,16 +368,23 @@ class TenantSettingsServiceTests {
     @Test
     fun `deactivate closes the setting`() {
         activate()
-        settingsStore.put(organisationId, StoredSetting("base_currency", "KES", "CURRENCY", false))
-        service.deactivate(DeactivateTenantSettingCommand(organisationId, "base_currency", actorId))
-        assertNull(settingsStore.stored(organisationId, "base_currency"))
+        settingsStore.put(
+            organisationId,
+            StoredSetting("default_timezone", "Africa/Nairobi", "TIMEZONE", false),
+        )
+        service.deactivate(
+            DeactivateTenantSettingCommand(organisationId, "default_timezone", actorId),
+        )
+        assertNull(settingsStore.stored(organisationId, "default_timezone"))
     }
 
     @Test
     fun `deactivate is a no-op when no setting is currently active`() {
         activate()
 
-        service.deactivate(DeactivateTenantSettingCommand(organisationId, "base_currency", actorId))
+        service.deactivate(
+            DeactivateTenantSettingCommand(organisationId, "default_timezone", actorId),
+        )
 
         assertEquals(0, auditEvents.saved.size)
         assertEquals(0, events.published.size)
@@ -331,6 +392,9 @@ class TenantSettingsServiceTests {
 
     private companion object {
         val PLATFORM_ORG_ID: UUID = UUID.fromString("00000000-0000-0000-0000-000000000000")
+        const val BASE_CURRENCY_MIRROR_DETAIL =
+            "base_currency is derived from the organisation's base currency " +
+                "and cannot be changed here."
     }
 }
 
@@ -384,10 +448,16 @@ private class FakeSettingsStore : OrganisationSettingsStore {
         actorId: UUID,
     ) = Unit
 
+    /** Every key [currentSetting] was asked for, in order. */
+    val readKeys = mutableListOf<String>()
+
     override fun currentSetting(
         organisationId: UUID,
         key: String,
-    ): StoredSetting? = data[organisationId to key]
+    ): StoredSetting? {
+        readKeys += key
+        return data[organisationId to key]
+    }
 
     override fun currentSettingsList(organisationId: UUID): List<StoredSetting> =
         data.filterKeys { it.first == organisationId }.values.toList()
@@ -483,20 +553,30 @@ private class CapturingPublisherForSettings : TransitionEventPublisher {
     }
 }
 
-private class FakeLedgerActivity : AccountingLedgerActivity {
-    var posted = false
+/** The organisation's base currency column: the one thing [OrganisationBootstrapStore] answers. */
+private class FakeBootstrapStore : OrganisationBootstrapStore {
+    val currency = mutableMapOf<UUID, String>()
 
-    /** Each call in order, so a test can prove the lock was taken BEFORE the question was asked. */
-    val calls = mutableListOf<String>()
+    override fun baseCurrencyCode(organisationId: UUID): String? = currency[organisationId]
 
-    override fun hasPostedJournals(organisationId: java.util.UUID): Boolean {
-        calls += "hasPostedJournals"
-        return posted
-    }
+    override fun lockBaseCurrencyCode(organisationId: UUID): String? = currency[organisationId]
 
-    override fun lockFunctionalCurrencyForChange(organisationId: java.util.UUID) {
-        calls += "lockFunctionalCurrencyForChange"
-    }
+    override fun ensureBusinessDate(
+        organisationId: UUID,
+        date: LocalDate,
+    ) = unused()
+
+    override fun timezone(organisationId: UUID): String = unused()
+
+    override fun ensureHeadOfficeDraft(organisationId: UUID): HeadOfficeDraftResult = unused()
+
+    override fun createDefaultReferenceSequences(organisationId: UUID) = unused()
+
+    override fun createDefaultRoles(organisationId: UUID) = unused()
+
+    override fun headOfficeState(organisationId: UUID): BranchLifecycleState? = unused()
+
+    private fun unused(): Nothing = error("not used by tenant settings")
 }
 
 private class RecordingAuditRepository : AuditEventRepository {
