@@ -215,6 +215,7 @@ class KeycloakUserProvisioningHandlerTests {
         val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.SUCCESS, dispatchAudit.outcome)
         assertEquals("KEYCLOAK", dispatchAudit.metadata["externalSystemReference"])
+        assertEquals(context.userId.toString(), dispatchAudit.subjectUserId)
     }
 
     @Test
@@ -261,6 +262,8 @@ class KeycloakUserProvisioningHandlerTests {
         val dispatchAudit = audits.items.single { it.action == "user.keycloak_provisioning" }
         assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, dispatchAudit.outcome)
         assertEquals("IllegalStateException", dispatchAudit.reason)
+        // The failed row is about the user being provisioned, on the failure path as on success.
+        assertEquals(context.userId.toString(), dispatchAudit.subjectUserId)
     }
 
     @Test

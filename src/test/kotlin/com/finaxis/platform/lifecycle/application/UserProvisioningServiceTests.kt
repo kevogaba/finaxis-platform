@@ -105,6 +105,11 @@ class UserProvisioningServiceTests {
         assertTrue(fake.branchAssignments.contains(BranchAssignmentKey(context.org, result.userId)))
         assertEquals(1, fake.roleAssignments.size)
         assertTrue(audits.events.any { it.action == "user.invite" })
+        // The invitee is the subject of the invitation, never the inviting administrator.
+        assertEquals(
+            result.userId.toString(),
+            audits.events.single { it.action == "user.invite" }.subjectUserId,
+        )
     }
 
     @Test
@@ -693,6 +698,7 @@ class UserProvisioningServiceTests {
         assertEquals(platformChecker.toString(), audit.actorId)
         assertEquals(context.org.toString(), audit.tenantId)
         assertEquals("PLATFORM", audit.metadata["checkerScope"])
+        assertEquals(invitation.userId.toString(), audit.subjectUserId)
     }
 
     @Test
@@ -1079,6 +1085,7 @@ class UserProvisioningServiceTests {
             setOf(firstTenantId.toString(), secondTenantId.toString()),
             revocationAudits.map { it.tenantId }.toSet(),
         )
+        assertEquals(List(4) { userId.toString() }, revocationAudits.map { it.subjectUserId })
     }
 
     @Test
@@ -1114,6 +1121,9 @@ class UserProvisioningServiceTests {
             mapOf("branchAssignmentsRevoked" to "1", "roleAssignmentsRevoked" to "1"),
             cascade.first().metadata.filterKeys { it.endsWith("AssignmentsRevoked") },
         )
+        // The revoked member is the subject; the administrator who revoked them is the actor.
+        assertEquals(userId.toString(), cascade.first().subjectUserId)
+        assertEquals(context.actor.toString(), cascade.first().actorId)
     }
 
     @Test
@@ -1898,10 +1908,10 @@ private class UserProvisioningFake :
         roleAssignments.removeAll(matchingRole.toSet())
         // This fake keeps no branch per assignment, so the branch is not modelled here.
         return matchingBranch.map {
-            DeprovisionedAssignment(uuidV7(), "USER_BRANCH_ASSIGNMENT", branchId = null)
+            DeprovisionedAssignment(uuidV7(), "USER_BRANCH_ASSIGNMENT", null, userId)
         } +
             matchingRole.map {
-                DeprovisionedAssignment(uuidV7(), "USER_ROLE_ASSIGNMENT", branchId = null)
+                DeprovisionedAssignment(uuidV7(), "USER_ROLE_ASSIGNMENT", null, userId)
             }
     }
 

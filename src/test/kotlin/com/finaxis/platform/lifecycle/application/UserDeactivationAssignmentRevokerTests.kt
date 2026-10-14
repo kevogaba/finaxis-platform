@@ -41,8 +41,13 @@ class UserDeactivationAssignmentRevokerTests {
             .thenReturn(setOf(organisationId))
         whenever(writer.revokeActiveAssignments(organisationId, userId)).thenReturn(
             listOf(
-                DeprovisionedAssignment(branchAssignment, "USER_BRANCH_ASSIGNMENT", branchId),
-                DeprovisionedAssignment(tenantRoleAssignment, "USER_ROLE_ASSIGNMENT", null),
+                DeprovisionedAssignment(
+                    branchAssignment,
+                    "USER_BRANCH_ASSIGNMENT",
+                    branchId,
+                    userId,
+                ),
+                DeprovisionedAssignment(tenantRoleAssignment, "USER_ROLE_ASSIGNMENT", null, userId),
             ),
         )
 
@@ -53,6 +58,31 @@ class UserDeactivationAssignmentRevokerTests {
         val rows = repository.saved.associateBy { it.resourceId }
         assertEquals(branchId.toString(), rows.getValue(branchAssignment.toString()).branchId)
         assertNull(rows.getValue(tenantRoleAssignment.toString()).branchId)
+    }
+
+    @Test
+    fun `a revoked assignment is about the deactivated user, not the administrator`() {
+        val organisationId = uuidV7()
+        val userId = uuidV7()
+        val actorId = uuidV7()
+        whenever(reader.findOrganisationIdsForActiveUserAccess(userId))
+            .thenReturn(setOf(organisationId))
+        whenever(writer.revokeActiveAssignments(organisationId, userId)).thenReturn(
+            listOf(
+                DeprovisionedAssignment(uuidV7(), "USER_BRANCH_ASSIGNMENT", uuidV7(), userId),
+                DeprovisionedAssignment(uuidV7(), "USER_ROLE_ASSIGNMENT", null, userId),
+            ),
+        )
+
+        revoker.revoke(
+            DeactivateUserCommand(organisationId, userId, actorId, Reason.required("left")),
+        )
+
+        assertEquals(
+            listOf(userId.toString(), userId.toString()),
+            repository.saved.map { it.subjectUserId },
+        )
+        assertEquals(actorId.toString(), repository.saved.first().actorId)
     }
 }
 

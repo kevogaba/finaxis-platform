@@ -16,6 +16,10 @@ internal const val AUDIT_MIN_SEVERITY_DOC =
     "This severity or above (INFO < LOW < MEDIUM < HIGH < CRITICAL). Case-insensitive. Not " +
         "together with severity."
 internal const val AUDIT_BRANCH_DOC = "Branch the event was recorded against."
+internal const val AUDIT_SUBJECT_USER_ID_DOC =
+    "The user the event is about (a UUID), not who did it (actor_id): the account, membership, " +
+        "branch assignment or role assignment it changed. Rows written before the subject was " +
+        "recorded (#186) are not found by it."
 internal const val AUDIT_Q_DOC =
     "Case-insensitive text, 3 to 64 characters, found anywhere in the action, entity type or " +
         "reason (% and _ match themselves). Requires occurred_from, at most 31 days before " +

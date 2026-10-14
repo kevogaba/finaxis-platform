@@ -65,6 +65,7 @@ class UserFirstLoginActivationService(
                 outcome = AuditOutcome.SUCCESS,
                 reason = FIRST_LOGIN_REASON,
                 metadata = mapOf("organisationId" to organisationId.toString()),
+                subjectUserId = userId.toString(),
             ),
         )
     }

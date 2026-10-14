@@ -202,7 +202,8 @@ if (gradle.startParameter.taskNames.isNotEmpty()) {
         Flyway
             .configure()
             // As spring.flyway.postgresql.transactional-lock=false in application.yaml: the
-            // CONCURRENTLY index migrations (V25-V28) cannot finish under a transactional lock.
+            // CONCURRENTLY index migrations (V25-V28, V30) cannot finish under a transactional
+            // lock.
             .configuration(mapOf("flyway.postgresql.transactional.lock" to "false"))
             .dataSource(jooqCodegenJdbcUrl, "postgres", "")
             .locations(

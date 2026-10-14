@@ -15,6 +15,10 @@ import java.util.UUID
  * [record] is the single choke point: every convenience method funnels through it so redaction
  * always applies before an event reaches its repository.
  *
+ * Every helper takes an optional [subjectUserId]: the user the event is ABOUT, which is never
+ * defaulted to the actor (ADR 0031; #186). Pass it on every event about one user; leave it null
+ * for an event about no user.
+ *
  * Excluded from Modulith proxying via [Role]: in 2.1.0, rendering the default-parameter bridge
  * signatures generated for methods like [recordLifecycleTransition] recurses indefinitely, the same
  * observability-proxy issue already worked around for `TransitionExecutor`.
@@ -46,6 +50,7 @@ class AuditService(
                 actorId = command.actorId,
                 tenantId = command.tenantId,
                 branchId = command.branchId,
+                subjectUserId = command.subjectUserId,
                 action = command.action,
                 resourceType = command.resourceType,
                 resourceId = command.resourceId,
@@ -78,6 +83,7 @@ class AuditService(
         before: Map<String, Any?>? = null,
         after: Map<String, Any?>? = null,
         metadata: Map<String, Any?> = emptyMap(),
+        subjectUserId: UUID? = null,
     ): AuditEvent =
         record(
             baseCommand(
@@ -92,6 +98,7 @@ class AuditService(
                 reason = reason,
                 requestId = requestId,
                 metadata = metadata,
+                subjectUserId = subjectUserId,
             ).copy(before = before, after = after),
         )
 
@@ -109,6 +116,7 @@ class AuditService(
         requestId: String? = null,
         before: Map<String, Any?>? = null,
         metadata: Map<String, Any?> = emptyMap(),
+        subjectUserId: UUID? = null,
     ): AuditEvent =
         record(
             baseCommand(
@@ -123,6 +131,7 @@ class AuditService(
                 reason = reason,
                 requestId = requestId,
                 metadata = metadata,
+                subjectUserId = subjectUserId,
             ).copy(before = before),
         )
 
@@ -145,6 +154,7 @@ class AuditService(
         reason: String? = null,
         requestId: String? = null,
         metadata: Map<String, Any?> = emptyMap(),
+        subjectUserId: UUID? = null,
     ): AuditEvent =
         record(
             lifecycleTransitionCommand(
@@ -161,6 +171,7 @@ class AuditService(
                 reason = reason,
                 requestId = requestId,
                 metadata = metadata,
+                subjectUserId = subjectUserId,
             ),
         )
 
@@ -183,6 +194,7 @@ class AuditService(
         reason: String? = null,
         requestId: String? = null,
         metadata: Map<String, Any?> = emptyMap(),
+        subjectUserId: UUID? = null,
     ): AuditCommand =
         baseCommand(
             actorId = actorId,
@@ -196,6 +208,7 @@ class AuditService(
             reason = reason,
             requestId = requestId,
             metadata = metadata + mapOf(FROM_STATE to fromState, TO_STATE to toState),
+            subjectUserId = subjectUserId,
         )
 
     /**
@@ -216,6 +229,7 @@ class AuditService(
         requestId: String? = null,
         sourceIp: String? = null,
         metadata: Map<String, Any?> = emptyMap(),
+        subjectUserId: UUID? = null,
     ): AuditEvent =
         record(
             baseCommand(
@@ -230,13 +244,15 @@ class AuditService(
                 reason = reason,
                 requestId = requestId,
                 metadata = metadata,
+                subjectUserId = subjectUserId,
             ).copy(severity = severity, sourceIp = sourceIp),
         )
 
     /**
      * Records an IAM administration change: role, permission, membership, or assignment. [branchId]
      * is the branch the change is about (a branch-scoped assignment's), or null for a tenant-wide
-     * one. It is never the caller's selected branch.
+     * one. It is never the caller's selected branch. [subjectUserId] is the user whose assignment
+     * or membership changed (the target, not the actor), or null for a change about no user.
      */
     fun recordIamChange(
         actorId: UUID?,
@@ -251,6 +267,7 @@ class AuditService(
         reason: String? = null,
         requestId: String? = null,
         metadata: Map<String, Any?> = emptyMap(),
+        subjectUserId: UUID? = null,
     ): AuditEvent =
         record(
             baseCommand(
@@ -265,6 +282,7 @@ class AuditService(
                 reason = reason,
                 requestId = requestId,
                 metadata = metadata,
+                subjectUserId = subjectUserId,
             ).copy(before = before, after = after),
         )
 
@@ -284,6 +302,7 @@ class AuditService(
         reason: String? = null,
         requestId: String? = null,
         metadata: Map<String, Any?> = emptyMap(),
+        subjectUserId: UUID? = null,
     ): AuditEvent =
         record(
             baseCommand(
@@ -300,6 +319,7 @@ class AuditService(
                 metadata =
                     metadata +
                         mapOf(AuditMetadataKeys.EXTERNAL_SYSTEM_REFERENCE to externalSystemRef),
+                subjectUserId = subjectUserId,
             ),
         )
 
@@ -313,6 +333,7 @@ class AuditService(
         actorType: String? = null,
         reason: String? = null,
         requestId: String? = null,
+        subjectUserId: UUID? = null,
     ): AuditEvent =
         record(
             baseCommand(
@@ -327,6 +348,7 @@ class AuditService(
                 reason = reason,
                 requestId = requestId,
                 metadata = emptyMap(),
+                subjectUserId = subjectUserId,
             ).copy(before = before, after = after),
         )
 
@@ -342,12 +364,14 @@ class AuditService(
         reason: String?,
         requestId: String?,
         metadata: Map<String, Any?>,
+        subjectUserId: UUID?,
     ): AuditCommand =
         AuditCommand(
             actorType = actorType ?: resolveActorType(actorId),
             actorId = actorId?.toString(),
             tenantId = tenantId?.toString(),
             branchId = branchId?.toString(),
+            subjectUserId = subjectUserId?.toString(),
             action = action,
             resourceType = resourceType,
             resourceId = resourceId,

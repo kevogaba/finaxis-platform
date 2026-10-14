@@ -65,6 +65,24 @@ class AuditEventResponseMappingTests {
     }
 
     @Test
+    fun `the subject user is the same on every route and is not withheld on platform items`() {
+        val detail = detail()
+        val subject = detail.subjectUserId.toString()
+
+        assertEquals(subject, wire(detail.toSummaryResponse())["subject_user_id"])
+        assertEquals(subject, wire(detail.toResponse())["subject_user_id"])
+        assertEquals(subject, wire(detail.toPlatformSummaryResponse())["subject_user_id"])
+    }
+
+    @Test
+    fun `an event about no user carries a null subject_user_id`() {
+        val json = wire(detail().copy(subjectUserId = null).toResponse())
+
+        assertEquals(true, json.containsKey("subject_user_id"))
+        assertNull(json["subject_user_id"])
+    }
+
+    @Test
     fun `a resource id that is not a UUID reads as null under both names`() {
         val json = wire(detail().copy(entityId = null).toResponse())
 
@@ -85,6 +103,7 @@ class AuditEventResponseMappingTests {
             organisationId = uuidV7(),
             occurredAt = Instant.parse("2026-07-25T08:12:00Z"),
             actorUserId = uuidV7(),
+            subjectUserId = uuidV7(),
             actorExternalSubject = "local.admin",
             actorType = "USER",
             branchId = uuidV7(),
@@ -125,6 +144,7 @@ class AuditEventResponseMappingTests {
                 "actor_type",
                 "actor_id",
                 "actor_user_id",
+                "subject_user_id",
                 "actor_external_subject",
                 "branch_id",
                 "event_type",

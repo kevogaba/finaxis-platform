@@ -145,6 +145,38 @@ class OpenApiWireNamingContractTests
         }
 
         @Test
+        fun `audit schemas publish subject_user_id as an undeprecated uuid`() {
+            listOf("AuditEventSummaryResponse", "AuditEventDetailResponse").forEach { name ->
+                val property = schemas.path(name).path("properties").path("subject_user_id")
+
+                // A nullable property is a type array in this document (OpenAPI 3.1).
+                assertThat(property.path("type").toList().map { it.asString() })
+                    .describedAs("%s.subject_user_id type", name)
+                    .containsExactlyInAnyOrder("string", "null")
+                assertThat(property.path("format").asString())
+                    .describedAs("%s.subject_user_id format", name)
+                    .isEqualTo("uuid")
+                assertThat(property.path("deprecated").asBoolean())
+                    .describedAs("%s.subject_user_id deprecated", name)
+                    .isFalse()
+            }
+        }
+
+        @Test
+        fun `every audit search publishes the subject_user_id filter as a uuid`() {
+            listOf(
+                "/api/v1/tenant/audit-events",
+                "/api/v1/platform/audit-events",
+                "/api/v1/platform/tenants/{tenant_id}/audit-events",
+            ).forEach { path ->
+                val filter = queryParameter(path, "subject_user_id")
+                assertThat(filter.path("schema").path("format").asString())
+                    .describedAs("GET %s subject_user_id", path)
+                    .isEqualTo("uuid")
+            }
+        }
+
+        @Test
         fun `sort_by documents the accepted camelCase values per list endpoint`() {
             SORT_BY_VALUES.forEach { (path, expected) ->
                 val sortBy = queryParameter(path, "sort_by")

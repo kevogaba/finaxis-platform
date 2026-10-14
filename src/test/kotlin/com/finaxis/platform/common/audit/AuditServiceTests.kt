@@ -1,5 +1,6 @@
 package com.finaxis.platform.common.audit
 
+import com.finaxis.platform.common.id.uuidV7
 import org.junit.jupiter.api.Test
 import java.time.Clock
 import java.time.Instant
@@ -317,6 +318,153 @@ class AuditServiceTests {
 
         assertEquals("USER", repository.events.single().actorType)
         assertNull(repository.events.single().actorId)
+    }
+
+    @Test
+    fun `success, failure and transition helpers carry the user the event is about`() {
+        val service = service()
+        val subject = uuidV7()
+        val actor = uuidV7()
+        val tenant = uuidV7()
+
+        service.recordSuccess(
+            actorId = actor,
+            tenantId = tenant,
+            action = "user.invite",
+            resourceType = "USER",
+            resourceId = subject.toString(),
+            subjectUserId = subject,
+        )
+        service.recordFailure(
+            actorId = actor,
+            tenantId = tenant,
+            action = "user.approve",
+            resourceType = "USER",
+            resourceId = subject.toString(),
+            subjectUserId = subject,
+        )
+        service.recordLifecycleTransition(
+            actorId = actor,
+            tenantId = tenant,
+            aggregateType = "USER_ACCOUNT",
+            aggregateId = subject.toString(),
+            transition = "SUSPEND",
+            fromState = "ACTIVE",
+            toState = "SUSPENDED",
+            outcome = AuditOutcome.SUCCESS,
+            subjectUserId = subject,
+        )
+        service.record(
+            service.lifecycleTransitionCommand(
+                actorId = actor,
+                tenantId = tenant,
+                aggregateType = "USER_ACCOUNT",
+                aggregateId = subject.toString(),
+                transition = "REACTIVATE",
+                fromState = "SUSPENDED",
+                toState = "ACTIVE",
+                outcome = AuditOutcome.DENIED,
+                subjectUserId = subject,
+            ),
+        )
+
+        assertEquals(List(4) { subject.toString() }, repository.events.map { it.subjectUserId })
+    }
+
+    @Test
+    fun `security, IAM, dispatch and settings helpers carry the user the event is about`() {
+        val service = service()
+        val subject = uuidV7()
+        val actor = uuidV7()
+        val tenant = uuidV7()
+
+        service.recordSecurityEvent(
+            actorId = actor,
+            tenantId = tenant,
+            action = "user.access_denied",
+            resourceType = "USER",
+            resourceId = subject.toString(),
+            outcome = AuditOutcome.DENIED,
+            subjectUserId = subject,
+        )
+        service.recordIamChange(
+            actorId = actor,
+            tenantId = tenant,
+            action = "user.assign_role",
+            resourceType = "USER_ROLE_ASSIGNMENT",
+            resourceId = uuidV7().toString(),
+            subjectUserId = subject,
+        )
+        service.recordExternalDispatch(
+            actorId = actor,
+            tenantId = tenant,
+            action = "user.keycloak_provisioning",
+            outcome = AuditOutcome.SUCCESS,
+            externalSystemRef = "KEYCLOAK",
+            resourceType = "USER",
+            resourceId = subject.toString(),
+            subjectUserId = subject,
+        )
+        service.recordSettingsChange(
+            actorId = actor,
+            tenantId = tenant,
+            resourceId = tenant.toString(),
+            before = mapOf("a" to "1"),
+            after = mapOf("a" to "2"),
+            subjectUserId = subject,
+        )
+
+        assertEquals(List(4) { subject.toString() }, repository.events.map { it.subjectUserId })
+    }
+
+    @Test
+    fun `a helper called without a subject records no subject user`() {
+        val service = service()
+
+        service.recordSuccess(
+            actorId = uuidV7(),
+            tenantId = uuidV7(),
+            action = "organisation.activate",
+            resourceType = "ORGANISATION",
+            resourceId = uuidV7().toString(),
+        )
+        service.record(
+            AuditCommand(
+                actorType = "USER",
+                actorId = uuidV7().toString(),
+                tenantId = uuidV7().toString(),
+                action = "branch.update",
+                resourceType = "BRANCH",
+                resourceId = uuidV7().toString(),
+                outcome = AuditOutcome.SUCCESS,
+            ),
+        )
+
+        assertEquals(listOf<String?>(null, null), repository.events.map { it.subjectUserId })
+    }
+
+    @Test
+    fun `record carries the subject a command names and never derives it from the actor`() {
+        val service = service()
+        val actor = uuidV7()
+        val subject = uuidV7()
+
+        service.record(
+            AuditCommand(
+                actorType = "USER",
+                actorId = actor.toString(),
+                tenantId = uuidV7().toString(),
+                action = "membership.assignments_revoked",
+                resourceType = "MEMBERSHIP",
+                resourceId = uuidV7().toString(),
+                outcome = AuditOutcome.SUCCESS,
+                subjectUserId = subject.toString(),
+            ),
+        )
+
+        val event = repository.events.single()
+        assertEquals(subject.toString(), event.subjectUserId)
+        assertEquals(actor.toString(), event.actorId)
     }
 
     private val repository = CapturingAuditEventRepository()

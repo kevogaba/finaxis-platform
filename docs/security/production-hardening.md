@@ -160,7 +160,9 @@ Audit rows record the client address (`audit_event.ip_address`, #185), resolved 
 `ClientIpResolver` with the same list (see "Forwarded headers" above for the deployment
 requirement). Behind a listed peer the valve has already applied the list; the resolver continues
 the same walk and never trusts more, parses strictly and normalises the address. Unset, every audit
-row records the proxy's address, not the client's. The access log, the rate-limit key and the audit
+row records the proxy's address, not the client's. Each row also keeps the request's `User-Agent`,
+cut to 512 characters (`audit_event.user_agent`, #185); see `docs/architecture/audit-logging.md`
+("User agent"). The access log, the rate-limit key and the audit
 row name the same address for the same request whenever the listed proxy writes plain, canonical
 IP literals (Traefik does). When a listed hop writes a port, `::ffff:a.b.c.d`, brackets or
 non-canonical text, that text verbatim is the access log's address and the rate-limit key (a port

@@ -1822,8 +1822,9 @@ extra bounded lookup. See
 ### Audit Events
 
 Base path: `/api/v1/tenant/audit-events`. List filters: `entity_type`, `entity_id`,
-`actor_id`, `action`, `action_prefix`, `occurred_from`, `occurred_to`, `outcome`, `severity`,
-`min_severity`, `branch_id`, `q`, `actor_type`, `actor_subject`, `sort_dir`, `page`, `size`.
+`actor_id`, `subject_user_id`, `action`, `action_prefix`, `occurred_from`, `occurred_to`, `outcome`,
+`severity`, `min_severity`, `branch_id`, `q`, `actor_type`, `actor_subject`, `sort_dir`, `page`,
+`size`.
 
 | Method | Path          | Summary                    | Permission   | Shape |
 |--------|---------------|----------------------------|--------------|-------|
@@ -1853,6 +1854,18 @@ and is paginated (#183):
 - `actor_type`: `USER` (a person) or `SYSTEM` (a job, a listener or the bootstrap).
 - `actor_subject`: the identity-provider subject (`actor_external_subject`), exactly, 1 to 255
   characters. **Tenant route only.**
+- `subject_user_id`: the user the events are **about**, a UUID, exactly (#186). It is the user
+  whose account, membership, branch assignment or role assignment the row changed, and it is
+  never the administrator who made the change: `actor_id` answers "who did it", this answers
+  "who is it about". One query, `subject_user_id=<user>`, returns the rows about that user across
+  the tenant's log, one row per transition. It is accepted on the tenant route and on both
+  platform routes, because it reveals no withheld field. **Cut-over:** a row written before
+  `V29` has no subject and is not backfilled, so this filter does not find it; ADR 0031 lists the
+  older keys those rows can still be found by. A tenant log holds the tenant's rows only: the
+  platform user lifecycle rows (`user_account.suspend`, `.reactivate`, `.start_deactivation`,
+  `.complete_deactivation`) are written under the reserved PLATFORM organisation, so they are
+  found on the platform log, not here; the onboarding rows (`.submit`, `.start_idp_provisioning`,
+  `.invite`, `.activate`) are tenant rows.
 - `sort_dir`: `DESC` (default, newest first) or `ASC`, on `occurred_at`, then the id.
 
 `outcome`, `severity`, `min_severity`, `actor_type` and `sort_dir` are case-insensitive; the
@@ -1861,9 +1874,9 @@ upper-case form is canonical and is the enum the OpenAPI document publishes.
 - **`q` is bounded.** It needs `occurred_from`, at most 31 days before `occurred_to` (or now, when
   `occurred_to` is absent): the substring match has no index, so the window is what bounds its cost.
 - **400, never 500.** A value outside its set or its length bounds, `severity` together with
-  `min_severity`, `q` without a window of at most 31 days, a malformed `branch_id`, or
-  `actor_subject` on a platform route answers `400 invalid_parameter` with one violation naming
-  the parameter. The message never repeats the rejected value.
+  `min_severity`, `q` without a window of at most 31 days, a malformed `branch_id` or
+  `subject_user_id`, or `actor_subject` on a platform route answers `400 invalid_parameter` with
+  one violation naming the parameter. The message never repeats the rejected value.
 - **No side channel to withheld fields.** There is no filter over `before_json`, `after_json`,
   `metadata_json`, `user_agent` or `ip_address`, and the platform searches refuse `actor_subject`
   because they withhold `actor_external_subject`.
@@ -1912,6 +1925,7 @@ the FSM transition `ACTIVATE` on the organisation, written by a platform checker
   "actor_type": "USER",
   "actor_id": "44444444-4444-7444-8444-444444444444",
   "actor_user_id": "44444444-4444-7444-8444-444444444444",
+  "subject_user_id": null,
   "actor_external_subject": "6f1c2a9e-0d4b-4c3e-9a51-2b7d8e4f1a03",
   "branch_id": null,
   "event_type": "organisation.activate",
@@ -1948,12 +1962,20 @@ the FSM transition `ACTIVATE` on the organisation, written by a platform checker
   is keyed by the setting key, for example) is not stored, so such a row reads `null` in both
   `entity_id` and `resource_id`; its `entity_type`, `action` and `before_json`/`after_json` still
   identify it. There is no text column for it and none is planned in this change.
+- **`subject_user_id`** is the user the row is about (#186), a UUID, or `null` for an event about
+  no user (an organisation, a branch, a tenant setting) and for a row written before `V29`, which
+  is not backfilled. It is the same on the tenant and the platform routes, because a user id is
+  not a withheld field (as `actor_user_id` is not). Subject and actor are different questions: an
+  administrator who revokes a membership is the `actor_user_id` of that row, and the member is its
+  `subject_user_id`; the actor-only search (`actor_id`) finds the first and the subject search finds
+  the second.
 - `actor_user_id` (and `actor_id`) is `null` when a system process acted (`actor_type`
   `SYSTEM`). `ip_address` is the client address of the request that wrote the row (personal
   data, #185): the direct peer, or the `X-Forwarded-For` client only when the peer is a configured
   trusted proxy (`finaxis.security.client-ip.trusted-proxies`, empty by default). IPv4 dotted
   quad or RFC 5952 IPv6, at most 39 characters; `null` for rows written outside an HTTP request
-  and for rows written before #185.
+  and for rows written before #185. `user_agent` is stored as sent, silently cut to 512
+  characters; it never fails the request.
 - `before_json`, `after_json` and `metadata_json` are JSON documents as strings, after redaction.
 - The tenant search (`/api/v1/tenant/audit-events`) and both platform searches return this shape
   in `items`; `GET .../{event_id}` returns it as the body.

@@ -68,6 +68,8 @@ class RoleManagementServiceTests {
         assertEquals(RoleStatus.ACTIVE, result.status)
         assertTrue(fixture.organisationId to "OPS" in fixture.persistence.roleCodes)
         assertEquals("role.create", audit.action)
+        // A role is tenant-wide: it is about no user.
+        assertNull(audit.subjectUserId)
         assertEquals("req-create", audit.requestId)
     }
 
@@ -558,6 +560,9 @@ class RoleManagementServiceTests {
             audit.metadata,
         )
         assertEquals("req-assign", audit.requestId)
+        // The assignee is the subject; the administrator who assigned the role is only the actor.
+        assertEquals(fixture.userId.toString(), audit.subjectUserId)
+        assertEquals(fixture.actorId.toString(), audit.actorId)
     }
 
     /** Assigns branch-scoped roles only when the user already has active branch access. */
@@ -683,6 +688,10 @@ class RoleManagementServiceTests {
         assertEquals(
             listOf("user.assign_role", "user.revoke_role"),
             fixture.audits.events.map(AuditEvent::action),
+        )
+        assertEquals(
+            listOf(fixture.userId.toString(), fixture.userId.toString()),
+            fixture.audits.events.map(AuditEvent::subjectUserId),
         )
     }
 

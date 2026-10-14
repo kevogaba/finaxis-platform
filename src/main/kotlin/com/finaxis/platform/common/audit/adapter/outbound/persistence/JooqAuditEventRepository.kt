@@ -33,6 +33,9 @@ class JooqAuditEventRepository(
                 event.actorType.ifBlank { SYSTEM }
             }
         val userActorId = actorId.takeIf { actorType == USER }
+        // The agent is a client-controlled header: it is cut to the stored cap, never rejected, so
+        // a long one cannot fail the audited action (#185).
+        val userAgent = (event.userAgent ?: context?.userAgent)?.take(MAX_USER_AGENT_LENGTH)
 
         dsl
             .insertInto(AUDIT_EVENT)
@@ -45,6 +48,9 @@ class JooqAuditEventRepository(
             // The branch the event is about, and only that: the request's selected branch is never
             // stamped, so a tenant-wide event carries no branch whatever the caller has selected.
             .set(AUDIT_EVENT.BRANCH_ID, event.branchId?.toUuidOrNull())
+            // The user the event is about, never the actor by default (#186). A non-UUID subject is
+            // stored as NULL, like the other ids above.
+            .set(AUDIT_EVENT.SUBJECT_USER_ID, event.subjectUserId?.toUuidOrNull())
             .set(AUDIT_EVENT.EVENT_TYPE, event.eventType)
             .set(AUDIT_EVENT.ENTITY_TYPE, event.resourceType)
             .set(AUDIT_EVENT.ENTITY_ID, event.resourceId?.toUuidOrNull())
@@ -53,7 +59,7 @@ class JooqAuditEventRepository(
             .set(AUDIT_EVENT.REASON, event.reason)
             .set(AUDIT_EVENT.SEVERITY, event.severity.name)
             .set(AUDIT_EVENT.IP_ADDRESS, event.sourceIp ?: context?.clientIp)
-            .set(AUDIT_EVENT.USER_AGENT, event.userAgent ?: context?.userAgent)
+            .set(AUDIT_EVENT.USER_AGENT, userAgent)
             .set(AUDIT_EVENT.CORRELATION_ID, context?.correlation?.correlationId)
             .set(AUDIT_EVENT.REQUEST_ID, event.requestId ?: context?.correlation?.requestId)
             .set(AUDIT_EVENT.BEFORE_JSONB, event.before?.let(::toJsonb))
@@ -84,6 +90,11 @@ class JooqAuditEventRepository(
     private fun String.toUuidOrNull(): UUID? = runCatching(UUID::fromString).getOrNull()
 
     private companion object {
+        /**
+         * The longest user agent stored (#185). V1 declares `audit_event.user_agent` as unbounded
+         * `TEXT`, so this is an application cap; a longer agent is cut to it, silently.
+         */
+        const val MAX_USER_AGENT_LENGTH = 512
         const val SYSTEM = "SYSTEM"
         const val USER = "USER"
         val UTC: java.time.ZoneOffset = java.time.ZoneOffset.UTC

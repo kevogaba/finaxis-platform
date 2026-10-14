@@ -278,30 +278,28 @@ class JooqFoundationLifecyclePersistence(
     ): List<DeprovisionedAssignment> {
         val branchAssignments =
             dsl
-                .select(USER_BRANCH_ASSIGNMENT.ID, USER_BRANCH_ASSIGNMENT.BRANCH_ID)
-                .from(USER_BRANCH_ASSIGNMENT)
+                .select(
+                    USER_BRANCH_ASSIGNMENT.ID,
+                    USER_BRANCH_ASSIGNMENT.BRANCH_ID,
+                    USER_BRANCH_ASSIGNMENT.USER_ID,
+                ).from(USER_BRANCH_ASSIGNMENT)
                 .where(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID.eq(organisationId))
                 .and(USER_BRANCH_ASSIGNMENT.USER_ID.eq(userId))
                 .and(USER_BRANCH_ASSIGNMENT.STATUS.eq(ACTIVE))
                 .fetch()
-                .mapNotNull { row ->
-                    row.value1()?.let {
-                        DeprovisionedAssignment(it, "USER_BRANCH_ASSIGNMENT", row.value2())
-                    }
-                }
+                .mapNotNull { it.toDeprovisionedAssignment("USER_BRANCH_ASSIGNMENT") }
         val roleAssignments =
             dsl
-                .select(USER_ROLE_ASSIGNMENT.ID, USER_ROLE_ASSIGNMENT.BRANCH_ID)
-                .from(USER_ROLE_ASSIGNMENT)
+                .select(
+                    USER_ROLE_ASSIGNMENT.ID,
+                    USER_ROLE_ASSIGNMENT.BRANCH_ID,
+                    USER_ROLE_ASSIGNMENT.USER_ID,
+                ).from(USER_ROLE_ASSIGNMENT)
                 .where(USER_ROLE_ASSIGNMENT.ORGANISATION_ID.eq(organisationId))
                 .and(USER_ROLE_ASSIGNMENT.USER_ID.eq(userId))
                 .and(USER_ROLE_ASSIGNMENT.STATUS.eq(ACTIVE))
                 .fetch()
-                .mapNotNull { row ->
-                    row.value1()?.let {
-                        DeprovisionedAssignment(it, "USER_ROLE_ASSIGNMENT", row.value2())
-                    }
-                }
+                .mapNotNull { it.toDeprovisionedAssignment("USER_ROLE_ASSIGNMENT") }
         dsl
             .update(USER_BRANCH_ASSIGNMENT)
             .set(USER_BRANCH_ASSIGNMENT.STATUS, REVOKED)

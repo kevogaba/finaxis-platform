@@ -445,6 +445,37 @@ class OrganisationBranchProvisioningServiceTests {
     }
 
     @Test
+    fun `a deprovisioning revocation is about the user whose assignment it ends`() {
+        val organisationId = uuidV7()
+        val firstUser = uuidV7()
+        val secondUser = uuidV7()
+        lifecyclePersistence.organisations[organisationId] =
+            aggregate(organisationId, OrganisationLifecycleState.ACTIVE, "ORGANISATION")
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        store.revokedAssignments +=
+            listOf(
+                DeprovisionedAssignment(uuidV7(), "USER_BRANCH_ASSIGNMENT", null, firstUser),
+                DeprovisionedAssignment(uuidV7(), "USER_ROLE_ASSIGNMENT", null, secondUser),
+            )
+
+        organisations.deprovision(
+            DeprovisionOrganisationCommand(organisationId, req("contract ended"), uuidV7()),
+        )
+
+        val revocations =
+            audits.events.filter {
+                it.action ==
+                    "organisation.deprovision_assignment_revoked"
+            }
+        assertEquals(
+            listOf(firstUser.toString(), secondUser.toString()),
+            revocations.map { it.subjectUserId },
+        )
+        // The row is about the organisation's assignment, so its resource is the organisation.
+        assertEquals(setOf("ORGANISATION"), revocations.map { it.resourceType }.toSet())
+    }
+
+    @Test
     fun `branch assignment rejects an inactive organisation and protects ordinary membership`() {
         val organisationId = uuidV7()
         val branchId = uuidV7()
@@ -554,6 +585,10 @@ class OrganisationBranchProvisioningServiceTests {
         assertEquals(1, store.assignmentCount(organisationId, userId))
         assertEquals(1, events.events.size)
         assertEquals(1, audits.events.count { it.action == "branch.assign_user" })
+        // The user assigned is the subject; the administrator who assigned them is the actor.
+        val assigned = audits.events.single { it.action == "branch.assign_user" }
+        assertEquals(userId.toString(), assigned.subjectUserId)
+        assertEquals(command.assignedBy.toString(), assigned.actorId)
         assertTrue(
             events.events.all {
                 (it as? ExternalizedTransitionEvent)?.target ==
@@ -595,6 +630,10 @@ class OrganisationBranchProvisioningServiceTests {
 
         assertEquals(1, events.events.size)
         assertEquals(1, audits.events.count { it.action == "branch.revoke_user" })
+        assertEquals(
+            userId.toString(),
+            audits.events.single { it.action == "branch.revoke_user" }.subjectUserId,
+        )
     }
 
     @Test

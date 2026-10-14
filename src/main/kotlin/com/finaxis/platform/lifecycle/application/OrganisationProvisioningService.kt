@@ -504,6 +504,8 @@ class OrganisationProvisioningService(
                 reason = command.reason.value,
                 // A branch assignment, or a branch-scoped role, is about its branch (#186).
                 branchId = assignment.branchId,
+                // The user whose assignment the deprovisioning ends, not the administrator (#186).
+                subjectUserId = assignment.userId,
             )
         }
     }
@@ -542,6 +544,7 @@ class OrganisationProvisioningService(
         metadata: Map<String, String>,
         reason: String? = null,
         branchId: UUID? = null,
+        subjectUserId: UUID? = null,
     ) {
         auditService.record(
             AuditCommand(
@@ -552,6 +555,7 @@ class OrganisationProvisioningService(
                 resourceType = ORGANISATION,
                 resourceId = organisationId.toString(),
                 branchId = branchId?.toString(),
+                subjectUserId = subjectUserId?.toString(),
                 outcome = AuditOutcome.SUCCESS,
                 reason = reason,
                 metadata = metadata,

@@ -247,8 +247,13 @@ class BranchPinningIntegrationTests {
             .assertThat(listOf(stored.scopeType, stored.branchId, stored.roleId, stored.status))
             .containsExactly("BRANCH", branchId, roleId, "ACTIVE")
         // Both rows are about the branch acted on, though the caller selected another branch.
-        assertThat(auditBranchIds("user.assign_role", assignmentId)).containsExactly(branchId)
-        assertThat(auditBranchIds("branch.assign_user", branchId)).containsExactly(branchId)
+        assertThat(auditBranchIds(dsl, "user.assign_role", assignmentId)).containsExactly(branchId)
+        assertThat(auditBranchIds(dsl, "branch.assign_user", branchId)).containsExactly(branchId)
+        // Both rows name the user assigned. The caller is also USER_ID here, so this cannot
+        // tell the target from the actor. That proof is in AssignmentLookupsByKeyIntegrationTests,
+        // where the administrator assigns a role to a different user.
+        assertThat(auditSubjects(dsl, "user.assign_role", assignmentId)).containsExactly(USER_ID)
+        assertThat(auditSubjects(dsl, "branch.assign_user", branchId)).containsExactly(USER_ID)
     }
 
     @Test
@@ -271,7 +276,11 @@ class BranchPinningIntegrationTests {
                 .response.contentAsString
 
         val assignmentId = UUID.fromString(JsonPath.read<String>(body, "$.id"))
-        assertThat(auditBranchIds("user.assign_role", assignmentId)).hasSize(1).containsOnlyNulls()
+        assertThat(
+            auditBranchIds(dsl, "user.assign_role", assignmentId),
+        ).hasSize(1).containsOnlyNulls()
+        // A tenant-wide assignment is about the user it assigns, not the caller's branch.
+        assertThat(auditSubjects(dsl, "user.assign_role", assignmentId)).containsExactly(USER_ID)
     }
 
     @Test
@@ -290,11 +299,11 @@ class BranchPinningIntegrationTests {
 
         val rows =
             dsl
-                .select(AUDIT_EVENT.EVENT_TYPE, AUDIT_EVENT.BRANCH_ID)
+                .select(AUDIT_EVENT.EVENT_TYPE, AUDIT_EVENT.BRANCH_ID, AUDIT_EVENT.SUBJECT_USER_ID)
                 .from(AUDIT_EVENT)
                 .where(AUDIT_EVENT.ENTITY_TYPE.eq("BRANCH"))
                 .and(AUDIT_EVENT.ENTITY_ID.eq(branchId))
-                .fetch { it.value1() to it.value2() }
+                .fetch { Triple(it.value1(), it.value2(), it.value3()) }
         assertThat(rows.map { it.first }).contains(
             "branch.create_draft",
             "branch.submit",
@@ -304,6 +313,8 @@ class BranchPinningIntegrationTests {
             "branch.close",
         )
         assertThat(rows.map { it.second }).containsOnly(branchId)
+        // A branch lifecycle row is about the branch, not a user: no subject.
+        assertThat(rows.map { it.third }).containsOnlyNulls()
     }
 
     /**
@@ -682,18 +693,6 @@ class BranchPinningIntegrationTests {
         ).also { createdRoleIds += it }
     }
 
-    /** The branch_id of every audit row of [action] about [entityId] (its entity_id). */
-    private fun auditBranchIds(
-        action: String,
-        entityId: UUID,
-    ): List<UUID?> =
-        dsl
-            .select(AUDIT_EVENT.BRANCH_ID)
-            .from(AUDIT_EVENT)
-            .where(AUDIT_EVENT.EVENT_TYPE.eq(action))
-            .and(AUDIT_EVENT.ENTITY_ID.eq(entityId))
-            .fetch(AUDIT_EVENT.BRANCH_ID)
-
     private fun contextToken(branchId: UUID?): String =
         contextService.issue(
             ActiveOrganisationContext(USER_ID, ORGANISATION_ID, MEMBERSHIP_ID, branchId),
@@ -731,3 +730,29 @@ class BranchPinningIntegrationTests {
             UUID.fromString("88888888-8888-8888-8888-888888888801")
     }
 }
+
+/** The subject_user_id of every audit row of [action] about [entityId] (its entity_id). */
+private fun auditSubjects(
+    dsl: DSLContext,
+    action: String,
+    entityId: UUID,
+): List<UUID?> =
+    dsl
+        .select(AUDIT_EVENT.SUBJECT_USER_ID)
+        .from(AUDIT_EVENT)
+        .where(AUDIT_EVENT.EVENT_TYPE.eq(action))
+        .and(AUDIT_EVENT.ENTITY_ID.eq(entityId))
+        .fetch(AUDIT_EVENT.SUBJECT_USER_ID)
+
+/** The branch_id of every audit row of [action] about [entityId] (its entity_id). */
+private fun auditBranchIds(
+    dsl: DSLContext,
+    action: String,
+    entityId: UUID,
+): List<UUID?> =
+    dsl
+        .select(AUDIT_EVENT.BRANCH_ID)
+        .from(AUDIT_EVENT)
+        .where(AUDIT_EVENT.EVENT_TYPE.eq(action))
+        .and(AUDIT_EVENT.ENTITY_ID.eq(entityId))
+        .fetch(AUDIT_EVENT.BRANCH_ID)

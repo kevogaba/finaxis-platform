@@ -121,6 +121,25 @@ class AuditEventControllerTests
         }
 
         @Test
+        fun `search audit events filters by the user the events are about`() {
+            val tenantId = uuidV7()
+            val callerId = uuidV7()
+            val subjectUserId = uuidV7()
+
+            val capturedFilter =
+                searchAndCapture(
+                    tenantId,
+                    callerId,
+                    mapOf("subject_user_id" to subjectUserId.toString()),
+                )
+
+            assertEquals(
+                AuditEventFilter(tenantId, subjectUserId = subjectUserId, page = 1, size = 25),
+                capturedFilter,
+            )
+        }
+
+        @Test
         fun `search audit events filters by action and occurred date range`() {
             val tenantId = uuidV7()
             val callerId = uuidV7()
@@ -211,18 +230,25 @@ class AuditEventControllerTests
         fun `search audit events rejects a value outside its closed set with 400`() {
             val tenantId = uuidV7()
 
-            listOf("outcome", "severity", "min_severity", "actor_type", "sort_dir", "branch_id")
-                .forEach { parameter ->
-                    mockMvc
-                        .get(ApiPaths.AUDIT_EVENTS) {
-                            param(parameter, "sideways")
-                            with(authentication(tenantToken(setOf("audit.view"), tenantId)))
-                        }.andExpect {
-                            status { isBadRequest() }
-                            jsonPath("$.code") { value("invalid_parameter") }
-                            jsonPath("$.violations[0].field") { value(parameter) }
-                        }
-                }
+            listOf(
+                "outcome",
+                "severity",
+                "min_severity",
+                "actor_type",
+                "sort_dir",
+                "branch_id",
+                "subject_user_id",
+            ).forEach { parameter ->
+                mockMvc
+                    .get(ApiPaths.AUDIT_EVENTS) {
+                        param(parameter, "sideways")
+                        with(authentication(tenantToken(setOf("audit.view"), tenantId)))
+                    }.andExpect {
+                        status { isBadRequest() }
+                        jsonPath("$.code") { value("invalid_parameter") }
+                        jsonPath("$.violations[0].field") { value(parameter) }
+                    }
+            }
         }
 
         @Test
@@ -322,6 +348,7 @@ class AuditEventControllerTests
                     jsonPath("$.actor_type") { value("USER") }
                     jsonPath("$.branch_id") { value(detail.branchId.toString()) }
                     jsonPath("$.actor_id") { value(detail.actorUserId.toString()) }
+                    jsonPath("$.subject_user_id") { value(detail.subjectUserId.toString()) }
                     jsonPath("$.event_type") { value("branch.updated") }
                     jsonPath("$.entity_type") { value("BRANCH") }
                     jsonPath("$.resource_type") { value("BRANCH") }
@@ -392,6 +419,7 @@ class AuditEventControllerTests
             organisationId = tenantId,
             occurredAt = Instant.parse("2026-07-21T10:15:30Z"),
             actorUserId = uuidV7(),
+            subjectUserId = uuidV7(),
             actorExternalSubject = "keycloak:external-subject",
             actorType = "USER",
             branchId = uuidV7(),

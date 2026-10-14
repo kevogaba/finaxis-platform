@@ -415,6 +415,8 @@ class BranchProvisioningService(
                 command.branchId,
                 "branch.assign_user",
                 command.assignedBy.toString(),
+                // The user assigned is the subject, not the administrator who assigned them (#186).
+                subjectUserId = command.userId,
             )
             publishAssignment(command)
         }
@@ -444,6 +446,7 @@ class BranchProvisioningService(
             command.branchId,
             "branch.revoke_user",
             command.revokedBy.toString(),
+            subjectUserId = command.userId,
         )
         eventPublisher.publish(
             ExternalizedTransitionEvent(
@@ -658,7 +661,10 @@ class BranchProvisioningService(
         )
     }
 
-    /** Writes a tenant-scoped branch event, stamped with [branchId], the branch it is about. */
+    /**
+     * Writes a tenant-scoped branch event, stamped with [branchId], the branch it is about. A
+     * user assignment names the user it is about in [subjectUserId]; a branch event names none.
+     */
     private fun audit(
         organisationId: java.util.UUID,
         resourceId: String,
@@ -667,6 +673,7 @@ class BranchProvisioningService(
         actorId: String,
         metadata: Map<String, String> = emptyMap(),
         reason: String? = null,
+        subjectUserId: java.util.UUID? = null,
     ) {
         auditService.record(
             AuditCommand(
@@ -677,6 +684,7 @@ class BranchProvisioningService(
                 resourceType = BRANCH_AUDIT_ENTITY_TYPE,
                 resourceId = resourceId,
                 branchId = branchId.toString(),
+                subjectUserId = subjectUserId?.toString(),
                 outcome = AuditOutcome.SUCCESS,
                 reason = reason,
                 metadata = metadata,

@@ -100,6 +100,8 @@ class PlatformAuditEventController(
         @RequestParam(required = false, name = "entity_type") entityType: String?,
         @RequestParam(required = false, name = "entity_id") entityId: UUID?,
         @RequestParam(required = false, name = "actor_id") actorId: UUID?,
+        @Parameter(description = AUDIT_SUBJECT_USER_ID_DOC)
+        @RequestParam(required = false, name = "subject_user_id") subjectUserId: UUID?,
         @Parameter(description = AUDIT_ACTION_DOC)
         @RequestParam(required = false) action: String?,
         @Parameter(description = AUDIT_ACTION_PREFIX_DOC)
@@ -143,6 +145,7 @@ class PlatformAuditEventController(
                 entityType = entityType,
                 entityId = entityId,
                 actorId = actorId,
+                subjectUserId = subjectUserId,
                 action = action,
                 occurredFrom = occurredFrom,
                 occurredTo = occurredTo,
@@ -271,6 +274,8 @@ class PlatformAuditEventController(
         @RequestParam(required = false, name = "entity_type") entityType: String?,
         @RequestParam(required = false, name = "entity_id") entityId: UUID?,
         @RequestParam(required = false, name = "actor_id") actorId: UUID?,
+        @Parameter(description = AUDIT_SUBJECT_USER_ID_DOC)
+        @RequestParam(required = false, name = "subject_user_id") subjectUserId: UUID?,
         @Parameter(description = AUDIT_ACTION_DOC)
         @RequestParam(required = false) action: String?,
         @Parameter(description = AUDIT_ACTION_PREFIX_DOC)
@@ -314,6 +319,7 @@ class PlatformAuditEventController(
                 entityType = entityType,
                 entityId = entityId,
                 actorId = actorId,
+                subjectUserId = subjectUserId,
                 action = action,
                 occurredFrom = occurredFrom,
                 occurredTo = occurredTo,

@@ -1,9 +1,10 @@
-# Audit index migrations (V25-V28)
+# Audit index migrations (V25-V28, V30)
 
 `V25`-`V28` add the four partial indexes behind the audit search filters of #183
 (`branch_id`, `actor_subject`, `outcome`, `severity`/`min_severity`). The design is in
-[audit architecture](../architecture/audit-logging.md#search-filters-183). This page covers how
-they are built and what an operator does when a build fails.
+[audit architecture](../architecture/audit-logging.md#search-filters-183). `V30` adds the fifth,
+the subject user index of #186, and `V29` adds the column it covers. This page covers how they are
+built, what an operator does when a build fails, and the cut-over for the subject user.
 
 ## How they are built
 
@@ -32,10 +33,15 @@ The build still waits for transactions already running on `audit_event` when it 
 scans the table twice, so on a large log it takes a while. Inserts are not blocked meanwhile.
 
 `AuditIndexMigrationTests` proves all of this on PostgreSQL:
-- the four migrations succeed with the application's Flyway settings, which also shows that the
+- V25-V28 and V30 succeed with the application's Flyway settings, which also shows that the
   `.sql.conf` files and the session lock work;
 - the valid-index case is kept;
-- the `INVALID`-index case stops the migration.
+- the `INVALID`-index case stops the migration;
+- for `V30`, the same two index cases on a scratch database migrated to `V29`.
+
+`V30` is built by the same convention, so its statements are the same: a `DO` guard, then one
+`CREATE INDEX CONCURRENTLY IF NOT EXISTS`. Its name is
+`idx_audit_event_organisation_subject_user_time`, which is not the `actor_subject` index of `V26`.
 
 None of this is a trigger, so ADR 0024 does not apply.
 
@@ -72,3 +78,28 @@ The same state can also appear if the instance stopped during the build. Recover
 
 Search results are never wrong in this state, only slower: an `INVALID` index is never used for
 reads, and the queries fall back to `idx_audit_event_organisation_time`.
+
+For `V30`, substitute `idx_audit_event_organisation_subject_user_time` in the steps above. Until
+the index is valid again, a subject query falls back to the tenant's time index.
+
+## Subject user cut-over (V29, V30)
+
+`V29` adds `audit_event.subject_user_id`, the user an event is about, and `V30` indexes it. Neither
+is backfilled, by owner decision:
+
+- A row written before `V29` keeps a `NULL` `subject_user_id`, and so does any event about no user.
+  Recovering a subject for those rows from `metadata_jsonb` would be a guess, not evidence.
+- A subject search on `subject_user_id` finds only events whose writer set the column, so it never
+  finds a pre-`V29` row. For a user's history before the release, use the actor filter (who did
+  it), the entity filters (`entity_type`, `entity_id`) or the lifecycle tables.
+- The writers set the column at write time from a typed field on the audit command, as a contract:
+  it is never parsed from `metadata_jsonb`.
+
+`V29` takes a short `ACCESS EXCLUSIVE` lock on `audit_event` and gives up after five seconds
+(`lock_timeout`), so the deploy never stalls audit writes behind it for longer than that. If the
+deploy fails with SQLSTATE `55P03` on `V29`, the migration rolled back and Flyway recorded nothing
+(verified by `AuditIndexMigrationTests`): retry the deploy, and do not run `flyway repair`.
+
+Each migration runs in its own transaction. `V30` runs after `V29` has committed, so its concurrent
+build starts only once the column exists. Apart from the invalid-index recovery above, nothing in
+the cut-over needs an operator step.

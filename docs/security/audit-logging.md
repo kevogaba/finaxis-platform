@@ -16,6 +16,11 @@ Every audit event maps to one row in `audit_event` (`public` schema; there is no
 
 - `id`, `event_time` — identity and when it occurred (UTC);
 - `organisation_id`, `branch_id` — tenant and optional branch;
+- `subject_user_id` — the user the event is **about**, typed on `AuditCommand.subjectUserId`
+  (#186). It is never the actor by default: an assignment names the assignee, a revocation the
+  user whose access it ends, a membership transition the member. A row about no user carries
+  `NULL`, and so does every row written before V29. See
+  [audit architecture](../architecture/audit-logging.md#the-subject-user-186);
 - `actor_type`, `actor_user_id`, `actor_external_subject` — who acted;
 - `event_type` — the domain event name: the row's `action` (`AuditEvent.eventType`), for
   example `organisation.activate`. Rows written before #187 hold the resource type here instead
@@ -85,7 +90,9 @@ bearer tokens, passwords, session cookies, and API keys must never be constructe
 
 ## `AuditService` methods
 
-All seven methods build an `AuditCommand` and delegate to `record(...)`:
+All seven methods build an `AuditCommand` and delegate to `record(...)`. Each takes an optional
+trailing `subjectUserId: UUID? = null`, the user the event is about (see the event shape above):
+pass it on every event about one user, and leave it out for an event about no user.
 
 | Method | Use for |
 | --- | --- |
@@ -96,6 +103,9 @@ All seven methods build an `AuditCommand` and delegate to `record(...)`:
 | `recordIamChange` | Role, permission, membership, or assignment changes, with optional `before`/`after`. |
 | `recordExternalDispatch` | The outcome of dispatching work to an external system (Keycloak, invite/email provider); `externalSystemRef` identifies the system. |
 | `recordSettingsChange` | An organisation settings change with both `before` and `after`. |
+
+`lifecycleTransitionCommand` builds the `AuditCommand` of an FSM outcome without persisting it, for
+the rows written with `recordIndependently`; it takes `subjectUserId` the same way.
 
 Every method accepts `actorId: UUID?` and derives `actorType` (`"USER"` vs `"SYSTEM"`) via
 `SystemActor.isSystemActor(actorId)` unless the caller overrides it explicitly — services no
@@ -150,14 +160,19 @@ then the application-layer `audit.view` check in `AuditQueryService`, and only t
 (`requireValid`: lengths, `severity` with `min_severity`, the `q` window, the platform
 `actor_subject` refusal). So a bad closed-set value can be a 400 for a caller in the right context
 whom the application-layer check would refuse; the 400 names only the parameter and its public set.
-A malformed UUID or instant is refused by Spring's binding before the handler runs. No filter
-reads anything before both checks pass. Their design, bounds and index support are recorded in
-[audit architecture](../architecture/audit-logging.md#search-filters-183). Two of them are
+A malformed UUID or instant is refused by Spring's binding before the handler runs.
+`subject_user_id` (#186) is a UUID like `actor_id` and is accepted on the platform routes too: it
+reveals no withheld field. The platform user lifecycle rows (`user_account.suspend`, `.reactivate`,
+`.start_deactivation`, `.complete_deactivation`) are written under the PLATFORM organisation, so
+they are found on the platform log and never in a tenant search; the onboarding rows
+(`.submit`, `.start_idp_provisioning`, `.invite`, `.activate`) are tenant rows. No
+filter reads anything before both checks pass. Their design, bounds and index support are recorded
+in [audit architecture](../architecture/audit-logging.md#search-filters-183). Two of them are
 security rules, not conveniences: the free-text `q` must name a window of at most 31 days
 (`occurred_from` is required), so one request cannot make the database scan a tenant's whole log;
 and `searchForPlatform` refuses `actor_subject`, which would otherwise reveal the withheld
-`actor_external_subject` of platform page items one guess at a time. No filter reads
-`before_jsonb`, `after_jsonb`, `metadata_jsonb`, `user_agent` or `ip_address`.
+`actor_external_subject` of platform page items one guess at a time. No filter reads `before_jsonb`,
+`after_jsonb`, `metadata_jsonb`, `user_agent` or `ip_address`.
 
 ### REST read endpoints and the platform permission model
 

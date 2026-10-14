@@ -59,6 +59,7 @@ class ApplicationInviteJobRequestHandler(
                 tenantId = jobRequest.organisationId,
                 action = APPLICATION_INVITE_ACTION,
                 resourceId = jobRequest.userId.toString(),
+                subjectUserId = jobRequest.userId,
                 metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
             )
         } catch (ex: IllegalStateException) {
@@ -107,6 +108,7 @@ class ApplicationInviteJobRequestHandler(
             tenantId = jobRequest.organisationId,
             action = APPLICATION_INVITE_ACTION,
             resourceId = jobRequest.userId.toString(),
+            subjectUserId = jobRequest.userId,
             reason = ex.toAuditFailureReason(),
             detail = ex.toDispatchFailureDetail(),
             metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),

@@ -301,6 +301,7 @@ class AuditQueryServiceTests {
                 organisationId = organisationId,
                 occurredAt = Instant.now(),
                 actorUserId = actorId,
+                subjectUserId = null,
                 actorExternalSubject = "ext-subj",
                 actorType = "USER",
                 branchId = null,

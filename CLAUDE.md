@@ -304,6 +304,23 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   concurrent build never finishes under the transactional advisory lock. `AuditIndexMigrationTests`
   proves all of it on PostgreSQL. A failed concurrent build needs the operator step in
   `docs/operations/audit-index-migrations.md`. It adds no trigger, so it does not touch ADR 0024
+- `V29__audit_event_subject_user.sql` — the one column: nullable
+  `audit_event.subject_user_id UUID`, no default, no data change, no trigger, **no foreign key**
+  (#186). It holds the user an event is ABOUT, set by the writer at write time from a typed field,
+  never parsed from metadata. It is not a foreign key because an audit row must outlive the user it
+  names; the neighbouring `actor_user_id` carries one (V1), and V29's header records why this column
+  does not. Transactional, with `SET LOCAL lock_timeout = '5s'` before its `ACCESS EXCLUSIVE` ALTER
+  so a lock held on `audit_event` cannot stall audit writes indefinitely. Rows written before V29
+  keep a `NULL`: there is no backfill, and the cut-over is in
+  `docs/operations/audit-index-migrations.md`.
+- `V30__audit_event_subject_user_index.sql` (+ `.sql.conf`, `executeInTransaction=false`) — the
+  one index, `idx_audit_event_organisation_subject_user_time` on
+  `(organisation_id, subject_user_id, event_time DESC) WHERE subject_user_id IS NOT NULL`, built
+  under the V25-V28 convention above:
+  `CONCURRENTLY`, one index, the invalid-index guard, and `AuditIndexMigrationTests` proving it. The
+  name is distinct from V26's `idx_audit_event_organisation_subject_time` (actor subject). jOOQ
+  regenerates `AUDIT_EVENT.SUBJECT_USER_ID` and the index from V29 and V30 at build; never hand-edit
+  generated code.
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -335,8 +352,9 @@ state. `V18` is a data backfill of the branch lifecycle dates, `V19` a foundatio
 seed (`branch.update`), `V20` a foundation CHECK pinning the platform organisation to `ACTIVE`,
 `V21` the move of branch approval to `branch.approve` (deprecating `branch.activate`), `V22`
 the permission catalogue's kind, grant scope and view requirements, `V23` the seeded
-administrator roles' grants, `V24` the closed bootstrap failure-code set, and `V25`-`V28` the
-audit search indexes; none is accounting.
+administrator roles' grants, `V24` the closed bootstrap failure-code set, `V25`-`V28` the
+audit search indexes, and `V29`-`V30` the audit subject user (column and index); none is
+accounting.
 Do not invent accounting tables or columns outside those documents.
 
 ## Authorization

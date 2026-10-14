@@ -12,6 +12,8 @@ data class AuditEvent(
     val actorId: String?,
     val tenantId: String?,
     val branchId: String?,
+    /** The user the event is about, stored as `subject_user_id`; null when it is about no user. */
+    val subjectUserId: String?,
     val action: String,
     val resourceType: String,
     val resourceId: String?,
