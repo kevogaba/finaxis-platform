@@ -107,6 +107,15 @@ data class LifecycleMembershipDetail(
     val createdAt: Instant,
     val updatedAt: Instant,
     val createdBy: ActorRef? = null,
+    val invitation: LifecycleInvitationStatus? = null,
+)
+
+/** Where a member's identity provisioning stands, as the lifecycle adapters see it (#274). */
+data class LifecycleInvitationStatus(
+    val status: String,
+    val attempts: Int,
+    val lastErrorCode: String?,
+    val updatedAt: Instant?,
 )
 
 /** Branch-assignment summary projection exposed to lifecycle adapters. */

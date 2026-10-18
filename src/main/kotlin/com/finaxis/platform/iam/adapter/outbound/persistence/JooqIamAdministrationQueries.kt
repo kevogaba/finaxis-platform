@@ -27,6 +27,7 @@ import com.finaxis.platform.iam.application.query.RoleSummary
 import com.finaxis.platform.iam.application.query.UserInTenantDetail
 import com.finaxis.platform.iam.application.query.UserInTenantFilter
 import com.finaxis.platform.iam.application.query.UserInTenantSummary
+import com.finaxis.platform.iam.application.query.deriveInvitationStatus
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.PERMISSION
 import com.finaxis.platform.jooq.tables.references.PERMISSION_VIEW_REQUIREMENT
@@ -59,6 +60,7 @@ class JooqIamAdministrationQueries(
     IamAssignmentQueries {
     private val roleColumns = RoleSummaryColumns(dsl)
     private val actors = ActorRefLookup(dsl)
+    private val invitations = InvitationDispatchReader(dsl)
 
     /** The maker of the membership [record] row, resolved with one lookup. */
     private fun makerOf(
@@ -198,12 +200,21 @@ class JooqIamAdministrationQueries(
                 USER_ORGANISATION_MEMBERSHIP.CREATED_AT,
                 USER_ORGANISATION_MEMBERSHIP.UPDATED_AT,
                 USER_ORGANISATION_MEMBERSHIP.CREATED_BY,
+                *invitations.fields.toTypedArray(),
             ).from(USER_ORGANISATION_MEMBERSHIP)
             .join(USER_ACCOUNT)
             .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID))
+            .leftJoin(invitations.table)
+            .on(DSL.trueCondition())
             .where(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
             .and(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId))
-            .fetchOne { it.toMembershipDetail(makerOf(organisationId, it)) }
+            .fetchOne { record ->
+                val detail = record.toMembershipDetail(makerOf(organisationId, record))
+                detail.copy(
+                    invitation =
+                        deriveInvitationStatus(detail.membershipStatus, invitations.of(record)),
+                )
+            }
 
     override fun searchMemberships(
         organisationId: UUID,

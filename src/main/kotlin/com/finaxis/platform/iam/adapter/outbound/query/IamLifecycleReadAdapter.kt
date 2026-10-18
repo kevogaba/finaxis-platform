@@ -13,6 +13,7 @@ import com.finaxis.platform.lifecycle.application.query.LifecycleBranchAssignmen
 import com.finaxis.platform.lifecycle.application.query.LifecycleBranchAssignmentFilter
 import com.finaxis.platform.lifecycle.application.query.LifecycleBranchAssignmentSummary
 import com.finaxis.platform.lifecycle.application.query.LifecycleIamReadService
+import com.finaxis.platform.lifecycle.application.query.LifecycleInvitationStatus
 import com.finaxis.platform.lifecycle.application.query.LifecycleMembershipDetail
 import com.finaxis.platform.lifecycle.application.query.LifecycleMembershipFilter
 import com.finaxis.platform.lifecycle.application.query.LifecycleMembershipSummary
@@ -120,6 +121,9 @@ class IamLifecycleReadAdapter(
             createdAt,
             updatedAt,
             createdBy,
+            invitation?.let {
+                LifecycleInvitationStatus(it.status, it.attempts, it.lastErrorCode, it.updatedAt)
+            },
         )
 
     private fun MembershipSummary.toLifecycle() =

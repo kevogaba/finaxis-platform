@@ -62,6 +62,40 @@ data class MembershipDetailResponse(
                 "callers).",
     )
     val createdBy: ActorRefResponse?,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        description =
+            "Where the member's identity provisioning stands (#274), derived from the " +
+                "provisioning dispatch. Present on a membership detail read; `null` on the " +
+                "result of a mutation that does not read it.",
+    )
+    val invitation: InvitationStatusResponse? = null,
+)
+
+/** Where a member's identity provisioning stands; a view, not a lifecycle state. */
+data class InvitationStatusResponse(
+    @field:Schema(
+        allowableValues =
+            ["AWAITING_APPROVAL", "IN_PROGRESS", "FAILED", "COMPLETED", "NOT_REQUIRED"],
+    )
+    val status: String,
+    @field:Schema(description = "Provisioning attempts plus invitation resends recorded.")
+    val attempts: Int,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        description =
+            "Closed code of the last failure, only while `status` is `FAILED`: " +
+                "`IDENTITY_PROVIDER_FAILED`, `CONFLICT`, `NOT_FOUND`, `INVALID_STATE`, " +
+                "`DATABASE_ERROR`, `UNEXPECTED`, `CANCELLED` (membership revoked while queued), " +
+                "or `UNKNOWN` for a failure recorded before codes existed. Never the " +
+                "failure's text.",
+    )
+    val lastErrorCode: String?,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(nullable = true, description = "When the dispatch last changed, if any.")
+    val updatedAt: Instant?,
 )
 
 /** Summary response for a tenant membership. */

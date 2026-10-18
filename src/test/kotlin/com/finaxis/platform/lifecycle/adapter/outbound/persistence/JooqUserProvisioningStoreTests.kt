@@ -11,6 +11,7 @@ import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
 import com.finaxis.platform.lifecycle.application.MembershipType
 import com.finaxis.platform.lifecycle.application.RoleAssignmentScopeType
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityDispatchType
+import com.finaxis.platform.lifecycle.application.port.outbound.ResendTouch
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
@@ -21,6 +22,7 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.TestConstructor
 import org.springframework.transaction.annotation.Transactional
+import java.time.Duration
 import java.time.OffsetDateTime
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -180,6 +182,83 @@ class JooqUserProvisioningStoreTests(
     }
 
     @Test
+    fun `a resend touches only a succeeded dispatch, once per cooldown, and counts the attempt`() {
+        val organisationId = insertOrganisation()
+        val userId =
+            store.createUserAccount("resend@example.test", "resend", "Resend", null, userId())
+        val key = "$organisationId:$userId:KEYCLOAK_PROVISIONING"
+        store.recordDispatch(
+            organisationId,
+            userId,
+            IdentityDispatchType.KEYCLOAK_PROVISIONING,
+            key,
+            userId(),
+        )
+
+        assertEquals(
+            ResendTouch.NoDispatch,
+            store.touchDispatchForResend(userId, Duration.ZERO),
+            "pending is not resendable",
+        )
+        store.markDispatchSucceeded(key, "subject")
+        val attemptsAfterSuccess = attemptsOf(key)
+
+        assertEquals(
+            ResendTouch.TooSoon,
+            store.touchDispatchForResend(userId, Duration.ofHours(1)),
+            "inside the cooldown",
+        )
+        assertEquals(
+            ResendTouch.Touched(key, attemptsAfterSuccess + 1),
+            store.touchDispatchForResend(userId, Duration.ZERO),
+        )
+        assertEquals(
+            ResendTouch.TooSoon,
+            store.touchDispatchForResend(userId, Duration.ofHours(1)),
+            "touched just now",
+        )
+        assertEquals(
+            ResendTouch.NoDispatch,
+            store.touchDispatchForResend(userId(), Duration.ZERO),
+            "an unknown user",
+        )
+    }
+
+    @Test
+    fun `a resend finds the dispatch of the organisation that provisioned the account`() {
+        val provisioner = insertOrganisation()
+        val userId =
+            store.createUserAccount("shared@example.test", "shared", "Shared", null, userId())
+        val key = "$provisioner:$userId:KEYCLOAK_PROVISIONING"
+        store.recordDispatch(
+            provisioner,
+            userId,
+            IdentityDispatchType.KEYCLOAK_PROVISIONING,
+            key,
+            userId(),
+        )
+        store.markDispatchSucceeded(key, "subject")
+
+        // A second organisation that activated the same account has no dispatch of its own.
+        insertOrganisation()
+        assertEquals(
+            key,
+            (store.touchDispatchForResend(userId, Duration.ZERO) as ResendTouch.Touched)
+                .dispatchKey,
+        )
+    }
+
+    @Test
+    fun `the linked keycloak subject is the active link, and absent without one`() {
+        val userId =
+            store.createUserAccount("linked@example.test", "linked", "Linked", null, userId())
+
+        assertNull(store.linkedKeycloakSubject(userId))
+        store.linkKeycloakIdentity(userId, "subject-$userId", "finaxis", userId())
+        assertEquals("subject-$userId", store.linkedKeycloakSubject(userId))
+    }
+
+    @Test
     fun `keeps organisation boundaries on branch role and membership reads`() {
         val organisationId = insertOrganisation()
         val otherOrganisationId = insertOrganisation()
@@ -285,6 +364,15 @@ class JooqUserProvisioningStoreTests(
             .execute()
         return id
     }
+
+    private fun attemptsOf(dispatchKey: String): Int =
+        requireNotNull(
+            dsl
+                .select(IDENTITY_DISPATCH_LOG.ATTEMPTS)
+                .from(IDENTITY_DISPATCH_LOG)
+                .where(IDENTITY_DISPATCH_LOG.DISPATCH_KEY.eq(dispatchKey))
+                .fetchOne(IDENTITY_DISPATCH_LOG.ATTEMPTS),
+        )
 
     private fun userId(): UUID = uuidV7()
 }

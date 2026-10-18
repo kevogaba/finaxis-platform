@@ -221,6 +221,46 @@ class KeycloakUserProvisioningHandlerTests {
     }
 
     @Test
+    fun `a membership revoked while the job waited ends it without calling Keycloak`() {
+        val context = store.activePendingProvisioningContext()
+        store.memberships.getValue(context.organisationId to context.membershipId).state =
+            MembershipLifecycleState.REVOKED
+
+        handler.run(keycloakRequest(context, "member@example.test", "member"))
+
+        assertEquals(0, gateway.findOrCreateCalls)
+        val dispatch = store.dispatches.getValue(context.dispatchKey)
+        assertEquals("FAILED", dispatch.status)
+        assertEquals("CANCELLED:MembershipRevoked", dispatch.lastError)
+        assertEquals(
+            UserLifecycleState.PROVISIONING_IDP,
+            store.users.getValue(context.userId).state,
+            "nothing was provisioned",
+        )
+        // The cancellation is audited with the state change, like every dispatch outcome.
+        val audit = audits.items.single { it.action == "user.keycloak_provisioning" }
+        assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, audit.outcome)
+        assertEquals("MembershipRevoked", audit.reason)
+        assertEquals(context.userId.toString(), audit.subjectUserId)
+    }
+
+    @Test
+    fun `a redelivered job for a member revoked after success leaves the dispatch succeeded`() {
+        val context = store.activePendingProvisioningContext()
+        store.dispatches[context.dispatchKey] =
+            DispatchState("SUCCEEDED", attempts = 1, externalRef = context.subject)
+        store.memberships.getValue(context.organisationId to context.membershipId).state =
+            MembershipLifecycleState.REVOKED
+
+        handler.run(keycloakRequest(context, "member@example.test", "member"))
+
+        assertEquals(0, gateway.findOrCreateCalls)
+        val dispatch = store.dispatches.getValue(context.dispatchKey)
+        assertEquals("SUCCEEDED", dispatch.status)
+        assertEquals(null, dispatch.lastError)
+    }
+
+    @Test
     fun `succeeded dispatch skips keycloak and lifecycle work`() {
         val context = store.activePendingProvisioningContext()
         store.dispatches[context.dispatchKey] =

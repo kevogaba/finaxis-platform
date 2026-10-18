@@ -32,14 +32,28 @@ class KeycloakAdminGateway(
         return KeycloakUserRef(createUser(users, request), created = true)
     }
 
-    /** Sends a Keycloak verify-email required action to the subject. */
+    /**
+     * Sends the invitation email: the configured required actions (verify email, set a password),
+     * with a link that lives for the configured lifespan and, when a redirect is configured, lands
+     * the user there afterwards.
+     */
     override fun sendRequiredActionsEmail(subject: String) {
         protectedCall("send required actions email") {
-            keycloak
-                .realm(properties.realm)
-                .users()
-                .get(subject)
-                .executeActionsEmail(listOf(VERIFY_EMAIL))
+            val user = keycloak.realm(properties.realm).users().get(subject)
+            val lifespan = properties.invitationLifespan.seconds.toInt()
+            val redirectUri = properties.invitationRedirectUri?.takeIf(String::isNotBlank)
+            val redirectClient =
+                properties.invitationRedirectClientId?.takeIf(String::isNotBlank)
+            if (redirectUri != null && redirectClient != null) {
+                user.executeActionsEmail(
+                    redirectClient,
+                    redirectUri,
+                    lifespan,
+                    properties.invitationRequiredActions,
+                )
+            } else {
+                user.executeActionsEmail(properties.invitationRequiredActions, lifespan)
+            }
         }
     }
 
@@ -95,6 +109,5 @@ class KeycloakAdminGateway(
 
     private companion object {
         const val CIRCUIT_BREAKER_NAME = "keycloakAdmin"
-        const val VERIFY_EMAIL = "VERIFY_EMAIL"
     }
 }

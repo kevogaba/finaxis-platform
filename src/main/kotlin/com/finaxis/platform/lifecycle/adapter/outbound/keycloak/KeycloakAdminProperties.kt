@@ -14,6 +14,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 
 /** Type-safe Keycloak admin-client configuration. */
@@ -26,7 +27,22 @@ data class KeycloakAdminProperties(
     val enabled: Boolean = false,
     val connectTimeoutMillis: Long = 5_000,
     val readTimeoutMillis: Long = 10_000,
-)
+    /**
+     * The required actions the invitation email asks the user to complete. A user is created with
+     * no credentials, so `UPDATE_PASSWORD` is what lets them sign in at all.
+     */
+    val invitationRequiredActions: List<String> = listOf("VERIFY_EMAIL", "UPDATE_PASSWORD"),
+    /** How long the emailed link stays valid; Keycloak's own default is 12 hours. */
+    val invitationLifespan: Duration = Duration.ofHours(INVITATION_LIFESPAN_HOURS),
+    /** Where the user lands after the actions, with [invitationRedirectClientId]; none unset. */
+    val invitationRedirectUri: String? = null,
+    /** The Keycloak client that owns [invitationRedirectUri], which must allow it. */
+    val invitationRedirectClientId: String? = null,
+) {
+    private companion object {
+        const val INVITATION_LIFESPAN_HOURS = 72L
+    }
+}
 
 /** Registers the Keycloak admin client and disabled fallback gateway. */
 @Configuration

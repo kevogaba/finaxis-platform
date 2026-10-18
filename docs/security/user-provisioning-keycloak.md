@@ -107,8 +107,25 @@ The gateway uses the pinned `org.keycloak:keycloak-admin-client:26.0.10` depende
 admin calls in the Resilience4j circuit breaker named `keycloakAdmin`, configured in
 `application.yaml`.
 
-The gateway creates enabled Keycloak users with unverified email, links the returned subject
-locally, and optionally calls `executeActionsEmail([VERIFY_EMAIL])`.
+The gateway creates enabled Keycloak users with unverified email and no credentials, links the
+returned subject locally, and optionally emails the user their required actions (#274): by default
+`VERIFY_EMAIL` and `UPDATE_PASSWORD` (a user created with no credentials cannot sign in until they
+set one), with a link that lives 72 hours and, when a redirect is configured, lands the user there.
+They are configured under `finaxis.keycloak.admin`:
+
+- `invitation-required-actions` (`FINAXIS_KEYCLOAK_INVITATION_REQUIRED_ACTIONS`, comma separated);
+- `invitation-lifespan` (`FINAXIS_KEYCLOAK_INVITATION_LIFESPAN`, a duration such as `72h`);
+- `invitation-redirect-uri` and `invitation-redirect-client-id`
+  (`FINAXIS_KEYCLOAK_INVITATION_REDIRECT_URI` and `..._REDIRECT_CLIENT_ID`): both or neither; the
+  client must allow the URI as a valid redirect, or Keycloak refuses the email.
+
+Recovery is documented in the foundation API (memberships): the `invitation` status on a membership
+detail, `POST /memberships/{id}/invitation/retry` for a failed job, and
+`POST /memberships/{id}/invitation/resend` for the email (rate limited per account by
+`finaxis.invitation.resend-cooldown`, 5 minutes by default). A membership revoked while its job
+waited ends the job without calling Keycloak and leaves the dispatch `FAILED` with the reason
+`CANCELLED:MembershipRevoked` (a dispatch that had already succeeded stays `SUCCEEDED`). A resend
+is refused (`lifecycle.invitation_resend_not_applicable`) for a revoked or suspended membership.
 
 Known minor edge: if the required-actions email is sent and a later local FSM step fails, a retry
 may send another required-actions email. Keycloak required-actions email is re-issuable, and the

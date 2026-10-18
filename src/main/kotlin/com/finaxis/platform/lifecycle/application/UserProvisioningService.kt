@@ -101,7 +101,7 @@ class UserProvisioningService(
             command.invitedBy,
         )
         createInvitationAssignments(command, userId)
-        val snapshot = requireMembership(command.organisationId, membershipId)
+        val snapshot = store.requireMembership(command.organisationId, membershipId)
         audit(
             organisationId = command.organisationId,
             action = "user.invite",
@@ -199,7 +199,7 @@ class UserProvisioningService(
     }
 
     private fun approve(command: ApproveUserCommand): UserApprovalResult {
-        val snapshot = requireMembership(command.organisationId, command.membershipId)
+        val snapshot = store.requireMembership(command.organisationId, command.membershipId)
         val selfApproved =
             membershipCheckerRule.requireApproverIsNotMakerOrBeneficiary(command, snapshot)
         if (command.scope == ActingScope.PLATFORM) store.requirePlatformCheckerOpen(command)
@@ -239,7 +239,7 @@ class UserProvisioningService(
             subjectUserId = snapshot.userId,
             severity = if (selfApproved) AuditSeverity.HIGH else AuditSeverity.INFO,
         )
-        val approved = requireMembership(command.organisationId, command.membershipId)
+        val approved = store.requireMembership(command.organisationId, command.membershipId)
         return UserApprovalResult(
             snapshot.userId,
             snapshot.id,
@@ -323,7 +323,7 @@ class UserProvisioningService(
             command.organisationId,
             "membership.revoke",
         )
-        val snapshot = requireMembership(command.organisationId, command.membershipId)
+        val snapshot = store.requireMembership(command.organisationId, command.membershipId)
         lifecycleService.transition(
             MembershipTransitionCommand(
                 command.organisationId,
@@ -375,7 +375,7 @@ class UserProvisioningService(
             command.organisationId,
             "membership.suspend",
         )
-        requireMembership(command.organisationId, command.membershipId)
+        store.requireMembership(command.organisationId, command.membershipId)
         // The FSM writes the transition's one audit row, keyed by the membership (ADR 0031).
         lifecycleService.transition(
             MembershipTransitionCommand(
@@ -398,7 +398,7 @@ class UserProvisioningService(
             command.organisationId,
             "membership.reactivate",
         )
-        requireMembership(command.organisationId, command.membershipId)
+        store.requireMembership(command.organisationId, command.membershipId)
         // The FSM writes the transition's one audit row, keyed by the membership (ADR 0031).
         lifecycleService.transition(
             MembershipTransitionCommand(
@@ -410,40 +410,50 @@ class UserProvisioningService(
         )
     }
 
+    /**
+     * Gets the job an earlier approval queued (#162) running again. It runs again under its own id
+     * when FAILED; a job still scheduled, enqueued or processing is left alone; a job that is
+     * gone is queued again under the same key. A new job id is never made, since two jobs could
+     * create the same Keycloak user. A dispatch never recorded, or one that SUCCEEDED, is refused
+     * with the 409 of a first approval.
+     */
+    internal fun requeueFailedProvisioning(
+        command: ApproveUserCommand,
+        snapshot: MembershipProvisioningSnapshot,
+    ): JobRequeueOutcome {
+        val dispatchKey = keycloakDispatchKey(command.organisationId, snapshot.userId)
+        val status = store.dispatchStatus(dispatchKey)
+        if (status == null || status == DISPATCH_SUCCEEDED) {
+            throw ConflictException(safeDetail = IDENTITY_PROVISIONING_REFUSED)
+        }
+        // The requeue is an external write on JobRunr's own connection and commits at once. If
+        // this transaction rolls back later (for example, the audit write), the job still runs
+        // without a committed audit row for this repeat. That is tolerated: the job is skipped
+        // only when the dispatch SUCCEEDED, and a FAILED row is harmless.
+        val outcome = failedJobRequeuer.requeueIfFailed(deterministicJobId(dispatchKey))
+        when (outcome) {
+            JobRequeueOutcome.REQUEUED -> {
+                store.markDispatchPending(dispatchKey)
+            }
+
+            JobRequeueOutcome.NOT_FAILED -> {
+                // nothing to do: the job is still scheduled or running
+            }
+
+            JobRequeueOutcome.NOT_FOUND -> {
+                store.markDispatchPending(dispatchKey)
+                publishKeycloakProvisioning(command, snapshot)
+            }
+        }
+        return outcome
+    }
+
     private fun requestKeycloakProvisioningIfNeeded(
         command: ApproveUserCommand,
         snapshot: MembershipProvisioningSnapshot,
     ): Boolean {
         if (snapshot.userStatus == UserLifecycleState.PROVISIONING_IDP) {
-            // A user already in PROVISIONING_IDP has the job an earlier approval queued (#162). It
-            // runs again under its own id when FAILED; a job still scheduled, enqueued or
-            // processing is left alone; a job that is gone is queued again under the same key. A
-            // new job id is never made, since two jobs could create the same Keycloak user. A
-            // dispatch never recorded, or one that SUCCEEDED, is refused with the 409 of a first
-            // approval.
-            val dispatchKey = keycloakDispatchKey(command.organisationId, snapshot.userId)
-            val status = store.dispatchStatus(dispatchKey)
-            if (status == null || status == DISPATCH_SUCCEEDED) {
-                throw ConflictException(safeDetail = IDENTITY_PROVISIONING_REFUSED)
-            }
-            // The requeue is an external write on JobRunr's own connection and commits at once. If
-            // this approval's transaction rolls back later (for example, the audit write), the job
-            // still runs without a committed user.approve row for this repeat. That is tolerated:
-            // the job is skipped only when the dispatch SUCCEEDED, and a FAILED row is harmless.
-            when (failedJobRequeuer.requeueIfFailed(deterministicJobId(dispatchKey))) {
-                JobRequeueOutcome.REQUEUED -> {
-                    store.markDispatchPending(dispatchKey)
-                }
-
-                JobRequeueOutcome.NOT_FAILED -> {
-                    // nothing to do: the job is still scheduled or running
-                }
-
-                JobRequeueOutcome.NOT_FOUND -> {
-                    store.markDispatchPending(dispatchKey)
-                    publishKeycloakProvisioning(command, snapshot)
-                }
-            }
+            requeueFailedProvisioning(command, snapshot)
             return true
         }
         if (store.hasKeycloakIdentity(snapshot.userId)) return false
@@ -577,12 +587,6 @@ class UserProvisioningService(
         )
     }
 
-    private fun requireMembership(
-        organisationId: UUID,
-        membershipId: UUID,
-    ): MembershipProvisioningSnapshot =
-        store.membershipSnapshot(organisationId, membershipId) ?: throw ResourceNotFoundException()
-
     private fun audit(
         organisationId: UUID,
         action: String,
@@ -701,3 +705,9 @@ private fun transitionCommand(
     reason: String? = null,
     requestId: String? = null,
 ): TransitionCommand = TransitionCommand(reason = reason, requestId = requestId)
+
+private fun UserProvisioningStore.requireMembership(
+    organisationId: UUID,
+    membershipId: UUID,
+): MembershipProvisioningSnapshot =
+    membershipSnapshot(organisationId, membershipId) ?: throw ResourceNotFoundException()

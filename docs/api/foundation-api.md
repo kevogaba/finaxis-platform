@@ -1470,6 +1470,43 @@ no active branch assignment (`409`, as activation requires one; an `AUDITOR` may
 unknown membership is `404`. Idempotent, answers the membership detail,
 and is audited as `membership.update` naming the changed fields (ADR 0033).
 
+**Invitation status and recovery (#274).** A membership detail carries `invitation`: `status`
+(`AWAITING_APPROVAL`, `IN_PROGRESS`, `FAILED`, `COMPLETED` or `NOT_REQUIRED`), `attempts`
+(provisioning attempts plus resends), `last_error_code` and `updated_at`. It is derived from the
+membership and its Keycloak provisioning dispatch, not a new lifecycle state (the user and
+membership state machines are unchanged): `FAILED` is a membership still awaiting approval whose
+user waits on provisioning and whose last attempt failed (a failed dispatch behind an `ACTIVE` or
+`SUSPENDED` member is stale and reads `COMPLETED`). The membership and its dispatch are read by
+one statement. `last_error_code` is the closed failure
+code (`IDENTITY_PROVIDER_FAILED`, `CONFLICT`, `NOT_FOUND`, `INVALID_STATE`, `DATABASE_ERROR`,
+`UNEXPECTED`, `CANCELLED` for a job ended because its membership was revoked, or `UNKNOWN` for a
+failure recorded before codes existed) and only while `FAILED`:
+never the failure's text. It is `null` on the answer of a mutation that does not read it.
+
+| Method | Path                                  | Summary                       | Permission                           | Shape    |
+|--------|---------------------------------------|-------------------------------|--------------------------------------|----------|
+| POST   | `/{membership_id}/invitation/retry`   | Run failed provisioning again | `user.approve` + `membership.view`   | mutation |
+| POST   | `/{membership_id}/invitation/resend`  | Send the invitation email again | `user.invite` + `membership.view` + `user.view` | mutation |
+
+`retry` runs the failed job again under its own id (a job still scheduled or running is left
+alone, a job that is gone is queued again). It is no approval: it is `409` unless the membership is
+awaiting approval with provisioning pending and a recorded dispatch that did not succeed, and it
+changes no state of its own. `resend` applies to an account that exists in Keycloak and has not
+signed in (`INVITED`), whose membership here is `ACTIVE` and which has a succeeded provisioning
+dispatch in any organisation (the account is global: a tenant that activated an
+already-provisioned user has none of its own), else
+`409 lifecycle.invitation_resend_not_applicable` (a revoked or suspended member is never mailed). It
+is rate limited per account, a second resend inside the cooldown
+(`finaxis.invitation.resend-cooldown`, 5 minutes) being `409 lifecycle.invitation_resend_too_soon`,
+and each resend is one durable job that carries no personal data: it emails the account's linked
+Keycloak subject, only if the account is still `INVITED` when it runs, and fails for reconciliation
+rather than creating an identity when no subject is linked. Both answer the
+membership detail, are idempotent, and are audited (`user.invitation_retry`,
+`user.invitation_resend`). A membership revoked while its job waited ends the job without calling
+Keycloak, audited as a failed `user.keycloak_provisioning`, and shows `FAILED` with `last_error_code`
+`CANCELLED`, unless the dispatch had already
+succeeded, which a redelivered job leaves as it is.
+
 Membership response and revoke request:
 
 ```json

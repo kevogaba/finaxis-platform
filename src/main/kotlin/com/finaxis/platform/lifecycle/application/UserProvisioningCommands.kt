@@ -54,6 +54,22 @@ data class ApproveUserCommand(
     val reason: DecisionRemark? = null,
 )
 
+/** Runs a membership's failed identity provisioning again; not an approval. */
+data class RetryInvitationCommand(
+    val organisationId: UUID,
+    val membershipId: UUID,
+    val actorId: UUID,
+    val requestId: String? = null,
+)
+
+/** Sends a member's invitation email again, once the account exists and has not logged in. */
+data class ResendInvitationCommand(
+    val organisationId: UUID,
+    val membershipId: UUID,
+    val actorId: UUID,
+    val requestId: String? = null,
+)
+
 /** Suspends a global user account from an organisation workflow context. */
 data class SuspendUserCommand(
     val organisationId: UUID,
