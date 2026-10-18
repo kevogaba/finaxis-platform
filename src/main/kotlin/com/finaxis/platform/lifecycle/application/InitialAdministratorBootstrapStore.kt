@@ -51,11 +51,13 @@ interface InitialAdministratorBootstrapStore {
      * Updates the bootstrap status and optionally records a failure code from the closed set.
      * When [incrementAttempts] is true, the attempt counter is incremented atomically.
      *
-     * COMPLETED is terminal for a failure: a [InitialAdministratorBootstrapStatus.FAILED] write
-     * against a COMPLETED record changes nothing (no status, code, attempt, version or timestamp),
-     * so a late or unrelated failure can never undo a finished bootstrap.
+     * COMPLETED is terminal: a write of any status but
+     * [InitialAdministratorBootstrapStatus.COMPLETED] against a COMPLETED record changes nothing
+     * (no status, code, attempt, version or timestamp), so a late or unrelated failure, or a retry
+     * that read the record before it completed, can never undo a finished bootstrap.
      *
-     * Returns the number of rows changed: 0 when no record matched or the guard above refused.
+     * Returns the number of rows changed: 0 when no record matched or the guard above refused, so
+     * a caller that must tell the two apart [find]s the record.
      */
     fun updateStatus(
         organisationId: UUID,
