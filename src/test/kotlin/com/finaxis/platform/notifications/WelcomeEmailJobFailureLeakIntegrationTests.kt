@@ -8,6 +8,7 @@ import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.notifications.adapter.outbound.jobrunr.SendWelcomeEmailJobRequest
 import com.finaxis.platform.notifications.adapter.outbound.jobrunr.SendWelcomeEmailJobRequestHandler
+import com.finaxis.platform.notifications.application.port.outbound.WelcomeEmailRecipientDirectory
 import com.finaxis.platform.notifications.application.port.outbound.email.EmailGateway
 import com.finaxis.platform.notifications.application.port.outbound.email.PermanentEmailDeliveryException
 import com.finaxis.platform.notifications.application.port.outbound.email.RetryableEmailDeliveryException
@@ -18,6 +19,7 @@ import org.jobrunr.storage.StorageProvider
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito.atLeastOnce
+import org.mockito.Mockito.doThrow
 import org.mockito.Mockito.times
 import org.mockito.kotlin.any
 import org.mockito.kotlin.verify
@@ -25,8 +27,10 @@ import org.mockito.kotlin.whenever
 import org.slf4j.LoggerFactory
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
+import org.springframework.dao.DataAccessResourceFailureException
 import org.springframework.test.context.TestConstructor
 import org.springframework.test.context.bean.override.mockito.MockitoBean
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import java.time.Duration
 import java.util.Collections
 import java.util.UUID
@@ -58,6 +62,10 @@ class WelcomeEmailJobFailureLeakIntegrationTests(
 ) {
     @MockitoBean
     private lateinit var emailGateway: EmailGateway
+
+    // A spy, so the other tests still resolve the real recipient.
+    @MockitoSpyBean
+    private lateinit var recipientDirectory: WelcomeEmailRecipientDirectory
 
     @Test
     fun `a retryable welcome email failure stores and logs no exception text`() {
@@ -95,6 +103,24 @@ class WelcomeEmailJobFailureLeakIntegrationTests(
         assertNoSentinel(captured)
         assertNull(captured.failed.exceptionCauseMessage)
         assertHandlerWarning(captured, PERMANENT_CLASS)
+    }
+
+    @Test
+    fun `a failing recipient lookup stores and logs no exception text and is retried`() {
+        doThrow(
+            DataAccessResourceFailureException(
+                "could not read $SENTINEL",
+                IllegalStateException("connection for $SENTINEL"),
+            ),
+        ).whenever(recipientDirectory).findRecipient(any(), any())
+
+        val captured = runWelcomeEmailJob()
+
+        assertFalse(captured.failed.mustNotRetry(), "a transient failure must stay retryable")
+        assertEquals("DataAccessResourceFailureException", captured.failed.exceptionMessage)
+        assertNoSentinel(captured)
+        assertNull(captured.failed.exceptionCauseMessage)
+        assertHandlerWarning(captured, LOOKUP_CLASS)
     }
 
     private fun runWelcomeEmailJob(): CapturedFailure {
@@ -206,6 +232,7 @@ class WelcomeEmailJobFailureLeakIntegrationTests(
         val HANDLER_LOGGER: String = SendWelcomeEmailJobRequestHandler::class.java.name
         val RETRYABLE_CLASS: String = RetryableEmailDeliveryException::class.java.name
         val PERMANENT_CLASS: String = PermanentEmailDeliveryException::class.java.name
+        val LOOKUP_CLASS: String = DataAccessResourceFailureException::class.java.name
 
         // Seeded by V3__bootstrap_tenant_and_administrator.sql: the local administrator and the
         // organisation whose welcome-email recipient the directory resolves.

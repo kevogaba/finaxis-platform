@@ -152,12 +152,13 @@ Where to look for the cause, in order:
      simple class name as its message and no cause; a retryable failure throws a message-free
      exception named by the failure's class, with no cause, so JobRunr retries it as before. Both
      log a message-free `WARN` with the exception and root-cause classes and the frames before they
-     throw, and both write the `user.welcome_email` failure audit row first.
+     throw, and both write the `user.welcome_email` failure audit row after that log line (so a
+     failing audit write cannot swallow it). Any other exception (the recipient lookup, the audit
+     write, an unclassified gateway error) is logged the same way and rethrown as the message-free
+     retryable exception, so JobRunr retries it and stores only the class name.
    - **Not covered.** `jobrunr_jobs` keeps the job request's input (for the Keycloak job the
      administrator's email and username). An exception type the invite handler does not catch
-     reaches JobRunr as raised. The welcome-email handler does not catch a `DataAccessException` (or
-     any other exception) from its recipient lookup or audit write: it reaches JobRunr raw, with its
-     message. The Keycloak handler's uncaught types and its already-succeeded
+     reaches JobRunr as raised. The Keycloak handler's uncaught types and its already-succeeded
      branch are logged and sanitised but not recorded as a failed dispatch. On the API side,
      Sentry's MVC exception resolver (default `sentry.exception-resolver-order` 1) runs after
      Spring's own (the composite, 0), so the global handler resolves a failure first and Sentry's
