@@ -19,6 +19,7 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SuspendTenantReque
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.TenantDetailResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.TenantDraftResultResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.TenantSummaryResponse
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.toAdminResponse
 import com.finaxis.platform.lifecycle.application.AmendOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.ApproveOrganisationProvisioningCommand
 import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
@@ -323,8 +324,9 @@ class PlatformTenantController(
         description =
             "Amends an unsubmitted tenant organisation draft. `admin` is optional: absent leaves " +
                 "the administrator draft unchanged; when sent it replaces it and " +
-                "`send_application_invite` is required. A non-empty `initial_settings` or a " +
-                "`business_date` is refused with 422.",
+                "`send_application_invite` is required. A non-empty `initial_settings` is " +
+                "refused with 422. `business_date` sets the date the tenant opens on; absent, " +
+                "it is derived from the timezone at approval.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -395,8 +397,8 @@ class PlatformTenantController(
         ApiResponse(
             responseCode = "422",
             description =
-                "A non-empty initial_settings or a business_date is refused on amend, or a " +
-                    "tenant setting key or value is invalid",
+                "A non-empty initial_settings is refused on amend, or a tenant setting key " +
+                    "or value is invalid",
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -1241,6 +1243,7 @@ class PlatformTenantController(
             bootstrapFailureCode = bootstrapFailureCode,
             createdAt = createdAt,
             updatedAt = updatedAt,
+            admin = administratorDraft?.toAdminResponse(),
             requestedBy = requestedBy.toResponse(),
             submittedBy = submittedBy.toResponse(),
         )

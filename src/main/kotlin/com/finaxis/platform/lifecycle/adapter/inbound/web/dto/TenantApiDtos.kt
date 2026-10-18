@@ -7,6 +7,7 @@ import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
 import com.finaxis.platform.lifecycle.application.InitialAdministratorDraft
 import com.finaxis.platform.lifecycle.application.Reason
+import com.finaxis.platform.lifecycle.application.query.AdministratorDraftView
 import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.Valid
 import jakarta.validation.constraints.Email
@@ -66,7 +67,13 @@ data class CreateTenantDraftRequest(
     )
     val initialSettings: Map<String, String> = emptyMap(),
     @field:JsonFormat(pattern = "dd-MM-yyyy")
-    @field:Schema(example = "18-07-2026", type = "string")
+    @field:Schema(
+        example = "18-07-2026",
+        type = "string",
+        description =
+            "The business date the tenant opens on. Optional: when absent it is derived from " +
+                "the tenant's timezone when the tenant is approved.",
+    )
     val businessDate: LocalDate? = null,
 )
 
@@ -133,7 +140,14 @@ data class AmendTenantDraftRequest(
     val admin: AmendInitialAdminDto? = null,
     val initialSettings: Map<String, String> = emptyMap(),
     @field:JsonFormat(pattern = "dd-MM-yyyy")
-    @field:Schema(example = "18-07-2026", type = "string")
+    @field:Schema(
+        example = "18-07-2026",
+        type = "string",
+        description =
+            "Sets the business date the tenant opens on. Absent leaves it as it is, and a " +
+                "tenant with none gets one derived from its timezone at approval, so changing " +
+                "the timezone needs no business date.",
+    )
     val businessDate: LocalDate? = null,
 )
 
@@ -311,6 +325,18 @@ data class TenantDetailResponse(
         nullable = true,
         requiredMode = Schema.RequiredMode.REQUIRED,
         description =
+            "The initial administrator as drafted, in full, so an amend form can be " +
+                "pre-filled: the same fields `admin` takes. Personal data: shown only on the " +
+                "platform route, only while the tenant is a `DRAFT`, and only to a caller " +
+                "holding `tenant.update_draft`; `null` otherwise, and always for a tenant " +
+                "caller.",
+    )
+    val admin: AdministratorDraftResponse? = null,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
             "Who requested the tenant. Shown to platform callers only; `null` for a " +
                 "tenant caller.",
     )
@@ -325,6 +351,25 @@ data class TenantDetailResponse(
     )
     val submittedBy: ActorRefResponse?,
 )
+
+/** The initial administrator a tenant draft holds, mirroring the `admin` request block. */
+data class AdministratorDraftResponse(
+    @field:Schema(example = "admin@acme.test")
+    val email: String,
+    @field:Schema(example = "admin")
+    val username: String,
+    @field:Schema(example = "Initial Administrator")
+    val displayName: String,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(nullable = true, example = "+254700000000")
+    val phoneE164: String?,
+    @field:Schema(example = "true")
+    val sendApplicationInvite: Boolean,
+)
+
+/** Maps the stored administrator draft to its response. */
+internal fun AdministratorDraftView.toAdminResponse() =
+    AdministratorDraftResponse(email, username, displayName, phoneE164, sendApplicationInvite)
 
 /** Compact response representing a tenant in list queries. */
 data class TenantSummaryResponse(

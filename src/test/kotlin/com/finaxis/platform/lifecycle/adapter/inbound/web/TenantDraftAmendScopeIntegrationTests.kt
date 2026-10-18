@@ -10,6 +10,7 @@ import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.context.AppPrincipalAuthenticationToken
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
+import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_SETTING
@@ -30,6 +31,7 @@ import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActionsDsl
 import org.springframework.test.web.servlet.patch
 import org.springframework.test.web.servlet.post
+import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -116,18 +118,20 @@ class TenantDraftAmendScopeIntegrationTests
         }
 
         @Test
-        fun `a business_date on amend is a 422 and writes nothing`() {
+        fun `a business_date on amend is applied`() {
             val tenantId = createdId(create())
-            val before = writtenState(tenantId)
 
             amend(tenantId, core() + ("business_date" to "20-07-2026") + ("admin" to adminMap()))
-                .andExpect {
-                    status { isUnprocessableContent() }
-                    jsonPath("$.code") { value("invalid_operation") }
-                    jsonPath("$.detail") { value("business_date cannot be changed by an amend.") }
-                }
+                .andExpect { status { isOk() } }
 
-            assertEquals(before, writtenState(tenantId))
+            assertEquals(
+                LocalDate.of(2026, 7, 20),
+                dsl
+                    .select(BUSINESS_DATE.CURRENT_BUSINESS_DATE)
+                    .from(BUSINESS_DATE)
+                    .where(BUSINESS_DATE.ORGANISATION_ID.eq(tenantId))
+                    .fetchOne(BUSINESS_DATE.CURRENT_BUSINESS_DATE),
+            )
         }
 
         @Test

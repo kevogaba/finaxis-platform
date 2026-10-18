@@ -5,6 +5,7 @@ import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.audit.AuditSeverity
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
@@ -164,6 +165,64 @@ class TenantSettingsServiceTests {
     }
 
     @Test
+    fun `an unset setting is marked default and a stored one is not`() {
+        activate()
+        settingsStore.put(
+            organisationId,
+            StoredSetting("require_maker_checker_for_user_invites", "false", "BOOLEAN", false),
+        )
+
+        val items =
+            service
+                .list(ListTenantSettingsQuery(organisationId, actorId))
+                .items
+                .associateBy { it.key }
+
+        // Unset: the catalogue default is shown and flagged as such.
+        val unset = items.getValue("require_maker_checker_for_branch_creation")
+        assertEquals("true", unset.value)
+        assertTrue(unset.isDefault)
+        // Stored: an explicit value, even one equal to what the default would be.
+        val stored = items.getValue("require_maker_checker_for_user_invites")
+        assertEquals("false", stored.value)
+        assertFalse(stored.isDefault)
+    }
+
+    @Test
+    fun `every catalogue setting lists its label description and group`() {
+        activate()
+
+        val items = service.list(ListTenantSettingsQuery(organisationId, actorId)).items
+
+        items.forEach {
+            assertTrue(!it.label.isNullOrBlank(), "${it.key} label")
+            assertTrue(!it.description.isNullOrBlank(), "${it.key} description")
+            assertTrue(!it.group.isNullOrBlank(), "${it.key} group")
+        }
+        assertEquals(
+            "Approvals",
+            items.single { it.key == "require_maker_checker_for_user_invites" }.group,
+        )
+    }
+
+    @Test
+    fun `a stored key outside the catalogue has no metadata and is not a default`() {
+        activate()
+        settingsStore.put(organisationId, StoredSetting("legacy.flag", "x", "STRING", false))
+
+        val extra =
+            service
+                .list(ListTenantSettingsQuery(organisationId, actorId))
+                .items
+                .single { it.key == "legacy.flag" }
+
+        assertNull(extra.label)
+        assertNull(extra.description)
+        assertNull(extra.group)
+        assertFalse(extra.isDefault)
+    }
+
+    @Test
     fun `createOrUpdate rejects an inactive organisation`() {
         lifecycleStore.states[organisationId] = OrganisationLifecycleState.SUSPENDED
         assertFailsWith<ConflictException> {
@@ -244,6 +303,68 @@ class TenantSettingsServiceTests {
         )
         assertEquals(1, auditEvents.saved.count { it.action == "settings.update" })
         assertEquals(1, events.published.size)
+    }
+
+    @Test
+    fun `changing a maker-checker switch is audited HIGH and another setting is not`() {
+        activate()
+        service.createOrUpdate(
+            CreateOrUpdateTenantSettingCommand(
+                organisationId,
+                "require_maker_checker_for_branch_creation",
+                "false",
+                actorId,
+            ),
+        )
+        service.createOrUpdate(
+            CreateOrUpdateTenantSettingCommand(
+                organisationId,
+                "default_timezone",
+                "Africa/Nairobi",
+                actorId,
+            ),
+        )
+
+        val severities =
+            auditEvents.saved
+                .filter { it.action == "settings.update" }
+                .associate { it.resourceId to it.severity }
+        assertEquals(
+            AuditSeverity.HIGH,
+            severities["require_maker_checker_for_branch_creation"],
+        )
+        assertEquals(AuditSeverity.INFO, severities["default_timezone"])
+    }
+
+    @Test
+    fun `a maker-checker switch change locks the organisation and another setting does not`() {
+        activate()
+        service.createOrUpdate(
+            CreateOrUpdateTenantSettingCommand(
+                organisationId,
+                "require_maker_checker_for_user_invites",
+                "false",
+                actorId,
+            ),
+        )
+        service.deactivate(
+            DeactivateTenantSettingCommand(
+                organisationId,
+                "require_maker_checker_for_user_invites",
+                actorId,
+            ),
+        )
+        assertEquals(listOf(organisationId, organisationId), lifecycleStore.locked)
+
+        service.createOrUpdate(
+            CreateOrUpdateTenantSettingCommand(
+                organisationId,
+                "default_timezone",
+                "Africa/Nairobi",
+                actorId,
+            ),
+        )
+        assertEquals(2, lifecycleStore.locked.size)
     }
 
     @Test
@@ -403,7 +524,11 @@ private class FakeLifecycleStoreForSettings : OrganisationLifecycleProvisioningS
 
     override fun lifecycleState(organisationId: UUID) = states[organisationId]
 
-    override fun lockOrganisation(organisationId: UUID) = Unit
+    val locked = mutableListOf<UUID>()
+
+    override fun lockOrganisation(organisationId: UUID) {
+        locked += organisationId
+    }
 
     override fun createDraft(command: CreateOrganisationDraftCommand): UUID = uuidV7()
 
@@ -564,6 +689,7 @@ private class FakeBootstrapStore : OrganisationBootstrapStore {
     override fun ensureBusinessDate(
         organisationId: UUID,
         date: LocalDate,
+        overwrite: Boolean,
     ) = unused()
 
     override fun timezone(organisationId: UUID): String = unused()

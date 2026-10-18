@@ -7,13 +7,19 @@ import java.time.ZoneId
 /** Storage/validation kind of a tenant setting value. */
 enum class TenantSettingValueType { STRING, BOOLEAN, INT, TIMEZONE, CURRENCY }
 
-/** One allowed tenant setting: its key, value kind, sensitivity, and required authority scope. */
+/**
+ * One allowed tenant setting: its key, value kind, sensitivity, required authority scope, and the
+ * human-facing [label], [description] and [group] a settings screen shows.
+ */
 data class TenantSettingDefinition(
     val key: String,
     val valueType: TenantSettingValueType,
     val sensitive: Boolean,
     val platformAdminOnly: Boolean,
     val defaultValue: String?,
+    val label: String,
+    val description: String,
+    val group: String,
 )
 
 /**
@@ -28,51 +34,106 @@ object TenantSettingCatalog {
      */
     const val BASE_CURRENCY_KEY = "base_currency"
 
+    private const val GROUP_GENERAL = "General"
+    private const val GROUP_APPROVALS = "Approvals"
+    private const val GROUP_BUSINESS_DATE = "Business date"
+    private const val GROUP_AUDIT = "Audit"
+
+    /**
+     * Whether a membership approval keeps its maker-checker segregation (the inviter and the
+     * invited user may not approve). `true` unless a tenant sets it to `false`.
+     */
+    const val MAKER_CHECKER_USER_INVITES_KEY = "require_maker_checker_for_user_invites"
+
+    /**
+     * Whether a branch approval keeps its maker-checker segregation (the creator, the submitter
+     * on the platform route and anyone who amended the branch may not approve it). `true` unless
+     * a tenant sets it to `false`.
+     */
+    const val MAKER_CHECKER_BRANCH_CREATION_KEY = "require_maker_checker_for_branch_creation"
+
     private val definitions0 =
         listOf(
             TenantSettingDefinition(
-                "default_timezone",
-                TenantSettingValueType.TIMEZONE,
-                false,
-                false,
-                null,
+                key = "default_timezone",
+                valueType = TenantSettingValueType.TIMEZONE,
+                sensitive = false,
+                platformAdminOnly = false,
+                defaultValue = null,
+                label = "Default time zone",
+                description =
+                    "Reserved: the time zone new branches would default to. Not yet applied by " +
+                        "the platform; the organisation's own time zone is what is used today.",
+                group = GROUP_GENERAL,
             ),
             TenantSettingDefinition(
-                BASE_CURRENCY_KEY,
-                TenantSettingValueType.CURRENCY,
-                false,
-                false,
-                null,
+                key = BASE_CURRENCY_KEY,
+                valueType = TenantSettingValueType.CURRENCY,
+                sensitive = false,
+                platformAdminOnly = false,
+                defaultValue = null,
+                label = "Base currency",
+                description =
+                    "The currency the ledger posts in. Read-only: it mirrors the organisation's " +
+                        "base currency and cannot be changed here.",
+                group = GROUP_GENERAL,
             ),
             TenantSettingDefinition(
-                "require_maker_checker_for_user_invites",
-                TenantSettingValueType.BOOLEAN,
-                false,
-                false,
-                "false",
+                key = MAKER_CHECKER_USER_INVITES_KEY,
+                valueType = TenantSettingValueType.BOOLEAN,
+                sensitive = false,
+                platformAdminOnly = false,
+                defaultValue = "true",
+                label = "Require maker-checker for user invitations",
+                description =
+                    "When on, the person who invited a member and the invited user cannot " +
+                        "approve the membership. Turning it off lets them; each such approval is " +
+                        "audited as high severity. The platform checker is never relaxed.",
+                group = GROUP_APPROVALS,
             ),
             TenantSettingDefinition(
-                "require_maker_checker_for_branch_creation",
-                TenantSettingValueType.BOOLEAN,
-                false,
-                false,
-                "false",
+                key = MAKER_CHECKER_BRANCH_CREATION_KEY,
+                valueType = TenantSettingValueType.BOOLEAN,
+                sensitive = false,
+                platformAdminOnly = false,
+                defaultValue = "true",
+                label = "Require maker-checker for branch creation",
+                description =
+                    "When on, the person who created a branch and anyone who amended it cannot " +
+                        "approve it. Turning it off lets them; each such approval is audited as " +
+                        "high severity. The platform checker is never relaxed.",
+                group = GROUP_APPROVALS,
             ),
             TenantSettingDefinition(
-                "business_date_auto_advance_enabled",
-                TenantSettingValueType.BOOLEAN,
-                false,
-                false,
-                "false",
+                key = "business_date_auto_advance_enabled",
+                valueType = TenantSettingValueType.BOOLEAN,
+                sensitive = false,
+                platformAdminOnly = false,
+                defaultValue = "false",
+                label = "Advance the business date automatically",
+                description =
+                    "Reserved: would advance the business date each day without a manual " +
+                        "request. Not yet applied; the business date moves only when someone " +
+                        "advances it.",
+                group = GROUP_BUSINESS_DATE,
             ),
             TenantSettingDefinition(
-                "audit_retention_days",
-                TenantSettingValueType.INT,
-                false,
-                true,
-                null,
+                key = "audit_retention_days",
+                valueType = TenantSettingValueType.INT,
+                sensitive = false,
+                platformAdminOnly = true,
+                defaultValue = null,
+                label = "Audit retention (days)",
+                description =
+                    "Reserved: how long audit events would be kept. Not yet applied; nothing " +
+                        "is purged today. Platform administrators only.",
+                group = GROUP_AUDIT,
             ),
         )
+
+    /** The settings that switch a maker-checker control; changing one is audited HIGH. */
+    val makerCheckerKeys: Set<String> =
+        setOf(MAKER_CHECKER_USER_INVITES_KEY, MAKER_CHECKER_BRANCH_CREATION_KEY)
 
     /** All setting definitions in declaration order. */
     val definitions: List<TenantSettingDefinition> get() = definitions0

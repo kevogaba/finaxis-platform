@@ -2,7 +2,6 @@ package com.finaxis.platform.lifecycle.adapter.inbound.web
 
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
-import com.finaxis.platform.common.web.api.apiPageOf
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
@@ -13,8 +12,6 @@ import com.finaxis.platform.lifecycle.application.CreateOrUpdateTenantSettingCom
 import com.finaxis.platform.lifecycle.application.DeactivateTenantSettingCommand
 import com.finaxis.platform.lifecycle.application.GetTenantSettingQuery
 import com.finaxis.platform.lifecycle.application.ListTenantSettingsQuery
-import com.finaxis.platform.lifecycle.application.TenantSettingPage
-import com.finaxis.platform.lifecycle.application.TenantSettingView
 import com.finaxis.platform.lifecycle.application.TenantSettingsService
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.Parameter
@@ -384,21 +381,6 @@ class TenantSettingsController(
         )
         return ResponseEntity.noContent().build()
     }
-
-    private fun TenantSettingPage.toApiPage(
-        page: Int,
-        size: Int,
-    ): ApiPage<TenantSettingResponse> =
-        apiPageOf(items.map { it.toResponse() }, page, size, totalItems)
-
-    private fun TenantSettingView.toResponse() =
-        TenantSettingResponse(
-            key = key,
-            value = value,
-            valueType = valueType,
-            sensitive = sensitive,
-            platformAdminOnly = platformAdminOnly,
-        )
 
     private companion object {
         const val MAXIMUM_PAGE_SIZE = 100L

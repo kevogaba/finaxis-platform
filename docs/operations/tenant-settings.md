@@ -24,19 +24,26 @@ unknown keys instead of accepting arbitrary key/value pairs.
 |---|---|---:|---:|---|
 | `default_timezone` | `TIMEZONE` | no | no | none |
 | `base_currency` | `CURRENCY` | no | no | read-only mirror (see below) |
-| `require_maker_checker_for_user_invites` | `BOOLEAN` | no | no | `false` |
-| `require_maker_checker_for_branch_creation` | `BOOLEAN` | no | no | `false` |
+| `require_maker_checker_for_user_invites` | `BOOLEAN` | no | no | `true` |
+| `require_maker_checker_for_branch_creation` | `BOOLEAN` | no | no | `true` |
 | `business_date_auto_advance_enabled` | `BOOLEAN` | no | no | `false` |
 | `audit_retention_days` | `INT` | no | yes | none |
 
-`require_maker_checker_for_user_invites` and `require_maker_checker_for_branch_creation` are
-**inert**: nothing reads them, and maker-checker is unconditional for membership approval and
-branch activation. They are scheduled for removal in #164
-([ADR 0029](../adr/0029-approval-model-per-resource-extensions.md)), which must also retire
-any rows already stored for them: dropping the catalogue entries alone would leave those rows
-listed and impossible to deactivate (an unknown key is rejected). #164 chooses between a
-forward-only migration (the next free number) closing the existing effective rows and a filter
-of the retired keys in list/get, and doing one of them is an acceptance condition of #164.
+`require_maker_checker_for_user_invites` and `require_maker_checker_for_branch_creation` are the
+tenant's **maker-checker switches** ([ADR 0032](../adr/0032-per-tenant-maker-checker-switches.md)).
+Maker-checker is required unless the tenant stores the literal `false`: unset, `true` and any other
+value keep it on, so the default is `true` and no existing tenant changes behaviour.
+
+- **Off lifts segregation, not the approval.** With `require_maker_checker_for_user_invites` off,
+  the inviter and the invited user may approve a membership; with
+  `require_maker_checker_for_branch_creation` off, the creator and anyone who amended the branch
+  may approve it. `user.approve` / `branch.approve` are still required and the FSM is unchanged.
+- **Tenant approvers only.** The platform checker is always held to the rule (ADR 0028), whatever
+  the tenant stored. Tenant provisioning approval and accounting maker-checker are not governed.
+- **Audited.** An approval that relied on a lifted check is a self-approval: the `user.approve` row
+  is `HIGH` with `selfApproved = true`, a branch approval adds one `branch.self_approve` row
+  (`HIGH`); changing either setting is itself a `HIGH` `settings.update` row. Find them with
+  `severity=HIGH` or by those action names.
 
 Validation and canonicalization are catalog-owned:
 
@@ -58,6 +65,28 @@ Two keys are internal and deliberately outside the catalogue. `settings.operatio
 the platform writes when a tenant is approved, and it is not a tenant setting: `ListTenantSettings`
 leaves it out, and `GetTenantSetting` refuses it as an unknown key, exactly as a `PUT` does. After
 approval a list therefore totals the catalogue's six keys and no more.
+
+## Platform route and retired rows
+
+`/api/v1/platform/tenants/{tenant_id}/settings` is how a platform administrator, who is no member
+of the tenant, reads and changes the platform-only keys (#273); see the foundation API. It reuses
+the tenant route's validation, audit (`settings.update`, actor the platform administrator) and
+outbox event, and the permission check comes first.
+
+`V31` closes (`effective_to`, never a delete) every current `base_currency` row, a mirror nothing
+reads, and the `business-date.timezone` row `V3` seeded for the bootstrap tenant, which nothing
+reads either: the organisation's `base_currency_code` and `timezone` columns are the one source.
+It also closes any current `false` of the two maker-checker switches. Until that release both
+switches defaulted to `false` and were read by nothing, so a `false` may be only a saved default;
+the release makes `false` mean "self-approval allowed", and a row nobody meant as an opt-out must
+not become one. A tenant that wants the opt-out sets it again after the upgrade, which is audited
+HIGH. `true` rows and unset switches are left alone. `V31` is idempotent and writes only
+`effective_to` and `updated_at`. A hand-written row under any of those keys is retired the same
+way if it is current when `V31` runs.
+
+Changing a maker-checker switch locks the organisation row, the lock a membership or branch
+approval takes before it reads the switch, so an approval never acts on a value a committed change
+has replaced.
 
 ## The base currency is a read-only mirror
 
@@ -81,13 +110,17 @@ journal line. The setting is not a second copy that can be changed:
 
 ## Setup values at draft creation and amendment
 
-The setup values a tenant draft takes are set on create and cannot be changed by an amend:
+The setup values a tenant draft takes: `initial_settings` is set on create only, and
+`business_date` can be set on create or amend:
 
 - `initial_settings` is a create input. A draft amend with a non-empty `initial_settings` is
   `422 invalid_operation`; an empty `{}` is accepted and changes nothing. Later changes to a
   setting go through `PUT /{key}`.
-- `business_date` is a create input. An amend that sends a value is `422 invalid_operation`; an
-  absent key or an explicit `null` is accepted and changes nothing.
+- `business_date` sets the date the tenant opens on, on create or on an amend (#271). An absent key
+  or an explicit `null` changes nothing. A draft that never names a date has none until approval
+  derives it from the timezone the tenant then has, so a timezone amended on the draft needs no
+  business date; a date named is kept as stated. Drafts created before #271 were seeded a derived
+  date at create: amend them with `business_date` if their timezone changed.
 - A refused amend writes nothing: the draft, its administrator, its settings and the audit log are
   as they were.
 

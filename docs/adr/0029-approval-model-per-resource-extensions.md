@@ -414,6 +414,11 @@ exchange entry, symmetric with `SUBMIT` and `REJECT`), as a change of its own.
 
 ### 4. The two `require_maker_checker_*` settings are removed, not wired
 
+> **Superseded by [ADR 0032](0032-per-tenant-maker-checker-switches.md).** The owner chose to wire
+> the two settings (default on, off lifts only the tenant's own segregation checks) rather than
+> remove them, so no retirement migration is needed. The reasoning below is kept as the record of
+> the decision it replaced.
+
 Maker-checker is **unconditional** for membership approval and branch activation, as implemented
 and as ADR 0028 relies on. The settings `require_maker_checker_for_user_invites` and
 `require_maker_checker_for_branch_creation` therefore promise a control that does not exist and

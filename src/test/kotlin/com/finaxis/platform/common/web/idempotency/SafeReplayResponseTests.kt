@@ -11,7 +11,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SafeReplayResponseTests {
-    private val properties = IdempotencyProperties(maxResponseBodyBytes = 128)
+    private val properties = IdempotencyProperties(maxResponseBodyBytes = 256)
     private val factory = SafeReplayResponseFactory(ObjectMapper(), properties)
 
     @Test
@@ -142,9 +142,9 @@ class SafeReplayResponseTests {
             """{"outer":$TENANT_SETTING_BODY}""",
             """[$TENANT_SETTING_BODY]""",
             """{"key":"k","value":"v","value_type":"STRING","sensitive":false,""" +
-                """"platform_admin_only":false,"extra":1}""",
+                """"platform_admin_only":false,$SETTING_METADATA,"extra":1}""",
             """{"nested":{"key":"k"},"value":"v","value_type":"STRING","sensitive":false,""" +
-                """"platform_admin_only":false}""",
+                """"platform_admin_only":false,$SETTING_METADATA}""",
         ],
     )
     fun `a bare key outside the exact tenant setting response shape stays rejected`(body: String) {
@@ -158,7 +158,7 @@ class SafeReplayResponseTests {
     fun `the tenant setting exemption does not cover other sensitive names`(field: String) {
         val body =
             """{"key":"k","value":"v","value_type":"STRING","sensitive":false,""" +
-                """"platform_admin_only":false,"$field":"must-not-persist"}"""
+                """"platform_admin_only":false,$SETTING_METADATA,"$field":"must-not-persist"}"""
 
         assertFailsWith<IllegalArgumentException> {
             factory.fromLive(IdempotencyResponse(200, emptyMap(), body))
@@ -239,8 +239,11 @@ class SafeReplayResponseTests {
     }
 
     private companion object {
+        /** The members every tenant-setting response carries after `platform_admin_only`. */
+        const val SETTING_METADATA =
+            """"is_default":false,"label":null,""" + """"description":null,"group":null"""
         const val TENANT_SETTING_BODY =
             """{"key":"base_currency","value":"KES","value_type":"CURRENCY",""" +
-                """"sensitive":false,"platform_admin_only":false}"""
+                """"sensitive":false,"platform_admin_only":false,$SETTING_METADATA}"""
     }
 }

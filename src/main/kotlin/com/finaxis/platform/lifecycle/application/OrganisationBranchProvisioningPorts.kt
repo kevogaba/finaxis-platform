@@ -76,10 +76,14 @@ const val ORGANISATION_AUDIT_ENTITY_TYPE = "ORGANISATION"
 
 /** Persistence operations for the local setup created within organisation provisioning. */
 interface OrganisationBootstrapStore {
-    /** Creates or preserves the organisation's current business date. */
+    /**
+     * Creates the organisation's current business date, and keeps an existing one unless
+     * [overwrite] is set, which replaces it: the date a draft names for its opening.
+     */
     fun ensureBusinessDate(
         organisationId: UUID,
         date: LocalDate,
+        overwrite: Boolean = false,
     )
 
     /** Returns the configured IANA timezone used to derive the default business date. */

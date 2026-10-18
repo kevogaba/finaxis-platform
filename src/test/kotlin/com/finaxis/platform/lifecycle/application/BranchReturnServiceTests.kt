@@ -54,6 +54,7 @@ class BranchReturnServiceTests {
             audit,
             mock(TransitionEventPublisher::class.java),
             guard,
+            allControlsOn(),
         )
 
     private fun givenPendingBranch(

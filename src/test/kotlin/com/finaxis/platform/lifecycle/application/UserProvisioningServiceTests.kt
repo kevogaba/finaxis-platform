@@ -79,10 +79,12 @@ class UserProvisioningServiceTests {
             AuditService(audits, clock),
             events,
             permissionGuard,
+            allControlsOn(),
         )
     private val deactivationAssignmentRevoker =
         UserDeactivationAssignmentRevoker(fake, fake, AuditService(audits, clock), events, clock)
     private val requeuer = FailedJobRequeuerFake()
+    private val switches = MakerCheckerSwitches()
     private val service =
         UserProvisioningService(
             lifecycle,
@@ -94,6 +96,7 @@ class UserProvisioningServiceTests {
             clock,
             permissionGuard,
             requeuer,
+            switches.policy,
         )
 
     @Test
@@ -802,6 +805,101 @@ class UserProvisioningServiceTests {
         assertFailsWith<ConflictException> {
             service.approveUser(ApproveUserCommand(context.org, membershipId, context.checker))
         }
+    }
+
+    @Test
+    fun `with the switch off the inviter approves and the approval is audited HIGH and marked`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        switches.switchOffUserInvites(context.org)
+
+        val approval =
+            service.approveUser(
+                ApproveUserCommand(context.org, invitation.membershipId, context.actor),
+            )
+
+        assertTrue(approval.keycloakProvisioningRequested)
+        val row = audits.events.single { it.action == "user.approve" }
+        assertEquals(AuditOutcome.SUCCESS, row.outcome)
+        assertEquals(AuditSeverity.HIGH, row.severity)
+        assertEquals("true", row.metadata["selfApproved"])
+        assertEquals(context.actor.toString(), row.actorId)
+        assertTrue(audits.events.none { it.outcome == AuditOutcome.DENIED })
+    }
+
+    @Test
+    fun `with the switch off the invited user may approve their own membership`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        switches.switchOffUserInvites(context.org)
+
+        service.approveUser(
+            ApproveUserCommand(context.org, invitation.membershipId, invitation.userId),
+        )
+
+        val row = audits.events.single { it.action == "user.approve" }
+        assertEquals(AuditSeverity.HIGH, row.severity)
+        assertEquals("true", row.metadata["selfApproved"])
+        assertEquals(invitation.userId.toString(), row.actorId)
+    }
+
+    @Test
+    fun `with the switch off an ordinary checker is not marked as a self approval`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        switches.switchOffUserInvites(context.org)
+
+        service.approveUser(
+            ApproveUserCommand(context.org, invitation.membershipId, context.checker),
+        )
+
+        val row = audits.events.single { it.action == "user.approve" }
+        assertEquals(AuditSeverity.INFO, row.severity)
+        assertEquals(null, row.metadata["selfApproved"])
+    }
+
+    @Test
+    fun `the platform checker is held to the rule whatever the tenant switched`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        switches.switchOffUserInvites(context.org)
+
+        val refusal =
+            assertFailsWith<ForbiddenOperationException> {
+                service.approveUser(
+                    ApproveUserCommand(
+                        context.org,
+                        invitation.membershipId,
+                        context.actor,
+                        scope = ActingScope.PLATFORM,
+                    ),
+                )
+            }
+
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_MEMBERSHIP_MAKER, refusal.code)
+        assertTrue(
+            audits.events.none {
+                it.outcome == AuditOutcome.SUCCESS &&
+                    it.action == "user.approve"
+            },
+        )
+    }
+
+    @Test
+    fun `the membership switch is per tenant and independent of the branch switch`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context))
+        switches.switchOffUserInvites(uuidV7())
+        switches.switchOffBranchCreation(context.org)
+
+        val refusal =
+            assertFailsWith<ForbiddenOperationException> {
+                service.approveUser(
+                    ApproveUserCommand(context.org, invitation.membershipId, context.actor),
+                )
+            }
+
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_MEMBERSHIP_MAKER, refusal.code)
     }
 
     @Test

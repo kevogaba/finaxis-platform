@@ -73,10 +73,11 @@ class OrganisationProvisioningService(
         val organisationId = translatingDuplicateTenantCode { lifecycleStore.createDraft(command) }
         adminBootstrapStore.createDraft(organisationId, command.admin, command.requestedBy)
         lifecycleStore.saveSettings(organisationId, settings, command.requestedBy)
-        bootstrapStore.ensureBusinessDate(
-            organisationId,
-            command.businessDate ?: businessDate(command.timezone),
-        )
+        // A date is stored only when the caller names one. Otherwise it is derived at approval,
+        // from the timezone the tenant then has, so a timezone amended on the draft is honoured.
+        command.businessDate?.let {
+            bootstrapStore.ensureBusinessDate(organisationId, it, overwrite = true)
+        }
         audit(
             organisationId = organisationId,
             action = "organisation.create_draft",
@@ -111,6 +112,9 @@ class OrganisationProvisioningService(
         queryStore.requireTenantCodeFree(command.tenantCode, except = command.organisationId)
         translatingDuplicateTenantCode { lifecycleStore.amendDraft(command) }
         command.admin?.let { adminBootstrapStore.amendDraft(command.organisationId, it) }
+        command.businessDate?.let {
+            bootstrapStore.ensureBusinessDate(command.organisationId, it, overwrite = true)
+        }
 
         audit(
             organisationId = command.organisationId,
@@ -621,9 +625,9 @@ private fun validateCreate(command: CreateOrganisationDraftCommand) {
 }
 
 /**
- * Validates an amend, and refuses input it would discard (#164): `initial_settings` and
- * `business_date` are creation inputs an amend does not apply, so a non-empty settings map or a
- * business date is refused with 422 before any write. An empty map is harmless and accepted.
+ * Validates an amend, and refuses input it would discard (#164): `initial_settings` is a
+ * creation input an amend does not apply, so a non-empty settings map is refused with 422 before
+ * any write. An empty map is harmless and accepted. A `business_date` is applied (#271).
  */
 private fun validateAmend(command: AmendOrganisationDraftCommand) {
     errorUnless(command.tenantCode.isNotBlank(), SafeError.INVALID_OPERATION)
@@ -635,9 +639,6 @@ private fun validateAmend(command: AmendOrganisationDraftCommand) {
         throw InvalidOperationException(
             safeDetail = "initial_settings cannot be changed by an amend.",
         )
-    }
-    if (command.businessDate != null) {
-        throw InvalidOperationException(safeDetail = "business_date cannot be changed by an amend.")
     }
 }
 

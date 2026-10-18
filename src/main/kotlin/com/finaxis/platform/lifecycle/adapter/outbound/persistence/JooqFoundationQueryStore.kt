@@ -13,6 +13,7 @@ import com.finaxis.platform.jooq.tables.references.ORGANISATION_INITIAL_ADMINIST
 import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
+import com.finaxis.platform.lifecycle.application.query.AdministratorDraftView
 import com.finaxis.platform.lifecycle.application.query.BranchDetail
 import com.finaxis.platform.lifecycle.application.query.BranchFilter
 import com.finaxis.platform.lifecycle.application.query.BranchSummary
@@ -126,6 +127,11 @@ class JooqFoundationQueryStore(
                 bootstrap.LAST_FAILURE_CODE,
                 bootstrap.REQUESTED_BY,
                 bootstrap.SUBMITTED_BY,
+                bootstrap.ADMIN_EMAIL,
+                bootstrap.ADMIN_USERNAME,
+                bootstrap.ADMIN_DISPLAY_NAME,
+                bootstrap.ADMIN_PHONE_E164,
+                bootstrap.SEND_APPLICATION_INVITE,
             ).from(ORGANISATION)
             .leftJoin(bootstrap)
             .on(bootstrap.ORGANISATION_ID.eq(ORGANISATION.ID))
@@ -151,6 +157,7 @@ class JooqFoundationQueryStore(
                     registrationNumber = record.get(ORGANISATION.REGISTRATION_NUMBER),
                     requestedBy = makerOf(null, record.get(bootstrap.REQUESTED_BY)),
                     submittedBy = makerOf(null, record.get(bootstrap.SUBMITTED_BY)),
+                    administratorDraft = administratorDraftOf(record),
                 )
             }
     }
@@ -513,3 +520,16 @@ private fun Record.toBranchSummary(
     createdBy = get(BRANCH.CREATED_BY)?.let(makers::get),
     submittedBy = submitters[get(BRANCH.ID)]?.let(makers::get),
 )
+
+/** The administrator block of a tenant detail row, or null when the tenant has no bootstrap. */
+private fun administratorDraftOf(record: Record): AdministratorDraftView? {
+    val bootstrap = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
+    val email = record.get(bootstrap.ADMIN_EMAIL) ?: return null
+    return AdministratorDraftView(
+        email = email,
+        username = requireNotNull(record.get(bootstrap.ADMIN_USERNAME)),
+        displayName = requireNotNull(record.get(bootstrap.ADMIN_DISPLAY_NAME)),
+        phoneE164 = record.get(bootstrap.ADMIN_PHONE_E164),
+        sendApplicationInvite = record.get(bootstrap.SEND_APPLICATION_INVITE) == true,
+    )
+}

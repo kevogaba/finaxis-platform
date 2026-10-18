@@ -117,6 +117,10 @@ class TenantSettingsControllerTests
                                 valueType = "INT",
                                 sensitive = true,
                                 platformAdminOnly = true,
+                                isDefault = false,
+                                label = "Audit retention (days)",
+                                description = "Reserved: how long audit events would be kept.",
+                                group = "Audit",
                             ),
                         ),
                     totalItems = 26,
@@ -133,6 +137,10 @@ class TenantSettingsControllerTests
                     jsonPath("$.items[0].key") { value("audit_retention_days") }
                     jsonPath("$.items[0].value") { value("***REDACTED***") }
                     jsonPath("$.items[0].value_type") { value("INT") }
+                    jsonPath("$.items[0].is_default") { value(false) }
+                    jsonPath("$.items[0].label") { value("Audit retention (days)") }
+                    jsonPath("$.items[0].group") { value("Audit") }
+                    jsonPath("$.items[0].description") { exists() }
                     jsonPath("$.items[0].platform_admin_only") { value(true) }
                     jsonPath("$.page.number") { value(1) }
                     jsonPath("$.page.size") { value(25) }
@@ -352,6 +360,7 @@ class TenantSettingsControllerTests
                 valueType = "TIMEZONE",
                 sensitive = false,
                 platformAdminOnly = false,
+                isDefault = false,
             )
 
         private fun tenantToken(

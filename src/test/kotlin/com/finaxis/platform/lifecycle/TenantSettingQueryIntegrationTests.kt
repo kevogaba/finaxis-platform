@@ -65,7 +65,7 @@ class TenantSettingQueryIntegrationTests(
 
         val makerChecker =
             catalogSettings.single { it.key == "require_maker_checker_for_user_invites" }
-        assertEquals("false", makerChecker.value)
+        assertEquals("true", makerChecker.value, "unset means maker-checker is required")
     }
 
     @Test

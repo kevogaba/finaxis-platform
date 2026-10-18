@@ -1032,8 +1032,12 @@ tenant's draft fields, and the rules for the optional parts are:
   `admin` is `400 validation_failed`, so an omitted flag can never reset a stored `true` to `false`.
 - `initial_settings` is refused with `422 invalid_operation` when it holds any key. An empty `{}` is
   accepted and changes nothing.
-- `business_date` is refused with `422 invalid_operation` when it holds a value. An explicit `null`
-  is accepted, like an absent key, and changes nothing. The business date is set on create only.
+- `business_date` is applied when it holds a value (#271): it sets the date the tenant opens on,
+  creating the row when the draft has none. Absent or an explicit `null` changes nothing. A draft
+  that never names a date has **none** until approval, which derives it from the timezone the tenant
+  then has, so a timezone amended on the draft needs no business date. A date named on create or
+  amend is kept as stated. Drafts created before this change were seeded a derived date at create;
+  amend them with `business_date` if their timezone changed.
 
 A refused amend writes nothing: the draft, its administrator and its settings stay as they were.
 Amend without `admin`:
@@ -1097,9 +1101,17 @@ Tenant detail response:
   "bootstrap_status": "COMPLETED",
   "bootstrap_failure_code": null,
   "created_at": "2026-07-25T08:00:00Z",
-  "updated_at": "2026-07-25T08:20:00Z"
+  "updated_at": "2026-07-25T08:20:00Z",
+  "admin": null
 }
 ```
+
+`admin` is the initial administrator as drafted (`email`, `username`, `display_name`, `phone_e164`,
+`send_application_invite`: the fields `PATCH` takes), so an amend form can be pre-filled (#271). It
+is personal data and is **always present, `null` unless all of these hold**: the route is a platform
+route (never `GET /api/v1/tenant`), the tenant is a `DRAFT`, and the caller holds
+`tenant.update_draft` in the platform organisation. A viewer with `tenant.view` alone, a tenant
+caller, and any detail of a submitted, active or later tenant see `null`, and no permission is named.
 
 `status_reason` is the reason recorded by the tenant's **last transition**, so a maker can read why
 a tenant was returned to draft. It is **always present** and nullable: `null` when the last
@@ -2096,6 +2108,19 @@ Advance request and response:
 ### Tenant Settings
 
 Base path: `/api/v1/tenant/settings`. List filters: `page`, `size`.
+
+Every setting carries `label`, `description` and `group` (all `null` for a stored key outside the
+catalogue) and `is_default`: `true` when `value` is the catalogue default because nothing is
+stored, so an unset and an explicitly stored value are told apart. A description says whether the
+platform applies the setting yet; the maker-checker switches are applied (ADR 0032).
+
+**Platform route (#273).** `/api/v1/platform/tenants/{tenant_id}/settings` (`GET /`, `GET /{key}`,
+`PUT /{key}`, `DELETE /{key}`) lets a platform administrator who is no member of the tenant read and
+change the platform-only keys (`audit_retention_days`). It requires `tenant_setting.manage_platform`
+in the platform organisation, checked first (403, never 404 for an unknown tenant), then answers
+`404` for an unknown tenant and `422 invalid_operation` for a key that is not platform-only. Writes
+need an `ACTIVE` tenant (`409` otherwise), are idempotent, and are audited as `settings.update`
+with the platform administrator as actor. `GET /` lists only the platform-only keys.
 
 | Method | Path     | Summary                         | Permission                    | Shape    |
 |--------|----------|---------------------------------|-------------------------------|----------|

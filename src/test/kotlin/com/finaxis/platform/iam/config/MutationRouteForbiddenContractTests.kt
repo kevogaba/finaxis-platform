@@ -28,7 +28,7 @@ import tools.jackson.databind.JsonNode
  * The expectation is computed, not typed: the codes come from each route's real `@PreAuthorize`
  * (on the method or its controller) and the views from `permission_view_requirement`, the rows the
  * guard enforces. A route added tomorrow is therefore held to the rule with no edit here, and a
- * mutation route that names no catalogue mutation code must be one of the four listed below, whose
+ * mutation route that names no catalogue mutation code must be one of those listed below, whose
  * authority is checked per key or per context in the service.
  */
 @Import(PostgresTestConfiguration::class)
@@ -159,13 +159,25 @@ class MutationRouteForbiddenContractTests
             val MUTATION_METHODS =
                 setOf(HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH, HttpMethod.DELETE)
 
-            /** Context selection and per-key tenant settings: authorised in the service. */
+            /**
+             * Context selection and per-key tenant settings: authorised in the service. The
+             * platform settings routes are gated by the context code
+             * `tenant_setting.manage_platform`, which has no view to pair.
+             */
             val UNGATED_ROUTES =
                 setOf(
                     Route("${ApiPaths.AUTH}/select-organisation", HttpMethod.POST),
                     Route("${ApiPaths.AUTH}/select-branch", HttpMethod.POST),
                     Route("${ApiPaths.TENANT_SETTINGS}/{key}", HttpMethod.PUT),
                     Route("${ApiPaths.TENANT_SETTINGS}/{key}", HttpMethod.DELETE),
+                    Route(
+                        "${ApiPaths.PLATFORM_TENANTS}/{tenant_id}/settings/{key}",
+                        HttpMethod.PUT,
+                    ),
+                    Route(
+                        "${ApiPaths.PLATFORM_TENANTS}/{tenant_id}/settings/{key}",
+                        HttpMethod.DELETE,
+                    ),
                 )
         }
     }
