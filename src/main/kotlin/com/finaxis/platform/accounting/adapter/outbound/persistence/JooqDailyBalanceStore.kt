@@ -17,6 +17,7 @@ import org.jooq.Field
 import org.jooq.Record
 import org.jooq.Table
 import org.jooq.impl.DSL
+import org.jooq.impl.SQLDataType
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.time.Instant
@@ -24,6 +25,25 @@ import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.UUID
+
+/**
+ * The operand of the as-of read's `MIN`: `posting_date`, and for a read bounded by `business_date`
+ * not a bare column.
+ *
+ * `MIN(posting_date)` is rewritten by PostgreSQL into an ordered walk of
+ * `idx_journal_entry_posting_date` that filters on `business_date`, and which of that and the
+ * index-only range scan on `idx_journal_entry_business_date` it picks is a cost estimate that
+ * moves with the visibility map. The walk reads a tenant's whole posting history (issue #234:
+ * 49,728 rows filtered, ~50k blocks). `+ 0` keeps the value and takes away the rewrite, so a
+ * bounded aggregate always runs over the range scan V14 built for it. Unbounded, the rewrite is
+ * the right plan: the first entry of the posting-date index, one probe. Both as-of queries use it.
+ */
+internal fun earliestPostingDate(bounded: Boolean): Field<LocalDate> =
+    if (bounded) {
+        DSL.field("{0} + 0", SQLDataType.LOCALDATE, JOURNAL_ENTRY.POSTING_DATE)
+    } else {
+        JOURNAL_ENTRY.POSTING_DATE
+    }
 
 /**
  * The projection's persistence, and the `journal_line` aggregates it is rebuilt from.
@@ -179,7 +199,7 @@ class JooqDailyBalanceStore(
         afterBusinessDate: LocalDate?,
     ): LocalDate? =
         dsl
-            .select(DSL.min(JOURNAL_ENTRY.POSTING_DATE))
+            .select(DSL.min(earliestPostingDate(afterBusinessDate != null)))
             .from(JOURNAL_ENTRY)
             .where(JOURNAL_ENTRY.ORGANISATION_ID.eq(organisationId))
             .and(

@@ -298,11 +298,7 @@ class AccountingQueryPlanTests(
         // the probe fetches a heap tuple per journal recorded since the last build.
         val plan =
             explain(
-                """
-                SELECT MIN(posting_date)
-                FROM journal_entry
-                WHERE organisation_id = ? AND business_date > ?
-                """.trimIndent(),
+                EARLIEST_UNPROJECTED_SQL,
                 organisationId,
                 LedgerVolumeFixture.END.minusDays(WATERMARK_LAG_DAYS),
             )
@@ -310,6 +306,26 @@ class AccountingQueryPlanTests(
         assertNoSeqScan(plan)
         assertUsesIndex(plan, "idx_journal_entry_business_date")
         assertBlocksUnder(plan, WATERMARK_BUDGET)
+    }
+
+    @Test
+    fun `the as-of read stays on the header index when the index-only scan is unavailable`() {
+        // The visibility map decides whether the index-only scan above is cheap, and it moves with
+        // autovacuum. Without it the planner could turn MIN(posting_date) into an ordered walk of
+        // idx_journal_entry_posting_date that filters on business_date, which on a busy tenant
+        // reads every posting date it ever recorded (the run in issue #234 touched ~44k blocks).
+        // The query must not leave the choice to cost estimates, so the plan has to hold even
+        // when the index-only scan is off the table.
+        val plan =
+            explainWith(
+                "enable_indexonlyscan = off",
+                EARLIEST_UNPROJECTED_SQL,
+                organisationId,
+                LedgerVolumeFixture.END.minusDays(WATERMARK_LAG_DAYS),
+            )
+
+        assertNoSeqScan(plan)
+        assertUsesIndex(plan, "idx_journal_entry_business_date")
     }
 
     @Test
@@ -426,9 +442,27 @@ class AccountingQueryPlanTests(
     private fun explain(
         sql: String,
         vararg args: Any?,
+    ): JsonNode = plan(dsl, sql, args)
+
+    /** [explain] with one `SET LOCAL` planner setting, scoped to its own transaction. */
+    private fun explainWith(
+        setting: String,
+        sql: String,
+        vararg args: Any?,
+    ): JsonNode =
+        dsl.transactionResult { configuration ->
+            val transactional = DSL.using(configuration)
+            transactional.execute("SET LOCAL $setting")
+            plan(transactional, sql, args)
+        }
+
+    private fun plan(
+        context: DSLContext,
+        sql: String,
+        args: Array<out Any?>,
     ): JsonNode {
         val json =
-            dsl
+            context
                 .fetchValue("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) $sql", *args)
                 .toString()
         return mapper.readTree(json)[0]["Plan"]
@@ -490,6 +524,14 @@ class AccountingQueryPlanTests(
         const val Q6_BUDGET = 500
         const val Q7_BUDGET = 200
         const val WATERMARK_BUDGET = 50
+
+        /**
+         * The as-of read's aggregate as `JooqDailyBalanceStore` and `JooqReportingAdapters` bound
+         * it (`earliestPostingDate(true)`), so the plan under test is the plan production gets.
+         */
+        const val EARLIEST_UNPROJECTED_SQL =
+            "SELECT MIN(posting_date + 0) FROM journal_entry " +
+                "WHERE organisation_id = ? AND business_date >= ?"
 
         /**
          * One position's whole history, which is what an opening balance asks for.

@@ -210,10 +210,20 @@ period is the honest measure; closing periods promptly is what keeps it small.
 Two index reads buy the retreat, and **only one of them is O(1)**.
 `MAX(built_for_business_date)` is a backward scan of `idx_gl_account_daily_balance_watermark`
 stopping at its first row. `MIN(posting_date)` over `business_date >= W` is not: `posting_date` is
-an `INCLUDE` payload of `idx_journal_entry_business_date` rather than an ordered key, so PostgreSQL
-cannot rewrite the aggregate into a one-row lookup and scans the matching entries index-only
-instead. Its cost grows with the journals recorded since the last build — normally one business
-day's worth, and bounded by how far behind the build has fallen.
+an `INCLUDE` payload of `idx_journal_entry_business_date` rather than an ordered key, so it is not
+a one-row lookup there, and the query scans the matching entries index-only instead. Its cost grows
+with the journals recorded since the last build — normally one business day's worth, and bounded
+by how far behind the build has fallen.
+
+**The aggregate is `MIN(posting_date + 0)`, deliberately (issue #234).** A bare `MIN(posting_date)`
+lets PostgreSQL rewrite it into an ordered walk of `idx_journal_entry_posting_date` that filters on
+`business_date`. That walk is one probe when the newest journals sit early in posting order and
+reads a tenant's whole posting history when they do not, and the planner chooses between it and the
+index-only range scan above by cost estimates that move with the visibility map (the failing CI run
+filtered 49,728 rows and touched ~50k blocks against a budget of 50). `+ 0` keeps the value and
+removes the rewrite, so the bounded read always takes the range scan. It is applied only when the
+read is bounded by a watermark: with no watermark the bare form is right, the first entry of the
+posting-date index. Both reads use `earliestPostingDate(bounded)`; do not simplify it back.
 
 The watermark is read from the projection's own rows rather than from a counter, so it cannot
 disagree with what is actually stored: a build that failed halfway leaves a watermark reflecting the
