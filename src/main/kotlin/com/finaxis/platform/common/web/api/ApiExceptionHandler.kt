@@ -1,6 +1,7 @@
 package com.finaxis.platform.common.web.api
 
 import com.finaxis.platform.common.application.ApplicationException
+import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.audit.toMessageFreeStackTraceOrUnavailable
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.validation.ConstraintViolationException
@@ -27,6 +28,7 @@ import org.springframework.web.servlet.resource.NoResourceFoundException
 @Order(Ordered.HIGHEST_PRECEDENCE)
 class ApiExceptionHandler(
     private val problemFactory: ApiProblemFactory = ApiProblemFactory(),
+    private val deniedAccessAuditor: DeniedAccessAuditor? = null,
 ) {
     private val logger = LoggerFactory.getLogger(javaClass)
 
@@ -35,16 +37,21 @@ class ApiExceptionHandler(
     fun application(
         exception: ApplicationException,
         request: HttpServletRequest,
-    ): ResponseEntity<ApiProblem> =
-        response(problemFactory.application(exception, request), exception)
+    ): ResponseEntity<ApiProblem> {
+        if (exception is ForbiddenOperationException) {
+            deniedAccessAuditor?.applicationDenial(request, exception)
+        }
+        return response(problemFactory.application(exception, request), exception)
+    }
 
     /** Maps Spring Security authorization denials without leaking authority details. */
     @ExceptionHandler(org.springframework.security.access.AccessDeniedException::class)
     fun accessDenied(
         exception: org.springframework.security.access.AccessDeniedException,
         request: HttpServletRequest,
-    ): ResponseEntity<ApiProblem> =
-        response(
+    ): ResponseEntity<ApiProblem> {
+        deniedAccessAuditor?.securityDenial(request, "forbidden")
+        return response(
             problem(
                 HttpStatus.FORBIDDEN,
                 "forbidden",
@@ -53,6 +60,7 @@ class ApiExceptionHandler(
             ),
             exception,
         )
+    }
 
     /** Maps malformed request JSON without disclosing parser messages. */
     @ExceptionHandler(HttpMessageNotReadableException::class)

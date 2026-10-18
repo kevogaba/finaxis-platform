@@ -237,7 +237,7 @@ class UserProvisioningService(
                     "membershipActivated" to membershipActivated.toString(),
                 ) + checkerScopeMetadata(command.scope) + selfApprovalMetadata(selfApproved),
             subjectUserId = snapshot.userId,
-            severity = if (selfApproved) AuditSeverity.HIGH else AuditSeverity.INFO,
+            severity = if (selfApproved) AuditSeverity.HIGH else null,
         )
         val approved = store.requireMembership(command.organisationId, command.membershipId)
         return UserApprovalResult(
@@ -597,7 +597,7 @@ class UserProvisioningService(
         requestId: String? = null,
         metadata: Map<String, String> = emptyMap(),
         subjectUserId: UUID? = null,
-        severity: AuditSeverity = AuditSeverity.INFO,
+        severity: AuditSeverity? = null,
     ) {
         auditService.record(
             AuditCommand(

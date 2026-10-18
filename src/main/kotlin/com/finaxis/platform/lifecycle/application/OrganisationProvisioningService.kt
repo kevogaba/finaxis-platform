@@ -493,7 +493,7 @@ class OrganisationProvisioningService(
             audit(
                 organisationId = command.organisationId,
                 action = "organisation.deprovision_assignment_revoked",
-                actorId = SYSTEM_ACTOR,
+                actorId = command.actorId,
                 metadata =
                     mapOf(
                         "assignmentId" to assignment.assignmentId.toString(),

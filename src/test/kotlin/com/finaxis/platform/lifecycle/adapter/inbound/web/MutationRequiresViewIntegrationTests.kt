@@ -1225,7 +1225,8 @@ class MutationRequiresViewIntegrationTests
             dsl
                 .fetchOne(
                     "SELECT " +
-                        "(SELECT count(*) FROM audit_event WHERE actor_user_id = ?), " +
+                        "(SELECT count(*) FROM audit_event WHERE actor_user_id = ? " +
+                        "AND action <> 'api.access_denied'), " +
                         "(SELECT count(*) FROM organisation_transition_log " +
                         "WHERE organisation_id = ?), " +
                         "(SELECT count(*) FROM branch_transition_log WHERE organisation_id = ?), " +
@@ -1261,7 +1262,11 @@ class MutationRequiresViewIntegrationTests
 
         private fun auditRows(actor: UUID): Int =
             dsl
-                .fetchOne("SELECT count(*) FROM audit_event WHERE actor_user_id = ?", actor)!!
+                .fetchOne(
+                    "SELECT count(*) FROM audit_event WHERE actor_user_id = ? " +
+                        "AND action <> 'api.access_denied'",
+                    actor,
+                )!!
                 .get(0, Int::class.java)
 
         private fun idempotencyRows(key: UUID): Int =

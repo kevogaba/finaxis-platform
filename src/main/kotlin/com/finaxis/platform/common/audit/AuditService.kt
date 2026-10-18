@@ -55,7 +55,9 @@ class AuditService(
                 resourceType = command.resourceType,
                 resourceId = command.resourceId,
                 outcome = command.outcome,
-                severity = command.severity,
+                severity =
+                    command.severity
+                        ?: AuditSeverityPolicy.resolve(command.action, command.outcome),
                 reason = command.reason,
                 requestId = command.requestId,
                 sourceIp = command.sourceIp,
@@ -334,7 +336,7 @@ class AuditService(
         reason: String? = null,
         requestId: String? = null,
         subjectUserId: UUID? = null,
-        severity: AuditSeverity = AuditSeverity.INFO,
+        severity: AuditSeverity? = null,
     ): AuditEvent =
         record(
             baseCommand(

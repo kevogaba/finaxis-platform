@@ -99,7 +99,7 @@ pass it on every event about one user, and leave it out for an event about no us
 | `recordSuccess` | A successful security-sensitive or state-changing action. |
 | `recordFailure` | A failed or denied action (`outcome` defaults to `FAILURE`; pass `DENIED` explicitly for an access denial). |
 | `recordLifecycleTransition` | An FSM transition outcome — success or rejection — with `fromState`/`toState`. Used by `FoundationLifecycleService` for every organisation/branch/user/membership transition. |
-| `recordSecurityEvent` | A security-sensitive event such as a denied access attempt; defaults to `AuditSeverity.HIGH`. |
+| `recordSecurityEvent` | A security-sensitive event such as a denied access attempt; defaults to `AuditSeverity.HIGH`. `DeniedAccessAuditor` writes every authenticated `403` through it (see "Denied access" in the architecture document). |
 | `recordIamChange` | Role, permission, membership, or assignment changes, with optional `before`/`after`. |
 | `recordExternalDispatch` | The outcome of dispatching work to an external system (Keycloak, invite/email provider); `externalSystemRef` identifies the system. |
 | `recordSettingsChange` | An organisation settings change with both `before` and `after`. |

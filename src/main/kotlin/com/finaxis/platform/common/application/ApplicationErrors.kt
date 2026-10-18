@@ -1,5 +1,7 @@
 package com.finaxis.platform.common.application
 
+import java.util.UUID
+
 /** Base class for application failures that have a stable public error contract. */
 sealed class ApplicationException(
     val code: String,
@@ -24,7 +26,14 @@ class ConflictException(
 open class ForbiddenOperationException(
     code: String = "forbidden",
     safeDetail: String = "You are not permitted to perform this action.",
-) : ApplicationException(code, safeDetail)
+) : ApplicationException(code, safeDetail) {
+    /**
+     * The authenticated user the refusal is about, for a refusal raised before any request context
+     * names one (a JWT-only caller choosing an organisation): the denial audit uses it when the
+     * context has no actor. Null when the context already identifies the caller.
+     */
+    open val actorUserId: UUID? get() = null
+}
 
 /**
  * Raised when a caller lacks a specific permission code (ADR 0030, decision 4). It is still a
