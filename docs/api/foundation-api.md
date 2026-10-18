@@ -915,7 +915,11 @@ The platform route is `POST /api/v1/platform/tenants/{tenant_id}/branches/{branc
 ### Platform Tenant Administration
 
 Base path: `/api/v1/platform/tenants`. List filters: `q`, `status`, `country`,
-`created_from`, `created_to`, `sort_by`, `sort_dir`, `page`, `size`.
+`created_from`, `created_to`, `include_platform`, `sort_by`, `sort_dir`, `page`, `size`.
+
+`GET /` leaves the reserved `PLATFORM` organisation out, and `total_items` with it, so a client sees
+only tenants and no short page (#160). `include_platform=true` lists it; reading it by id
+(`GET /{tenant_id}`) is unaffected. A tenant caller's own search never lists it.
 
 | Method | Path                           | Summary             | Permission                   | Shape         |
 |--------|--------------------------------|---------------------|------------------------------|---------------|
@@ -1285,13 +1289,31 @@ User response:
 
 ### Platform Global Users
 
-Base path: `/api/v1/platform/users`.
+Base path: `/api/v1/platform/users`. List filters: `q`, `user_status`, `organisation_id`,
+`sort_by`, `sort_dir`, `page`, `size`.
 
 | Method | Path                    | Summary                        | Permission        | Shape    |
 |--------|-------------------------|--------------------------------|-------------------|----------|
+| GET    | `/`                     | Search user accounts, all organisations | `user.view` (platform) | page |
+| GET    | `/{user_id}`            | Get a user account and its memberships  | `user.view` (platform) | item |
 | POST   | `/{user_id}/suspend`    | Suspend global user account    | `user.suspend` + `user.view` | mutation |
 | POST   | `/{user_id}/reactivate` | Reactivate global user account | `user.activate` + `user.view` | mutation |
 | POST   | `/{user_id}/deactivate` | Deactivate global user account | `user.deactivate` + `user.view` | mutation |
+
+**Directory reads (#160).** `GET /` pages user accounts across every organisation, newest first by
+default (`sort_by`: `createdAt`, `username`, `displayName`, `email`, `userStatus`; `sort_dir` applies
+only with a `sort_by`). `q` matches username, email or display name; `organisation_id` narrows to
+accounts holding a membership there, in any status. Each item is `id`, `username`, `email`,
+`display_name`, `user_status`, `created_at` and `membership_count` (every membership, any
+organisation and status); the page costs a constant number of statements. `GET /{user_id}` adds
+`memberships` (`membership_id`, `organisation_id`, `tenant_code`, `organisation_name`,
+`membership_status`, `membership_type`, `created_at`), newest first and capped at 100, while
+`membership_count` stays the full count. Both need `user.view` in the platform organisation, checked
+first in the service (403 before `sort_by` is judged or any row is read, and never 404 for an
+unknown id; a malformed `page` or `size` is `400` for any authenticated caller, as on every list,
+because the pagination interceptor runs first); an unknown account
+is `404`. Email is personal data, so the code is the same one that gates the per-tenant user reads.
+Rate limiting is the platform read policy, by path prefix.
 
 Lifecycle request and response:
 

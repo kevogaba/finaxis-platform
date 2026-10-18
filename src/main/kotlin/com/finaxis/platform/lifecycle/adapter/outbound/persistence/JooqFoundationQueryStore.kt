@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.finaxis.platform.common.application.ActorRef
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.persistence.ActorRefLookup
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.apiPageOf
@@ -53,6 +54,8 @@ class JooqFoundationQueryStore(
         var condition: Condition = DSL.noCondition()
         if (organisationId != null) {
             condition = condition.and(ORGANISATION.ID.eq(organisationId))
+        } else if (!filter.includePlatform) {
+            condition = condition.and(ORGANISATION.ID.ne(PlatformOrganisation.ID))
         }
         filter.status?.let { condition = condition.and(ORGANISATION.STATUS.eq(it)) }
         filter.country?.let { condition = condition.and(ORGANISATION.COUNTRY_CODE.eq(it)) }

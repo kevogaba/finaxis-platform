@@ -184,7 +184,10 @@ class PlatformTenantController(
     @PreAuthorize("hasAuthority('tenant.view')")
     @Operation(
         summary = "Search tenants",
-        description = "Searches tenant organisations using pagination and filters.",
+        description =
+            "Searches tenant organisations using pagination and filters. The reserved PLATFORM " +
+                "organisation is left out, and `total_items` with it, unless `include_platform` " +
+                "is true; it stays readable by id.",
     )
     @ApiResponses(
         ApiResponse(
@@ -239,6 +242,12 @@ class PlatformTenantController(
         )
         @RequestParam(required = false, name = "sort_by") sortBy: String?,
         @RequestParam(required = false, name = "sort_dir") sortDir: String?,
+        @Parameter(
+            description =
+                "List the reserved PLATFORM organisation too. Off by default: it is not a " +
+                    "tenant, and `total_items` excludes it unless this is set.",
+        )
+        @RequestParam(required = false, name = "include_platform") includePlatform: Boolean?,
     ): ApiPage<TenantSummaryResponse> {
         val caller = CallerContextResolver.getPlatformCaller()
         val filter =
@@ -252,6 +261,7 @@ class PlatformTenantController(
                 size = size,
                 sortBy = sortBy,
                 sortDir = sortDir,
+                includePlatform = includePlatform == true,
             )
         val pageResult = foundationQueryService.searchTenants(filter, caller)
         return ApiPage(
