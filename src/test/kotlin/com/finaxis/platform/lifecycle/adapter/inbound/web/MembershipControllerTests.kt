@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
+import com.finaxis.platform.common.application.ActorRef
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.id.uuidV7
@@ -180,6 +181,7 @@ class MembershipControllerTests
         fun `searchMemberships returns a bounded page`() {
             val tenantId = uuidV7()
             val membershipId = uuidV7()
+            val inviterId = uuidV7()
             whenever(
                 lifecycleIamReadService.searchMemberships(eq(tenantId), any(), any()),
             ).thenReturn(
@@ -196,6 +198,7 @@ class MembershipControllerTests
                             "Tenant Administrator",
                             "Westlands",
                             Instant.parse("2026-07-18T10:00:00Z"),
+                            createdBy = ActorRef(inviterId, "Ian Inviter", true),
                         ),
                     ),
                     number = 1,
@@ -220,6 +223,8 @@ class MembershipControllerTests
                     jsonPath("$.items[0].display_name") { value("Tenant Administrator") }
                     jsonPath("$.items[0].primary_branch_name") { value("Westlands") }
                     jsonPath("$.items[0].created_at") { value("2026-07-18T10:00:00Z") }
+                    jsonPath("$.items[0].created_by.id") { value(inviterId.toString()) }
+                    jsonPath("$.items[0].created_by.display_name") { value("Ian Inviter") }
                     jsonPath("$.page.number") { value(1) }
                     jsonPath("$.page.size") { value(10) }
                 }

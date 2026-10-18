@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
+import com.finaxis.platform.common.application.ActorRef
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.context.PlatformOrganisation
@@ -309,6 +310,7 @@ class PlatformTenantControllerTests
         @Test
         fun `searchTenants returns a bounded page`() {
             val tenantId = uuidV7()
+            val requesterId = uuidV7()
             whenever(foundationQueryService.searchTenants(any(), any())).thenReturn(
                 apiPageOf(
                     listOf(
@@ -324,6 +326,7 @@ class PlatformTenantControllerTests
                             "COMPLETED",
                             3,
                             null,
+                            requestedBy = ActorRef(requesterId, "Rae Requester", false),
                         ),
                     ),
                     number = 2,
@@ -346,6 +349,9 @@ class PlatformTenantControllerTests
                     jsonPath("$.items[0].bootstrap_status") { value("COMPLETED") }
                     jsonPath("$.items[0].active_branch_count") { value(3) }
                     jsonPath("$.items[0].active_user_count") { isEmpty() }
+                    jsonPath("$.items[0].requested_by.id") { value(requesterId.toString()) }
+                    jsonPath("$.items[0].requested_by.display_name") { value("Rae Requester") }
+                    jsonPath("$.items[0].submitted_by") { isEmpty() }
                     jsonPath("$.page.number") { value(2) }
                     jsonPath("$.page.size") { value(20) }
                 }

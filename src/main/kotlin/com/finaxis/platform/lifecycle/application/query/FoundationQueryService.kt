@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.application.query
 
 import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.application.ResourceNotFoundException
+import com.finaxis.platform.common.application.shownTo
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.requireValidPage
@@ -46,7 +47,7 @@ class FoundationQueryService(
                 permissionGuard.requirePlatformPermission(caller.actorId, "tenant.view")
             }
         }
-        return store.findTenantById(id)
+        return store.findTenantById(id)?.withMakersFor(caller)
             ?: throw ResourceNotFoundException(safeDetail = "Tenant not found: $id")
     }
 
@@ -82,10 +83,11 @@ class FoundationQueryService(
         return page.copy(
             items =
                 page.items.map {
-                    it.copy(
-                        activeBranchCount = it.activeBranchCount.takeIf { showBranches },
-                        activeUserCount = it.activeUserCount.takeIf { showUsers },
-                    )
+                    it
+                        .copy(
+                            activeBranchCount = it.activeBranchCount.takeIf { showBranches },
+                            activeUserCount = it.activeUserCount.takeIf { showUsers },
+                        ).withMakersFor(caller)
                 },
         )
     }
@@ -117,7 +119,7 @@ class FoundationQueryService(
                 permissionGuard.requirePlatformPermission(caller.actorId, "branch.view")
             }
         }
-        return store.findBranchById(organisationId, id)
+        return store.findBranchById(organisationId, id)?.withMakersFor(caller)
             ?: throw ResourceNotFoundException(safeDetail = "Branch not found: $id")
     }
 
@@ -155,10 +157,11 @@ class FoundationQueryService(
         return page.copy(
             items =
                 page.items.map { branch ->
-                    branch.copy(
-                        activeUserCount =
-                            branch.activeUserCount.takeIf { assignments.canSee(branch.id) },
-                    )
+                    branch
+                        .copy(
+                            activeUserCount =
+                                branch.activeUserCount.takeIf { assignments.canSee(branch.id) },
+                        ).withMakersFor(caller)
                 },
         )
     }
@@ -270,3 +273,30 @@ class FoundationQueryService(
             setOf("branchCode", "branchName", "branchType", "status", "createdAt")
     }
 }
+
+// A maker is shown to a tenant caller only when they belong to the tenant, so a platform operator
+// who acted for it is not named to its own users; a platform caller sees every maker. A tenant's
+// requester and submitter are platform users, so a tenant caller never sees them.
+private fun TenantSummary.withMakersFor(caller: FoundationCaller) =
+    copy(
+        requestedBy = requestedBy.shownTo(caller is PlatformCaller),
+        submittedBy = submittedBy.shownTo(caller is PlatformCaller),
+    )
+
+private fun TenantDetail.withMakersFor(caller: FoundationCaller) =
+    copy(
+        requestedBy = requestedBy.shownTo(caller is PlatformCaller),
+        submittedBy = submittedBy.shownTo(caller is PlatformCaller),
+    )
+
+private fun BranchSummary.withMakersFor(caller: FoundationCaller) =
+    copy(
+        createdBy = createdBy.shownTo(caller is PlatformCaller),
+        submittedBy = submittedBy.shownTo(caller is PlatformCaller),
+    )
+
+private fun BranchDetail.withMakersFor(caller: FoundationCaller) =
+    copy(
+        createdBy = createdBy.shownTo(caller is PlatformCaller),
+        submittedBy = submittedBy.shownTo(caller is PlatformCaller),
+    )

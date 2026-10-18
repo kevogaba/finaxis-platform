@@ -1,7 +1,9 @@
 package com.finaxis.platform.iam.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.common.application.ActorRef
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.iam.application.query.BranchAssignmentFilter
 import com.finaxis.platform.iam.application.query.MembershipFilter
 import com.finaxis.platform.iam.application.query.RoleFilter
@@ -50,9 +52,12 @@ class JooqIamSummaryEnrichmentTests(
     private val alice = insertUser("alice", "Alice Wanjiru")
     private val bob = insertUser("bob", "Bob Otieno")
     private val carol = insertUser("carol", "Carol Mwangi")
-    private val aliceMembership = insertMembership(org, alice, "ACTIVE", "ADMIN", westlands, T1)
-    private val bobMembership = insertMembership(org, bob, "ACTIVE", "STAFF", null, T2)
-    private val carolMembership = insertMembership(org, carol, "SUSPENDED", "STAFF", null, T3)
+    private val outsider = insertUser("olu", "Olu Outsider")
+    private val aliceMembership =
+        insertMembership(org, alice, "ACTIVE", "ADMIN", westlands, T1, SystemActor.ID)
+    private val bobMembership = insertMembership(org, bob, "ACTIVE", "STAFF", null, T2, alice)
+    private val carolMembership =
+        insertMembership(org, carol, "SUSPENDED", "STAFF", null, T3, outsider)
 
     @Test
     fun `tenant user items carry the membership id type and both dates`() {
@@ -89,6 +94,28 @@ class JooqIamSummaryEnrichmentTests(
         assertNull(withoutBranch.primaryBranchId)
         assertNull(withoutBranch.primaryBranchName)
         assertEquals(3, byId.size, "the left join must not drop or duplicate memberships")
+    }
+
+    @Test
+    fun `membership and user items name the inviter, a member or an outsider, never the system`() {
+        val byId = queries.searchMemberships(org, MembershipFilter()).items.associateBy { it.id }
+
+        assertNull(byId.getValue(aliceMembership).createdBy, "the system actor has no account")
+        assertEquals(
+            ActorRef(alice, "Alice Wanjiru", member = true),
+            byId.getValue(bobMembership).createdBy,
+        )
+        assertEquals(
+            ActorRef(outsider, "Olu Outsider", member = false),
+            byId.getValue(carolMembership).createdBy,
+        )
+
+        val users = queries.searchUsers(org, UserInTenantFilter()).items.associateBy { it.id }
+        assertEquals(alice, users.getValue(bob).createdBy?.id)
+        assertEquals(false, users.getValue(carol).createdBy?.member)
+        assertEquals(alice, queries.findUserInTenant(org, bob)?.createdBy?.id)
+        assertEquals(outsider, queries.findMembershipById(org, carolMembership)?.createdBy?.id)
+        assertNull(queries.findMembershipById(org, aliceMembership)?.createdBy)
     }
 
     @Test
@@ -247,6 +274,7 @@ class JooqIamSummaryEnrichmentTests(
         type: String,
         primaryBranchId: UUID?,
         at: OffsetDateTime,
+        createdBy: UUID? = null,
     ): UUID {
         val id = uuidV7()
         dsl
@@ -257,6 +285,7 @@ class JooqIamSummaryEnrichmentTests(
             .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, status)
             .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, type)
             .set(USER_ORGANISATION_MEMBERSHIP.PRIMARY_BRANCH_ID, primaryBranchId)
+            .set(USER_ORGANISATION_MEMBERSHIP.CREATED_BY, createdBy)
             .set(USER_ORGANISATION_MEMBERSHIP.CREATED_AT, at)
             .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT, at)
             .execute()

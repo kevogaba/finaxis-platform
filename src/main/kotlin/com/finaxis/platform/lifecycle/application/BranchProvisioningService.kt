@@ -522,8 +522,8 @@ class BranchProvisioningService(
      * A refusal is audited `DENIED` (HIGH, action `branch.activate`, `branch_id` the target
      * branch, the response code as reason) through [AuditService.recordIndependently] before it
      * is raised, because the caller's transaction then rolls back and would take a row written
-     * inside it (#251, the branch mirror of the tenant rule's `TenantCheckerRule`). The maker's
-     * code stays the generic `forbidden` until #156 gives it a dedicated one, and its audit reason
+     * inside it (#251, the branch mirror of the tenant rule's `TenantCheckerRule`). The maker has
+     * its own code, [LifecycleErrorCodes.APPROVER_IS_BRANCH_MAKER] (#156), and the audit reason
      * follows the code.
      */
     private fun requireApproverIsNotBranchMaker(command: ActivateBranchCommand) {
@@ -537,7 +537,10 @@ class BranchProvisioningService(
         val refusal =
             when {
                 actedAsMaker -> {
-                    ForbiddenOperationException()
+                    ForbiddenOperationException(
+                        LifecycleErrorCodes.APPROVER_IS_BRANCH_MAKER,
+                        LifecycleErrorCodes.APPROVER_IS_BRANCH_MAKER_DETAIL,
+                    )
                 }
 
                 command.actorId != SystemActor.ID &&

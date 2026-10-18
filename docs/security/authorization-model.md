@@ -702,9 +702,12 @@ name but no code.
 ## Maker-checker and the platform checker
 
 Approvals are maker-checker: the actor that created a thing cannot approve it, whatever its
-permissions. `UserProvisioningService.approveUser` refuses the actor that invited the membership
-**and the invited user themselves** (the checker is neither the maker nor the beneficiary), and
-`BranchProvisioningService.activate` refuses the actor that created the branch and the actor who
+permissions. `UserProvisioningService.approveUser` refuses the actor that invited the membership (403
+`lifecycle.approver_is_membership_maker`) **and the invited user themselves** (403
+`lifecycle.approver_is_membership_beneficiary`; the checker is neither the maker nor the
+beneficiary), each with an independent `DENIED`/`HIGH` audit row, and
+`BranchProvisioningService.activate` refuses the actor that created the branch (403
+`lifecycle.approver_is_branch_maker`) and the actor who
 **amended** it (anyone with a successful `branch.update` audit event on it, 403
 `lifecycle.approver_is_branch_modifier`), because a returned draft is amendable by anyone holding
 `branch.update` and one person must not amend, resubmit and approve another's draft. The checker who

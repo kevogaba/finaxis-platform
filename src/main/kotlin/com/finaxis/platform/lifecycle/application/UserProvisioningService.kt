@@ -6,6 +6,7 @@ import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.audit.AuditSeverity
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.jobs.FailedJobRequeuer
 import com.finaxis.platform.common.jobs.JobRequeueOutcome
@@ -45,6 +46,8 @@ class UserProvisioningService(
     private val permissionGuard: PermissionGuard,
     private val failedJobRequeuer: FailedJobRequeuer,
 ) {
+    private val membershipCheckerRule = MembershipCheckerRule(store, auditService)
+
     /**
      * Persists a local user invitation with branch and role prerequisites. The inviter must hold
      * `user.invite` (and the views it implies) in the tenant, checked first, before the
@@ -196,7 +199,7 @@ class UserProvisioningService(
 
     private fun approve(command: ApproveUserCommand): UserApprovalResult {
         val snapshot = requireMembership(command.organisationId, command.membershipId)
-        if (store.isMakerOrBeneficiary(command, snapshot)) throw ForbiddenOperationException()
+        membershipCheckerRule.requireApproverIsNotMakerOrBeneficiary(command, snapshot)
         if (command.scope == ActingScope.PLATFORM) store.requirePlatformCheckerOpen(command)
         if (snapshot.status != MembershipLifecycleState.PENDING_APPROVAL) throw ConflictException()
         store.requireActiveAccessPrerequisites(command.organisationId, snapshot)
@@ -676,26 +679,13 @@ private fun UserProvisioningStore.requirePlatformCheckerOpen(command: ApproveUse
     }
 }
 
-/** The inviter (maker) and the invited user (beneficiary) may never approve. */
-private fun UserProvisioningStore.isMakerOrBeneficiary(
-    command: ApproveUserCommand,
-    snapshot: MembershipProvisioningSnapshot,
-): Boolean {
-    val inviter = membershipInvitedBy(command.organisationId, command.membershipId)
-    val isMaker =
-        inviter != null &&
-            command.approvedBy != com.finaxis.platform.common.persistence.SystemActor.ID &&
-            command.approvedBy == inviter
-    return isMaker || command.approvedBy == snapshot.userId
-}
-
 /** Platform checker gate: the platform permission first, then never the platform organisation. */
 private fun PermissionGuard.requirePlatformChecker(command: ApproveUserCommand) {
     requirePlatformPermission(command.approvedBy, "user.approve")
     if (command.organisationId == PlatformOrganisation.ID) throw ResourceNotFoundException()
 }
 
-private fun checkerScopeMetadata(scope: ActingScope): Map<String, String> =
+internal fun checkerScopeMetadata(scope: ActingScope): Map<String, String> =
     if (scope == ActingScope.PLATFORM) mapOf("checkerScope" to scope.name) else emptyMap()
 
 private fun transitionCommand(

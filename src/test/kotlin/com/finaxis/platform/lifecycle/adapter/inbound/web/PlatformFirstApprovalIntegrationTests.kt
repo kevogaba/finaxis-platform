@@ -167,7 +167,11 @@ class PlatformFirstApprovalIntegrationTests
                 "${ApiPaths.MEMBERSHIPS}/$membershipId/activate",
                 s.tenantAdmin,
                 s.tenantId,
-            ).andExpect { status { isForbidden() } }
+            ).andExpect {
+                status { isForbidden() }
+                jsonPath("$.code") { value("lifecycle.approver_is_membership_maker") }
+                jsonPath("$.detail") { value("The approver cannot be the member's inviter.") }
+            }
 
             platformPost(
                 "${ApiPaths.PLATFORM_TENANTS}/${s.tenantId}/memberships/$membershipId/activate",
@@ -534,14 +538,21 @@ class PlatformFirstApprovalIntegrationTests
             platformPost(
                 "${ApiPaths.PLATFORM_TENANTS}/${s.tenantId}/memberships/$membershipId/activate",
                 s.platformChecker,
-            ).andExpect { status { isForbidden() } }
+            ).andExpect {
+                status { isForbidden() }
+                jsonPath("$.code") { value("lifecycle.approver_is_membership_beneficiary") }
+            }
 
-            // Nor can the same user approve it from the tenant side.
+            // Nor can the same user approve it from the tenant side: it holds no tenant grant, so
+            // that is the plain missing-permission refusal, not the beneficiary rule.
             tenantPost(
                 "${ApiPaths.MEMBERSHIPS}/$membershipId/activate",
                 s.platformChecker,
                 s.tenantId,
-            ).andExpect { status { isForbidden() } }
+            ).andExpect {
+                status { isForbidden() }
+                jsonPath("$.code") { value("forbidden") }
+            }
 
             assertEquals("PENDING_APPROVAL", membershipStatus(membershipId))
             listOf(

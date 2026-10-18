@@ -4,6 +4,7 @@ import com.finaxis.platform.common.application.InvalidRequestException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
+import com.finaxis.platform.common.web.api.toResponse
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
@@ -1220,6 +1221,8 @@ class PlatformTenantController(
             bootstrapStatus = bootstrapStatus,
             activeBranchCount = activeBranchCount,
             activeUserCount = activeUserCount,
+            requestedBy = requestedBy.toResponse(),
+            submittedBy = submittedBy.toResponse(),
         )
 
     private fun TenantDetail.toResponse() =
@@ -1238,6 +1241,8 @@ class PlatformTenantController(
             bootstrapFailureCode = bootstrapFailureCode,
             createdAt = createdAt,
             updatedAt = updatedAt,
+            requestedBy = requestedBy.toResponse(),
+            submittedBy = submittedBy.toResponse(),
         )
 
     /**

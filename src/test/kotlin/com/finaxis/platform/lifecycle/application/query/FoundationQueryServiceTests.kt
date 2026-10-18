@@ -334,7 +334,7 @@ class FoundationQueryServiceTests {
     }
 }
 
-private class FakeFoundationQueryStore : FoundationQueryStore {
+internal class FakeFoundationQueryStore : FoundationQueryStore {
     var tenantSummaries: List<TenantSummary> = emptyList()
     var branchSummaries: List<BranchSummary> = emptyList()
 
@@ -344,6 +344,7 @@ private class FakeFoundationQueryStore : FoundationQueryStore {
     ): ApiPage<TenantSummary> = apiPageOf(tenantSummaries, 0, 25, tenantSummaries.size.toLong())
 
     val tenants = mutableMapOf<UUID, TenantDetail>()
+    val branches = mutableMapOf<UUID, BranchDetail>()
 
     override fun findTenantById(id: UUID): TenantDetail? = tenants[id]
 
@@ -361,7 +362,7 @@ private class FakeFoundationQueryStore : FoundationQueryStore {
     override fun findBranchById(
         organisationId: UUID,
         id: UUID,
-    ): BranchDetail? = null
+    ): BranchDetail? = branches[id]
 
     override fun listBusinessDateHistory(
         organisationId: UUID,
@@ -374,7 +375,7 @@ private class FakeFoundationQueryStore : FoundationQueryStore {
     ): BusinessDateHistoryDetail? = null
 }
 
-private fun tenantDetail(id: UUID) =
+internal fun tenantDetail(id: UUID) =
     TenantDetail(
         id = id,
         tenantCode = "acme-test",
@@ -388,7 +389,7 @@ private fun tenantDetail(id: UUID) =
         updatedAt = Instant.parse("2026-07-18T10:00:00Z"),
     )
 
-private class FakePermissionGuard : PermissionGuard {
+internal class FakePermissionGuard : PermissionGuard {
     private val denied = mutableSetOf<Pair<UUID, String>>()
 
     fun deny(

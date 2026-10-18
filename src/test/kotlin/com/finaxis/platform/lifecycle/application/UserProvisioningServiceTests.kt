@@ -8,7 +8,9 @@ import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
+import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.audit.AuditSeverity
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.jobs.FailedJobRequeuer
@@ -656,11 +658,21 @@ class UserProvisioningServiceTests {
         val context = activeInvitationContext()
         val invitation = service.inviteUser(inviteCommand(context))
 
-        assertFailsWith<ForbiddenOperationException> {
-            service.approveUser(
-                ApproveUserCommand(context.org, invitation.membershipId, context.actor),
-            )
-        }
+        val refusal =
+            assertFailsWith<ForbiddenOperationException> {
+                service.approveUser(
+                    ApproveUserCommand(context.org, invitation.membershipId, context.actor),
+                )
+            }
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_MEMBERSHIP_MAKER, refusal.code)
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_MEMBERSHIP_MAKER_DETAIL, refusal.safeDetail)
+        val denied = audits.events.single { it.outcome == AuditOutcome.DENIED }
+        assertEquals("user.approve", denied.action)
+        assertEquals(AuditSeverity.HIGH, denied.severity)
+        assertEquals(context.actor.toString(), denied.actorId)
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_MEMBERSHIP_MAKER, denied.reason)
+        assertEquals(invitation.userId.toString(), denied.subjectUserId)
+        assertEquals(invitation.membershipId.toString(), denied.metadata["membershipId"])
 
         val approval =
             service.approveUser(
@@ -721,16 +733,23 @@ class UserProvisioningServiceTests {
         val context = activeInvitationContext()
         val invitation = service.inviteUser(inviteCommand(context))
 
-        assertFailsWith<ForbiddenOperationException> {
-            service.approveUser(
-                ApproveUserCommand(
-                    context.org,
-                    invitation.membershipId,
-                    context.actor,
-                    scope = ActingScope.PLATFORM,
-                ),
-            )
-        }
+        val refusal =
+            assertFailsWith<ForbiddenOperationException> {
+                service.approveUser(
+                    ApproveUserCommand(
+                        context.org,
+                        invitation.membershipId,
+                        context.actor,
+                        scope = ActingScope.PLATFORM,
+                    ),
+                )
+            }
+
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_MEMBERSHIP_MAKER, refusal.code)
+        assertEquals(
+            "PLATFORM",
+            audits.events.single { it.outcome == AuditOutcome.DENIED }.metadata["checkerScope"],
+        )
     }
 
     @Test
@@ -804,11 +823,17 @@ class UserProvisioningServiceTests {
                 )
             fake.membershipInviters[context.org to membershipId] = context.actor
 
-            assertFailsWith<ForbiddenOperationException>(scope.name) {
-                service.approveUser(
-                    ApproveUserCommand(context.org, membershipId, beneficiary, scope = scope),
-                )
-            }
+            val refusal =
+                assertFailsWith<ForbiddenOperationException>(scope.name) {
+                    service.approveUser(
+                        ApproveUserCommand(context.org, membershipId, beneficiary, scope = scope),
+                    )
+                }
+            assertEquals(
+                LifecycleErrorCodes.APPROVER_IS_MEMBERSHIP_BENEFICIARY,
+                refusal.code,
+                scope.name,
+            )
             assertEquals(
                 MembershipLifecycleState.PENDING_APPROVAL,
                 fake.memberships.getValue(context.org to membershipId).state,
@@ -1273,11 +1298,13 @@ class UserProvisioningServiceTests {
         verify(permissionGuard, never()).requireTenantPermission(any(), any(), any())
         verify(permissionGuard, never()).requirePlatformPermission(any(), any())
         val beneficiary = fake.users.keys.single()
-        assertFailsWith<ForbiddenOperationException> {
-            service.approveAsSystem(
-                ApproveUserCommand(context.org, invitation.membershipId, beneficiary),
-            )
-        }
+        val refusal =
+            assertFailsWith<ForbiddenOperationException> {
+                service.approveAsSystem(
+                    ApproveUserCommand(context.org, invitation.membershipId, beneficiary),
+                )
+            }
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_MEMBERSHIP_BENEFICIARY, refusal.code)
     }
 
     @Test

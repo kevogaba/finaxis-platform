@@ -1,8 +1,11 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.common.application.ActorRef
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.jooq.tables.references.BRANCH
+import com.finaxis.platform.jooq.tables.references.BRANCH_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
@@ -118,6 +121,60 @@ class JooqFoundationQuerySummaryTests(
     }
 
     @Test
+    fun `branch items name the creator and the latest submitter, not the system`() {
+        val org = insertOrganisation("summary-f", "Africa/Nairobi", "KES")
+        val maker = insertUser("maker")
+        val resubmitter = insertUser("resubmitter")
+        val outsider = insertUser("outsider")
+        insertMembership(org, maker, "ACTIVE")
+        insertMembership(org, resubmitter, "ACTIVE")
+        val made = insertBranch(org, "Made", "PENDING_APPROVAL", createdBy = maker)
+        insertSubmit(org, made, maker, NOW.plusDays(1))
+        insertSubmit(org, made, resubmitter, NOW.plusDays(2))
+        val bootstrapped = insertBranch(org, "Head Office", "ACTIVE", createdBy = SystemActor.ID)
+        val platformMade = insertBranch(org, "Platform", "DRAFT", createdBy = outsider)
+        val neverSubmitted = insertBranch(org, "Draft", "DRAFT", createdBy = maker)
+
+        val items = store.searchBranches(org, BranchFilter(), null).items.associateBy { it.id }
+
+        assertEquals(ActorRef(maker, "maker", true), items.getValue(made).createdBy)
+        assertEquals(
+            ActorRef(resubmitter, "resubmitter", true),
+            items.getValue(made).submittedBy,
+            "the latest SUBMIT wins",
+        )
+        assertNull(items.getValue(bootstrapped).createdBy, "the system actor has no account")
+        assertEquals(false, items.getValue(platformMade).createdBy?.member)
+        assertNull(items.getValue(neverSubmitted).submittedBy)
+
+        val detail = requireNotNull(store.findBranchById(org, made))
+        assertEquals(maker, detail.createdBy?.id)
+        assertEquals(resubmitter, detail.submittedBy?.id)
+    }
+
+    @Test
+    fun `tenant items name the requester and the submitter from the bootstrap record`() {
+        val org = insertOrganisation("summary-g", "Africa/Nairobi", "KES")
+        val requester = insertUser("requester")
+        val submitter = insertUser("submitter")
+        insertBootstrap(org, "DRAFT", requestedBy = requester, submittedBy = submitter)
+        val bare = insertOrganisation("summary-h", "Africa/Nairobi", "KES")
+
+        val item = store.searchTenants(TenantFilter(), org).items.single()
+        assertEquals(requester, item.requestedBy?.id)
+        assertEquals("submitter", item.submittedBy?.displayName)
+        assertEquals(false, item.requestedBy?.member, "a platform user is no member of the tenant")
+
+        val detail = requireNotNull(store.findTenantById(org))
+        assertEquals(requester, detail.requestedBy?.id)
+        assertEquals(submitter, detail.submittedBy?.id)
+
+        val none = store.searchTenants(TenantFilter(), bare).items.single()
+        assertNull(none.requestedBy)
+        assertNull(none.submittedBy)
+    }
+
+    @Test
     fun `tenant and branch lists cost the same statements whatever the page size`() {
         val org = insertOrganisation("summary-e", "Africa/Nairobi", "KES")
         repeat(6) { insertBranch(org, "Branch $it", "ACTIVE") }
@@ -180,6 +237,7 @@ class JooqFoundationQuerySummaryTests(
         name: String,
         status: String,
         parent: UUID? = null,
+        createdBy: UUID? = null,
         timezone: String = "Africa/Nairobi",
         openedOn: LocalDate? = null,
         closedOn: LocalDate? = null,
@@ -197,6 +255,7 @@ class JooqFoundationQuerySummaryTests(
             .set(BRANCH.TIMEZONE, timezone)
             .set(BRANCH.OPENED_ON, openedOn)
             .set(BRANCH.CLOSED_ON, closedOn)
+            .set(BRANCH.CREATED_BY, createdBy)
             .set(BRANCH.CREATED_AT, NOW)
             .set(BRANCH.UPDATED_AT, NOW)
             .execute()
@@ -256,9 +315,32 @@ class JooqFoundationQuerySummaryTests(
             .execute()
     }
 
+    private fun insertSubmit(
+        organisationId: UUID,
+        branchId: UUID,
+        actor: UUID,
+        at: OffsetDateTime,
+    ) {
+        dsl
+            .insertInto(BRANCH_TRANSITION_LOG)
+            .set(BRANCH_TRANSITION_LOG.ID, uuidV7())
+            .set(BRANCH_TRANSITION_LOG.ORGANISATION_ID, organisationId)
+            .set(BRANCH_TRANSITION_LOG.BRANCH_ID, branchId)
+            .set(BRANCH_TRANSITION_LOG.ENTITY_ID, branchId)
+            .set(BRANCH_TRANSITION_LOG.TRANSITION_NAME, "SUBMIT")
+            .set(BRANCH_TRANSITION_LOG.STATUS_FROM, "DRAFT")
+            .set(BRANCH_TRANSITION_LOG.STATUS_TO, "PENDING_APPROVAL")
+            .set(BRANCH_TRANSITION_LOG.CREATED_AT, at)
+            .set(BRANCH_TRANSITION_LOG.CREATED_BY, actor)
+            .set(BRANCH_TRANSITION_LOG.UPDATED_AT, at)
+            .execute()
+    }
+
     private fun insertBootstrap(
         organisationId: UUID,
         status: String,
+        requestedBy: UUID = uuidV7(),
+        submittedBy: UUID? = null,
     ) {
         val bootstrap = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
         dsl
@@ -268,7 +350,8 @@ class JooqFoundationQuerySummaryTests(
             .set(bootstrap.ADMIN_USERNAME, "admin-$organisationId")
             .set(bootstrap.ADMIN_DISPLAY_NAME, "Admin")
             .set(bootstrap.STATUS, status)
-            .set(bootstrap.REQUESTED_BY, uuidV7())
+            .set(bootstrap.REQUESTED_BY, requestedBy)
+            .set(bootstrap.SUBMITTED_BY, submittedBy)
             .set(bootstrap.CREATED_AT, NOW)
             .set(bootstrap.UPDATED_AT, NOW)
             .execute()

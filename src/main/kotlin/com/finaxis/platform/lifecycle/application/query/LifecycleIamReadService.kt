@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application.query
 
+import com.finaxis.platform.common.application.ActorRef
 import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.lifecycle.FoundationCaller
@@ -88,6 +89,7 @@ data class LifecycleMembershipSummary(
     val displayName: String,
     val primaryBranchName: String?,
     val createdAt: Instant,
+    val createdBy: ActorRef? = null,
 )
 
 /** Membership detail projection exposed to lifecycle adapters. */
@@ -104,6 +106,7 @@ data class LifecycleMembershipDetail(
     val primaryBranchId: UUID?,
     val createdAt: Instant,
     val updatedAt: Instant,
+    val createdBy: ActorRef? = null,
 )
 
 /** Branch-assignment summary projection exposed to lifecycle adapters. */

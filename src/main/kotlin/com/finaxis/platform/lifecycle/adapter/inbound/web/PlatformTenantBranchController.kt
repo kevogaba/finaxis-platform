@@ -4,6 +4,7 @@ import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiJsonCodec
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
+import com.finaxis.platform.common.web.api.toResponse
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
@@ -643,6 +644,8 @@ class PlatformTenantBranchController(
             openedOn = openedOn,
             closedOn = closedOn,
             activeUserCount = activeUserCount,
+            createdBy = createdBy.toResponse(),
+            submittedBy = submittedBy.toResponse(),
         )
 
     private fun BranchDetail.toResponse() =
@@ -661,6 +664,8 @@ class PlatformTenantBranchController(
             statusReason = statusReason,
             createdAt = createdAt,
             updatedAt = updatedAt,
+            createdBy = createdBy.toResponse(),
+            submittedBy = submittedBy.toResponse(),
         )
 
     private companion object {

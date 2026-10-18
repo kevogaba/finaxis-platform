@@ -3,6 +3,7 @@ package com.finaxis.platform.lifecycle.adapter.inbound.web
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
+import com.finaxis.platform.common.web.api.toResponse
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
@@ -608,6 +609,7 @@ class MembershipController(
             displayName = displayName,
             primaryBranchName = primaryBranchName,
             createdAt = createdAt,
+            createdBy = createdBy.toResponse(),
         )
 
     private companion object {

@@ -8,6 +8,7 @@ import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.audit.AuditSeverity
 import com.finaxis.platform.common.audit.toAuditFailureReason
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.TransitionCommand
@@ -49,6 +50,8 @@ class OrganisationProvisioningService(
     private val clock: Clock,
 ) {
     private val checkerRule = TenantCheckerRule(lifecycleStore, auditService)
+    private val initialAdministratorRule =
+        InitialAdministratorRule(adminBootstrapStore, auditService)
 
     /** Creates a non-operational organisation draft with its initial local configuration. */
     @Transactional
@@ -189,16 +192,7 @@ class OrganisationProvisioningService(
             refuseAmender = true,
         )
         errorUnless(command.actorId != SYSTEM_ACTOR, SafeError.INVALID_OPERATION)
-        // The bootstrap approves its administrator's membership in the approver's name, and a user
-        // may never approve their own membership, so refuse now rather than fail it later.
-        if (adminBootstrapStore.existingAdministratorUserId(command.organisationId) ==
-            command.actorId
-        ) {
-            throw ForbiddenOperationException(
-                LifecycleErrorCodes.APPROVER_IS_INITIAL_ADMINISTRATOR,
-                LifecycleErrorCodes.APPROVER_IS_INITIAL_ADMINISTRATOR_DETAIL,
-            )
-        }
+        initialAdministratorRule.requireApproverIsNotAdministrator(command)
 
         lifecycleService.transition(
             OrganisationTransitionCommand(

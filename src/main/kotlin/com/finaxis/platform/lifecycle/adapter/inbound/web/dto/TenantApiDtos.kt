@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.adapter.inbound.web.dto
 
 import com.fasterxml.jackson.annotation.JsonFormat
 import com.fasterxml.jackson.annotation.JsonInclude
+import com.finaxis.platform.common.web.api.ActorRefResponse
 import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
 import com.finaxis.platform.lifecycle.application.InitialAdministratorDraft
@@ -305,6 +306,24 @@ data class TenantDetailResponse(
     val bootstrapFailureCode: InitialAdministratorBootstrapFailureCode? = null,
     val createdAt: Instant,
     val updatedAt: Instant,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "Who requested the tenant. Shown to platform callers only; `null` for a " +
+                "tenant caller.",
+    )
+    val requestedBy: ActorRefResponse?,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "Who submitted the tenant for approval. Shown to platform callers only; " +
+                "`null` for a tenant caller or when never submitted.",
+    )
+    val submittedBy: ActorRefResponse?,
 )
 
 /** Compact response representing a tenant in list queries. */
@@ -344,4 +363,22 @@ data class TenantSummaryResponse(
                 "tenant-wide.",
     )
     val activeUserCount: Int?,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "Who requested the tenant. Shown to platform callers only; `null` for a " +
+                "tenant caller.",
+    )
+    val requestedBy: ActorRefResponse?,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "Who submitted the tenant for approval. Shown to platform callers only; " +
+                "`null` for a tenant caller or when never submitted.",
+    )
+    val submittedBy: ActorRefResponse?,
 )

@@ -126,10 +126,10 @@ class BranchReturnIntegrationTests
                 status { isForbidden() }
                 jsonPath("$.code") { value("lifecycle.approver_is_branch_modifier") }
             }
-            // The creator is still refused with the plain code, and the draft is untouched.
+            // The creator is still refused with its own code, and the draft is untouched.
             activate(branchId, tenantToken(maker, "branch.approve")).andExpect {
                 status { isForbidden() }
-                jsonPath("$.code") { value("forbidden") }
+                jsonPath("$.code") { value("lifecycle.approver_is_branch_maker") }
             }
             assertEquals("PENDING_APPROVAL", branchColumn(branchId, "status"))
             assertTrue(transitionRows(branchId, "ACTIVATE").isEmpty())
@@ -208,14 +208,14 @@ class BranchReturnIntegrationTests
         }
 
         @Test
-        fun `a creator who also amended the branch gets the plain forbidden code`() {
+        fun `a creator who also amended the branch is refused as the maker`() {
             val branchId = createBranch()
             patch(branchId, """{"branch_name":"Maker Edit"}""").andExpect { status { isOk() } }
             submit(branchId, makerToken())
 
             activate(branchId, tenantToken(maker, "branch.approve")).andExpect {
                 status { isForbidden() }
-                jsonPath("$.code") { value("forbidden") }
+                jsonPath("$.code") { value("lifecycle.approver_is_branch_maker") }
             }
         }
 

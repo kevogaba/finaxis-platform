@@ -1,5 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web.dto
 
+import com.fasterxml.jackson.annotation.JsonInclude
+import com.finaxis.platform.common.web.api.ActorRefResponse
 import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.Reason
 import io.swagger.v3.oas.annotations.media.Schema
@@ -49,6 +51,16 @@ data class MembershipDetailResponse(
     val primaryBranchId: UUID?,
     val createdAt: Instant,
     val updatedAt: Instant,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "Who invited the member. `null` when the system did, or when the caller " +
+                "may not see them (a platform operator is shown only to platform " +
+                "callers).",
+    )
+    val createdBy: ActorRefResponse?,
 )
 
 /** Summary response for a tenant membership. */
@@ -63,4 +75,14 @@ data class MembershipSummaryResponse(
     val displayName: String,
     val primaryBranchName: String?,
     val createdAt: Instant,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "Who invited the member. `null` when the system did, or when the caller " +
+                "may not see them (a platform operator is shown only to platform " +
+                "callers).",
+    )
+    val createdBy: ActorRefResponse?,
 )

@@ -116,6 +116,7 @@ class PlatformCheckedOnboardingIntegrationTests
             tenantPost(tenantId, admin, "${ApiPaths.MEMBERSHIPS}/${second.membershipId}/activate")
                 .andExpect {
                     status { isForbidden() }
+                    jsonPath("$.code") { value("lifecycle.approver_is_membership_maker") }
                     jsonPath("$.detail") { value(MAKER_REFUSAL) }
                 }
 
@@ -154,6 +155,11 @@ class PlatformCheckedOnboardingIntegrationTests
             assertEquals(listOf<String?>(null), checkerScopes(tenantId, third.userId))
             assertEquals(listOf(checker), approvers(tenantId, second.userId))
             assertEquals(listOf(second.userId), approvers(tenantId, third.userId))
+            // The tenant admin's refused approval of their own invitation left its own row.
+            assertEquals(
+                listOf("lifecycle.approver_is_membership_maker"),
+                refusalReasons(tenantId, second.userId),
+            )
         }
 
         private fun approvedTenant(
@@ -297,7 +303,7 @@ class PlatformCheckedOnboardingIntegrationTests
             actorId = approvedBy,
         )
 
-        /** `checkerScope` of each `user.approve` row about [userId] in the tenant's log. */
+        /** `checkerScope` of each approved `user.approve` row about [userId]. */
         private fun checkerScopes(
             tenantId: UUID,
             userId: UUID,
@@ -305,7 +311,8 @@ class PlatformCheckedOnboardingIntegrationTests
             dsl
                 .fetch(
                     "SELECT metadata_jsonb ->> 'checkerScope' FROM audit_event " +
-                        "WHERE organisation_id = ? AND action = 'user.approve' AND entity_id = ?",
+                        "WHERE organisation_id = ? AND action = 'user.approve' " +
+                        "AND outcome = 'SUCCESS' AND entity_id = ?",
                     tenantId,
                     userId,
                 ).map { it.get(0, String::class.java) }
@@ -317,10 +324,25 @@ class PlatformCheckedOnboardingIntegrationTests
             dsl
                 .fetch(
                     "SELECT actor_user_id FROM audit_event " +
-                        "WHERE organisation_id = ? AND action = 'user.approve' AND entity_id = ?",
+                        "WHERE organisation_id = ? AND action = 'user.approve' " +
+                        "AND outcome = 'SUCCESS' AND entity_id = ?",
                     tenantId,
                     userId,
                 ).map { it.get(0, UUID::class.java) }
+
+        /** The reason of each refused (`DENIED`) `user.approve` row about [userId]. */
+        private fun refusalReasons(
+            tenantId: UUID,
+            userId: UUID,
+        ): List<String?> =
+            dsl
+                .fetch(
+                    "SELECT reason FROM audit_event " +
+                        "WHERE organisation_id = ? AND action = 'user.approve' " +
+                        "AND outcome = 'DENIED' AND severity = 'HIGH' AND entity_id = ?",
+                    tenantId,
+                    userId,
+                ).map { it.get(0, String::class.java) }
 
         private fun membershipStatus(membershipId: UUID): String? =
             dsl
@@ -420,7 +442,7 @@ class PlatformCheckedOnboardingIntegrationTests
 
         private companion object {
             /** The maker rule's refusal; a missing permission would name the code instead. */
-            const val MAKER_REFUSAL = "You are not permitted to perform this action."
+            const val MAKER_REFUSAL = "The approver cannot be the member's inviter."
 
             /**
              * Every coarse authority a route here needs. The coarse gate only filters; the

@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
+import com.finaxis.platform.common.application.ActorRef
 import com.finaxis.platform.common.application.ApplicationException
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.ForbiddenOperationException
@@ -237,6 +238,7 @@ class BranchControllerTests
         fun `searchBranches returns a bounded page`() {
             val tenantId = uuidV7()
             val branchId = uuidV7()
+            val makerId = uuidV7()
             whenever(foundationQueryService.searchBranches(eq(tenantId), any(), any())).thenReturn(
                 apiPageOf(
                     listOf(
@@ -253,6 +255,7 @@ class BranchControllerTests
                             LocalDate.of(2026, 7, 18),
                             null,
                             null,
+                            createdBy = ActorRef(makerId, "Mia Maker", true),
                         ),
                     ),
                     number = 1,
@@ -273,6 +276,9 @@ class BranchControllerTests
                     jsonPath("$.items[0].timezone") { value("Africa/Nairobi") }
                     jsonPath("$.items[0].opened_on") { value("18-07-2026") }
                     jsonPath("$.items[0].active_user_count") { isEmpty() }
+                    jsonPath("$.items[0].created_by.id") { value(makerId.toString()) }
+                    jsonPath("$.items[0].created_by.display_name") { value("Mia Maker") }
+                    jsonPath("$.items[0].submitted_by") { isEmpty() }
                     jsonPath("$.page.number") { value(1) }
                     jsonPath("$.page.size") { value(10) }
                 }
@@ -384,7 +390,10 @@ class BranchControllerTests
             doAnswer { invocation ->
                 val command = invocation.getArgument<ActivateBranchCommand>(0)
                 if (command.actorId == makerId) {
-                    throw ForbiddenOperationException()
+                    throw ForbiddenOperationException(
+                        LifecycleErrorCodes.APPROVER_IS_BRANCH_MAKER,
+                        LifecycleErrorCodes.APPROVER_IS_BRANCH_MAKER_DETAIL,
+                    )
                 }
                 Unit
             }.whenever(branchProvisioningService).activate(any())
@@ -405,7 +414,7 @@ class BranchControllerTests
                     )
                 }.andExpect {
                     status { isForbidden() }
-                    jsonPath("$.code") { value("forbidden") }
+                    jsonPath("$.code") { value(LifecycleErrorCodes.APPROVER_IS_BRANCH_MAKER) }
                 }
 
             mockMvc
