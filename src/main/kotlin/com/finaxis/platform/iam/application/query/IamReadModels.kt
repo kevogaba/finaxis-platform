@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.application.query
 
+import com.finaxis.platform.common.application.ActorRef
 import java.time.Instant
 import java.util.UUID
 
@@ -18,6 +19,8 @@ data class UserInTenantSummary(
     val membershipType: String,
     val createdAt: Instant,
     val membershipCreatedAt: Instant,
+    /** Who invited this member, or null when the system did or the caller may not see them. */
+    val createdBy: ActorRef? = null,
 )
 
 /** Detailed projection of a tenant user; carries what [UserInTenantSummary] does. */
@@ -32,6 +35,8 @@ data class UserInTenantDetail(
     val membershipType: String,
     val createdAt: Instant,
     val membershipCreatedAt: Instant,
+    /** Who invited this member, or null when the system did or the caller may not see them. */
+    val createdBy: ActorRef? = null,
 )
 
 /**
@@ -57,6 +62,8 @@ data class MembershipDetail(
     val primaryBranchId: UUID?,
     val createdAt: Instant,
     val updatedAt: Instant,
+    /** Who invited this member, or null when the system did or the caller may not see them. */
+    val createdBy: ActorRef? = null,
 )
 
 /** Summary projection of an organisation membership, with the user's names and the dates. */
@@ -71,6 +78,8 @@ data class MembershipSummary(
     val displayName: String,
     val primaryBranchName: String?,
     val createdAt: Instant,
+    /** Who invited this member, or null when the system did or the caller may not see them. */
+    val createdBy: ActorRef? = null,
 )
 
 /** Summary projection of a branch assignment, with the user's and the branch's names. */

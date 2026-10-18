@@ -67,17 +67,17 @@ class BranchCheckerRuleAuditTests {
     }
 
     @Test
-    fun `the creator refused on either route is audited as denied before the plain 403`() {
+    fun `the creator refused on either route is audited as denied before the 403`() {
         ActingScope.entries.forEach { scope ->
             val refusal =
                 assertFailsWith<ForbiddenOperationException> {
                     branches.activate(command(creator, scope))
                 }
-            assertEquals("forbidden", refusal.code)
+            assertEquals(LifecycleErrorCodes.APPROVER_IS_BRANCH_MAKER, refusal.code)
         }
 
         val rows = deniedRows(2)
-        rows.forEach { assertDenied(it, creator, "forbidden") }
+        rows.forEach { assertDenied(it, creator, LifecycleErrorCodes.APPROVER_IS_BRANCH_MAKER) }
         verifyNothingWritten()
     }
 
@@ -87,8 +87,12 @@ class BranchCheckerRuleAuditTests {
             assertFailsWith<ForbiddenOperationException> {
                 branches.activate(command(submitter, ActingScope.PLATFORM))
             }
-        assertEquals("forbidden", refusal.code)
-        assertDenied(deniedRows(1).single(), submitter, "forbidden")
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_BRANCH_MAKER, refusal.code)
+        assertDenied(
+            deniedRows(1).single(),
+            submitter,
+            LifecycleErrorCodes.APPROVER_IS_BRANCH_MAKER,
+        )
 
         branches.activate(command(submitter, ActingScope.TENANT))
         // Still the one row: the accepted tenant submitter wrote no DENIED row.
@@ -116,14 +120,18 @@ class BranchCheckerRuleAuditTests {
     }
 
     @Test
-    fun `a creator who also amended is audited once with the plain code`() {
+    fun `a creator who also amended is audited once with the maker code`() {
         whenever(lifecycleStore.hasAmended(organisationId, branchId, creator)).thenReturn(true)
 
         assertFailsWith<ForbiddenOperationException> {
             branches.activate(command(creator, ActingScope.TENANT))
         }
 
-        assertDenied(deniedRows(1).single(), creator, "forbidden")
+        assertDenied(
+            deniedRows(1).single(),
+            creator,
+            LifecycleErrorCodes.APPROVER_IS_BRANCH_MAKER,
+        )
     }
 
     @Test

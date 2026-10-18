@@ -119,6 +119,7 @@ class IamLifecycleReadAdapter(
             primaryBranchId,
             createdAt,
             updatedAt,
+            createdBy,
         )
 
     private fun MembershipSummary.toLifecycle() =
@@ -133,6 +134,7 @@ class IamLifecycleReadAdapter(
             displayName = displayName,
             primaryBranchName = primaryBranchName,
             createdAt = createdAt,
+            createdBy = createdBy,
         )
 
     private fun BranchAssignmentSummary.toLifecycle() =

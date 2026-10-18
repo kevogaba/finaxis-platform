@@ -1,9 +1,12 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
+import com.finaxis.platform.common.application.ActorRef
+import com.finaxis.platform.common.persistence.ActorRefLookup
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.apiPageOf
 import com.finaxis.platform.common.web.api.boundedPageOffset
 import com.finaxis.platform.jooq.tables.references.BRANCH
+import com.finaxis.platform.jooq.tables.references.BRANCH_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE_HISTORY
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
@@ -20,6 +23,7 @@ import com.finaxis.platform.lifecycle.application.query.FoundationQueryStore
 import com.finaxis.platform.lifecycle.application.query.TenantDetail
 import com.finaxis.platform.lifecycle.application.query.TenantFilter
 import com.finaxis.platform.lifecycle.application.query.TenantSummary
+import com.finaxis.platform.lifecycle.domain.BranchLifecycleTransition
 import org.jooq.Condition
 import org.jooq.DSLContext
 import org.jooq.Field
@@ -39,6 +43,8 @@ private const val ACTIVE = "ACTIVE"
 class JooqFoundationQueryStore(
     private val dsl: DSLContext,
 ) : FoundationQueryStore {
+    private val actors = ActorRefLookup(dsl)
+
     override fun searchTenants(
         filter: TenantFilter,
         organisationId: UUID?,
@@ -81,6 +87,8 @@ class JooqFoundationQueryStore(
                     ORGANISATION.BASE_CURRENCY_CODE,
                     ORGANISATION.TIMEZONE,
                     BOOTSTRAP.STATUS,
+                    BOOTSTRAP.REQUESTED_BY,
+                    BOOTSTRAP.SUBMITTED_BY,
                     ACTIVE_BRANCH_COUNT,
                     ACTIVE_MEMBER_COUNT,
                 ).from(ORGANISATION)
@@ -92,7 +100,8 @@ class JooqFoundationQueryStore(
                     ORGANISATION.ID.desc(),
                 ).limit(filter.size)
                 .offset(offset)
-                .fetch { it.toTenantSummary() }
+                .fetch()
+                .let(::tenantSummaries)
 
         return apiPageOf(items, filter.page, filter.size, total)
     }
@@ -115,6 +124,8 @@ class JooqFoundationQueryStore(
                 ORGANISATION.REGISTRATION_NUMBER,
                 bootstrap.STATUS,
                 bootstrap.LAST_FAILURE_CODE,
+                bootstrap.REQUESTED_BY,
+                bootstrap.SUBMITTED_BY,
             ).from(ORGANISATION)
             .leftJoin(bootstrap)
             .on(bootstrap.ORGANISATION_ID.eq(ORGANISATION.ID))
@@ -138,6 +149,8 @@ class JooqFoundationQueryStore(
                         ),
                     legalName = record.get(ORGANISATION.LEGAL_NAME),
                     registrationNumber = record.get(ORGANISATION.REGISTRATION_NUMBER),
+                    requestedBy = makerOf(null, record.get(bootstrap.REQUESTED_BY)),
+                    submittedBy = makerOf(null, record.get(bootstrap.SUBMITTED_BY)),
                 )
             }
     }
@@ -179,6 +192,7 @@ class JooqFoundationQueryStore(
                     BRANCH.TIMEZONE,
                     BRANCH.OPENED_ON,
                     BRANCH.CLOSED_ON,
+                    BRANCH.CREATED_BY,
                     ACTIVE_ASSIGNEE_COUNT,
                 ).from(BRANCH)
                 .where(condition)
@@ -187,7 +201,17 @@ class JooqFoundationQueryStore(
                     BRANCH.ID.desc(),
                 ).limit(filter.size)
                 .offset(offset)
-                .fetch { it.toBranchSummary() }
+                .fetch()
+                .let { rows ->
+                    val submitters =
+                        branchSubmitters(organisationId, rows.map { it.get(BRANCH.ID) })
+                    val makers =
+                        actors.find(
+                            organisationId,
+                            rows.map { it.get(BRANCH.CREATED_BY) } + submitters.values,
+                        )
+                    rows.map { it.toBranchSummary(makers, submitters) }
+                }
 
         return apiPageOf(items, filter.page, filter.size, total)
     }
@@ -212,6 +236,7 @@ class JooqFoundationQueryStore(
                 BRANCH.STATUS_REASON,
                 BRANCH.CREATED_AT,
                 BRANCH.UPDATED_AT,
+                BRANCH.CREATED_BY,
             ).from(BRANCH)
             .where(BRANCH.ID.eq(id))
             .and(BRANCH.ORGANISATION_ID.eq(organisationId))
@@ -231,8 +256,64 @@ class JooqFoundationQueryStore(
                     statusReason = record.get(BRANCH.STATUS_REASON),
                     createdAt = requireNotNull(record.get(BRANCH.CREATED_AT)).toInstant(),
                     updatedAt = requireNotNull(record.get(BRANCH.UPDATED_AT)).toInstant(),
+                    createdBy = makerOf(organisationId, record.get(BRANCH.CREATED_BY)),
+                    submittedBy =
+                        makerOf(organisationId, branchSubmitters(organisationId, listOf(id))[id]),
                 )
             }
+
+    /**
+     * The page's tenants with their makers resolved in one lookup. The makers of a tenant are
+     * platform users, so nobody is a member of the tenant.
+     */
+    private fun tenantSummaries(rows: List<Record>): List<TenantSummary> {
+        val makers =
+            actors.find(
+                null,
+                rows.flatMap {
+                    listOf(it.get(BOOTSTRAP.REQUESTED_BY), it.get(BOOTSTRAP.SUBMITTED_BY))
+                },
+            )
+        return rows.map { it.toTenantSummary(makers) }
+    }
+
+    /** The maker [id] names, or null for no id, the system actor or an unknown account. */
+    private fun makerOf(
+        organisationId: UUID?,
+        id: UUID?,
+    ): ActorRef? = id?.let { actors.find(organisationId, listOf(it))[it] }
+
+    /**
+     * The actor of the latest SUBMIT of each of [branchIds], read for the whole page in one
+     * statement (the same log and index the approver rule reads); a branch never submitted is
+     * absent.
+     */
+    private fun branchSubmitters(
+        organisationId: UUID,
+        branchIds: Collection<UUID?>,
+    ): Map<UUID, UUID> {
+        val ids = branchIds.filterNotNull()
+        if (ids.isEmpty()) return emptyMap()
+        val latest = mutableMapOf<UUID, UUID?>()
+        dsl
+            .select(BRANCH_TRANSITION_LOG.ENTITY_ID, BRANCH_TRANSITION_LOG.CREATED_BY)
+            .from(BRANCH_TRANSITION_LOG)
+            .where(BRANCH_TRANSITION_LOG.ORGANISATION_ID.eq(organisationId))
+            .and(BRANCH_TRANSITION_LOG.ENTITY_ID.`in`(ids))
+            .and(BRANCH_TRANSITION_LOG.TRANSITION_NAME.eq(BranchLifecycleTransition.SUBMIT.name))
+            .orderBy(BRANCH_TRANSITION_LOG.CREATED_AT.desc(), BRANCH_TRANSITION_LOG.ID.desc())
+            .fetch()
+            .forEach { row ->
+                // Newest first: the first row of a branch is its latest submission.
+                val branchId = requireNotNull(row.get(BRANCH_TRANSITION_LOG.ENTITY_ID))
+                if (branchId !in
+                    latest
+                ) {
+                    latest[branchId] = row.get(BRANCH_TRANSITION_LOG.CREATED_BY)
+                }
+            }
+        return latest.mapNotNull { (branch, actor) -> actor?.let { branch to it } }.toMap()
+    }
 
     override fun listBusinessDateHistory(
         organisationId: UUID,
@@ -395,7 +476,7 @@ private val ACTIVE_ASSIGNEE_COUNT: Field<Int> =
             .and(USER_BRANCH_ASSIGNMENT.STATUS.eq(ACTIVE)),
     )
 
-private fun Record.toTenantSummary() =
+private fun Record.toTenantSummary(makers: Map<UUID, ActorRef>) =
     TenantSummary(
         id = requireNotNull(get(ORGANISATION.ID)),
         tenantCode = requireNotNull(get(ORGANISATION.TENANT_CODE)),
@@ -409,20 +490,26 @@ private fun Record.toTenantSummary() =
         bootstrapStatus = get(BOOTSTRAP.STATUS),
         activeBranchCount = get(ACTIVE_BRANCH_COUNT),
         activeUserCount = get(ACTIVE_MEMBER_COUNT),
+        requestedBy = get(BOOTSTRAP.REQUESTED_BY)?.let(makers::get),
+        submittedBy = get(BOOTSTRAP.SUBMITTED_BY)?.let(makers::get),
     )
 
-private fun Record.toBranchSummary() =
-    BranchSummary(
-        id = requireNotNull(get(BRANCH.ID)),
-        organisationId = requireNotNull(get(BRANCH.ORGANISATION_ID)),
-        branchCode = requireNotNull(get(BRANCH.BRANCH_CODE)),
-        branchName = requireNotNull(get(BRANCH.BRANCH_NAME)),
-        branchType = requireNotNull(get(BRANCH.BRANCH_TYPE)),
-        status = requireNotNull(get(BRANCH.STATUS)),
-        createdAt = requireNotNull(get(BRANCH.CREATED_AT)).toInstant(),
-        parentBranchId = get(BRANCH.PARENT_BRANCH_ID),
-        timezone = requireNotNull(get(BRANCH.TIMEZONE)),
-        openedOn = get(BRANCH.OPENED_ON),
-        closedOn = get(BRANCH.CLOSED_ON),
-        activeUserCount = get(ACTIVE_ASSIGNEE_COUNT),
-    )
+private fun Record.toBranchSummary(
+    makers: Map<UUID, ActorRef>,
+    submitters: Map<UUID, UUID>,
+) = BranchSummary(
+    id = requireNotNull(get(BRANCH.ID)),
+    organisationId = requireNotNull(get(BRANCH.ORGANISATION_ID)),
+    branchCode = requireNotNull(get(BRANCH.BRANCH_CODE)),
+    branchName = requireNotNull(get(BRANCH.BRANCH_NAME)),
+    branchType = requireNotNull(get(BRANCH.BRANCH_TYPE)),
+    status = requireNotNull(get(BRANCH.STATUS)),
+    createdAt = requireNotNull(get(BRANCH.CREATED_AT)).toInstant(),
+    parentBranchId = get(BRANCH.PARENT_BRANCH_ID),
+    timezone = requireNotNull(get(BRANCH.TIMEZONE)),
+    openedOn = get(BRANCH.OPENED_ON),
+    closedOn = get(BRANCH.CLOSED_ON),
+    activeUserCount = get(ACTIVE_ASSIGNEE_COUNT),
+    createdBy = get(BRANCH.CREATED_BY)?.let(makers::get),
+    submittedBy = submitters[get(BRANCH.ID)]?.let(makers::get),
+)

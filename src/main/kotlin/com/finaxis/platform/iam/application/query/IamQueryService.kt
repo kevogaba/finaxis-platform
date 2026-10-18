@@ -3,6 +3,7 @@ package com.finaxis.platform.iam.application.query
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.application.ResourceNotFoundException
+import com.finaxis.platform.common.application.shownTo
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.requireValidPage
@@ -53,7 +54,9 @@ class IamQueryService(
             }
         }
         requireValidSort(filter.sortBy, filter.sortDir, allowedUserSorts)
-        return userQueries.searchUsers(organisationId, filter)
+        return userQueries.searchUsers(organisationId, filter).let { page ->
+            page.copy(items = page.items.map { it.withMakerFor(caller) })
+        }
     }
 
     /** Retrieves user metadata within an organisation, validating caller scope and permission. */
@@ -80,7 +83,7 @@ class IamQueryService(
                 )
             }
         }
-        return userQueries.findUserInTenant(organisationId, userId)
+        return userQueries.findUserInTenant(organisationId, userId)?.withMakerFor(caller)
             ?: throw ResourceNotFoundException(
                 safeDetail = "User not found: $userId",
             )
@@ -127,7 +130,7 @@ class IamQueryService(
                 )
             }
         }
-        return findMembership(organisationId, membershipId)
+        return findMembership(organisationId, membershipId).withMakerFor(caller)
     }
 
     private fun findMembership(
@@ -165,7 +168,9 @@ class IamQueryService(
             }
         }
         requireValidSort(filter.sortBy, filter.sortDir, allowedMembershipSorts)
-        return userQueries.searchMemberships(organisationId, filter)
+        return userQueries.searchMemberships(organisationId, filter).let { page ->
+            page.copy(items = page.items.map { it.withMakerFor(caller) })
+        }
     }
 
     /**
@@ -606,3 +611,17 @@ private fun PermissionGuard.listsEveryRoleAssignment(
             branchVisibility(caller.actorId, PlatformOrganisation.ID, "role_assignment.view")
         }
     } is BranchVisibility.AllBranches
+
+// A maker is shown to a tenant caller only when they belong to the tenant, so a platform operator
+// who acted for it is not named to its own users; a platform caller sees every maker.
+private fun UserInTenantSummary.withMakerFor(caller: FoundationCaller) =
+    copy(createdBy = createdBy.shownTo(caller is PlatformCaller))
+
+private fun UserInTenantDetail.withMakerFor(caller: FoundationCaller) =
+    copy(createdBy = createdBy.shownTo(caller is PlatformCaller))
+
+private fun MembershipSummary.withMakerFor(caller: FoundationCaller) =
+    copy(createdBy = createdBy.shownTo(caller is PlatformCaller))
+
+private fun MembershipDetail.withMakerFor(caller: FoundationCaller) =
+    copy(createdBy = createdBy.shownTo(caller is PlatformCaller))

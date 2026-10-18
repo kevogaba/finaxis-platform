@@ -1,10 +1,13 @@
 package com.finaxis.platform.iam.adapter.inbound.web.dto
 
+import com.fasterxml.jackson.annotation.JsonInclude
+import com.finaxis.platform.common.web.api.ActorRefResponse
 import com.finaxis.platform.lifecycle.application.BranchAssignmentType
 import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.MembershipType
 import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.RoleAssignmentScopeType
+import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.Valid
 import jakarta.validation.constraints.Email
 import jakarta.validation.constraints.NotBlank
@@ -79,6 +82,16 @@ data class UserInTenantSummaryResponse(
     val membershipType: String,
     val createdAt: Instant,
     val membershipCreatedAt: Instant,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "Who invited the member. `null` when the system did, or when the caller " +
+                "may not see them (a platform operator is shown only to platform " +
+                "callers).",
+    )
+    val createdBy: ActorRefResponse?,
 )
 
 /** Request payload for suspending a global user account. */

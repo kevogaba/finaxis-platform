@@ -3,6 +3,7 @@ package com.finaxis.platform.iam.adapter.inbound.web
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
+import com.finaxis.platform.common.web.api.toResponse
 import com.finaxis.platform.common.web.idempotency.IdempotencyScopeKind
 import com.finaxis.platform.common.web.idempotency.IdempotentMutation
 import com.finaxis.platform.common.web.versioning.ApiPaths
@@ -293,6 +294,7 @@ class TenantUserController(
             membershipType = membershipType,
             createdAt = createdAt,
             membershipCreatedAt = membershipCreatedAt,
+            createdBy = createdBy.toResponse(),
         )
 
     private fun UserInTenantDetail.toResponse() =
@@ -307,6 +309,7 @@ class TenantUserController(
             membershipType = membershipType,
             createdAt = createdAt,
             membershipCreatedAt = membershipCreatedAt,
+            createdBy = createdBy.toResponse(),
         )
 
     private companion object {

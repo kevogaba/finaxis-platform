@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.adapter.inbound.web.dto
 
 import com.fasterxml.jackson.annotation.JsonFormat
 import com.fasterxml.jackson.annotation.JsonInclude
+import com.finaxis.platform.common.web.api.ActorRefResponse
 import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.Reason
 import io.swagger.v3.oas.annotations.media.Schema
@@ -140,6 +141,25 @@ data class BranchDetailResponse(
     val statusReason: String?,
     val createdAt: Instant,
     val updatedAt: Instant,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "Who created the branch. `null` when the system did, or when the caller " +
+                "may not see them (a platform operator is shown only to platform " +
+                "callers).",
+    )
+    val createdBy: ActorRefResponse?,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "Who submitted the branch for approval most recently. `null` when it was " +
+                "never submitted, or when the caller may not see them.",
+    )
+    val submittedBy: ActorRefResponse?,
 )
 
 /** Summary response for a branch in list queries. */
@@ -168,4 +188,23 @@ data class BranchSummaryResponse(
                 "may not list the branch's assignments (branch_assignment.view).",
     )
     val activeUserCount: Int?,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "Who created the branch. `null` when the system did, or when the caller " +
+                "may not see them (a platform operator is shown only to platform " +
+                "callers).",
+    )
+    val createdBy: ActorRefResponse?,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "Who submitted the branch for approval most recently. `null` when it was " +
+                "never submitted, or when the caller may not see them.",
+    )
+    val submittedBy: ActorRefResponse?,
 )

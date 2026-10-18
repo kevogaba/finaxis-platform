@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application.query
 
+import com.finaxis.platform.common.application.ActorRef
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
 import java.time.Instant
 import java.time.LocalDate
@@ -22,6 +23,8 @@ data class TenantSummary(
     val bootstrapStatus: String?,
     val activeBranchCount: Int?,
     val activeUserCount: Int?,
+    val requestedBy: ActorRef? = null,
+    val submittedBy: ActorRef? = null,
 )
 
 /** Detailed projection of a tenant organisation. */
@@ -45,6 +48,8 @@ data class TenantDetail(
     val legalName: String? = null,
     /** The tenant's registration number, or null when none is recorded. */
     val registrationNumber: String? = null,
+    val requestedBy: ActorRef? = null,
+    val submittedBy: ActorRef? = null,
 )
 
 /**
@@ -64,6 +69,8 @@ data class BranchSummary(
     val openedOn: LocalDate?,
     val closedOn: LocalDate?,
     val activeUserCount: Int?,
+    val createdBy: ActorRef? = null,
+    val submittedBy: ActorRef? = null,
 )
 
 /** Detailed projection of an operating branch. */
@@ -82,6 +89,8 @@ data class BranchDetail(
     val statusReason: String?,
     val createdAt: Instant,
     val updatedAt: Instant,
+    val createdBy: ActorRef? = null,
+    val submittedBy: ActorRef? = null,
 )
 
 /** Summary projection of a business date history event. */

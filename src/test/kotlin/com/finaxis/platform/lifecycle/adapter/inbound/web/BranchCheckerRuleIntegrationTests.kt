@@ -74,13 +74,13 @@ class BranchCheckerRuleIntegrationTests
             // Both callers are pinned to another active branch, the head office: the row must name
             // the branch they tried to approve, not the one their request context carries.
             val pinned = headOfficeId()
-            activate(branchId, maker, pinned).andExpect { refusedAs(FORBIDDEN, FORBIDDEN_DETAIL) }
+            activate(branchId, maker, pinned).andExpect { refusedAs(MAKER, MAKER_DETAIL) }
             activate(branchId, amender, pinned).andExpect { refusedAs(MODIFIER, MODIFIER_DETAIL) }
 
             assertEquals("PENDING_APPROVAL", branchStatus(branchId))
             assertEquals(0, activations(branchId))
             assertEquals(
-                listOf(maker to FORBIDDEN, amender to MODIFIER),
+                listOf(maker to MAKER, amender to MODIFIER),
                 deniedRows(branchId),
             )
             assertEquals(listOf(branchId, branchId), deniedBranches(branchId))
@@ -114,16 +114,16 @@ class BranchCheckerRuleIntegrationTests
             submitPlatform(branchId, submitter)
 
             platformActivate(branchId, creator)
-                .andExpect { refusedAs(FORBIDDEN, FORBIDDEN_DETAIL) }
+                .andExpect { refusedAs(MAKER, MAKER_DETAIL) }
             platformActivate(branchId, submitter)
-                .andExpect { refusedAs(FORBIDDEN, FORBIDDEN_DETAIL) }
+                .andExpect { refusedAs(MAKER, MAKER_DETAIL) }
             platformActivate(branchId, platformAmender)
                 .andExpect { refusedAs(MODIFIER, MODIFIER_DETAIL) }
 
             assertEquals("PENDING_APPROVAL", branchStatus(branchId))
             assertEquals(0, activations(branchId))
             assertEquals(
-                listOf(creator to FORBIDDEN, submitter to FORBIDDEN, platformAmender to MODIFIER),
+                listOf(creator to MAKER, submitter to MAKER, platformAmender to MODIFIER),
                 deniedRows(branchId),
             )
             // A platform request carries no branch context; the row still names the target.
@@ -363,6 +363,8 @@ class BranchCheckerRuleIntegrationTests
         private companion object {
             const val FORBIDDEN = "forbidden"
             const val FORBIDDEN_DETAIL = "You are not permitted to perform this action."
+            const val MAKER = "lifecycle.approver_is_branch_maker"
+            const val MAKER_DETAIL = "The approver cannot be the branch's creator or submitter."
             const val MODIFIER = "lifecycle.approver_is_branch_modifier"
             const val MODIFIER_DETAIL = "The approver cannot be someone who amended the branch."
 

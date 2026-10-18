@@ -1,5 +1,7 @@
 package com.finaxis.platform.iam.adapter.outbound.persistence
 
+import com.finaxis.platform.common.application.ActorRef
+import com.finaxis.platform.common.persistence.ActorRefLookup
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.apiPageOf
 import com.finaxis.platform.common.web.api.boundedPageOffset
@@ -38,6 +40,7 @@ import org.jooq.Condition
 import org.jooq.DSLContext
 import org.jooq.Field
 import org.jooq.Record
+import org.jooq.Result
 import org.jooq.SortField
 import org.jooq.impl.DSL
 import org.springframework.stereotype.Component
@@ -55,6 +58,29 @@ class JooqIamAdministrationQueries(
     IamRoleQueries,
     IamAssignmentQueries {
     private val roleColumns = RoleSummaryColumns(dsl)
+    private val actors = ActorRefLookup(dsl)
+
+    /** The maker of the membership [record] row, resolved with one lookup. */
+    private fun makerOf(
+        organisationId: UUID,
+        record: Record,
+    ): ActorRef? =
+        record.get(USER_ORGANISATION_MEMBERSHIP.CREATED_BY)?.let { id ->
+            actors.find(organisationId, listOf(id))[id]
+        }
+
+    /** Maps [this] page of rows with the makers of all of them resolved in one lookup. */
+    private fun <R : Record, T> Result<R>.mapWithMakers(
+        organisationId: UUID,
+        map: (R, Map<UUID, ActorRef>) -> T,
+    ): List<T> {
+        val makers =
+            actors.find(
+                organisationId,
+                this.map { it.get(USER_ORGANISATION_MEMBERSHIP.CREATED_BY) },
+            )
+        return this.map { map(it, makers) }
+    }
 
     override fun searchUsers(
         organisationId: UUID,
@@ -101,6 +127,7 @@ class JooqIamAdministrationQueries(
                     USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS,
                     USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE,
                     USER_ORGANISATION_MEMBERSHIP.CREATED_AT,
+                    USER_ORGANISATION_MEMBERSHIP.CREATED_BY,
                 ).from(USER_ORGANISATION_MEMBERSHIP)
                 .join(USER_ACCOUNT)
                 .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID))
@@ -110,7 +137,8 @@ class JooqIamAdministrationQueries(
                     USER_ACCOUNT.ID.desc(),
                 ).limit(filter.size)
                 .offset(offset)
-                .fetch { it.toUserInTenantSummary() }
+                .fetch()
+                .mapWithMakers(organisationId) { row, makers -> row.toUserInTenantSummary(makers) }
 
         return apiPageOf(items, filter.page, filter.size, total)
     }
@@ -131,34 +159,13 @@ class JooqIamAdministrationQueries(
                 USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS,
                 USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE,
                 USER_ORGANISATION_MEMBERSHIP.CREATED_AT,
+                USER_ORGANISATION_MEMBERSHIP.CREATED_BY,
             ).from(USER_ORGANISATION_MEMBERSHIP)
             .join(USER_ACCOUNT)
             .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID))
             .where(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId))
             .and(USER_ACCOUNT.ID.eq(userId))
-            .fetchOne { record ->
-                UserInTenantDetail(
-                    id = requireNotNull(record.get(USER_ACCOUNT.ID)),
-                    username = requireNotNull(record.get(USER_ACCOUNT.USERNAME)),
-                    email = requireNotNull(record.get(USER_ACCOUNT.EMAIL)),
-                    displayName = requireNotNull(record.get(USER_ACCOUNT.DISPLAY_NAME)),
-                    userStatus = requireNotNull(record.get(USER_ACCOUNT.STATUS)),
-                    membershipStatus =
-                        requireNotNull(
-                            record.get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS),
-                        ),
-                    membershipId = requireNotNull(record.get(USER_ORGANISATION_MEMBERSHIP.ID)),
-                    membershipType =
-                        requireNotNull(
-                            record.get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE),
-                        ),
-                    createdAt = requireNotNull(record.get(USER_ACCOUNT.CREATED_AT)).toInstant(),
-                    membershipCreatedAt =
-                        requireNotNull(
-                            record.get(USER_ORGANISATION_MEMBERSHIP.CREATED_AT),
-                        ).toInstant(),
-                )
-            }
+            .fetchOne { it.toUserInTenantDetail(makerOf(organisationId, it)) }
 
     override fun findUserById(userId: UUID): GlobalUserDetail? =
         dsl
@@ -190,45 +197,13 @@ class JooqIamAdministrationQueries(
                 USER_ORGANISATION_MEMBERSHIP.PRIMARY_BRANCH_ID,
                 USER_ORGANISATION_MEMBERSHIP.CREATED_AT,
                 USER_ORGANISATION_MEMBERSHIP.UPDATED_AT,
+                USER_ORGANISATION_MEMBERSHIP.CREATED_BY,
             ).from(USER_ORGANISATION_MEMBERSHIP)
             .join(USER_ACCOUNT)
             .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID))
             .where(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
             .and(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId))
-            .fetchOne { record ->
-                MembershipDetail(
-                    id = requireNotNull(record.get(USER_ORGANISATION_MEMBERSHIP.ID)),
-                    organisationId =
-                        requireNotNull(
-                            record.get(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID),
-                        ),
-                    userId = requireNotNull(record.get(USER_ORGANISATION_MEMBERSHIP.USER_ID)),
-                    username = requireNotNull(record.get(USER_ACCOUNT.USERNAME)),
-                    email = requireNotNull(record.get(USER_ACCOUNT.EMAIL)),
-                    displayName = requireNotNull(record.get(USER_ACCOUNT.DISPLAY_NAME)),
-                    userStatus = requireNotNull(record.get(USER_ACCOUNT.STATUS)),
-                    membershipStatus =
-                        requireNotNull(
-                            record.get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS),
-                        ),
-                    membershipType =
-                        requireNotNull(
-                            record.get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE),
-                        ),
-                    primaryBranchId =
-                        record.get(
-                            USER_ORGANISATION_MEMBERSHIP.PRIMARY_BRANCH_ID,
-                        ),
-                    createdAt =
-                        requireNotNull(
-                            record.get(USER_ORGANISATION_MEMBERSHIP.CREATED_AT),
-                        ).toInstant(),
-                    updatedAt =
-                        requireNotNull(
-                            record.get(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT),
-                        ).toInstant(),
-                )
-            }
+            .fetchOne { it.toMembershipDetail(makerOf(organisationId, it)) }
 
     override fun searchMemberships(
         organisationId: UUID,
@@ -260,6 +235,7 @@ class JooqIamAdministrationQueries(
                     USER_ACCOUNT.EMAIL,
                     USER_ACCOUNT.DISPLAY_NAME,
                     BRANCH.BRANCH_NAME,
+                    USER_ORGANISATION_MEMBERSHIP.CREATED_BY,
                 ).from(USER_ORGANISATION_MEMBERSHIP)
                 .join(USER_ACCOUNT)
                 .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID))
@@ -271,7 +247,8 @@ class JooqIamAdministrationQueries(
                     USER_ORGANISATION_MEMBERSHIP.ID.desc(),
                 ).limit(filter.size)
                 .offset(offset)
-                .fetch { it.toMembershipSummary() }
+                .fetch()
+                .mapWithMakers(organisationId) { row, makers -> row.toMembershipSummary(makers) }
 
         return apiPageOf(items, filter.page, filter.size, total)
     }
@@ -706,7 +683,7 @@ private fun tenantListSortOrder(
     sortDir: String?,
 ): SortField<*> = if (sortBy != null && sortDir?.uppercase() == "ASC") field.asc() else field.desc()
 
-private fun Record.toUserInTenantSummary() =
+private fun Record.toUserInTenantSummary(makers: Map<UUID, ActorRef>) =
     UserInTenantSummary(
         id = requireNotNull(get(USER_ACCOUNT.ID)),
         username = requireNotNull(get(USER_ACCOUNT.USERNAME)),
@@ -727,9 +704,10 @@ private fun Record.toUserInTenantSummary() =
             requireNotNull(
                 get(USER_ORGANISATION_MEMBERSHIP.CREATED_AT),
             ).toInstant(),
+        createdBy = get(USER_ORGANISATION_MEMBERSHIP.CREATED_BY)?.let(makers::get),
     )
 
-private fun Record.toMembershipSummary() =
+private fun Record.toMembershipSummary(makers: Map<UUID, ActorRef>) =
     MembershipSummary(
         id = requireNotNull(get(USER_ORGANISATION_MEMBERSHIP.ID)),
         userId = requireNotNull(get(USER_ORGANISATION_MEMBERSHIP.USER_ID)),
@@ -753,6 +731,7 @@ private fun Record.toMembershipSummary() =
             requireNotNull(
                 get(USER_ORGANISATION_MEMBERSHIP.CREATED_AT),
             ).toInstant(),
+        createdBy = get(USER_ORGANISATION_MEMBERSHIP.CREATED_BY)?.let(makers::get),
     )
 
 private fun Record.toBranchAssignmentSummary() =
@@ -771,4 +750,63 @@ private fun Record.toBranchAssignmentSummary() =
         assignedAt =
             requireNotNull(get(USER_BRANCH_ASSIGNMENT.ASSIGNED_AT))
                 .toInstant(),
+    )
+
+private fun Record.toUserInTenantDetail(maker: ActorRef?) =
+    UserInTenantDetail(
+        id = requireNotNull(get(USER_ACCOUNT.ID)),
+        username = requireNotNull(get(USER_ACCOUNT.USERNAME)),
+        email = requireNotNull(get(USER_ACCOUNT.EMAIL)),
+        displayName = requireNotNull(get(USER_ACCOUNT.DISPLAY_NAME)),
+        userStatus = requireNotNull(get(USER_ACCOUNT.STATUS)),
+        membershipStatus =
+            requireNotNull(
+                get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS),
+            ),
+        membershipId = requireNotNull(get(USER_ORGANISATION_MEMBERSHIP.ID)),
+        membershipType =
+            requireNotNull(
+                get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE),
+            ),
+        createdAt = requireNotNull(get(USER_ACCOUNT.CREATED_AT)).toInstant(),
+        membershipCreatedAt =
+            requireNotNull(
+                get(USER_ORGANISATION_MEMBERSHIP.CREATED_AT),
+            ).toInstant(),
+        createdBy = maker,
+    )
+
+private fun Record.toMembershipDetail(maker: ActorRef?) =
+    MembershipDetail(
+        id = requireNotNull(get(USER_ORGANISATION_MEMBERSHIP.ID)),
+        organisationId =
+            requireNotNull(
+                get(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID),
+            ),
+        userId = requireNotNull(get(USER_ORGANISATION_MEMBERSHIP.USER_ID)),
+        username = requireNotNull(get(USER_ACCOUNT.USERNAME)),
+        email = requireNotNull(get(USER_ACCOUNT.EMAIL)),
+        displayName = requireNotNull(get(USER_ACCOUNT.DISPLAY_NAME)),
+        userStatus = requireNotNull(get(USER_ACCOUNT.STATUS)),
+        membershipStatus =
+            requireNotNull(
+                get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS),
+            ),
+        membershipType =
+            requireNotNull(
+                get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE),
+            ),
+        primaryBranchId =
+            get(
+                USER_ORGANISATION_MEMBERSHIP.PRIMARY_BRANCH_ID,
+            ),
+        createdAt =
+            requireNotNull(
+                get(USER_ORGANISATION_MEMBERSHIP.CREATED_AT),
+            ).toInstant(),
+        updatedAt =
+            requireNotNull(
+                get(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT),
+            ).toInstant(),
+        createdBy = maker,
     )

@@ -8,7 +8,9 @@ import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
+import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.audit.AuditSeverity
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
@@ -233,6 +235,12 @@ class OrganisationBranchProvisioningServiceTests {
         )
         assertTrue(events.events.isEmpty())
         assertTrue(!store.headOffices.contains(organisationId))
+        // The refusal is audited like the tenant's other maker-checker refusals (#156).
+        val denied = audits.events.single { it.outcome == AuditOutcome.DENIED }
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_INITIAL_ADMINISTRATOR, denied.reason)
+        assertEquals(AuditSeverity.HIGH, denied.severity)
+        assertEquals(approver.toString(), denied.actorId)
+        assertEquals(organisationId.toString(), denied.resourceId)
     }
 
     @Test
@@ -2263,7 +2271,7 @@ class PlatformCheckerBranchTests {
     }
 
     @Test
-    fun `the creator and the platform submitter stay refused with the plain forbidden code`() {
+    fun `the creator and the platform submitter are refused with the maker code`() {
         val branchId = pendingPlatformBranch()
         store.branchSubmitters[organisationId to branchId] = platformChecker
         amended(branchId, uuidV7())
@@ -2277,12 +2285,12 @@ class PlatformCheckerBranchTests {
                 branches.activate(activateCommand(branchId, platformChecker))
             }
 
-        assertEquals("forbidden", creatorRefusal.code)
-        assertEquals("forbidden", submitterRefusal.code)
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_BRANCH_MAKER, creatorRefusal.code)
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_BRANCH_MAKER, submitterRefusal.code)
     }
 
     @Test
-    fun `a creator who also amended the branch gets the plain forbidden code`() {
+    fun `a creator who also amended the branch is refused as the maker`() {
         val branchId = pendingPlatformBranch()
         amended(branchId, platformMaker)
 
@@ -2291,7 +2299,7 @@ class PlatformCheckerBranchTests {
                 branches.activate(activateCommand(branchId, platformMaker))
             }
 
-        assertEquals("forbidden", refusal.code)
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_BRANCH_MAKER, refusal.code)
     }
 
     @Test

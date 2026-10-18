@@ -55,6 +55,30 @@ object LifecycleErrorCodes {
         "The approver cannot be someone who amended the branch."
 
     /**
+     * A branch approval was refused because the approver made the branch: its creator, or, on the
+     * platform route, also the submitter of the current submission. The branch analogue of
+     * [APPROVER_IS_TENANT_MAKER].
+     */
+    const val APPROVER_IS_BRANCH_MAKER = "lifecycle.approver_is_branch_maker"
+
+    /** The safe detail that accompanies [APPROVER_IS_BRANCH_MAKER]. */
+    const val APPROVER_IS_BRANCH_MAKER_DETAIL =
+        "The approver cannot be the branch's creator or submitter."
+
+    /** A membership approval was refused because the approver is the user who invited it. */
+    const val APPROVER_IS_MEMBERSHIP_MAKER = "lifecycle.approver_is_membership_maker"
+
+    /** The safe detail that accompanies [APPROVER_IS_MEMBERSHIP_MAKER]. */
+    const val APPROVER_IS_MEMBERSHIP_MAKER_DETAIL = "The approver cannot be the member's inviter."
+
+    /** A membership approval was refused because the approver is the invited user themself. */
+    const val APPROVER_IS_MEMBERSHIP_BENEFICIARY = "lifecycle.approver_is_membership_beneficiary"
+
+    /** The safe detail that accompanies [APPROVER_IS_MEMBERSHIP_BENEFICIARY]. */
+    const val APPROVER_IS_MEMBERSHIP_BENEFICIARY_DETAIL =
+        "The approver cannot be the invited user."
+
+    /**
      * A checker decision on a pending tenant (approve, reject or return) was refused because the
      * actor is its maker: the requester of the draft or the submitter of the current submission.
      */

@@ -183,6 +183,25 @@ list, so a list costs the same number of queries at any page size.
   `user.view`, both tenant-wide (in the platform organisation for a platform caller). A
   `permission_count` needs only the `role.view` the list already requires.
 
+### Makers
+
+Who made an approvable record is on its items, so an approvals screen can show it without reading
+the audit log (#156). Each is `{ "id", "display_name" }`, always present, and `null` when there is
+no maker to show.
+
+| Resource | Fields | Source |
+|----------|--------|--------|
+| membership, tenant user | `created_by` | who invited the member |
+| branch | `created_by`, `submitted_by` | its creator; the actor of its latest `SUBMIT` |
+| tenant | `requested_by`, `submitted_by` | the draft's requester; the submitter of the current submission |
+
+A maker is `null` when the **system** made the record (the bootstrap head office, a system-run
+invitation: it has no account), when the record was **never submitted**, or when the caller may
+not see them. The last rule protects staff: **a tenant caller sees a maker only if they belong to
+that tenant**, so a platform operator who created a branch or invited a member on the tenant's
+behalf is shown to platform callers only. A tenant's `requested_by` and `submitted_by` are platform
+users, so a tenant caller never sees them. Names come from the account's `display_name`.
+
 ### Errors
 
 Errors use RFC 9457 `application/problem+json` with Finaxis extensions:
@@ -795,8 +814,10 @@ maker-checker rule. The order is: the permission (403), the branch (404), on the
 the window (409), the maker-checker rule (403), then the tenant state (409) and the branch state
 (409):
 
-- `403 forbidden` when the approver **created** the branch, and, on the platform route, when it
-  **submitted** it. A tenant submitter is not refused (ADR 0028).
+- `403 lifecycle.approver_is_branch_maker` ("The approver cannot be the branch's creator or
+  submitter.") when the approver **created** the branch, and, on the platform route, when it
+  **submitted** it. A tenant submitter is not refused (ADR 0028). Before #156 this was the generic
+  `forbidden`, which a missing permission also answers.
 - `403 lifecycle.approver_is_branch_modifier` when the approver **amended** the branch, on either
   route: anyone with a successful `branch.update` audit event on it, however many amends came
   later (the row's `updated_by` is not used: a checker's return and every submit stamp it, so at
@@ -808,7 +829,8 @@ the window (409), the maker-checker rule (403), then the tenant state (409) and 
 
 Each of the two maker-checker refusals writes a `DENIED`, `HIGH` audit row (action
 `branch.activate`, resource the branch, `branch_id` the target branch rather than the caller's
-pinned one, reason the response code: `forbidden` or `lifecycle.approver_is_branch_modifier`) in
+pinned one, reason the response code: `lifecycle.approver_is_branch_maker` or
+`lifecycle.approver_is_branch_modifier`) in
 its own transaction, so the request's rollback does not take it (#251, as the tenant decisions
 do). A refusal earlier in the order (permission, 404, window) writes none. Until #251 these
 refusals left no audit row. An audit search on `action=branch.activate` therefore also returns
@@ -1222,8 +1244,9 @@ provisioning or activation (the same prerequisites as the tenant route, see
 [Memberships](#memberships)), or the tenant already has an `ACTIVE` membership the system actor did
 not create (the bootstrap administrator does not count; code
 `lifecycle.platform_checker_closed`), and
-`403` when the platform actor invited the membership or is the invited user (the checker is
-neither the maker nor the beneficiary).
+`403` when the platform actor invited the membership (`lifecycle.approver_is_membership_maker`) or
+is the invited user (`lifecycle.approver_is_membership_beneficiary`): the checker is neither the
+maker nor the beneficiary.
 
 ### Platform Tenant Users
 
@@ -1433,6 +1456,15 @@ row, no audit row (#207; it used to be a `500`). Revoke is terminal, so a retry 
 original response.
 
 #### Decision remarks
+
+**Maker-checker refusals on a membership (#156).** `POST .../memberships/{id}/activate`, on the
+tenant and the platform route, refuses with `403 lifecycle.approver_is_membership_maker` ("The
+approver cannot be the member's inviter.") or `403 lifecycle.approver_is_membership_beneficiary`
+("The approver cannot be the invited user."); a missing permission is still `403 forbidden`. Each
+refusal writes a `DENIED`, `HIGH` audit row (action `user.approve`, the invited user as subject,
+the code as reason) in its own transaction, so the request's rollback does not take it; a refusal
+before the rule (permission, 404) writes none. An audit search on `action=user.approve` therefore
+also returns refused attempts; add `outcome=SUCCESS` for approvals only.
 
 Three approvals accept an **optional** JSON body carrying a remark. The body itself is optional and
 so is the field, so a call without one behaves exactly as before:
@@ -2134,8 +2166,10 @@ reject it (`lifecycle.approver_is_tenant_modifier`), and neither can the platfor
 account the draft names (by email) as its initial administrator, because the bootstrap approves that
 administrator's membership in the approver's name and nobody may approve their own membership. That
 refusal is 403 with code `lifecycle.approver_is_initial_administrator`, returned before any state
-change (the tenant stays `PENDING_APPROVAL`); if no account exists yet for the administrator email
-there is nothing to compare. Self-approval returns 403:
+change (the tenant stays `PENDING_APPROVAL`), and writes a `DENIED`, `HIGH` audit row (action
+`organisation.approve`, reason the code) in its own transaction like the other tenant refusals (#156); if
+no account exists yet for the administrator email there is nothing to compare. Self-approval
+returns 403:
 
 ```json
 {

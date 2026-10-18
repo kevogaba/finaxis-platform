@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
+import com.finaxis.platform.common.web.api.toResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.MembershipDetailResponse
 import com.finaxis.platform.lifecycle.application.query.LifecycleMembershipDetail
 
@@ -18,4 +19,5 @@ internal fun LifecycleMembershipDetail.toResponse() =
         primaryBranchId = primaryBranchId,
         createdAt = createdAt,
         updatedAt = updatedAt,
+        createdBy = createdBy.toResponse(),
     )

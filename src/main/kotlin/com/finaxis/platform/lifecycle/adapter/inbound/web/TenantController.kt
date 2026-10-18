@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
 import com.finaxis.platform.common.web.api.ApiProblem
+import com.finaxis.platform.common.web.api.toResponse
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.TenantDetailResponse
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
@@ -95,5 +96,7 @@ class TenantController(
             bootstrapFailureCode = bootstrapFailureCode,
             createdAt = createdAt,
             updatedAt = updatedAt,
+            requestedBy = requestedBy.toResponse(),
+            submittedBy = submittedBy.toResponse(),
         )
 }

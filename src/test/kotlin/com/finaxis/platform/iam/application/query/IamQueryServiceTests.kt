@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.application.query
 
+import com.finaxis.platform.common.application.ActorRef
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.web.api.ApiPage
@@ -665,6 +666,10 @@ internal class FakeIamAdministrationQueries :
     var roleAssignmentScopeType = "TENANT"
     var roleAssignmentBranchId: UUID? = null
     var lastBranchAssignmentFilter: BranchAssignmentFilter? = null
+
+    /** The maker every user and membership read names; null for none. */
+    var maker: ActorRef? = null
+
     var lastBranchAssignmentRestriction: Set<UUID>? = null
     var lastRoleAssignmentFilter: RoleAssignmentFilter? = null
     var lastRoleAssignmentRestriction: Set<UUID>? = null
@@ -686,6 +691,7 @@ internal class FakeIamAdministrationQueries :
                     "STAFF",
                     Instant.now(),
                     Instant.now(),
+                    createdBy = maker,
                 ),
             ),
             filter.page,
@@ -709,6 +715,7 @@ internal class FakeIamAdministrationQueries :
             membershipType = "STAFF",
             createdAt = Instant.now(),
             membershipCreatedAt = Instant.now(),
+            createdBy = maker,
         )
     }
 
@@ -735,6 +742,7 @@ internal class FakeIamAdministrationQueries :
             primaryBranchId = null,
             createdAt = Instant.now(),
             updatedAt = Instant.now(),
+            createdBy = maker,
         )
     }
 
@@ -755,6 +763,7 @@ internal class FakeIamAdministrationQueries :
                     "Test User",
                     null,
                     Instant.now(),
+                    createdBy = maker,
                 ),
             ),
             filter.page,

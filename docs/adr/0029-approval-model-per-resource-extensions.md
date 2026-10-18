@@ -461,6 +461,14 @@ catalogue** (`TenantSettingCatalog.kt`), not wired to behaviour.
   `lifecycle.approver_is_tenant_maker` and `lifecycle.approver_is_tenant_modifier`; #156 must reuse
   or replace those names, not add a third.
 
+  *Delivered in #156:* the per-resource pattern was kept and completed, not replaced. Branches
+  gained `lifecycle.approver_is_branch_maker` beside the existing `..._branch_modifier`, and
+  memberships `lifecycle.approver_is_membership_maker` and `..._membership_beneficiary`, so each
+  of the three approvals names its maker refusal and a missing permission stays the plain
+  `forbidden`. The membership refusal is now audited like the other two. `created_by`,
+  `submitted_by` and `requested_by` are exposed as `{id, display_name}` and shown to a tenant
+  caller only for a maker who belongs to the tenant (see "Makers" in `docs/api/foundation-api.md`).
+
 ### 6. Sequencing
 
 Implementation order, all in this effort:
