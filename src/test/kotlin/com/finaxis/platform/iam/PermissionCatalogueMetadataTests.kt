@@ -39,7 +39,7 @@ class PermissionCatalogueMetadataTests(
                 Long::class.java,
             ),
         )
-        assertEquals(CATALOGUE_SIZE, catalogue.size, "the live catalogue is 81 codes")
+        assertEquals(CATALOGUE_SIZE, catalogue.size, "the live catalogue is 83 codes")
         assertTrue(catalogue.values.all { it.kind in KINDS && it.grantScope in SCOPES })
     }
 
@@ -73,7 +73,7 @@ class PermissionCatalogueMetadataTests(
     }
 
     @Test
-    fun `fourteen codes are platform scope and sixty seven are tenant scope`() {
+    fun `fifteen codes are platform scope and sixty eight are tenant scope`() {
         assertEquals(PLATFORM_CODES, codesOfScope("PLATFORM"))
         assertEquals(TENANT_SCOPE_COUNT, codesOfScope("TENANT").size)
         assertEquals(PLATFORM_SCOPE_COUNT, codesOfScope("PLATFORM").size)
@@ -276,17 +276,19 @@ class PermissionCatalogueMetadataTests(
     )
 
     private companion object {
-        const val CATALOGUE_SIZE = 81
+        const val CATALOGUE_SIZE = 83
         const val VIEW_COUNT = 18
         const val CONTEXT_COUNT = 3
-        const val MUTATION_COUNT = 60
-        const val PLATFORM_SCOPE_COUNT = 14
-        const val TENANT_SCOPE_COUNT = 67
+        const val MUTATION_COUNT = 62
+        const val PLATFORM_SCOPE_COUNT = 15
+        const val TENANT_SCOPE_COUNT = 68
 
         /** The complete pairing table of `V22`: mutation code to the views it requires. */
         val EXPECTED_REQUIREMENTS: Map<String, Set<String>> =
             mapOf(
                 "tenant.create" to setOf("tenant.view"),
+                "user.update" to setOf("user.view"),
+                "membership.update" to setOf("membership.view"),
                 "tenant.update_draft" to setOf("tenant.view"),
                 "tenant.submit_for_approval" to setOf("tenant.view"),
                 "tenant.approve" to setOf("tenant.view"),
@@ -372,6 +374,7 @@ class PermissionCatalogueMetadataTests(
                 "user.activate",
                 "user.suspend",
                 "user.deactivate",
+                "user.update",
                 "tenant_setting.manage_platform",
             )
     }

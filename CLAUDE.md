@@ -327,6 +327,14 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   nothing reads, and any current `false` of the two maker-checker switches (a saved default from
   when nothing read them, which the release would otherwise turn into an opt-out). Idempotent, writes only `effective_to` and `updated_at`, asserts in-file that none
   stays current; see `docs/operations/tenant-settings.md`.
+- `V32__user_and_membership_update_permissions.sql` — **reference data only** (#161, ADR 0033):
+  `user.update` (`MUTATION`, `PLATFORM` scope, `HIGH`, requires `user.view`, id `…065`) gates
+  `PATCH /api/v1/platform/users/{id}`, and `membership.update` (`MUTATION`, `TENANT` scope, `HIGH`,
+  requires `membership.view`, id `…066`) gates `PATCH /api/v1/memberships/{id}`. Both go to
+  `PLATFORM_SUPER_ADMIN`; `membership.update` also to every tenant's seeded `TENANT_ADMIN` and the
+  bootstrap `local-admin` (the V23 rule). It writes `kind`, `grant_scope` and the view requirements
+  in the same file, asserts its pre- and post-conditions in-file, and is idempotent. The catalogue
+  is now 83 codes, 82 `ACTIVE`.
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -360,7 +368,8 @@ seed (`branch.update`), `V20` a foundation CHECK pinning the platform organisati
 the permission catalogue's kind, grant scope and view requirements, `V23` the seeded
 administrator roles' grants, `V24` the closed bootstrap failure-code set, `V25`-`V28` the
 audit search indexes, `V29`-`V30` the audit subject user (column and index), and `V31` the
-retired legacy setting rows; none is accounting.
+retired legacy setting rows, and `V32` the user and membership edit permissions; none is
+accounting.
 Do not invent accounting tables or columns outside those documents.
 
 ## Authorization

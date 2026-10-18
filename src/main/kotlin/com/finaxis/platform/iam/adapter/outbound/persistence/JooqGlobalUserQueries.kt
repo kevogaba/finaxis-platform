@@ -44,13 +44,14 @@ class JooqGlobalUserQueries(
     }
 
     override fun findUser(userId: UUID): GlobalUserProfile? {
-        val user =
+        val account =
             dsl
                 .select(USER_ACCOUNT.fields().toList() + MEMBERSHIP_COUNT)
                 .from(USER_ACCOUNT)
                 .where(USER_ACCOUNT.ID.eq(userId))
-                .fetchOne { it.toSummary() }
+                .fetchOne()
                 ?: return null
+        val user = account.toSummary()
         val memberships =
             dsl
                 .select(
@@ -70,7 +71,12 @@ class JooqGlobalUserQueries(
                     USER_ORGANISATION_MEMBERSHIP.ID.desc(),
                 ).limit(GlobalUserQueries.MAX_MEMBERSHIPS)
                 .fetch { it.toMembership() }
-        return GlobalUserProfile(user, memberships)
+        return GlobalUserProfile(
+            user,
+            memberships,
+            phoneE164 = account.get(USER_ACCOUNT.PHONE_E164),
+            lastLoginAt = account.get(USER_ACCOUNT.LAST_LOGIN_AT)?.toInstant(),
+        )
     }
 
     private companion object {

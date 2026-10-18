@@ -46,6 +46,10 @@ data class GlobalUserMembership(
 data class GlobalUserProfile(
     val user: GlobalUserSummary,
     val memberships: List<GlobalUserMembership>,
+    /** The account's phone, or null when none is recorded. Platform-only personal data. */
+    val phoneE164: String? = null,
+    /** The account's last login, or null when it never logged in. Platform-only. */
+    val lastLoginAt: Instant? = null,
 )
 
 /** Outbound port for the platform-wide user directory. */
