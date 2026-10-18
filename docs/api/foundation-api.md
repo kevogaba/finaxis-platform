@@ -149,6 +149,40 @@ ignore `sort_by` and `sort_dir`, so an unknown `sort_by` on them answered `200`.
 `400 invalid_parameter`, and a bad `sort_dir` answers `400` on them too. A client that sent an
 unknown `sort_by` to one of these lists must correct the value.
 
+### List Items And Counts
+
+List items carry the fields a screen needs without a read per row (#189, #191). Every field below
+is additive and snake_case. Names and dates are PII-adjacent, so each list keeps the `.view`
+permission it already required.
+
+| List | Added to each item |
+|------|--------------------|
+| `GET /tenant/users`, `/platform/tenants/{id}/users` | `membership_id`, `membership_type`, `created_at` (the account's), `membership_created_at` |
+| `GET /tenant/memberships` | `username`, `email`, `display_name`, `primary_branch_name` (`null` with no primary branch), `created_at` |
+| `GET /tenant/branch-assignments` | `username`, `display_name`, `branch_name`, `assigned_at` |
+| `GET /branches`, `/platform/tenants/{id}/branches` | `parent_branch_id`, `timezone`, `opened_on`, `closed_on` (`dd-MM-yyyy`), `active_user_count` |
+| `GET /platform/tenants` | `base_currency_code`, `timezone`, `bootstrap_status` (`null` with no bootstrap record), `active_branch_count`, `active_user_count` |
+| `GET /tenant/roles` | `permission_count`, `active_user_count` |
+
+The detail of a tenant user and of a branch assignment carries the same fields as its list item
+(`POST /tenant/branch-assignments` answers with the summary shape).
+
+**Counts.** Each count is computed in the same statement (or one grouped statement per page) as the
+list, so a list costs the same number of queries at any page size.
+
+- `active_user_count` on a **role** is the distinct users holding it through an `ACTIVE`
+  assignment; `permission_count` is the permissions granted to it, whatever their catalogue
+  status.
+- `active_user_count` on a **branch** is the distinct users with an `ACTIVE` assignment to it.
+- `active_branch_count` and `active_user_count` on a **tenant** count its `ACTIVE` branches and
+  `ACTIVE` memberships. A suspended member or a draft branch is not counted.
+- A count is **`null`**, always present, when the caller could not list the rows it counts, so a
+  count never reveals what the list behind it would refuse: a role's `active_user_count` needs
+  `role_assignment.view` held tenant-wide; a branch's needs `branch_assignment.view` on that
+  branch; a tenant's `active_branch_count` needs `branch.view` and its `active_user_count`
+  `user.view`, both tenant-wide (in the platform organisation for a platform caller). A
+  `permission_count` needs only the `role.view` the list already requires.
+
 ### Errors
 
 Errors use RFC 9457 `application/problem+json` with Finaxis extensions:
@@ -1344,8 +1378,9 @@ fails Bean Validation is a `400` before any permission check, as on every route)
 ### Memberships
 
 Base path: `/api/v1/tenant/memberships`. List filters: `q`, `membership_status`,
-`membership_type`, `sort_by`, `sort_dir`, `page`, `size`. Sorting is described under
-[Pagination](#pagination).
+`membership_type`, `user_id`, `sort_by`, `sort_dir`, `page`, `size`. `user_id` narrows the list to
+that user's membership in the active organisation (a malformed UUID is `400`; a user with no
+membership here is an empty page). Sorting is described under [Pagination](#pagination).
 
 | Method | Path                          | Summary                         | Permission              | Shape    |
 |--------|-------------------------------|---------------------------------|-------------------------|----------|
@@ -1497,8 +1532,8 @@ caller without the permission who sends an over-long `reason` receives `400`, no
 ### Branch Assignments
 
 Base path: `/api/v1/tenant/branch-assignments`. List filters: `branch_id`,
-`assignment_type`, `status`, `sort_by`, `sort_dir`, `page`, `size`. Sorting is described under
-[Pagination](#pagination).
+`assignment_type`, `status`, `user_id`, `sort_by`, `sort_dir`, `page`, `size`. Sorting is
+described under [Pagination](#pagination).
 
 | Method | Path               | Summary                   | Permission               | Shape    |
 |--------|--------------------|---------------------------|--------------------------|----------|
@@ -1518,7 +1553,9 @@ and the application layer is the only authorisation.
   query so pages and totals are exact. An explicit `branch_id` outside that set is `403`; no grant
   is `403`. Without `branch_id`, one rule applies to every tenant caller: the list defaults to the
   selected branch when the caller may view it, and is every viewable branch otherwise (clear the
-  selection to list across all).
+  selection to list across all). A `user_id` filter switches that default off: the user's
+  assignments are listed across every branch the caller may view, and only an explicit `branch_id`
+  narrows them (#188).
 - A grant scoped to a branch counts only while the branch is `ACTIVE` (issue #242): the
   assignments of a suspended or closed branch are visible to a tenant-wide holder only, and to a
   branch-scoped holder they are absent from the list and `403` by id or by `branch_id`.

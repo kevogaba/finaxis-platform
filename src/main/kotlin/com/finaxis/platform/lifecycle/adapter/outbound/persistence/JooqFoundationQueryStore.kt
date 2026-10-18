@@ -7,6 +7,8 @@ import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.BUSINESS_DATE_HISTORY
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
 import com.finaxis.platform.jooq.tables.references.ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
+import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
+import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapFailureCode
 import com.finaxis.platform.lifecycle.application.query.BranchDetail
 import com.finaxis.platform.lifecycle.application.query.BranchFilter
@@ -20,10 +22,14 @@ import com.finaxis.platform.lifecycle.application.query.TenantFilter
 import com.finaxis.platform.lifecycle.application.query.TenantSummary
 import org.jooq.Condition
 import org.jooq.DSLContext
+import org.jooq.Field
+import org.jooq.Record
 import org.jooq.impl.DSL
 import org.springframework.stereotype.Component
 import java.time.ZoneOffset
 import java.util.UUID
+
+private const val ACTIVE = "ACTIVE"
 
 /**
  * jOOQ implementation of the [FoundationQueryStore] port.
@@ -72,23 +78,21 @@ class JooqFoundationQueryStore(
                     ORGANISATION.COUNTRY_CODE,
                     ORGANISATION.STATUS,
                     ORGANISATION.CREATED_AT,
+                    ORGANISATION.BASE_CURRENCY_CODE,
+                    ORGANISATION.TIMEZONE,
+                    BOOTSTRAP.STATUS,
+                    ACTIVE_BRANCH_COUNT,
+                    ACTIVE_MEMBER_COUNT,
                 ).from(ORGANISATION)
+                .leftJoin(BOOTSTRAP)
+                .on(BOOTSTRAP.ORGANISATION_ID.eq(ORGANISATION.ID))
                 .where(condition)
                 .orderBy(
                     tenantSortOrder(tenantSortField(filter.sortBy), filter.sortDir),
                     ORGANISATION.ID.desc(),
                 ).limit(filter.size)
                 .offset(offset)
-                .fetch { record ->
-                    TenantSummary(
-                        id = requireNotNull(record.get(ORGANISATION.ID)),
-                        tenantCode = requireNotNull(record.get(ORGANISATION.TENANT_CODE)),
-                        displayName = requireNotNull(record.get(ORGANISATION.DISPLAY_NAME)),
-                        countryCode = requireNotNull(record.get(ORGANISATION.COUNTRY_CODE)),
-                        status = requireNotNull(record.get(ORGANISATION.STATUS)),
-                        createdAt = requireNotNull(record.get(ORGANISATION.CREATED_AT)).toInstant(),
-                    )
-                }
+                .fetch { it.toTenantSummary() }
 
         return apiPageOf(items, filter.page, filter.size, total)
     }
@@ -171,6 +175,11 @@ class JooqFoundationQueryStore(
                     BRANCH.BRANCH_TYPE,
                     BRANCH.STATUS,
                     BRANCH.CREATED_AT,
+                    BRANCH.PARENT_BRANCH_ID,
+                    BRANCH.TIMEZONE,
+                    BRANCH.OPENED_ON,
+                    BRANCH.CLOSED_ON,
+                    ACTIVE_ASSIGNEE_COUNT,
                 ).from(BRANCH)
                 .where(condition)
                 .orderBy(
@@ -178,17 +187,7 @@ class JooqFoundationQueryStore(
                     BRANCH.ID.desc(),
                 ).limit(filter.size)
                 .offset(offset)
-                .fetch { record ->
-                    BranchSummary(
-                        id = requireNotNull(record.get(BRANCH.ID)),
-                        organisationId = requireNotNull(record.get(BRANCH.ORGANISATION_ID)),
-                        branchCode = requireNotNull(record.get(BRANCH.BRANCH_CODE)),
-                        branchName = requireNotNull(record.get(BRANCH.BRANCH_NAME)),
-                        branchType = requireNotNull(record.get(BRANCH.BRANCH_TYPE)),
-                        status = requireNotNull(record.get(BRANCH.STATUS)),
-                        createdAt = requireNotNull(record.get(BRANCH.CREATED_AT)).toInstant(),
-                    )
-                }
+                .fetch { it.toBranchSummary() }
 
         return apiPageOf(items, filter.page, filter.size, total)
     }
@@ -361,3 +360,69 @@ class JooqFoundationQueryStore(
         sortDir: String?,
     ): org.jooq.SortField<*> = if (sortDir?.uppercase() == "ASC") field.asc() else field.desc()
 }
+
+private val BOOTSTRAP = ORGANISATION_INITIAL_ADMINISTRATOR_BOOTSTRAP
+
+// The list counts are correlated subselects inside the page's one statement, so a page costs the
+// same number of statements at any size. The first two lean on idx_branch_organisation_status and
+// the (organisation_id, user_id) key of the membership, the third on
+// idx_user_branch_assignment_organisation_branch.
+private val ACTIVE_BRANCH_COUNT: Field<Int> =
+    DSL.field(
+        DSL
+            .selectCount()
+            .from(BRANCH)
+            .where(BRANCH.ORGANISATION_ID.eq(ORGANISATION.ID))
+            .and(BRANCH.STATUS.eq(ACTIVE)),
+    )
+
+private val ACTIVE_MEMBER_COUNT: Field<Int> =
+    DSL.field(
+        DSL
+            .selectCount()
+            .from(USER_ORGANISATION_MEMBERSHIP)
+            .where(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(ORGANISATION.ID))
+            .and(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS.eq(ACTIVE)),
+    )
+
+private val ACTIVE_ASSIGNEE_COUNT: Field<Int> =
+    DSL.field(
+        DSL
+            .select(DSL.countDistinct(USER_BRANCH_ASSIGNMENT.USER_ID))
+            .from(USER_BRANCH_ASSIGNMENT)
+            .where(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID.eq(BRANCH.ORGANISATION_ID))
+            .and(USER_BRANCH_ASSIGNMENT.BRANCH_ID.eq(BRANCH.ID))
+            .and(USER_BRANCH_ASSIGNMENT.STATUS.eq(ACTIVE)),
+    )
+
+private fun Record.toTenantSummary() =
+    TenantSummary(
+        id = requireNotNull(get(ORGANISATION.ID)),
+        tenantCode = requireNotNull(get(ORGANISATION.TENANT_CODE)),
+        displayName = requireNotNull(get(ORGANISATION.DISPLAY_NAME)),
+        countryCode = requireNotNull(get(ORGANISATION.COUNTRY_CODE)),
+        status = requireNotNull(get(ORGANISATION.STATUS)),
+        createdAt = requireNotNull(get(ORGANISATION.CREATED_AT)).toInstant(),
+        baseCurrencyCode =
+            requireNotNull(get(ORGANISATION.BASE_CURRENCY_CODE)),
+        timezone = requireNotNull(get(ORGANISATION.TIMEZONE)),
+        bootstrapStatus = get(BOOTSTRAP.STATUS),
+        activeBranchCount = get(ACTIVE_BRANCH_COUNT),
+        activeUserCount = get(ACTIVE_MEMBER_COUNT),
+    )
+
+private fun Record.toBranchSummary() =
+    BranchSummary(
+        id = requireNotNull(get(BRANCH.ID)),
+        organisationId = requireNotNull(get(BRANCH.ORGANISATION_ID)),
+        branchCode = requireNotNull(get(BRANCH.BRANCH_CODE)),
+        branchName = requireNotNull(get(BRANCH.BRANCH_NAME)),
+        branchType = requireNotNull(get(BRANCH.BRANCH_TYPE)),
+        status = requireNotNull(get(BRANCH.STATUS)),
+        createdAt = requireNotNull(get(BRANCH.CREATED_AT)).toInstant(),
+        parentBranchId = get(BRANCH.PARENT_BRANCH_ID),
+        timezone = requireNotNull(get(BRANCH.TIMEZONE)),
+        openedOn = get(BRANCH.OPENED_ON),
+        closedOn = get(BRANCH.CLOSED_ON),
+        activeUserCount = get(ACTIVE_ASSIGNEE_COUNT),
+    )

@@ -130,7 +130,7 @@ abstract class FoundationIamControllerTestSupport(
     protected fun roleSummary(
         roleId: UUID,
         missingViewPermissions: List<String> = emptyList(),
-    ) = RoleSummary(roleId, "OPS", "Operations", false, "ACTIVE", missingViewPermissions)
+    ) = RoleSummary(roleId, "OPS", "Operations", false, "ACTIVE", missingViewPermissions, 0, 0)
 
     protected fun roleDetail(
         tenantId: UUID,

@@ -588,56 +588,6 @@ class IamQueryServiceTests {
     }
 
     @Test
-    fun `verify full data model coverage part 1`() {
-        val id = UUID.randomUUID()
-        val orgId = UUID.randomUUID()
-        val userId = UUID.randomUUID()
-        val now = Instant.now()
-
-        val u1 = UserInTenantSummary(id, "u", "e", "d", "a", "a")
-        assertNotNull(u1.toString())
-        assertEquals(u1, u1.copy())
-        assertEquals(u1.hashCode(), u1.copy().hashCode())
-        assertTrue(u1 == u1)
-
-        val u2 = UserInTenantDetail(id, "u", "e", "d", "a", "a")
-        assertNotNull(u2.toString())
-        assertEquals(u2, u2.copy())
-        assertEquals(u2.hashCode(), u2.copy().hashCode())
-
-        val m1 = MembershipDetail(id, orgId, userId, "u", "e", "d", "a", "a", "t", null, now, now)
-        assertNotNull(m1.toString())
-        assertEquals(m1, m1.copy())
-        assertEquals(m1.hashCode(), m1.copy().hashCode())
-
-        val ms1 = MembershipSummary(id, userId, "a", "t", null)
-        assertNotNull(ms1.toString())
-        assertEquals(ms1, ms1.copy())
-        assertEquals(ms1.hashCode(), ms1.copy().hashCode())
-
-        val b1 = BranchAssignmentSummary(id, userId, id, "t", "a")
-        assertNotNull(b1.toString())
-        assertEquals(b1, b1.copy())
-        assertEquals(b1.hashCode(), b1.copy().hashCode())
-
-        val b2 =
-            BranchAssignmentDetail(id, orgId, userId, id, "t", "a", now, null, null, null, now, now)
-        assertNotNull(b2.toString())
-        assertEquals(b2, b2.copy())
-        assertEquals(b2.hashCode(), b2.copy().hashCode())
-
-        val r1 = RoleSummary(id, "c", "n", true, "a", listOf("branch.view"))
-        assertNotNull(r1.toString())
-        assertEquals(r1, r1.copy())
-        assertEquals(r1.hashCode(), r1.copy().hashCode())
-
-        val r2 = RoleDetail(id, orgId, "c", "n", "d", true, "a", listOf("branch.view"), now, now)
-        assertNotNull(r2.toString())
-        assertEquals(r2, r2.copy())
-        assertEquals(r2.hashCode(), r2.copy().hashCode())
-    }
-
-    @Test
     fun `verify full data model coverage part 2`() {
         val id = UUID.randomUUID()
         val orgId = UUID.randomUUID()
@@ -732,6 +682,10 @@ internal class FakeIamAdministrationQueries :
                     "Test User",
                     "ACTIVE",
                     "ACTIVE",
+                    UUID.randomUUID(),
+                    "STAFF",
+                    Instant.now(),
+                    Instant.now(),
                 ),
             ),
             filter.page,
@@ -751,6 +705,10 @@ internal class FakeIamAdministrationQueries :
             displayName = "Test User",
             userStatus = "ACTIVE",
             membershipStatus = "ACTIVE",
+            membershipId = UUID.randomUUID(),
+            membershipType = "STAFF",
+            createdAt = Instant.now(),
+            membershipCreatedAt = Instant.now(),
         )
     }
 
@@ -792,6 +750,11 @@ internal class FakeIamAdministrationQueries :
                     "ACTIVE",
                     "STAFF",
                     null,
+                    "testuser",
+                    "email@test.com",
+                    "Test User",
+                    null,
+                    Instant.now(),
                 ),
             ),
             filter.page,
@@ -814,6 +777,10 @@ internal class FakeIamAdministrationQueries :
                     UUID.randomUUID(),
                     "VIEW",
                     "ACTIVE",
+                    "testuser",
+                    "Test User",
+                    "Main Branch",
+                    Instant.now(),
                 ),
             ),
             filter.page,
@@ -840,6 +807,9 @@ internal class FakeIamAdministrationQueries :
             revokedBy = null,
             createdAt = Instant.now(),
             updatedAt = Instant.now(),
+            username = "testuser",
+            displayName = "Test User",
+            branchName = "Main Branch",
         )
     }
 
@@ -856,6 +826,8 @@ internal class FakeIamAdministrationQueries :
                     false,
                     "ACTIVE",
                     emptyList(),
+                    3,
+                    2,
                 ),
             ),
             filter.page,

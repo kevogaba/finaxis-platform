@@ -319,6 +319,11 @@ class PlatformTenantControllerTests
                             "KE",
                             "ACTIVE",
                             Instant.parse("2026-07-18T10:00:00Z"),
+                            "KES",
+                            "Africa/Nairobi",
+                            "COMPLETED",
+                            3,
+                            null,
                         ),
                     ),
                     number = 2,
@@ -336,6 +341,11 @@ class PlatformTenantControllerTests
                 }.andExpect {
                     status { isOk() }
                     jsonPath("$.items[0].id") { value(tenantId.toString()) }
+                    jsonPath("$.items[0].base_currency_code") { value("KES") }
+                    jsonPath("$.items[0].timezone") { value("Africa/Nairobi") }
+                    jsonPath("$.items[0].bootstrap_status") { value("COMPLETED") }
+                    jsonPath("$.items[0].active_branch_count") { value(3) }
+                    jsonPath("$.items[0].active_user_count") { isEmpty() }
                     jsonPath("$.page.number") { value(2) }
                     jsonPath("$.page.size") { value(20) }
                 }

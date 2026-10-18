@@ -23,6 +23,8 @@ data class MembershipFilter(
     val size: Int = 25,
     val sortBy: String? = null,
     val sortDir: String? = null,
+    /** Narrows to the one user's membership in the organisation. */
+    val userId: UUID? = null,
 )
 
 /** Filter parameters for branch assignment queries. */
@@ -39,6 +41,8 @@ data class BranchAssignmentFilter(
     val pinnedBranchId: UUID? = null,
     val sortBy: String? = null,
     val sortDir: String? = null,
+    /** Narrows to one user's assignments; a user also suppresses the [pinnedBranchId] default. */
+    val userId: UUID? = null,
 )
 
 /** Filter parameters for role queries. */

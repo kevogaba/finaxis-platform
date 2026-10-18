@@ -2,9 +2,11 @@ package com.finaxis.platform.lifecycle.application.query
 
 import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.application.ResourceNotFoundException
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.requireValidPage
 import com.finaxis.platform.common.web.api.requireValidSort
+import com.finaxis.platform.lifecycle.BranchVisibility
 import com.finaxis.platform.lifecycle.FoundationCaller
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.PlatformCaller
@@ -73,7 +75,19 @@ class FoundationQueryService(
                 }
             }
         val orgId = if (caller is TenantCaller) caller.activeOrganisationId else null
-        return store.searchTenants(scopedFilter, orgId)
+        val page = store.searchTenants(scopedFilter, orgId)
+        // A count is shown only to a caller who may list the rows it counts, tenant-wide.
+        val showBranches = holdsEverywhere(caller, orgId, "branch.view")
+        val showUsers = holdsEverywhere(caller, orgId, "user.view")
+        return page.copy(
+            items =
+                page.items.map {
+                    it.copy(
+                        activeBranchCount = it.activeBranchCount.takeIf { showBranches },
+                        activeUserCount = it.activeUserCount.takeIf { showUsers },
+                    )
+                },
+        )
     }
 
     /**
@@ -135,7 +149,58 @@ class FoundationQueryService(
                     null
                 }
             }
-        return store.searchBranches(organisationId, filter, visibleBranchIds)
+        val page = store.searchBranches(organisationId, filter, visibleBranchIds)
+        // A branch's user count is shown only where the caller may list its assignments.
+        val assignments = assignmentVisibility(caller, organisationId)
+        return page.copy(
+            items =
+                page.items.map { branch ->
+                    branch.copy(
+                        activeUserCount =
+                            branch.activeUserCount.takeIf { assignments.canSee(branch.id) },
+                    )
+                },
+        )
+    }
+
+    private fun assignmentVisibility(
+        caller: FoundationCaller,
+        organisationId: UUID,
+    ): BranchVisibility =
+        when (caller) {
+            is TenantCaller -> {
+                permissionGuard.branchVisibility(
+                    caller.actorId,
+                    organisationId,
+                    "branch_assignment.view",
+                )
+            }
+
+            is PlatformCaller -> {
+                permissionGuard.branchVisibility(
+                    caller.actorId,
+                    PlatformOrganisation.ID,
+                    "branch_assignment.view",
+                )
+            }
+        }
+
+    /**
+     * True when the caller holds the view [permissionCode] tenant-wide: in its own organisation,
+     * or, for a platform caller, in the platform organisation.
+     */
+    private fun holdsEverywhere(
+        caller: FoundationCaller,
+        tenantOrganisationId: UUID?,
+        permissionCode: String,
+    ): Boolean {
+        val organisationId =
+            when (caller) {
+                is TenantCaller -> requireNotNull(tenantOrganisationId)
+                is PlatformCaller -> PlatformOrganisation.ID
+            }
+        return permissionGuard.branchVisibility(caller.actorId, organisationId, permissionCode) is
+            BranchVisibility.AllBranches
     }
 
     /** Retrieves detailed business date history metadata by id, validating caller context. */

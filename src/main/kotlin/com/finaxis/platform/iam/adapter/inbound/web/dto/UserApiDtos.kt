@@ -11,6 +11,7 @@ import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.NotNull
 import jakarta.validation.constraints.Pattern
 import jakarta.validation.constraints.Size
+import java.time.Instant
 import java.util.UUID
 
 /** Request payload for inviting a user into the active tenant. */
@@ -63,7 +64,10 @@ data class UserInvitationResultResponse(
     val membershipStatus: String,
 )
 
-/** Tenant-scoped summary of a user and membership state. */
+/**
+ * Tenant-scoped summary of a user and membership state. [id] is the user id; [createdAt] is the
+ * account's and [membershipCreatedAt] the membership's.
+ */
 data class UserInTenantSummaryResponse(
     val id: UUID,
     val username: String,
@@ -71,6 +75,10 @@ data class UserInTenantSummaryResponse(
     val displayName: String,
     val userStatus: String,
     val membershipStatus: String,
+    val membershipId: UUID,
+    val membershipType: String,
+    val createdAt: Instant,
+    val membershipCreatedAt: Instant,
 )
 
 /** Request payload for suspending a global user account. */

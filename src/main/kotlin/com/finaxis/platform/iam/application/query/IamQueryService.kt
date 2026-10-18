@@ -3,6 +3,7 @@ package com.finaxis.platform.iam.application.query
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.application.ResourceNotFoundException
+import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.requireValidPage
 import com.finaxis.platform.common.web.api.requireValidSort
@@ -172,7 +173,8 @@ class IamQueryService(
      * caller sees the assignments of the branches it holds `branch_assignment.view` on (all of
      * them for a tenant-wide grant), restricted in the query; an explicit branch outside that set,
      * or no grant at all, is 403. Without an explicit branch the list defaults to the selected
-     * branch if the caller may view it, for every tenant caller alike.
+     * branch if the caller may view it, for every tenant caller alike, unless a `user_id` is
+     * given.
      */
     @GatedRead
     fun searchBranchAssignments(
@@ -194,7 +196,7 @@ class IamQueryService(
                 // One rule for every tenant caller: with no explicit branch the list defaults to
                 // the selected branch when the caller may view it, and is every viewable branch
                 // otherwise. It only ever narrows; visibility alone decides what may be seen.
-                branchId = branchId ?: filter.pinnedBranchId?.takeIf(visibility::canSee)
+                branchId = branchId ?: filter.defaultBranch { visibility.canSee(it) }
             }
 
             is PlatformCaller -> {
@@ -202,7 +204,7 @@ class IamQueryService(
                     caller.actorId,
                     "branch_assignment.view",
                 )
-                branchId = branchId ?: filter.pinnedBranchId
+                branchId = branchId ?: filter.defaultBranch { true }
             }
         }
         requireValidSort(filter.sortBy, filter.sortDir, allowedBranchAssignmentSorts)
@@ -287,7 +289,12 @@ class IamQueryService(
                 )
             }
         }
-        return roleQueries.searchRoles(organisationId, filter)
+        val page = roleQueries.searchRoles(organisationId, filter)
+        return if (permissionGuard.listsEveryRoleAssignment(caller, organisationId)) {
+            page
+        } else {
+            page.copy(items = page.items.map { it.copy(activeUserCount = null) })
+        }
     }
 
     /** Retrieves detailed role metadata by id, validating caller context and permissions. */
@@ -571,3 +578,31 @@ class IamQueryService(
             )
     }
 }
+
+/**
+ * The selected branch as the list's default, when the caller may see it. None once the caller
+ * names a user: that asks for the user's assignments everywhere, and a default branch would
+ * silently drop the rest.
+ */
+private inline fun BranchAssignmentFilter.defaultBranch(canSee: (UUID) -> Boolean): UUID? =
+    pinnedBranchId?.takeIf { userId == null && canSee(it) }
+
+/**
+ * True when the caller may list every role assignment of the organisation, which is what a role's
+ * `active_user_count` counts: a tenant-wide `role_assignment.view` (the platform organisation's,
+ * for a platform caller). A branch-scoped holder sees only some of those rows, so the count is
+ * withheld rather than leak the others.
+ */
+private fun PermissionGuard.listsEveryRoleAssignment(
+    caller: FoundationCaller,
+    organisationId: UUID,
+): Boolean =
+    when (caller) {
+        is TenantCaller -> {
+            branchVisibility(caller.actorId, organisationId, "role_assignment.view")
+        }
+
+        is PlatformCaller -> {
+            branchVisibility(caller.actorId, PlatformOrganisation.ID, "role_assignment.view")
+        }
+    } is BranchVisibility.AllBranches

@@ -29,6 +29,9 @@ data class BranchAssignmentDetailResponse(
     val revokedBy: UUID?,
     val createdAt: Instant,
     val updatedAt: Instant,
+    val username: String,
+    val displayName: String,
+    val branchName: String,
 )
 
 /** Summary response for a user branch assignment. */
@@ -38,4 +41,8 @@ data class BranchAssignmentSummaryResponse(
     val branchId: UUID,
     val assignmentType: String,
     val status: String,
+    val username: String,
+    val displayName: String,
+    val branchName: String,
+    val assignedAt: Instant,
 )

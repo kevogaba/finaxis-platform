@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web.dto
 
 import com.fasterxml.jackson.annotation.JsonFormat
+import com.fasterxml.jackson.annotation.JsonInclude
 import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.Reason
 import io.swagger.v3.oas.annotations.media.Schema
@@ -150,4 +151,21 @@ data class BranchSummaryResponse(
     val branchType: String,
     val status: String,
     val createdAt: Instant,
+    val parentBranchId: UUID?,
+    val timezone: String,
+    @field:JsonFormat(pattern = "dd-MM-yyyy")
+    @field:Schema(example = "18-07-2026", type = "string")
+    val openedOn: LocalDate?,
+    @field:JsonFormat(pattern = "dd-MM-yyyy")
+    @field:Schema(example = "18-07-2026", type = "string")
+    val closedOn: LocalDate?,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "Distinct users with an ACTIVE assignment to the branch. `null` when the caller " +
+                "may not list the branch's assignments (branch_assignment.view).",
+    )
+    val activeUserCount: Int?,
 )
