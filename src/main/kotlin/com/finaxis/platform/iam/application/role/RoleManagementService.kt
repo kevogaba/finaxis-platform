@@ -184,6 +184,15 @@ class RoleManagementService(
     /** Assigns a role idempotently after validating organisation membership and scope. */
     @Transactional
     fun assignRoleToUser(command: AssignRoleToUser): RoleAssignmentResult {
+        // Authorise before any lookup, so a caller without the grant learns nothing about which
+        // membership, role or branch ids exist.
+        requireRoleAssignmentPermission(
+            command.actorId,
+            command.organisationId,
+            command.scopeType,
+            command.branchId,
+            "user.assign_role",
+        )
         val membership =
             persistence
                 .membership(
@@ -194,15 +203,8 @@ class RoleManagementService(
         conflictUnless(
             persistence.organisationStatus(command.organisationId) == OrganisationStatus.ACTIVE,
         )
-        requiredRole(command.organisationId, command.roleId)
+        val role = requiredRole(command.organisationId, command.roleId)
         validateScope(command)
-        requireRoleAssignmentPermission(
-            command.actorId,
-            command.organisationId,
-            command.scopeType,
-            command.branchId,
-            "user.assign_role",
-        )
         persistence
             .activeRoleAssignment(
                 command.organisationId,
@@ -211,6 +213,10 @@ class RoleManagementService(
                 command.scopeType,
                 command.branchId,
             )?.let { return RoleAssignmentResult(it, ACTIVE) }
+        // Only a new assignment needs an ACTIVE role, so a repeat of one that exists stays
+        // idempotent. A DISABLED or ARCHIVED role grants nothing but would start to once it is
+        // re-enabled; the invitation path already refuses it the same way.
+        invalidOperationUnless(role.status == RoleStatus.ACTIVE)
         val assignmentId =
             persistence.assignRole(
                 command.organisationId,

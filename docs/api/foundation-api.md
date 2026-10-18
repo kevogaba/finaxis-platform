@@ -1857,6 +1857,12 @@ row's branch; `TENANT`-scope rows need the tenant-wide view.
   they are absent from the list and `403` by id or by `branch_id`, and the revoke below treats
   them as rows it may not touch.
 
+- `POST /`: the permission is checked before the user, role or branch is looked up. A role that is
+  not `ACTIVE` (`DISABLED` or `ARCHIVED`) is `422 invalid_operation` when the assignment would be
+  created: it grants nothing, but would start to once it was re-enabled. This matches the
+  invitation path. Repeating an assignment that already exists returns it, whatever the role's
+  status, so the call stays idempotent.
+
 **Revoke is an authorised combined lookup.** `DELETE /{assignment_id}` takes only the assignment
 id, and the permission check depends on the assignment's scope, so the service resolves that scope
 itself: it first works out, from the caller's grants alone, where the caller may revoke (the

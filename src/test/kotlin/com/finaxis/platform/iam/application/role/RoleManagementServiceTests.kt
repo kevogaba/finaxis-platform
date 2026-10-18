@@ -581,6 +581,54 @@ class RoleManagementServiceTests {
         assertEquals("conflict", exception.code)
     }
 
+    /** A role that grants nothing is not assignable: it would start granting when re-enabled. */
+    @Test
+    fun `assigning a role that is not active is an invalid operation and writes nothing`() {
+        fixture.persistence.memberships[fixture.userId] = fixture.activeMembership()
+        listOf(RoleStatus.DISABLED, RoleStatus.ARCHIVED).forEach { status ->
+            fixture.persistence.roles[fixture.roleId] = fixture.tenantRole().copy(status = status)
+
+            val exception =
+                assertFailsWith<InvalidOperationException> {
+                    fixture.service.assignRoleToUser(fixture.assignRole())
+                }
+
+            assertEquals("invalid_operation", exception.code)
+        }
+        assertTrue(fixture.persistence.assignedScopes.isEmpty())
+        assertTrue(fixture.audits.events.isEmpty())
+    }
+
+    /** Repeating an assignment that exists stays idempotent even if its role has been disabled. */
+    @Test
+    fun `repeating an existing assignment of a disabled role returns it and writes nothing`() {
+        fixture.persistence.roles[fixture.roleId] =
+            fixture.tenantRole().copy(status = RoleStatus.DISABLED)
+        fixture.persistence.memberships[fixture.userId] = fixture.activeMembership()
+        fixture.persistence.activeAssignments += fixture.assignmentId
+
+        val result = fixture.service.assignRoleToUser(fixture.assignRole())
+
+        assertEquals(RoleAssignmentResult(fixture.assignmentId, "ACTIVE"), result)
+        assertTrue(fixture.persistence.assignedScopes.isEmpty())
+        assertTrue(fixture.audits.events.isEmpty())
+    }
+
+    /** Authorisation precedes every lookup: an unauthorised caller learns nothing about the ids. */
+    @Test
+    fun `assigning a role is refused before any lookup without the permission`() {
+        doThrow(MissingPermissionException("user.assign_role"))
+            .`when`(fixture.permissionGuard)
+            .requireTenantPermission(fixture.actorId, fixture.organisationId, "user.assign_role")
+
+        // Nothing is seeded, so a lookup first would have answered 404 for the membership.
+        assertFailsWith<MissingPermissionException> {
+            fixture.service.assignRoleToUser(fixture.assignRole())
+        }
+
+        assertTrue(fixture.persistence.assignedScopes.isEmpty())
+    }
+
     /** Assigns tenant-scoped roles without a branch and clears the membership permission cache. */
     @Test
     fun `assigning tenant scoped role persists assignment and emits audit metadata`() {
