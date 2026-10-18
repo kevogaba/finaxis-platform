@@ -89,6 +89,59 @@ membership/organisation, or a persistence failure all still retry as before. A f
 provisioning job is re-run on re-approval under its existing id: see
 [Failed Keycloak provisioning](../operations/tenant-provisioning.md#failed-keycloak-provisioning).
 
+## Job inputs and personal data (decision, #275)
+
+JobRunr stores each job request as JSON in `jobrunr_jobs`, and the request is also what an
+operator sees on the JobRunr dashboard. Two requests carry personal data, **of every invited user**
+(the initial administrator is one case; `UserProvisioningService.approveUser` publishes the same
+values for each approved membership); the rest carry ids only:
+
+- `KeycloakUserProvisioningJobRequest`: `email`, `username`, `displayName`.
+- `ApplicationInviteJobRequest`: `email`.
+- `SendWelcomeEmailJobRequest`, `InitialAdministratorBootstrapJobRequest`,
+  `KeycloakInvitationResendJobRequest` and `BuildDailyBalanceJobRequest`: none (ids, dates and an
+  attempt count).
+
+The same values also travel in the metadata of the externalized transition events
+(`UserProvisioningService`, `InitialAdministratorBootstrapService`), so they sit in three places:
+`jobrunr_jobs`, the outbox tables and the RabbitMQ message until it is consumed. **The outbox keeps
+its copy:** `namastack.outbox.processing.delete-completed-records` is `false` in `application.yaml`
+(completed `outbox_record` rows are retained for inspection, see
+[transactional-outbox-amqp.md](../architecture/transactional-outbox-amqp.md)), so that copy is held
+indefinitely. Moving the two job requests to ids only would therefore close one of three places.
+
+**Decision (owner, 2026-10-18): accepted and documented, no payload change.** The reasons:
+
+- The JobRunr dashboard is on by default for local development and off in the `production`
+  profile (`application-production.yaml`), so it is not a way to read these values in production.
+- The same values already live in `user_account`, so anyone who can read `jobrunr_jobs` or the
+  outbox tables through the database can read them there as well; those tables add no new class of
+  reader.
+- Changing the job requests alone is a half fix, and changing the event metadata as well alters an
+  externalized event contract (consumers, in-flight messages) for no reader the first point leaves
+  out.
+
+What the decision does **not** cover:
+
+- **Retention.** Nothing here removes these copies. JobRunr's own maintenance only ages out
+  *succeeded* jobs (the repository sets none of its retention properties); a *failed* job, such as
+  a permanently failed invite or a provisioning job that exhausted its retries, keeps its request
+  until an operator deletes it. Completed outbox rows are kept by configuration. Rows already
+  written keep their values. Treat `jobrunr_jobs`, the outbox tables and the broker as holding
+  every invited user's email and username, and restrict their access like `user_account`.
+- **A retention procedure** for failed jobs and completed outbox rows is not defined by this
+  decision. It is the first thing to add if retention is ever required (delete failed jobs once
+  resolved; enable `delete-completed-records` or purge `outbox_record` on a schedule).
+
+Revisit it if the dashboard is ever enabled in production, if read access to the JobRunr or outbox
+tables is widened beyond the roles that can read `user_account`, or if a data-protection
+requirement names them. The plan then has two steps, **readers first** so that no release mixes
+versions that disagree. Release one deploys handlers that read the email, username and display
+name from the membership snapshot (`JooqUserProvisioningStore.membershipSnapshot`) while the
+producers still fill the fields; this makes an older worker, a newer worker or a rollback all
+behave the same. Release two stops filling the fields (keeping them defaulted so queued jobs still
+deserialise), and a later release removes them. The event metadata changes after that.
+
 ## Keycloak admin gateway
 
 The Keycloak admin adapter is enabled only when
