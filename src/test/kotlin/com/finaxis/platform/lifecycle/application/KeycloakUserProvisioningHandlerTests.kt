@@ -74,6 +74,7 @@ class KeycloakUserProvisioningHandlerTests {
             clock,
             mock(com.finaxis.platform.lifecycle.PermissionGuard::class.java),
             failedJobRequeuer,
+            allControlsOn(),
         )
     private val fakeBootstrapStore =
         object : InitialAdministratorBootstrapStore {
@@ -147,6 +148,7 @@ class KeycloakUserProvisioningHandlerTests {
             override fun ensureBusinessDate(
                 organisationId: UUID,
                 date: java.time.LocalDate,
+                overwrite: Boolean,
             ) = Unit
 
             override fun timezone(organisationId: UUID): String = "UTC"

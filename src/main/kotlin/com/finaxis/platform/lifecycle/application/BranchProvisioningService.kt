@@ -39,6 +39,7 @@ class BranchProvisioningService(
     private val auditService: AuditService,
     private val eventPublisher: TransitionEventPublisher,
     private val permissionGuard: PermissionGuard,
+    private val makerChecker: MakerCheckerPolicy,
 ) {
     /** Creates a branch draft under an active or provisioning organisation. */
     @Transactional
@@ -215,7 +216,7 @@ class BranchProvisioningService(
             ActingScope.PLATFORM -> requirePlatformCheckerOpen(command.organisationId)
             ActingScope.TENANT -> lifecycleStore.lockOrganisation(command.organisationId)
         }
-        requireApproverIsNotBranchMaker(command)
+        val selfApproved = requireApproverIsNotBranchMaker(command)
         conflictUnless(
             lifecycleStore.organisationState(command.organisationId) ==
                 OrganisationLifecycleState.ACTIVE,
@@ -228,6 +229,19 @@ class BranchProvisioningService(
                 TransitionCommand(reason = command.reason?.value),
             ),
         )
+        if (selfApproved) {
+            // The FSM row records the activation; this one carries the fact it cannot: the
+            // approver made or amended the branch and the tenant has switched that rule off.
+            audit(
+                command.organisationId,
+                command.branchId.toString(),
+                command.branchId,
+                BRANCH_SELF_APPROVE_AUDIT_ACTION,
+                command.actorId.toString(),
+                severity = AuditSeverity.HIGH,
+                reason = command.reason?.value,
+            )
+        }
         if (command.scope == ActingScope.PLATFORM) {
             audit(
                 command.organisationId,
@@ -526,7 +540,7 @@ class BranchProvisioningService(
      * its own code, [LifecycleErrorCodes.APPROVER_IS_BRANCH_MAKER] (#156), and the audit reason
      * follows the code.
      */
-    private fun requireApproverIsNotBranchMaker(command: ActivateBranchCommand) {
+    private fun requireApproverIsNotBranchMaker(command: ActivateBranchCommand): Boolean {
         val actedAsMaker =
             isBranchMaker(
                 command.actorId,
@@ -534,6 +548,22 @@ class BranchProvisioningService(
                 command.branchId,
                 includeSubmitter = command.scope == ActingScope.PLATFORM,
             )
+        if (command.scope == ActingScope.TENANT &&
+            !makerChecker.requiredForBranchCreation(command.organisationId)
+        ) {
+            // Segregation switched off for this tenant's own approvers: nobody is refused, but an
+            // approval by the maker or an amender is reported so it is audited HIGH. The platform
+            // checker is a platform safeguard (ADR 0028) and is always held to the rule.
+            return actedAsMaker ||
+                (
+                    command.actorId != SystemActor.ID &&
+                        lifecycleStore.hasAmended(
+                            command.organisationId,
+                            command.branchId,
+                            command.actorId,
+                        )
+                )
+        }
         val refusal =
             when {
                 actedAsMaker -> {
@@ -556,7 +586,7 @@ class BranchProvisioningService(
                 }
 
                 else -> {
-                    return
+                    return false
                 }
             }
         auditService.recordIndependently(
@@ -677,6 +707,7 @@ class BranchProvisioningService(
         metadata: Map<String, String> = emptyMap(),
         reason: String? = null,
         subjectUserId: java.util.UUID? = null,
+        severity: AuditSeverity = AuditSeverity.INFO,
     ) {
         auditService.record(
             AuditCommand(
@@ -689,6 +720,7 @@ class BranchProvisioningService(
                 branchId = branchId.toString(),
                 subjectUserId = subjectUserId?.toString(),
                 outcome = AuditOutcome.SUCCESS,
+                severity = severity,
                 reason = reason,
                 metadata = metadata,
             ),
@@ -713,6 +745,12 @@ class BranchProvisioningService(
         val BRANCH_ACTIVATE_AUDIT_ACTION =
             "${BRANCH_AUDIT_ENTITY_TYPE.lowercase()}." +
                 BranchLifecycleTransition.ACTIVATE.name.lowercase()
+
+        /**
+         * The action of the extra row an activation writes when the approver made or amended the
+         * branch and the tenant has switched that segregation off.
+         */
+        const val BRANCH_SELF_APPROVE_AUDIT_ACTION = "branch.self_approve"
     }
 }
 

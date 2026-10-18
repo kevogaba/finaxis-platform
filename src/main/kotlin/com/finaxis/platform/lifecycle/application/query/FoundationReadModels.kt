@@ -50,6 +50,20 @@ data class TenantDetail(
     val registrationNumber: String? = null,
     val requestedBy: ActorRef? = null,
     val submittedBy: ActorRef? = null,
+    /**
+     * The initial administrator as drafted, for a platform caller who may amend the draft, and
+     * only while the tenant is a draft; null otherwise. Personal data, so never shown to a tenant.
+     */
+    val administratorDraft: AdministratorDraftView? = null,
+)
+
+/** The initial-administrator details a tenant draft holds, in full (#271). */
+data class AdministratorDraftView(
+    val email: String,
+    val username: String,
+    val displayName: String,
+    val phoneE164: String?,
+    val sendApplicationInvite: Boolean,
 )
 
 /**

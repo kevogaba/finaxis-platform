@@ -19,33 +19,46 @@ import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioning
 internal class MembershipCheckerRule(
     private val store: UserProvisioningStore,
     private val auditService: AuditService,
+    private val policy: MakerCheckerPolicy,
 ) {
-    /** Throws, after auditing the refusal, when [command]'s approver made or is the membership. */
+    /**
+     * Throws, after auditing the refusal, when [command]'s approver made or is the membership.
+     * Returns true when the approver did, but the tenant has switched this segregation off for
+     * its own approvers, so the caller can audit the approval as a self-approval; false for an
+     * ordinary approval. The platform checker is always held to the rule.
+     */
     fun requireApproverIsNotMakerOrBeneficiary(
         command: ApproveUserCommand,
         snapshot: MembershipProvisioningSnapshot,
-    ) {
+    ): Boolean {
         val inviter = store.membershipInvitedBy(command.organisationId, command.membershipId)
+        val isMaker =
+            inviter != null &&
+                command.approvedBy != SystemActor.ID &&
+                command.approvedBy == inviter
+        val isBeneficiary = command.approvedBy == snapshot.userId
+        if (!isMaker && !isBeneficiary) return false
+        // Only the tenant's own approvers can be relaxed by the tenant: the platform checker is a
+        // platform safeguard (ADR 0028) that a tenant setting never loosens.
+        if (command.scope == ActingScope.TENANT &&
+            !policy.requiredForUserInvites(command.organisationId)
+        ) {
+            return true
+        }
         val refusal =
             when {
-                inviter != null &&
-                    command.approvedBy != SystemActor.ID &&
-                    command.approvedBy == inviter -> {
+                isMaker -> {
                     ForbiddenOperationException(
                         LifecycleErrorCodes.APPROVER_IS_MEMBERSHIP_MAKER,
                         LifecycleErrorCodes.APPROVER_IS_MEMBERSHIP_MAKER_DETAIL,
                     )
                 }
 
-                command.approvedBy == snapshot.userId -> {
+                else -> {
                     ForbiddenOperationException(
                         LifecycleErrorCodes.APPROVER_IS_MEMBERSHIP_BENEFICIARY,
                         LifecycleErrorCodes.APPROVER_IS_MEMBERSHIP_BENEFICIARY_DETAIL,
                     )
-                }
-
-                else -> {
-                    return
                 }
             }
         auditService.recordIndependently(

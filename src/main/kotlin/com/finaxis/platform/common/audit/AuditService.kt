@@ -334,6 +334,7 @@ class AuditService(
         reason: String? = null,
         requestId: String? = null,
         subjectUserId: UUID? = null,
+        severity: AuditSeverity = AuditSeverity.INFO,
     ): AuditEvent =
         record(
             baseCommand(
@@ -349,7 +350,7 @@ class AuditService(
                 requestId = requestId,
                 metadata = emptyMap(),
                 subjectUserId = subjectUserId,
-            ).copy(before = before, after = after),
+            ).copy(before = before, after = after, severity = severity),
         )
 
     private fun baseCommand(

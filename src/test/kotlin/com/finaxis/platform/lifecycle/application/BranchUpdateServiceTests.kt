@@ -43,6 +43,7 @@ class BranchUpdateServiceTests {
             audit,
             mock(TransitionEventPublisher::class.java),
             guard,
+            allControlsOn(),
         )
 
     private fun givenBranch(state: BranchLifecycleState = BranchLifecycleState.DRAFT) {

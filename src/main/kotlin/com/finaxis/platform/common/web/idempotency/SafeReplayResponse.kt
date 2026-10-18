@@ -177,7 +177,17 @@ class SafeReplayResponseFactory(
         const val ADDRESS_FIELD = "address"
         const val TENANT_SETTING_KEY_FIELD = "key"
         val TENANT_SETTING_RESPONSE_FIELDS: Set<String> =
-            setOf("key", "value", "value_type", "sensitive", "platform_admin_only")
+            setOf(
+                "key",
+                "value",
+                "value_type",
+                "sensitive",
+                "platform_admin_only",
+                "is_default",
+                "label",
+                "description",
+                "group",
+            )
 
         val CAMEL_CASE_BOUNDARY = Regex("([a-z0-9])([A-Z])")
         val ACRONYM_BOUNDARY = Regex("([A-Z]+)([A-Z][a-z])")

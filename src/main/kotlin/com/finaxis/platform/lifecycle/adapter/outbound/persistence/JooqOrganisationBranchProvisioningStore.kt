@@ -501,8 +501,18 @@ class JooqOrganisationBootstrapStore(
     override fun ensureBusinessDate(
         organisationId: UUID,
         date: LocalDate,
+        overwrite: Boolean,
     ) {
-        if (hasBusinessDate(organisationId)) return
+        if (hasBusinessDate(organisationId)) {
+            if (overwrite) {
+                dsl
+                    .update(BUSINESS_DATE)
+                    .set(BUSINESS_DATE.CURRENT_BUSINESS_DATE, date)
+                    .where(BUSINESS_DATE.ORGANISATION_ID.eq(organisationId))
+                    .execute()
+            }
+            return
+        }
         dsl
             .insertInto(BUSINESS_DATE)
             .set(BUSINESS_DATE.ORGANISATION_ID, organisationId)

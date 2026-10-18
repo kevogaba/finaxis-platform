@@ -4,6 +4,7 @@ import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.api.toResponse
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.TenantDetailResponse
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.toAdminResponse
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
 import com.finaxis.platform.lifecycle.application.query.TenantDetail
 import io.swagger.v3.oas.annotations.Operation
@@ -96,6 +97,7 @@ class TenantController(
             bootstrapFailureCode = bootstrapFailureCode,
             createdAt = createdAt,
             updatedAt = updatedAt,
+            admin = administratorDraft?.toAdminResponse(),
             requestedBy = requestedBy.toResponse(),
             submittedBy = submittedBy.toResponse(),
         )

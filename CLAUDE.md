@@ -321,6 +321,12 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   name is distinct from V26's `idx_audit_event_organisation_subject_time` (actor subject). jOOQ
   regenerates `AUDIT_EVENT.SUBJECT_USER_ID` and the index from V29 and V30 at build; never hand-edit
   generated code.
+- `V31__retire_legacy_setting_rows.sql` — **data only** (#272): closes (`effective_to`, no delete) the
+  current `organisation_setting` rows keyed `base_currency` (a read-only mirror of
+  `organisation.base_currency_code`) and `business-date.timezone` (seeded once by `V3`), which
+  nothing reads, and any current `false` of the two maker-checker switches (a saved default from
+  when nothing read them, which the release would otherwise turn into an opt-out). Idempotent, writes only `effective_to` and `updated_at`, asserts in-file that none
+  stays current; see `docs/operations/tenant-settings.md`.
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -353,8 +359,8 @@ seed (`branch.update`), `V20` a foundation CHECK pinning the platform organisati
 `V21` the move of branch approval to `branch.approve` (deprecating `branch.activate`), `V22`
 the permission catalogue's kind, grant scope and view requirements, `V23` the seeded
 administrator roles' grants, `V24` the closed bootstrap failure-code set, `V25`-`V28` the
-audit search indexes, and `V29`-`V30` the audit subject user (column and index); none is
-accounting.
+audit search indexes, `V29`-`V30` the audit subject user (column and index), and `V31` the
+retired legacy setting rows; none is accounting.
 Do not invent accounting tables or columns outside those documents.
 
 ## Authorization

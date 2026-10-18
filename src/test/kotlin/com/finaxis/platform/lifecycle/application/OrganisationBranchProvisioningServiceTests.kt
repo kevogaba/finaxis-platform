@@ -89,10 +89,11 @@ class OrganisationBranchProvisioningServiceTests {
             AuditService(audits, clock),
             events,
             permissionGuard,
+            allControlsOn(),
         )
 
     @Test
-    fun `creates organisation draft with timezone business date and requested settings`() {
+    fun `creates organisation draft with requested settings and leaves the business date unset`() {
         val result =
             organisations.createDraft(
                 CreateOrganisationDraftCommand(
@@ -110,7 +111,10 @@ class OrganisationBranchProvisioningServiceTests {
             )
 
         assertEquals(OrganisationLifecycleState.DRAFT, result.status)
-        assertEquals(LocalDate.of(2026, 7, 14), store.businessDates.getValue(result.organisationId))
+        assertNull(
+            store.businessDates[result.organisationId],
+            "no date is stored unless the caller names one: approval derives it from the timezone",
+        )
         val stored = store.settings.getValue(result.organisationId)
         assertNull(
             stored["base_currency"],
@@ -995,25 +999,27 @@ class OrganisationBranchProvisioningServiceTests {
     }
 
     @Test
-    fun `an amend carrying a business date is refused and writes nothing`() {
+    fun `an amend carrying a business date sets it`() {
         val organisationId = activeDraft()
         store.organisationStates[organisationId] = OrganisationLifecycleState.DRAFT
-        val administratorBefore = adminBootstrapStore.records.getValue(organisationId)
-        val auditedBefore = audits.events.size
 
-        val failure =
-            assertFailsWith<InvalidOperationException> {
-                organisations.amendDraft(
-                    amendDraftCommand(organisationId, "KES").copy(
-                        businessDate = LocalDate.of(2026, 7, 20),
-                    ),
-                )
-            }
+        organisations.amendDraft(
+            amendDraftCommand(organisationId, "KES").copy(
+                businessDate = LocalDate.of(2026, 7, 20),
+            ),
+        )
 
-        assertEquals("invalid_operation", failure.code)
-        assertTrue(failure.safeDetail.contains("business_date"))
-        assertEquals(administratorBefore, adminBootstrapStore.records.getValue(organisationId))
-        assertEquals(auditedBefore, audits.events.size)
+        assertEquals(LocalDate.of(2026, 7, 20), store.businessDates.getValue(organisationId))
+    }
+
+    @Test
+    fun `an amend without a business date leaves the stored one alone`() {
+        val organisationId = activeDraft()
+        store.organisationStates[organisationId] = OrganisationLifecycleState.DRAFT
+
+        organisations.amendDraft(amendDraftCommand(organisationId, "KES"))
+
+        assertEquals(LocalDate.of(2026, 7, 14), store.businessDates.getValue(organisationId))
     }
 
     @Test
@@ -1320,9 +1326,9 @@ private class ProvisioningFake(
     override fun ensureBusinessDate(
         organisationId: UUID,
         date: LocalDate,
+        overwrite: Boolean,
     ) {
-        businessDates[organisationId] =
-            date
+        if (overwrite || organisationId !in businessDates) businessDates[organisationId] = date
     }
 
     override fun hasRequiredMetadata(organisationId: UUID) = organisationId in metadataComplete
@@ -1842,6 +1848,7 @@ class BranchTargetResolutionTests {
             AuditService(audits, clock),
             events,
             permissionGuard,
+            allControlsOn(),
         )
 
     @Test
@@ -2032,6 +2039,7 @@ class PlatformCheckerBranchTests {
             AuditService(audits, clock),
             events,
             permissionGuard,
+            allControlsOn(),
         )
     private val organisationId = uuidV7()
     private val platformMaker = uuidV7()

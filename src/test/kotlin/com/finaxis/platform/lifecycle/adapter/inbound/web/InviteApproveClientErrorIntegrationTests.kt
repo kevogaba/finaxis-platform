@@ -28,6 +28,7 @@ import com.finaxis.platform.lifecycle.application.RoleAssignmentRequest
 import com.finaxis.platform.lifecycle.application.RoleAssignmentScopeType
 import com.finaxis.platform.lifecycle.application.UserDeactivationAssignmentRevoker
 import com.finaxis.platform.lifecycle.application.UserProvisioningService
+import com.finaxis.platform.lifecycle.application.allControlsOn
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
@@ -226,6 +227,7 @@ class InviteApproveClientErrorIntegrationTests
                 clock,
                 permissionGuard,
                 FailedJobRequeuer { JobRequeueOutcome.NOT_FAILED },
+                allControlsOn(),
             )
 
         private fun inviteCommand(

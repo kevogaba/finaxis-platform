@@ -45,8 +45,9 @@ class UserProvisioningService(
     private val clock: Clock,
     private val permissionGuard: PermissionGuard,
     private val failedJobRequeuer: FailedJobRequeuer,
+    makerChecker: MakerCheckerPolicy,
 ) {
-    private val membershipCheckerRule = MembershipCheckerRule(store, auditService)
+    private val membershipCheckerRule = MembershipCheckerRule(store, auditService, makerChecker)
 
     /**
      * Persists a local user invitation with branch and role prerequisites. The inviter must hold
@@ -199,7 +200,8 @@ class UserProvisioningService(
 
     private fun approve(command: ApproveUserCommand): UserApprovalResult {
         val snapshot = requireMembership(command.organisationId, command.membershipId)
-        membershipCheckerRule.requireApproverIsNotMakerOrBeneficiary(command, snapshot)
+        val selfApproved =
+            membershipCheckerRule.requireApproverIsNotMakerOrBeneficiary(command, snapshot)
         if (command.scope == ActingScope.PLATFORM) store.requirePlatformCheckerOpen(command)
         if (snapshot.status != MembershipLifecycleState.PENDING_APPROVAL) throw ConflictException()
         store.requireActiveAccessPrerequisites(command.organisationId, snapshot)
@@ -233,8 +235,9 @@ class UserProvisioningService(
                 mapOf(
                     MEMBERSHIP_ID to snapshot.id.toString(),
                     "membershipActivated" to membershipActivated.toString(),
-                ) + checkerScopeMetadata(command.scope),
+                ) + checkerScopeMetadata(command.scope) + selfApprovalMetadata(selfApproved),
             subjectUserId = snapshot.userId,
+            severity = if (selfApproved) AuditSeverity.HIGH else AuditSeverity.INFO,
         )
         val approved = requireMembership(command.organisationId, command.membershipId)
         return UserApprovalResult(
@@ -590,6 +593,7 @@ class UserProvisioningService(
         requestId: String? = null,
         metadata: Map<String, String> = emptyMap(),
         subjectUserId: UUID? = null,
+        severity: AuditSeverity = AuditSeverity.INFO,
     ) {
         auditService.record(
             AuditCommand(
@@ -600,6 +604,7 @@ class UserProvisioningService(
                 resourceType = resourceType,
                 resourceId = resourceId.toString(),
                 outcome = AuditOutcome.SUCCESS,
+                severity = severity,
                 reason = reason,
                 requestId = requestId,
                 metadata = metadata,
@@ -684,6 +689,10 @@ private fun PermissionGuard.requirePlatformChecker(command: ApproveUserCommand) 
     requirePlatformPermission(command.approvedBy, "user.approve")
     if (command.organisationId == PlatformOrganisation.ID) throw ResourceNotFoundException()
 }
+
+/** Marks an approval that only passed because the tenant switched the segregation off. */
+internal fun selfApprovalMetadata(selfApproved: Boolean): Map<String, String> =
+    if (selfApproved) mapOf("selfApproved" to "true") else emptyMap()
 
 internal fun checkerScopeMetadata(scope: ActingScope): Map<String, String> =
     if (scope == ActingScope.PLATFORM) mapOf("checkerScope" to scope.name) else emptyMap()

@@ -3,7 +3,9 @@ package com.finaxis.platform.lifecycle.application
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.application.InvalidOperationException
+import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.audit.AuditSeverity
 import com.finaxis.platform.common.audit.Redacted
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
@@ -38,10 +40,12 @@ class TenantSettingsService(
     /** Creates or updates one tenant setting for an active organisation. */
     @Transactional
     fun createOrUpdate(command: CreateOrUpdateTenantSettingCommand): TenantSettingView {
-        requireActive(command.organisationId)
+        if (command.platformScope) requirePlatformAdministrator(command.actorId)
+        requireActive(command.organisationId, command.platformScope)
         val definition = TenantSettingCatalog.require(command.key)
-        authorize(definition, command.organisationId, command.actorId)
+        authorize(definition, command.organisationId, command.actorId, command.platformScope)
         refuseMirroredKey(command.key)
+        serialiseWithApprovals(command.organisationId, command.key)
         val canonical = TenantSettingCatalog.canonicalize(command.key, command.value)
 
         val before =
@@ -72,10 +76,12 @@ class TenantSettingsService(
      */
     @Transactional
     fun deactivate(command: DeactivateTenantSettingCommand) {
-        requireActive(command.organisationId)
+        if (command.platformScope) requirePlatformAdministrator(command.actorId)
+        requireActive(command.organisationId, command.platformScope)
         val definition = TenantSettingCatalog.require(command.key)
-        authorize(definition, command.organisationId, command.actorId)
+        authorize(definition, command.organisationId, command.actorId, command.platformScope)
         refuseMirroredKey(command.key)
+        serialiseWithApprovals(command.organisationId, command.key)
 
         val before = settingsStore.currentSetting(command.organisationId, command.key)
         val deactivated =
@@ -105,6 +111,7 @@ class TenantSettingsService(
     fun get(query: GetTenantSettingQuery): TenantSettingView {
         // Authorise per key before the stored row is read, so a caller without the permission
         // learns nothing about whether a key exists (403, never 400 or 404 first).
+        if (query.platformScope) return getAsPlatform(query)
         val definition = TenantSettingCatalog.definition(query.key)
         if (definition != null) {
             authorize(definition, query.organisationId, query.actorId, isMutation = false)
@@ -135,6 +142,7 @@ class TenantSettingsService(
     @GatedRead
     @Transactional(readOnly = true)
     fun list(query: ListTenantSettingsQuery): TenantSettingPage {
+        if (query.platformScope) return listAsPlatform(query)
         permissionGuard.requirePermission(
             query.actorId,
             query.organisationId,
@@ -162,25 +170,23 @@ class TenantSettingsService(
                 .filter { TenantSettingCatalog.definition(it.key) == null }
                 .map { view(it.key, definition = null, stored = it, rawValue = it.value) }
 
-        val sortedList = (catalogViews + extraViews).sortedBy { it.key }
+        return pageOf((catalogViews + extraViews).sortedBy { it.key }, query) { setting ->
+            val masked = setting.platformAdminOnly && !canManagePlatformSettings
+            if (masked && setting.value != null) setting.copy(value = MASK) else setting
+        }
+    }
+
+    private fun pageOf(
+        sortedList: List<TenantSettingView>,
+        query: ListTenantSettingsQuery,
+        shown: (TenantSettingView) -> TenantSettingView = { it },
+    ): TenantSettingPage {
         val total = sortedList.size.toLong()
         val fromIndex =
             boundedPageOffset(query.page, query.size, total)
                 ?: return TenantSettingPage(emptyList(), total)
-        val toIndex =
-            (fromIndex.toLong() + query.size.toLong())
-                .coerceAtMost(total)
-                .toInt()
-        val paginatedItems =
-            sortedList.subList(fromIndex, toIndex).map { setting ->
-                val masked = setting.platformAdminOnly && !canManagePlatformSettings
-                if (masked && setting.value != null) {
-                    setting.copy(value = MASK)
-                } else {
-                    setting
-                }
-            }
-        return TenantSettingPage(paginatedItems, total)
+        val toIndex = (fromIndex.toLong() + query.size.toLong()).coerceAtMost(total).toInt()
+        return TenantSettingPage(sortedList.subList(fromIndex, toIndex).map(shown), total)
     }
 
     /**
@@ -222,19 +228,84 @@ class TenantSettingsService(
         }
     }
 
-    private fun requireActive(organisationId: UUID) {
-        if (lifecycleStore.lifecycleState(organisationId) != OrganisationLifecycleState.ACTIVE) {
-            throw ConflictException()
+    /**
+     * A maker-checker switch is read by a membership or branch approval after it locks the
+     * organisation row, so a change takes the same lock: an approval then reads the switch as it
+     * stands once this change commits, never a value this change has already replaced.
+     */
+    private fun serialiseWithApprovals(
+        organisationId: UUID,
+        key: String,
+    ) {
+        if (key in TenantSettingCatalog.makerCheckerKeys) {
+            lifecycleStore.lockOrganisation(organisationId)
         }
+    }
+
+    private fun requireActive(
+        organisationId: UUID,
+        platformScope: Boolean = false,
+    ) {
+        if (platformScope) {
+            auditService.requireNotPlatformOrganisation(organisationId, SETTINGS_AUDIT_ACTION)
+        }
+        val state = lifecycleStore.lifecycleState(organisationId)
+        if (state == null && platformScope) throw ResourceNotFoundException()
+        if (state != OrganisationLifecycleState.ACTIVE) throw ConflictException()
+    }
+
+    private fun requirePlatformAdministrator(actorId: UUID) {
+        permissionGuard.requirePermission(
+            actorId,
+            PlatformOrganisation.ID,
+            PLATFORM_SETTING_PERMISSION,
+        )
+    }
+
+    /** Reads one platform-only setting of a tenant for a platform administrator. */
+    private fun getAsPlatform(query: GetTenantSettingQuery): TenantSettingView {
+        requirePlatformAdministrator(query.actorId)
+        auditService.requireNotPlatformOrganisation(query.organisationId, SETTINGS_AUDIT_ACTION)
+        if (lifecycleStore.lifecycleState(query.organisationId) == null) {
+            throw ResourceNotFoundException()
+        }
+        val definition = TenantSettingCatalog.require(query.key)
+        authorize(definition, query.organisationId, query.actorId, platformScope = true)
+        val stored = storedSetting(query.organisationId, query.key)
+        return view(query.key, definition, stored, rawValue = stored?.value)
+    }
+
+    /** Lists a tenant's platform-only settings, which only a platform administrator may see. */
+    private fun listAsPlatform(query: ListTenantSettingsQuery): TenantSettingPage {
+        requirePlatformAdministrator(query.actorId)
+        requireValidPage(query.page, query.size)
+        auditService.requireNotPlatformOrganisation(query.organisationId, SETTINGS_AUDIT_ACTION)
+        if (lifecycleStore.lifecycleState(query.organisationId) == null) {
+            throw ResourceNotFoundException()
+        }
+        val stored = settingsStore.currentSettingsList(query.organisationId).associateBy { it.key }
+        val views =
+            TenantSettingCatalog.definitions
+                .filter { it.platformAdminOnly }
+                .sortedBy { it.key }
+                .map { view(it.key, it, stored[it.key], stored[it.key]?.value) }
+        return pageOf(views, query)
     }
 
     private fun authorize(
         definition: TenantSettingDefinition,
         organisationId: UUID,
         actorId: UUID,
+        platformScope: Boolean = false,
         isMutation: Boolean = true,
     ) {
-        if (definition.platformAdminOnly) {
+        if (platformScope) {
+            // The platform administrator is no tenant member, so only a platform-only key is
+            // reachable here; the caller has already passed the platform permission.
+            if (!definition.platformAdminOnly) {
+                throw InvalidOperationException(safeDetail = NOT_PLATFORM_SETTING_DETAIL)
+            }
+        } else if (definition.platformAdminOnly) {
             permissionGuard.requirePermission(
                 actorId,
                 PlatformOrganisation.ID,
@@ -271,6 +342,13 @@ class TenantSettingsService(
             before = mapOf(key to auditValue(sensitive, beforeValue)),
             after = mapOf(key to auditValue(sensitive, afterValue)),
             reason = reason,
+            // Switching a maker-checker control is loosening a safeguard, so it is HIGH.
+            severity =
+                if (key in TenantSettingCatalog.makerCheckerKeys) {
+                    AuditSeverity.HIGH
+                } else {
+                    AuditSeverity.INFO
+                },
         )
     }
 
@@ -300,6 +378,10 @@ class TenantSettingsService(
             valueType = valueType,
             sensitive = sensitive,
             platformAdminOnly = platformAdminOnly,
+            isDefault = rawValue == null,
+            label = definition?.label,
+            description = definition?.description,
+            group = definition?.group,
         )
     }
 
@@ -330,10 +412,13 @@ class TenantSettingsService(
     }
 
     private companion object {
+        const val NOT_PLATFORM_SETTING_DETAIL =
+            "Only platform-only settings can be managed on the platform route."
         const val BASE_CURRENCY_MIRROR_DETAIL =
             "base_currency is derived from the organisation's base currency " +
                 "and cannot be changed here."
 
+        const val SETTINGS_AUDIT_ACTION = "settings.update"
         const val SETTINGS_UPDATED_TARGET = "finaxis.lifecycle.organisation.settings-updated"
         const val ORGANISATION_SETTING = "ORGANISATION_SETTING"
         const val SETTING_MUTATE_PERMISSION = "settings.update"

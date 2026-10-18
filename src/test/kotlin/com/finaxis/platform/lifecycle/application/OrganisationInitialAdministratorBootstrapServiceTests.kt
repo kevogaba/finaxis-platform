@@ -477,9 +477,9 @@ internal class BootstrapProvisioningFake(
     override fun ensureBusinessDate(
         organisationId: UUID,
         date: LocalDate,
+        overwrite: Boolean,
     ) {
-        businessDates[organisationId] =
-            date
+        if (overwrite || organisationId !in businessDates) businessDates[organisationId] = date
     }
 
     override fun hasRequiredMetadata(organisationId: UUID) = organisationId in metadataComplete

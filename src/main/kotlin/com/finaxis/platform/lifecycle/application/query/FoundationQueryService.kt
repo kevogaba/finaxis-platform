@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.application.query
 
 import com.finaxis.platform.common.application.GatedRead
+import com.finaxis.platform.common.application.MissingPermissionException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.application.shownTo
 import com.finaxis.platform.common.context.PlatformOrganisation
@@ -47,9 +48,32 @@ class FoundationQueryService(
                 permissionGuard.requirePlatformPermission(caller.actorId, "tenant.view")
             }
         }
-        return store.findTenantById(id)?.withMakersFor(caller)
+        return store.findTenantById(id)?.withMakersFor(caller)?.withAdministratorDraftFor(caller)
             ?: throw ResourceNotFoundException(safeDetail = "Tenant not found: $id")
     }
+
+    /**
+     * The administrator draft is personal data (email, username, phone), so it is shown to a
+     * platform caller who may amend the draft, and only while the tenant is a draft: the people
+     * who would pre-fill the amend form. Everyone else gets `null`, and no permission is named.
+     */
+    private fun TenantDetail.withAdministratorDraftFor(caller: FoundationCaller): TenantDetail =
+        if (caller is PlatformCaller &&
+            status == DRAFT_STATUS &&
+            mayAmendDrafts(caller.actorId)
+        ) {
+            this
+        } else {
+            copy(administratorDraft = null)
+        }
+
+    private fun mayAmendDrafts(actorId: UUID): Boolean =
+        try {
+            permissionGuard.requirePlatformPermission(actorId, "tenant.update_draft")
+            true
+        } catch (_: MissingPermissionException) {
+            false
+        }
 
     /** Searches tenant summaries, restricting results to caller's tenant scope if restricted. */
     @GatedRead
@@ -271,6 +295,7 @@ class FoundationQueryService(
         val allowedTenantSorts = setOf("tenantCode", "displayName", "countryCode", "createdAt")
         val allowedBranchSorts =
             setOf("branchCode", "branchName", "branchType", "status", "createdAt")
+        const val DRAFT_STATUS = "DRAFT"
     }
 }
 

@@ -50,6 +50,7 @@ class BranchCheckerRuleAuditTests {
             auditService,
             eventPublisher,
             permissionGuard,
+            allControlsOn(),
         )
     private val organisationId = uuidV7()
     private val branchId = uuidV7()
