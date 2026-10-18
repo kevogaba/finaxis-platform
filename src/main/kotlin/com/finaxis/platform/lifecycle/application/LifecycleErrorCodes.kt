@@ -111,4 +111,21 @@ object LifecycleErrorCodes {
     /** The safe detail that accompanies [PLATFORM_ORGANISATION_PROTECTED]. */
     const val PLATFORM_ORGANISATION_PROTECTED_DETAIL =
         FoundationLifecycleDefinitions.PLATFORM_ORGANISATION_PROTECTED_DETAIL
+
+    /**
+     * An invitation resend was asked for a member whose account is not `INVITED`: it has not been
+     * provisioned yet (retry or approve it) or it has already logged in (nothing to resend).
+     */
+    const val INVITATION_RESEND_NOT_APPLICABLE = "lifecycle.invitation_resend_not_applicable"
+
+    /** The safe detail that accompanies [INVITATION_RESEND_NOT_APPLICABLE]. */
+    const val INVITATION_RESEND_NOT_APPLICABLE_DETAIL =
+        "An invitation can be resent only to an account that is invited and has not signed in."
+
+    /** An invitation was resent inside the cooldown of the previous send. */
+    const val INVITATION_RESEND_TOO_SOON = "lifecycle.invitation_resend_too_soon"
+
+    /** The safe detail that accompanies [INVITATION_RESEND_TOO_SOON]. */
+    const val INVITATION_RESEND_TOO_SOON_DETAIL =
+        "This invitation was sent a moment ago; wait before sending it again."
 }

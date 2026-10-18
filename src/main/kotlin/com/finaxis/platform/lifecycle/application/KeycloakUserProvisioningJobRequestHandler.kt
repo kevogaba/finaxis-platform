@@ -58,6 +58,7 @@ class KeycloakUserProvisioningJobRequestHandler(
     }
 
     private fun provision(jobRequest: KeycloakUserProvisioningJobRequest) {
+        if (cancelIfRevoked(jobRequest)) return
         if (store.dispatchStatus(jobRequest.dispatchKey) == SUCCEEDED) {
             bootstrapService.completeBootstrapIfCorrelated(
                 jobRequest.organisationId,
@@ -149,6 +150,36 @@ class KeycloakUserProvisioningJobRequestHandler(
         )
     }
 
+    /**
+     * Ends the job when its membership was revoked while it was queued (#274): there is no member
+     * to provision, and failing would have JobRunr retry a job that can never succeed. The dispatch
+     * is left FAILED with its reason, so the invitation status shows what happened, unless it had
+     * already succeeded.
+     */
+    private fun cancelIfRevoked(jobRequest: KeycloakUserProvisioningJobRequest): Boolean {
+        val status =
+            store.membershipSnapshot(jobRequest.organisationId, jobRequest.membershipId)?.status
+        if (status != MembershipLifecycleState.REVOKED) return false
+        // A dispatch that already succeeded stays so: the invitation did go out, and a redelivered
+        // job must not rewrite that as a failure. The cancellation is audited with the state
+        // change, like every other dispatch outcome.
+        if (store.dispatchStatus(jobRequest.dispatchKey) != SUCCEEDED) {
+            dispatchOutcomeAuditor.recordFailure(
+                dispatchKey = jobRequest.dispatchKey,
+                externalSystemRef = KEYCLOAK,
+                actorId = jobRequest.actorId,
+                tenantId = jobRequest.organisationId,
+                action = KEYCLOAK_PROVISIONING_ACTION,
+                resourceId = jobRequest.userId.toString(),
+                subjectUserId = jobRequest.userId,
+                reason = "MembershipRevoked",
+                detail = "CANCELLED:MembershipRevoked",
+                metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
+            )
+        }
+        return true
+    }
+
     private fun inviteUserIfNeeded(jobRequest: KeycloakUserProvisioningJobRequest) {
         when (store.userStatus(jobRequest.userId)) {
             UserLifecycleState.PROVISIONING_IDP -> {
@@ -185,7 +216,9 @@ class KeycloakUserProvisioningJobRequestHandler(
                 )
             }
 
-            MembershipLifecycleState.ACTIVE -> {}
+            MembershipLifecycleState.ACTIVE,
+            MembershipLifecycleState.REVOKED,
+            -> {}
 
             else -> {
                 error("Membership is not waiting for activation.")

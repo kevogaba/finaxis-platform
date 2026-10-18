@@ -28,6 +28,7 @@ class UserProvisioningAmqpConfiguration {
             listOf(
                 "finaxis.lifecycle.user.keycloak-provisioning-requested",
                 "finaxis.lifecycle.user.application-invite-requested",
+                "finaxis.lifecycle.user.invitation-resend-requested",
                 "finaxis.lifecycle.user.deactivation-assignment-revoked",
             )
         const val USER_PROVISIONING_QUEUE = "finaxis.lifecycle.user-provisioning-events"

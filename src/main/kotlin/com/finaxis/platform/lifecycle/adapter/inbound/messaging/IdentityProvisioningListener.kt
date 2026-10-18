@@ -6,6 +6,7 @@ import com.finaxis.platform.common.jobs.deterministicJobId
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.lifecycle.application.ApplicationInviteJobRequest
+import com.finaxis.platform.lifecycle.application.KeycloakInvitationResendJobRequest
 import com.finaxis.platform.lifecycle.application.KeycloakUserProvisioningJobRequest
 import org.jobrunr.scheduling.JobRequestScheduler
 import org.springframework.amqp.AmqpRejectAndDontRequeueException
@@ -27,6 +28,7 @@ class IdentityProvisioningListener(
         when (event.target) {
             KEYCLOAK_TARGET -> scheduleKeycloakProvisioning(event)
             APPLICATION_INVITE_TARGET -> scheduleApplicationInvite(event)
+            INVITATION_RESEND_TARGET -> scheduleInvitationResend(event)
             else -> reject("Unexpected user provisioning target: ${event.target}", null)
         }
     }
@@ -59,6 +61,22 @@ class IdentityProvisioningListener(
         )
     }
 
+    private fun scheduleInvitationResend(event: ExternalizedTransitionEvent) {
+        event.requireMetadata(INVITATION_RESEND_METADATA)
+        val dispatchKey = event.requiredMetadata(DISPATCH_KEY)
+        val attempt = event.requiredMetadataInt(ATTEMPT)
+        // One job per resend: the attempt count the rate-limited touch just produced.
+        jobRequestScheduler.enqueue(
+            deterministicJobId("$dispatchKey:resend:$attempt"),
+            KeycloakInvitationResendJobRequest(
+                organisationId = event.requiredMetadataUuid(ORGANISATION_ID),
+                userId = event.requiredMetadataUuid(USER_ID),
+                dispatchKey = dispatchKey,
+                attempt = attempt,
+            ),
+        )
+    }
+
     private fun scheduleApplicationInvite(event: ExternalizedTransitionEvent) {
         event.requireMetadata(APPLICATION_INVITE_METADATA)
         val dispatchKey = event.requiredMetadata(DISPATCH_KEY)
@@ -78,6 +96,8 @@ class IdentityProvisioningListener(
         const val USER_PROVISIONING_QUEUE = "finaxis.lifecycle.user-provisioning-events"
         const val KEYCLOAK_TARGET = "finaxis.lifecycle.user.keycloak-provisioning-requested"
         const val APPLICATION_INVITE_TARGET = "finaxis.lifecycle.user.application-invite-requested"
+        const val INVITATION_RESEND_TARGET = "finaxis.lifecycle.user.invitation-resend-requested"
+        const val ATTEMPT = "attempt"
         const val ORGANISATION_ID = "organisationId"
         const val MEMBERSHIP_ID = "membershipId"
         const val USER_ID = "userId"
@@ -96,6 +116,8 @@ class IdentityProvisioningListener(
                 SEND_KEYCLOAK_INVITE,
                 DISPATCH_KEY,
             )
+        val INVITATION_RESEND_METADATA =
+            setOf(ORGANISATION_ID, USER_ID, DISPATCH_KEY, ATTEMPT)
         val APPLICATION_INVITE_METADATA =
             setOf(ORGANISATION_ID, MEMBERSHIP_ID, USER_ID, EMAIL, DISPATCH_KEY)
     }
@@ -112,6 +134,10 @@ private fun ExternalizedTransitionEvent.requiredMetadata(field: String): String 
 private fun ExternalizedTransitionEvent.requiredMetadataUuid(field: String): UUID =
     runCatching { UUID.fromString(requiredMetadata(field)) }
         .getOrElse { cause -> reject("Invalid UUID metadata for $field.", cause) }
+
+private fun ExternalizedTransitionEvent.requiredMetadataInt(field: String): Int =
+    requiredMetadata(field).toIntOrNull()
+        ?: reject("Invalid integer metadata for $field.", null)
 
 private fun ObjectMapper.readExternalizedTransitionEvent(
     body: ByteArray,

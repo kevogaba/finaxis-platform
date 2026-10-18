@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
 import com.finaxis.platform.common.web.api.toResponse
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.InvitationStatusResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.MembershipDetailResponse
 import com.finaxis.platform.lifecycle.application.query.LifecycleMembershipDetail
 
@@ -20,4 +21,8 @@ internal fun LifecycleMembershipDetail.toResponse() =
         createdAt = createdAt,
         updatedAt = updatedAt,
         createdBy = createdBy.toResponse(),
+        invitation =
+            invitation?.let {
+                InvitationStatusResponse(it.status, it.attempts, it.lastErrorCode, it.updatedAt)
+            },
     )

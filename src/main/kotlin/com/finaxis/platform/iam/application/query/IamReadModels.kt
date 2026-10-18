@@ -64,6 +64,8 @@ data class MembershipDetail(
     val updatedAt: Instant,
     /** Who invited this member, or null when the system did or the caller may not see them. */
     val createdBy: ActorRef? = null,
+    /** Where the member's identity provisioning stands (#274); null outside a detail read. */
+    val invitation: InvitationStatus? = null,
 )
 
 /** Summary projection of an organisation membership, with the user's names and the dates. */

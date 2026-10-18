@@ -14,6 +14,7 @@ import com.finaxis.platform.lifecycle.application.MembershipType
 import com.finaxis.platform.lifecycle.application.RoleAssignmentScopeType
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityDispatchType
 import com.finaxis.platform.lifecycle.application.port.outbound.MembershipProvisioningSnapshot
+import com.finaxis.platform.lifecycle.application.port.outbound.ResendTouch
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningAccessStore
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningAccountStore
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningDispatchStore
@@ -564,6 +565,61 @@ private class JooqUserProvisioningDispatchStore(
             .and(IDENTITY_DISPATCH_LOG.STATUS.eq(FAILED))
             .execute()
     }
+
+    override fun touchDispatchForResend(
+        userId: UUID,
+        cooldown: java.time.Duration,
+    ): ResendTouch {
+        val now = now(clock)
+        val succeeded =
+            IDENTITY_DISPATCH_LOG.USER_ID
+                .eq(userId)
+                .and(IDENTITY_DISPATCH_LOG.DISPATCH_TYPE.eq(KEYCLOAK_PROVISIONING))
+                .and(IDENTITY_DISPATCH_LOG.STATUS.eq(SUCCEEDED))
+        val newest =
+            dsl
+                .select(IDENTITY_DISPATCH_LOG.ID)
+                .from(IDENTITY_DISPATCH_LOG)
+                .where(succeeded)
+                .orderBy(IDENTITY_DISPATCH_LOG.UPDATED_AT.desc(), IDENTITY_DISPATCH_LOG.ID.desc())
+                .limit(1)
+        val touched =
+            dsl
+                .update(IDENTITY_DISPATCH_LOG)
+                .set(IDENTITY_DISPATCH_LOG.ATTEMPTS, IDENTITY_DISPATCH_LOG.ATTEMPTS.plus(1))
+                .set(IDENTITY_DISPATCH_LOG.UPDATED_AT, now)
+                .set(IDENTITY_DISPATCH_LOG.ROW_VERSION, IDENTITY_DISPATCH_LOG.ROW_VERSION.plus(1))
+                .where(IDENTITY_DISPATCH_LOG.ID.eq(newest))
+                .and(IDENTITY_DISPATCH_LOG.UPDATED_AT.le(now.minus(cooldown)))
+                .returning(IDENTITY_DISPATCH_LOG.DISPATCH_KEY, IDENTITY_DISPATCH_LOG.ATTEMPTS)
+                .fetchOne()
+        return when {
+            touched != null -> {
+                ResendTouch.Touched(
+                    requireNotNull(touched.dispatchKey),
+                    requireNotNull(touched.attempts),
+                )
+            }
+
+            dsl.fetchExists(IDENTITY_DISPATCH_LOG, succeeded) -> {
+                ResendTouch.TooSoon
+            }
+
+            else -> {
+                ResendTouch.NoDispatch
+            }
+        }
+    }
+
+    override fun linkedKeycloakSubject(userId: UUID): String? =
+        dsl
+            .select(KEYCLOAK_IDENTITY_LINK.SUBJECT)
+            .from(KEYCLOAK_IDENTITY_LINK)
+            .where(KEYCLOAK_IDENTITY_LINK.USER_ID.eq(userId))
+            .and(KEYCLOAK_IDENTITY_LINK.UNLINKED_AT.isNull)
+            .orderBy(KEYCLOAK_IDENTITY_LINK.LINKED_AT.desc())
+            .limit(1)
+            .fetchOne(KEYCLOAK_IDENTITY_LINK.SUBJECT)
 }
 
 private fun branchCondition(branchId: UUID?) =
@@ -575,6 +631,7 @@ private fun now(clock: Clock): OffsetDateTime = clock.instant().atOffset(ZoneOff
 private const val ACTIVE = "ACTIVE"
 private const val FAILED = "FAILED"
 private const val KEYCLOAK = "KEYCLOAK"
+private val KEYCLOAK_PROVISIONING = IdentityDispatchType.KEYCLOAK_PROVISIONING.name
 private const val PENDING = "PENDING"
 private const val REVOKED = "REVOKED"
 private const val SUCCEEDED = "SUCCEEDED"

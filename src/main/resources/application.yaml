@@ -390,6 +390,12 @@ finaxis:
       client-secret: ${FINAXIS_KEYCLOAK_ADMIN_CLIENT_SECRET:}
       connect-timeout-millis: ${FINAXIS_KEYCLOAK_ADMIN_CONNECT_TIMEOUT_MILLIS:5000}
       read-timeout-millis: ${FINAXIS_KEYCLOAK_ADMIN_READ_TIMEOUT_MILLIS:10000}
+      # The invitation email: the actions the user completes, how long the link lives, and an
+      # optional landing page (needs both the client that owns it and a redirect it allows).
+      invitation-required-actions: ${FINAXIS_KEYCLOAK_INVITATION_REQUIRED_ACTIONS:VERIFY_EMAIL,UPDATE_PASSWORD}
+      invitation-lifespan: ${FINAXIS_KEYCLOAK_INVITATION_LIFESPAN:72h}
+      invitation-redirect-uri: ${FINAXIS_KEYCLOAK_INVITATION_REDIRECT_URI:}
+      invitation-redirect-client-id: ${FINAXIS_KEYCLOAK_INVITATION_REDIRECT_CLIENT_ID:}
   security:
     cors:
       enabled: false

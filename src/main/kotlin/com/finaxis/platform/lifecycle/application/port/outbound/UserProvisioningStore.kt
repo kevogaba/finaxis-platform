@@ -196,6 +196,38 @@ interface UserProvisioningDispatchStore {
      * other status is left as it is, so a SUCCEEDED dispatch is never reopened.
      */
     fun markDispatchPending(dispatchKey: String)
+
+    /**
+     * Records one invitation resend against the user's newest SUCCEEDED Keycloak dispatch, in any
+     * organisation (the account is global: a tenant that activated an already-provisioned user has
+     * no dispatch of its own), adding one to its attempts, only when it last changed at least
+     * [cooldown] ago, which is the per-account rate limit: the check and the touch are one
+     * statement, so concurrent resends cannot both pass. The result says what happened: the
+     * dispatch's key and new attempt count, a dispatch still inside the cooldown, or no SUCCEEDED
+     * dispatch at all.
+     */
+    fun touchDispatchForResend(
+        userId: UUID,
+        cooldown: java.time.Duration,
+    ): ResendTouch = ResendTouch.NoDispatch
+
+    /** The Keycloak subject the user is linked to, or null when there is no active link. */
+    fun linkedKeycloakSubject(userId: UUID): String? = null
+}
+
+/** What recording an invitation resend against the user's dispatch came to. */
+sealed interface ResendTouch {
+    /** The resend was recorded against [dispatchKey], which now holds [attempt] attempts. */
+    data class Touched(
+        val dispatchKey: String,
+        val attempt: Int,
+    ) : ResendTouch
+
+    /** The account has a succeeded dispatch, touched less than the cooldown ago. */
+    data object TooSoon : ResendTouch
+
+    /** The account has no succeeded dispatch, so there is no invitation to send again. */
+    data object NoDispatch : ResendTouch
 }
 
 /** Snapshot used by the local provisioning workflow before approval or revocation. */

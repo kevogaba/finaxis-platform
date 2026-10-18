@@ -71,6 +71,50 @@ class KeycloakAdminGatewayTests {
     }
 
     @Test
+    fun `the invitation email asks for the configured actions with a lifespan`() {
+        `when`(keycloak.realm("finaxis")).thenReturn(realm)
+        `when`(realm.users()).thenReturn(users)
+        `when`(users.get("subject-3")).thenReturn(user)
+
+        gateway.sendRequiredActionsEmail("subject-3")
+
+        verify(user).executeActionsEmail(listOf("VERIFY_EMAIL", "UPDATE_PASSWORD"), 259_200)
+    }
+
+    @Test
+    fun `a configured redirect is sent with its client and the same lifespan`() {
+        `when`(keycloak.realm("finaxis")).thenReturn(realm)
+        `when`(realm.users()).thenReturn(users)
+        `when`(users.get("subject-4")).thenReturn(user)
+        val redirecting =
+            KeycloakAdminGateway(
+                keycloak,
+                KeycloakAdminProperties(
+                    serverUrl = "http://localhost:8080",
+                    realm = "finaxis",
+                    clientId = "finaxis-platform-admin",
+                    clientSecret = "secret",
+                    enabled = true,
+                    invitationRequiredActions = listOf("UPDATE_PASSWORD"),
+                    invitationLifespan = java.time.Duration.ofHours(1),
+                    invitationRedirectUri = "https://app.example.test/welcome",
+                    invitationRedirectClientId = "finaxis-web",
+                ),
+                circuitBreakers,
+            )
+
+        redirecting.sendRequiredActionsEmail("subject-4")
+
+        verify(user)
+            .executeActionsEmail(
+                "finaxis-web",
+                "https://app.example.test/welcome",
+                3_600,
+                listOf("UPDATE_PASSWORD"),
+            )
+    }
+
+    @Test
     fun `searches username before creating missing user`() {
         val response = Response.created(URI.create("http://keycloak/users/subject-2")).build()
         `when`(keycloak.realm("finaxis")).thenReturn(realm)
