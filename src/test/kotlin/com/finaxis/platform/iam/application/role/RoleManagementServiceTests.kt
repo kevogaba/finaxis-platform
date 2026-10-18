@@ -200,6 +200,50 @@ class RoleManagementServiceTests {
         assertEquals("role.deactivate", audit.action)
     }
 
+    /** The role is locked before its status is read, so a concurrent call sees the new state. */
+    @Test
+    fun `a status change locks the role before it decides`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+
+        fixture.service.deactivateRole(fixture.deactivateRole())
+
+        assertEquals("lock", fixture.persistence.calls.first())
+    }
+
+    /** A status change is legal from one state only: a repeat or a wrong-state call is a 409. */
+    @Test
+    fun `deactivating a role that is not active conflicts and writes nothing`() {
+        listOf(RoleStatus.DISABLED, RoleStatus.ARCHIVED).forEach { status ->
+            fixture.persistence.roles[fixture.roleId] = fixture.tenantRole().copy(status = status)
+
+            val exception =
+                assertFailsWith<ConflictException> {
+                    fixture.service.deactivateRole(fixture.deactivateRole())
+                }
+
+            assertEquals("conflict", exception.code)
+        }
+        assertTrue(fixture.persistence.statusChanges.isEmpty())
+        assertTrue(fixture.audits.events.isEmpty())
+    }
+
+    /** Only a disabled role is re-enabled; an active or archived one is never changed. */
+    @Test
+    fun `activating a role that is not disabled conflicts and writes nothing`() {
+        listOf(RoleStatus.ACTIVE, RoleStatus.ARCHIVED).forEach { status ->
+            fixture.persistence.roles[fixture.roleId] = fixture.tenantRole().copy(status = status)
+
+            val exception =
+                assertFailsWith<ConflictException> {
+                    fixture.service.activateRole(fixture.activateRole())
+                }
+
+            assertEquals("conflict", exception.code)
+        }
+        assertTrue(fixture.persistence.statusChanges.isEmpty())
+        assertTrue(fixture.audits.events.isEmpty())
+    }
+
     /** Records permission grants and invalidates every membership that receives the role. */
     @Test
     fun `assigning permission audits and evicts memberships with the role`() {

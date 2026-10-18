@@ -78,33 +78,31 @@ class RoleManagementService(
         return RoleResult(command.roleId, role.status)
     }
 
-    /** Activates a role that is visible in the selected organisation. */
+    /** Re-enables a disabled tenant-managed role that is visible in the selected organisation. */
     @Transactional
-    fun activateRole(command: ActivateRole): RoleResult = setStatus(command, RoleStatus.ACTIVE)
-
-    /** Disables a tenant-managed role that is visible in the selected organisation. */
-    @Transactional
-    fun deactivateRole(command: DeactivateRole): RoleResult {
-        requireTenantPermission(command.actorId, command.organisationId, "role.deactivate")
-        val role = requiredRole(command.organisationId, command.roleId)
-        requireMutable(role)
-        persistence.setRoleStatus(
+    fun activateRole(command: ActivateRole): RoleResult =
+        changeStatus(
             command.organisationId,
             command.roleId,
-            RoleStatus.DISABLED,
-            role.rowVersion,
-            command.actorId,
-        )
-        invalidateRoleMemberships(command.organisationId, command.roleId)
-        audit(
-            command.organisationId,
-            command.roleId,
-            "role.deactivate",
             command.actorId,
             command.requestId,
+            "role.activate",
+            RoleStatus.DISABLED,
+            RoleStatus.ACTIVE,
         )
-        return RoleResult(command.roleId, RoleStatus.DISABLED)
-    }
+
+    /** Disables an active tenant-managed role that is visible in the selected organisation. */
+    @Transactional
+    fun deactivateRole(command: DeactivateRole): RoleResult =
+        changeStatus(
+            command.organisationId,
+            command.roleId,
+            command.actorId,
+            command.requestId,
+            "role.deactivate",
+            RoleStatus.ACTIVE,
+            RoleStatus.DISABLED,
+        )
 
     /** Idempotently grants a catalogue permission and evicts affected permission caches. */
     @Transactional
@@ -339,29 +337,29 @@ class RoleManagementService(
         )
     }
 
-    private fun setStatus(
-        command: ActivateRole,
-        status: RoleStatus,
+    /**
+     * Moves a role from [from] to [to], the only legal source of that [action]. Any other status
+     * (a repeat, or a role that is archived) is a 409 before anything is written or audited.
+     */
+    private fun changeStatus(
+        organisationId: UUID,
+        roleId: UUID,
+        actorId: UUID,
+        requestId: String?,
+        action: String,
+        from: RoleStatus,
+        to: RoleStatus,
     ): RoleResult {
-        requireTenantPermission(command.actorId, command.organisationId, "role.activate")
-        val role = requiredRole(command.organisationId, command.roleId)
+        requireTenantPermission(actorId, organisationId, action)
+        // Locked, so of two concurrent calls the second reads the state the first left and is a
+        // clean 409, not a stale `row_version` write that surfaces as a 500.
+        val role = persistence.lockRole(organisationId, roleId).orResourceNotFound()
         requireMutable(role)
-        persistence.setRoleStatus(
-            command.organisationId,
-            command.roleId,
-            status,
-            role.rowVersion,
-            command.actorId,
-        )
-        invalidateRoleMemberships(command.organisationId, command.roleId)
-        audit(
-            command.organisationId,
-            command.roleId,
-            "role.activate",
-            command.actorId,
-            command.requestId,
-        )
-        return RoleResult(command.roleId, status)
+        conflictUnless(role.status == from)
+        persistence.setRoleStatus(organisationId, roleId, to, role.rowVersion, actorId)
+        invalidateRoleMemberships(organisationId, roleId)
+        audit(organisationId, roleId, action, actorId, requestId)
+        return RoleResult(roleId, to)
     }
 
     private fun requiredRole(
