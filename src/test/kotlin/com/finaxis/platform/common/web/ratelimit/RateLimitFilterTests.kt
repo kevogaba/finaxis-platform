@@ -276,6 +276,12 @@ class RateLimitFilterTests {
                     "/api/v1/platform/users/user-1",
                     RateLimitPolicyId.PLATFORM_COMMAND,
                 ),
+                Arguments.of("GET", "/api/v1/platform/users", RateLimitPolicyId.PLATFORM_READ),
+                Arguments.of(
+                    "GET",
+                    "/api/v1/platform/users/user-1",
+                    RateLimitPolicyId.PLATFORM_READ,
+                ),
                 Arguments.of("GET", "/api/v1/records", RateLimitPolicyId.TENANT_READ),
                 Arguments.of("POST", "/api/v1/records", RateLimitPolicyId.TENANT_COMMAND),
                 Arguments.of("PUT", "/api/v1/records/1", RateLimitPolicyId.TENANT_COMMAND),

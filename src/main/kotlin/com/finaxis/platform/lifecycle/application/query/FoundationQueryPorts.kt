@@ -15,6 +15,12 @@ data class TenantFilter(
     val size: Int = 25,
     val sortBy: String? = null,
     val sortDir: String? = null,
+    /**
+     * Whether a platform-wide search lists the reserved PLATFORM organisation. Off by default: it
+     * is not a tenant, and a client that dropped it itself saw short pages (#160). Reading it by
+     * id is unaffected, and a tenant caller's own search never lists it.
+     */
+    val includePlatform: Boolean = false,
 )
 
 /** Filter parameters for branch queries. */
