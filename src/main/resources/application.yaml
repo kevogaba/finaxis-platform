@@ -282,6 +282,12 @@ finaxis:
     # new posting queue behind it, so this bounds the tenant's whole posting path and not just the
     # operator's request.
     business-date-lock-timeout: ${FINAXIS_LIFECYCLE_BUSINESS_DATE_LOCK_TIMEOUT:10s}
+  audit:
+    # One denied-access audit row per 403 per caller, capped by a distributed bucket (#184).
+    denied-access:
+      enabled: ${FINAXIS_AUDIT_DENIED_ACCESS_ENABLED:true}
+      capacity: ${FINAXIS_AUDIT_DENIED_ACCESS_CAPACITY:10}
+      refill-period: ${FINAXIS_AUDIT_DENIED_ACCESS_REFILL_PERIOD:1m}
   pagination:
     default-page-size: ${FINAXIS_PAGINATION_DEFAULT_PAGE_SIZE:25}
     max-page-size: ${FINAXIS_PAGINATION_MAX_PAGE_SIZE:100}

@@ -815,7 +815,8 @@ class AssignmentLookupsByKeyIntegrationTests
             dsl
                 .fetchOne(
                     "SELECT " +
-                        "(SELECT count(*) FROM audit_event WHERE actor_user_id = ?), " +
+                        "(SELECT count(*) FROM audit_event WHERE actor_user_id = ? " +
+                        "AND action <> 'api.access_denied'), " +
                         "(SELECT count(*) FROM user_role_assignment " +
                         "WHERE organisation_id = ? AND status = 'ACTIVE'), " +
                         "(SELECT count(*) FROM user_branch_assignment " +

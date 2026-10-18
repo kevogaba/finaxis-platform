@@ -470,8 +470,9 @@ class OrganisationBranchProvisioningServiceTests {
                 DeprovisionedAssignment(uuidV7(), "USER_ROLE_ASSIGNMENT", null, secondUser),
             )
 
+        val administrator = uuidV7()
         organisations.deprovision(
-            DeprovisionOrganisationCommand(organisationId, req("contract ended"), uuidV7()),
+            DeprovisionOrganisationCommand(organisationId, req("contract ended"), administrator),
         )
 
         val revocations =
@@ -485,6 +486,10 @@ class OrganisationBranchProvisioningServiceTests {
         )
         // The row is about the organisation's assignment, so its resource is the organisation.
         assertEquals(setOf("ORGANISATION"), revocations.map { it.resourceType }.toSet())
+        // The administrator who deprovisioned acted, not the platform's system actor (#184), and
+        // ending access is HIGH by the severity policy.
+        assertEquals(setOf(administrator.toString()), revocations.map { it.actorId }.toSet())
+        assertEquals(setOf(AuditSeverity.HIGH), revocations.map { it.severity }.toSet())
     }
 
     @Test
@@ -601,6 +606,8 @@ class OrganisationBranchProvisioningServiceTests {
         val assigned = audits.events.single { it.action == "branch.assign_user" }
         assertEquals(userId.toString(), assigned.subjectUserId)
         assertEquals(command.assignedBy.toString(), assigned.actorId)
+        // Granting access takes the policy's MEDIUM, not a blanket INFO (#184).
+        assertEquals(AuditSeverity.MEDIUM, assigned.severity)
         assertTrue(
             events.events.all {
                 (it as? ExternalizedTransitionEvent)?.target ==
@@ -645,6 +652,11 @@ class OrganisationBranchProvisioningServiceTests {
         assertEquals(
             userId.toString(),
             audits.events.single { it.action == "branch.revoke_user" }.subjectUserId,
+        )
+        // Ending access is HIGH by the policy (#184).
+        assertEquals(
+            AuditSeverity.HIGH,
+            audits.events.single { it.action == "branch.revoke_user" }.severity,
         )
     }
 

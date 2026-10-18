@@ -707,7 +707,7 @@ class BranchProvisioningService(
         metadata: Map<String, String> = emptyMap(),
         reason: String? = null,
         subjectUserId: java.util.UUID? = null,
-        severity: AuditSeverity = AuditSeverity.INFO,
+        severity: AuditSeverity? = null,
     ) {
         auditService.record(
             AuditCommand(

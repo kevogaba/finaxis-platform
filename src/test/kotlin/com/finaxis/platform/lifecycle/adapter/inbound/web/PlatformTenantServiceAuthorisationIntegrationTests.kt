@@ -427,7 +427,8 @@ class PlatformTenantServiceAuthorisationIntegrationTests
         ): List<Long> =
             dsl
                 .fetchOne(
-                    "SELECT (SELECT count(*) FROM audit_event WHERE actor_user_id = ?), " +
+                    "SELECT (SELECT count(*) FROM audit_event WHERE actor_user_id = ? " +
+                        "AND action <> 'api.access_denied'), " +
                         "(SELECT count(*) FROM organisation_transition_log " +
                         "WHERE organisation_id = ?)",
                     actor,
@@ -438,7 +439,11 @@ class PlatformTenantServiceAuthorisationIntegrationTests
 
         private fun auditRows(actor: UUID): Int =
             dsl
-                .fetchOne("SELECT count(*) FROM audit_event WHERE actor_user_id = ?", actor)!!
+                .fetchOne(
+                    "SELECT count(*) FROM audit_event WHERE actor_user_id = ? " +
+                        "AND action <> 'api.access_denied'",
+                    actor,
+                )!!
                 .get(0, Int::class.java)
 
         private fun tenantsWithCode(code: String): Int =

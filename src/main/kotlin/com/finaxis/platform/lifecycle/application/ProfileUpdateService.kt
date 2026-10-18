@@ -6,7 +6,6 @@ import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditCommand
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
-import com.finaxis.platform.common.audit.AuditSeverity
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.lifecycle.PermissionGuard
 import org.springframework.stereotype.Service
@@ -133,7 +132,6 @@ class ProfileUpdateService(
                 resourceType = resourceType,
                 resourceId = resourceId.toString(),
                 outcome = AuditOutcome.SUCCESS,
-                severity = AuditSeverity.INFO,
                 metadata = mapOf("changedFields" to changedFields.joinToString(",")),
                 subjectUserId = subjectUserId.toString(),
             ),

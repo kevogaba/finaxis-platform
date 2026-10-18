@@ -78,6 +78,30 @@ class AuditServiceTests {
     }
 
     @Test
+    fun `record takes the severity from the policy unless the writer names one`() {
+        val service = service()
+        val suspend =
+            AuditCommand(
+                actorType = "USER",
+                actorId = "user-1",
+                tenantId = "tenant-1",
+                action = "organisation.suspend",
+                resourceType = "ORGANISATION",
+                resourceId = "org-1",
+                outcome = AuditOutcome.SUCCESS,
+            )
+
+        service.record(suspend)
+        service.record(suspend.copy(severity = AuditSeverity.CRITICAL))
+        service.record(suspend.copy(outcome = AuditOutcome.DENIED))
+
+        assertEquals(
+            listOf(AuditSeverity.HIGH, AuditSeverity.CRITICAL, AuditSeverity.MEDIUM),
+            repository.events.map { it.severity },
+        )
+    }
+
+    @Test
     fun `record masks metadata values matching sensitive key names`() {
         val service = service()
 

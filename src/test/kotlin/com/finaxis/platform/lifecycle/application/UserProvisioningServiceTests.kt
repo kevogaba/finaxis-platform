@@ -854,7 +854,8 @@ class UserProvisioningServiceTests {
         )
 
         val row = audits.events.single { it.action == "user.approve" }
-        assertEquals(AuditSeverity.INFO, row.severity)
+        // An ordinary approval takes the policy's severity, not a blanket INFO (#184).
+        assertEquals(AuditSeverity.MEDIUM, row.severity)
         assertEquals(null, row.metadata["selfApproved"])
     }
 

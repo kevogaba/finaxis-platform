@@ -8,6 +8,7 @@ import com.finaxis.platform.common.context.RequestContexts
 import com.finaxis.platform.common.context.TenantContext
 import com.finaxis.platform.common.web.api.ApiProblemFactory
 import com.finaxis.platform.common.web.api.ApiProblemWriter
+import com.finaxis.platform.common.web.api.DeniedAccessAuditor
 import com.finaxis.platform.common.web.ratelimit.RateLimitFilter
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
 import com.finaxis.platform.iam.application.context.ActiveOrganisationContext
@@ -78,6 +79,7 @@ class SecurityConfiguration(
     private val securityHeadersProperties: SecurityHeadersProperties,
     private val apiDocsProperties: ApiDocsProperties,
     private val problemWriter: ApiProblemWriter,
+    private val deniedAccessAuditor: DeniedAccessAuditor,
     private val protectedResourceProperties: ProtectedResourceProperties,
     private val resourceServerProperties: OAuth2ResourceServerProperties,
 ) {
@@ -154,7 +156,7 @@ class SecurityConfiguration(
             }.exceptionHandling { exceptions ->
                 exceptions
                     .authenticationEntryPoint(ApiAuthenticationEntryPoint(problemWriter))
-                    .accessDeniedHandler(ApiAccessDeniedHandler(problemWriter))
+                    .accessDeniedHandler(ApiAccessDeniedHandler(problemWriter, deniedAccessAuditor))
             }.addFilterAfter(activeOrganisationFilter, BearerTokenAuthenticationFilter::class.java)
             .addFilterAfter(rateLimitFilter, ActiveOrganisationContextFilter::class.java)
         return http.build()
@@ -312,12 +314,14 @@ class ApiBearerTokenEntryPoint(
 /** Writes unauthorized Spring Security failures through the public API problem contract. */
 class ApiAccessDeniedHandler(
     private val problemWriter: ApiProblemWriter,
+    private val deniedAccessAuditor: DeniedAccessAuditor? = null,
 ) : AccessDeniedHandler {
     override fun handle(
         request: HttpServletRequest,
         response: HttpServletResponse,
         accessDeniedException: AccessDeniedException,
     ) {
+        deniedAccessAuditor?.securityDenial(request, "access_denied")
         problemWriter.write(
             request,
             response,

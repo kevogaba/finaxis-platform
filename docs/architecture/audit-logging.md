@@ -139,6 +139,59 @@ the tenant log never holds them and the subject query finds them on the platform
 onboarding rows (`user_account.submit`, `.start_idp_provisioning`, `.invite`, `.activate`) are
 written under the tenant and are found by a tenant subject search.
 
+## Severity policy (#184)
+
+A writer that knows the severity of its event passes it (`AuditCommand.severity`; accounting does
+for its own actions). A writer that names none gets `AuditSeverityPolicy.resolve(action, outcome)`,
+so lifecycle and IAM rows are classified in one place instead of all staying `INFO`:
+
+| Outcome | Action | Severity |
+| --- | --- | --- |
+| `FAILURE` | any | `HIGH`: what the caller asked for broke (a bootstrap retry, an FSM transition that errored) |
+| `DENIED` | any | `MEDIUM`: a rule refused it (an FSM guard, a maker-checker refusal) |
+| `DENIED` | `api.access_denied` | `HIGH`: the authorization refusal itself, below |
+| `SUCCESS` | verb `suspend*`, `close*`, `lock`, `deactivate`, `start_deactivation`, `complete_deactivation`, `deprovision`, `*_deprovisioning`, `revoke*`, `assign_permission`, `remove_permission`, `*_revoked`, `self_approve`, `archive` | `HIGH`: access is removed or ended, or authority is granted |
+| `SUCCESS` | verb `approve`, `activate`, `reactivate`, `unlock`, `reject`, `return_for_changes`, `invite`, `assign_role`, `assign_branch`, `assign_user` | `MEDIUM`: access is decided or granted |
+| `SUCCESS` | anything else (reads, edits, drafts, submissions, selections) | `INFO` |
+
+The verb is the part of the action after the last `.`. An explicit severity always wins: the
+maker-checker switch and platform-organisation refusals stay `HIGH`, and accounting keeps its own.
+Rows written before this policy keep the `INFO` they were stored with.
+
+## Denied access (#184)
+
+An authenticated caller's `403` writes one `api.access_denied` row, `DENIED` / `HIGH`, through
+`recordSecurityEvent` (`DeniedAccessAuditor`). It is written from the three places that answer
+`403`: the application's `ForbiddenOperationException` (`MissingPermissionException` included),
+method security's `AccessDeniedException`, and the filter chain's access-denied handler.
+
+- **Content.** The actor, the tenant, the request id and client address (from the request
+  context), `reason` = the problem code, and metadata `method`, `route` (the matched pattern such
+  as `/api/v1/memberships/{id}`, never the raw path, which can carry ids), `permission` (the
+  first missing code, when the refusal names one) and `tenant_context=none` when there was none.
+  Never a header, a token, a query string or a body.
+- **Tenancy.** A denial with no tenant context is recorded under the platform organisation
+  explicitly, instead of through the repository's warned fallback (#157), and says so in metadata.
+- **Not twice.** A refusal that already writes its own durable `DENIED` row
+  (`lifecycle.approver_is_*`) is not written again. An unauthenticated request is a `401` and is
+  not audited here; neither is the active-organisation filter's own `403` for a tenant the
+  caller does not belong to, which runs before the request context exists.
+- **Before a context exists.** A JWT-only caller choosing an organisation has no request context
+  yet; the selection service's refusal carries the user it is about
+  (`ForbiddenOperationException.actorUserId`), so that `403` is audited too, under the platform
+  organisation with `tenant_context=none`.
+- **Flood bound.** A caller (actor and tenant) is limited to `finaxis.audit.denied-access.capacity`
+  rows per `refill-period` (default 10 per minute) through the same distributed Bucket4j bucket as
+  request rate limiting, so a hostile client collects `403`s without filling the log; the request
+  rate limiter bounds the requests themselves. A skipped row is logged at `DEBUG` only. The
+  capacity and refill period are validated when bound (a non-positive value fails the start). With
+  `finaxis.rate-limit.enabled=false` there is no bucket, so every denial is written and a startup
+  `WARN` says so; no per-instance fallback is used, and the rows can be turned off with
+  `finaxis.audit.denied-access.enabled=false`.
+- **Never changes the answer.** A failed write or an unavailable bucket is a message-free `WARN`;
+  the `403` is returned as it would have been. Set `finaxis.audit.denied-access.enabled=false` to
+  turn the rows off.
+
 ## Current Adapter
 
 `AuditService` writes to an `AuditEventRepository` port. `JooqAuditEventRepository` is the durable
