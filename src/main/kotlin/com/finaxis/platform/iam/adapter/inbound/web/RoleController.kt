@@ -668,7 +668,16 @@ class RoleController(
     }
 
     private fun RoleSummary.toResponse() =
-        RoleSummaryResponse(id, roleCode, roleName, systemRole, status, missingViewPermissions)
+        RoleSummaryResponse(
+            id = id,
+            roleCode = roleCode,
+            roleName = roleName,
+            systemRole = systemRole,
+            status = status,
+            missingViewPermissions = missingViewPermissions,
+            permissionCount = permissionCount,
+            activeUserCount = activeUserCount,
+        )
 
     private fun RoleDetail.toResponse() =
         RoleDetailResponse(

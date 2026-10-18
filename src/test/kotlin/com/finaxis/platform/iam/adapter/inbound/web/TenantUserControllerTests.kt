@@ -398,6 +398,10 @@ class TenantUserControllerTests
                 "Tenant Administrator",
                 "ACTIVE",
                 "ACTIVE",
+                uuidV7(),
+                "STAFF",
+                java.time.Instant.parse("2026-01-01T00:00:00Z"),
+                java.time.Instant.parse("2026-01-02T00:00:00Z"),
             )
 
         private fun userDetail(userId: UUID) =
@@ -408,6 +412,10 @@ class TenantUserControllerTests
                 "Tenant Administrator",
                 "ACTIVE",
                 "ACTIVE",
+                uuidV7(),
+                "STAFF",
+                java.time.Instant.parse("2026-01-01T00:00:00Z"),
+                java.time.Instant.parse("2026-01-02T00:00:00Z"),
             )
 
         private fun tenantToken(

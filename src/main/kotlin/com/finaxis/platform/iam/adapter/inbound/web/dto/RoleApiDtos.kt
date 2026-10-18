@@ -59,6 +59,16 @@ data class RoleSummaryResponse(
                 "activating a role that violates the rule stays allowed.",
     )
     val missingViewPermissions: List<String>,
+    @field:Schema(description = "Permissions granted to the role, whatever their catalogue status.")
+    val permissionCount: Int,
+    @field:Schema(
+        description =
+            "Distinct users holding the role through an ACTIVE assignment. Null when the caller " +
+                "may not list every role assignment of the organisation (role_assignment.view " +
+                "held tenant-wide).",
+        nullable = true,
+    )
+    val activeUserCount: Int?,
 )
 
 /** Detailed response for a tenant role. */

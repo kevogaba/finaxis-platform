@@ -64,6 +64,7 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.reque
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.header
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import java.time.Instant
+import java.time.LocalDate
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -247,6 +248,11 @@ class BranchControllerTests
                             "HEAD_OFFICE",
                             "ACTIVE",
                             Instant.parse("2026-07-18T10:00:00Z"),
+                            null,
+                            "Africa/Nairobi",
+                            LocalDate.of(2026, 7, 18),
+                            null,
+                            null,
                         ),
                     ),
                     number = 1,
@@ -264,6 +270,9 @@ class BranchControllerTests
                 }.andExpect {
                     status { isOk() }
                     jsonPath("$.items[0].id") { value(branchId.toString()) }
+                    jsonPath("$.items[0].timezone") { value("Africa/Nairobi") }
+                    jsonPath("$.items[0].opened_on") { value("18-07-2026") }
+                    jsonPath("$.items[0].active_user_count") { isEmpty() }
                     jsonPath("$.page.number") { value(1) }
                     jsonPath("$.page.size") { value(10) }
                 }

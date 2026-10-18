@@ -43,6 +43,7 @@ class IamLifecycleReadAdapter(
                     size = filter.size,
                     sortBy = filter.sortBy,
                     sortDir = filter.sortDir,
+                    userId = filter.userId,
                 ),
                 caller,
             ).let { page -> ApiPage(page.items.map { it.toLifecycle() }, page.page) }
@@ -65,14 +66,15 @@ class IamLifecycleReadAdapter(
             .searchBranchAssignments(
                 organisationId,
                 BranchAssignmentFilter(
-                    filter.branchId,
-                    filter.assignmentType,
-                    filter.status,
-                    filter.page,
-                    filter.size,
-                    filter.pinnedBranchId,
-                    filter.sortBy,
-                    filter.sortDir,
+                    branchId = filter.branchId,
+                    assignmentType = filter.assignmentType,
+                    status = filter.status,
+                    page = filter.page,
+                    size = filter.size,
+                    pinnedBranchId = filter.pinnedBranchId,
+                    sortBy = filter.sortBy,
+                    sortDir = filter.sortDir,
+                    userId = filter.userId,
                 ),
                 caller,
             ).let { page -> ApiPage(page.items.map { it.toLifecycle() }, page.page) }
@@ -97,6 +99,9 @@ class IamLifecycleReadAdapter(
                 it.revokedBy,
                 it.createdAt,
                 it.updatedAt,
+                it.username,
+                it.displayName,
+                it.branchName,
             )
         }
 
@@ -117,8 +122,29 @@ class IamLifecycleReadAdapter(
         )
 
     private fun MembershipSummary.toLifecycle() =
-        LifecycleMembershipSummary(id, userId, membershipStatus, membershipType, primaryBranchId)
+        LifecycleMembershipSummary(
+            id = id,
+            userId = userId,
+            membershipStatus = membershipStatus,
+            membershipType = membershipType,
+            primaryBranchId = primaryBranchId,
+            username = username,
+            email = email,
+            displayName = displayName,
+            primaryBranchName = primaryBranchName,
+            createdAt = createdAt,
+        )
 
     private fun BranchAssignmentSummary.toLifecycle() =
-        LifecycleBranchAssignmentSummary(id, userId, branchId, assignmentType, status)
+        LifecycleBranchAssignmentSummary(
+            id = id,
+            userId = userId,
+            branchId = branchId,
+            assignmentType = assignmentType,
+            status = status,
+            username = username,
+            displayName = displayName,
+            branchName = branchName,
+            assignedAt = assignedAt,
+        )
 }

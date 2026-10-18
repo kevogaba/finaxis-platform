@@ -38,14 +38,7 @@ class IamLifecycleReadAdapterTests {
     @Test
     fun `searchMemberships delegates with mapped filter and maps response page`() {
         val primaryBranchId = UUID.fromString("40000000-0000-0000-0000-000000000004")
-        val membershipSummary =
-            MembershipSummary(
-                id = UUID.fromString("50000000-0000-0000-0000-000000000005"),
-                userId = UUID.fromString("60000000-0000-0000-0000-000000000006"),
-                membershipStatus = "PENDING_APPROVAL",
-                membershipType = "OPERATIONS_LEAD",
-                primaryBranchId = primaryBranchId,
-            )
+        val membershipSummary = membershipSummary(primaryBranchId)
         val lifecycleFilter =
             LifecycleMembershipFilter(
                 q = "anita@example.test",
@@ -55,6 +48,7 @@ class IamLifecycleReadAdapterTests {
                 size = 17,
                 sortBy = "membershipType",
                 sortDir = "ASC",
+                userId = USER_ID,
             )
         val iamFilter =
             MembershipFilter(
@@ -65,6 +59,7 @@ class IamLifecycleReadAdapterTests {
                 size = 17,
                 sortBy = "membershipType",
                 sortDir = "ASC",
+                userId = USER_ID,
             )
         val pageMetadata =
             ApiPageMetadata(
@@ -83,15 +78,7 @@ class IamLifecycleReadAdapterTests {
 
         verify(iamQueryService).searchMemberships(eq(organisationId), eq(iamFilter), eq(caller))
         assertEquals(
-            listOf(
-                LifecycleMembershipSummary(
-                    id = membershipSummary.id,
-                    userId = membershipSummary.userId,
-                    membershipStatus = "PENDING_APPROVAL",
-                    membershipType = "OPERATIONS_LEAD",
-                    primaryBranchId = primaryBranchId,
-                ),
-            ),
+            listOf(lifecycleMembershipSummary(membershipSummary)),
             result.items,
         )
         assertSame(pageMetadata, result.page)
@@ -147,14 +134,7 @@ class IamLifecycleReadAdapterTests {
     @Test
     fun `searchBranchAssignments delegates with mapped filter and maps response page`() {
         val branchId = UUID.fromString("a0000000-0000-0000-0000-00000000000a")
-        val assignmentSummary =
-            BranchAssignmentSummary(
-                id = UUID.fromString("b0000000-0000-0000-0000-00000000000b"),
-                userId = UUID.fromString("c0000000-0000-0000-0000-00000000000c"),
-                branchId = branchId,
-                assignmentType = "CASH_VAULT_REVIEWER",
-                status = "REVOKED",
-            )
+        val assignmentSummary = assignmentSummary(branchId)
         val lifecycleFilter =
             LifecycleBranchAssignmentFilter(
                 branchId = branchId,
@@ -164,6 +144,7 @@ class IamLifecycleReadAdapterTests {
                 size = 11,
                 sortBy = "assignedAt",
                 sortDir = "DESC",
+                userId = USER_ID,
             )
         val iamFilter =
             BranchAssignmentFilter(
@@ -174,6 +155,7 @@ class IamLifecycleReadAdapterTests {
                 size = 11,
                 sortBy = "assignedAt",
                 sortDir = "DESC",
+                userId = USER_ID,
             )
         val pageMetadata =
             ApiPageMetadata(
@@ -193,15 +175,7 @@ class IamLifecycleReadAdapterTests {
         verify(iamQueryService)
             .searchBranchAssignments(eq(organisationId), eq(iamFilter), eq(caller))
         assertEquals(
-            listOf(
-                LifecycleBranchAssignmentSummary(
-                    id = assignmentSummary.id,
-                    userId = assignmentSummary.userId,
-                    branchId = branchId,
-                    assignmentType = "CASH_VAULT_REVIEWER",
-                    status = "REVOKED",
-                ),
-            ),
+            listOf(lifecycleAssignmentSummary(assignmentSummary)),
             result.items,
         )
         assertSame(pageMetadata, result.page)
@@ -231,6 +205,9 @@ class IamLifecycleReadAdapterTests {
                 revokedBy = revokedBy,
                 createdAt = createdAt,
                 updatedAt = updatedAt,
+                username = "anita",
+                displayName = "Anita Wanjiru",
+                branchName = "Westlands",
             )
         whenever(
             iamQueryService.getBranchAssignment(eq(organisationId), eq(assignmentId), eq(caller)),
@@ -254,8 +231,72 @@ class IamLifecycleReadAdapterTests {
                 revokedBy = revokedBy,
                 createdAt = createdAt,
                 updatedAt = updatedAt,
+                username = "anita",
+                displayName = "Anita Wanjiru",
+                branchName = "Westlands",
             ),
             result,
         )
+    }
+
+    private fun membershipSummary(primaryBranchId: UUID) =
+        MembershipSummary(
+            id = UUID.fromString("50000000-0000-0000-0000-000000000005"),
+            userId = UUID.fromString("60000000-0000-0000-0000-000000000006"),
+            membershipStatus = "PENDING_APPROVAL",
+            membershipType = "OPERATIONS_LEAD",
+            primaryBranchId = primaryBranchId,
+            username = "anita",
+            email = "anita@example.test",
+            displayName = "Anita Wanjiru",
+            primaryBranchName = "Westlands",
+            createdAt = SUMMARY_CREATED_AT,
+        )
+
+    /** The lifecycle projection the adapter must map [source] to, field by field. */
+    private fun lifecycleMembershipSummary(source: MembershipSummary) =
+        LifecycleMembershipSummary(
+            id = source.id,
+            userId = source.userId,
+            membershipStatus = "PENDING_APPROVAL",
+            membershipType = "OPERATIONS_LEAD",
+            primaryBranchId = source.primaryBranchId,
+            username = "anita",
+            email = "anita@example.test",
+            displayName = "Anita Wanjiru",
+            primaryBranchName = "Westlands",
+            createdAt = SUMMARY_CREATED_AT,
+        )
+
+    private fun assignmentSummary(branchId: UUID) =
+        BranchAssignmentSummary(
+            id = UUID.fromString("b0000000-0000-0000-0000-00000000000b"),
+            userId = UUID.fromString("c0000000-0000-0000-0000-00000000000c"),
+            branchId = branchId,
+            assignmentType = "CASH_VAULT_REVIEWER",
+            status = "REVOKED",
+            username = "anita",
+            displayName = "Anita Wanjiru",
+            branchName = "Westlands",
+            assignedAt = SUMMARY_CREATED_AT,
+        )
+
+    /** The lifecycle projection the adapter must map [source] to, field by field. */
+    private fun lifecycleAssignmentSummary(source: BranchAssignmentSummary) =
+        LifecycleBranchAssignmentSummary(
+            id = source.id,
+            userId = source.userId,
+            branchId = source.branchId,
+            assignmentType = "CASH_VAULT_REVIEWER",
+            status = "REVOKED",
+            username = "anita",
+            displayName = "Anita Wanjiru",
+            branchName = "Westlands",
+            assignedAt = SUMMARY_CREATED_AT,
+        )
+
+    private companion object {
+        val USER_ID: UUID = UUID.fromString("13000000-0000-0000-0000-000000000013")
+        val SUMMARY_CREATED_AT: Instant = Instant.parse("2026-03-04T05:06:07Z")
     }
 }

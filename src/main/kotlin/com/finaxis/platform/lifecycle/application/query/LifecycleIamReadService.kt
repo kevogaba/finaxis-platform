@@ -56,6 +56,7 @@ data class LifecycleMembershipFilter(
     val size: Int = 25,
     val sortBy: String? = null,
     val sortDir: String? = null,
+    val userId: UUID? = null,
 )
 
 /** Filter parameters for branch-assignment queries exposed to lifecycle adapters. */
@@ -72,6 +73,7 @@ data class LifecycleBranchAssignmentFilter(
     val pinnedBranchId: UUID? = null,
     val sortBy: String? = null,
     val sortDir: String? = null,
+    val userId: UUID? = null,
 )
 
 /** Membership summary projection exposed to lifecycle adapters. */
@@ -81,6 +83,11 @@ data class LifecycleMembershipSummary(
     val membershipStatus: String,
     val membershipType: String,
     val primaryBranchId: UUID?,
+    val username: String,
+    val email: String,
+    val displayName: String,
+    val primaryBranchName: String?,
+    val createdAt: Instant,
 )
 
 /** Membership detail projection exposed to lifecycle adapters. */
@@ -106,6 +113,10 @@ data class LifecycleBranchAssignmentSummary(
     val branchId: UUID,
     val assignmentType: String,
     val status: String,
+    val username: String,
+    val displayName: String,
+    val branchName: String,
+    val assignedAt: Instant,
 )
 
 /** Branch-assignment detail projection exposed to lifecycle adapters. */
@@ -122,4 +133,7 @@ data class LifecycleBranchAssignmentDetail(
     val revokedBy: UUID?,
     val createdAt: Instant,
     val updatedAt: Instant,
+    val username: String,
+    val displayName: String,
+    val branchName: String,
 )

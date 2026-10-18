@@ -58,4 +58,9 @@ data class MembershipSummaryResponse(
     val membershipStatus: String,
     val membershipType: String,
     val primaryBranchId: UUID?,
+    val username: String,
+    val email: String,
+    val displayName: String,
+    val primaryBranchName: String?,
+    val createdAt: Instant,
 )

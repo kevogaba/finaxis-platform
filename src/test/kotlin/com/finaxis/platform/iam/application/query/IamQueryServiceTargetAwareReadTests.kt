@@ -66,6 +66,45 @@ class IamQueryServiceTargetAwareReadTests {
     }
 
     @Test
+    fun `branch assignment list of a named user is not narrowed to the pinned branch`() {
+        val pinned = UUID.randomUUID()
+        val userId = UUID.randomUUID()
+
+        service.searchBranchAssignments(
+            tenantId,
+            BranchAssignmentFilter(pinnedBranchId = pinned, userId = userId),
+            TenantCaller(actorId, tenantId, pinned),
+        )
+
+        assertEquals(null, queries.lastBranchAssignmentFilter?.branchId)
+        assertEquals(userId, queries.lastBranchAssignmentFilter?.userId)
+    }
+
+    @Test
+    fun `branch assignment list of a named user keeps an explicit branch and the visible set`() {
+        val branchA = UUID.randomUUID()
+        val branchB = UUID.randomUUID()
+        val userId = UUID.randomUUID()
+        permissionGuard.visibleOnly(tenantId, "branch_assignment.view", branchA, branchB)
+
+        service.searchBranchAssignments(
+            tenantId,
+            BranchAssignmentFilter(branchId = branchA, userId = userId),
+            TenantCaller(actorId, tenantId),
+        )
+
+        assertEquals(branchA, queries.lastBranchAssignmentFilter?.branchId)
+        assertEquals(setOf(branchA, branchB), queries.lastBranchAssignmentRestriction)
+        assertFailsWith<ForbiddenOperationException> {
+            service.searchBranchAssignments(
+                tenantId,
+                BranchAssignmentFilter(branchId = UUID.randomUUID(), userId = userId),
+                TenantCaller(actorId, tenantId),
+            )
+        }
+    }
+
+    @Test
     fun `branch assignment list refuses an explicit branch outside the visible set`() {
         val visible = UUID.randomUUID()
         permissionGuard.visibleOnly(tenantId, "branch_assignment.view", visible)

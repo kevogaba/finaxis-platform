@@ -3,7 +3,10 @@ package com.finaxis.platform.iam.application.query
 import java.time.Instant
 import java.util.UUID
 
-/** Summary projection of a user membership in a tenant. */
+/**
+ * Summary projection of a user membership in a tenant. [id] is the user id; [createdAt] is the
+ * account's, [membershipCreatedAt] the membership's.
+ */
 data class UserInTenantSummary(
     val id: UUID,
     val username: String,
@@ -11,9 +14,13 @@ data class UserInTenantSummary(
     val displayName: String,
     val userStatus: String,
     val membershipStatus: String,
+    val membershipId: UUID,
+    val membershipType: String,
+    val createdAt: Instant,
+    val membershipCreatedAt: Instant,
 )
 
-/** Detailed projection of a user membership in a tenant. */
+/** Detailed projection of a tenant user; carries what [UserInTenantSummary] does. */
 data class UserInTenantDetail(
     val id: UUID,
     val username: String,
@@ -21,6 +28,10 @@ data class UserInTenantDetail(
     val displayName: String,
     val userStatus: String,
     val membershipStatus: String,
+    val membershipId: UUID,
+    val membershipType: String,
+    val createdAt: Instant,
+    val membershipCreatedAt: Instant,
 )
 
 /**
@@ -48,25 +59,34 @@ data class MembershipDetail(
     val updatedAt: Instant,
 )
 
-/** Summary projection of an organisation membership. */
+/** Summary projection of an organisation membership, with the user's names and the dates. */
 data class MembershipSummary(
     val id: UUID,
     val userId: UUID,
     val membershipStatus: String,
     val membershipType: String,
     val primaryBranchId: UUID?,
+    val username: String,
+    val email: String,
+    val displayName: String,
+    val primaryBranchName: String?,
+    val createdAt: Instant,
 )
 
-/** Summary projection of a branch assignment. */
+/** Summary projection of a branch assignment, with the user's and the branch's names. */
 data class BranchAssignmentSummary(
     val id: UUID,
     val userId: UUID,
     val branchId: UUID,
     val assignmentType: String,
     val status: String,
+    val username: String,
+    val displayName: String,
+    val branchName: String,
+    val assignedAt: Instant,
 )
 
-/** Detailed projection of a branch assignment. */
+/** Detailed projection of a branch assignment; carries the names [BranchAssignmentSummary] does. */
 data class BranchAssignmentDetail(
     val id: UUID,
     val organisationId: UUID,
@@ -80,6 +100,9 @@ data class BranchAssignmentDetail(
     val revokedBy: UUID?,
     val createdAt: Instant,
     val updatedAt: Instant,
+    val username: String,
+    val displayName: String,
+    val branchName: String,
 )
 
 /**
@@ -87,6 +110,9 @@ data class BranchAssignmentDetail(
  *
  * [missingViewPermissions] is the sorted flat list of view codes the role's held `ACTIVE`
  * mutation codes need and the role lacks (empty when it complies; ADR 0030 point 3).
+ * [permissionCount] is the number of permissions granted to the role, and [activeUserCount] the
+ * number of distinct users holding it through an `ACTIVE` assignment; the latter is null for a
+ * caller who may not list every role assignment of the organisation.
  */
 data class RoleSummary(
     val id: UUID,
@@ -95,6 +121,8 @@ data class RoleSummary(
     val systemRole: Boolean,
     val status: String,
     val missingViewPermissions: List<String>,
+    val permissionCount: Int,
+    val activeUserCount: Int?,
 )
 
 /** Detailed projection of a security role; see [RoleSummary] for [missingViewPermissions]. */

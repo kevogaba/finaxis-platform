@@ -66,7 +66,8 @@ class BranchAssignmentController(
                 "the branches the caller holds branch_assignment.view on (all of them for a " +
                 "tenant-wide grant, the ACTIVE ones for a branch-scope grant). An explicit " +
                 "branch_id outside that set is 403. Without branch_id the list defaults to the " +
-                "selected branch when the caller may view it.",
+                "selected branch when the caller may view it, unless user_id is given: a " +
+                "user's assignments are then listed across every branch the caller may view.",
     )
     @ApiResponses(
         ApiResponse(
@@ -108,6 +109,7 @@ class BranchAssignmentController(
         @RequestParam(required = false, name = "branch_id") branchId: UUID?,
         @RequestParam(required = false, name = "assignment_type") assignmentType: String?,
         @RequestParam(required = false) status: String?,
+        @RequestParam(required = false, name = "user_id") userId: UUID?,
         @RequestParam(defaultValue = "0") @Min(0) page: Int,
         @RequestParam(defaultValue = "25") @Min(1) @Max(MAXIMUM_PAGE_SIZE) size: Int,
         @Parameter(
@@ -130,6 +132,7 @@ class BranchAssignmentController(
                     size = size,
                     sortBy = sortBy,
                     sortDir = sortDir,
+                    userId = userId,
                 ),
                 caller,
             )
@@ -350,6 +353,10 @@ class BranchAssignmentController(
             branchId = branchId,
             assignmentType = assignmentType,
             status = status,
+            username = username,
+            displayName = displayName,
+            branchName = branchName,
+            assignedAt = assignedAt,
         )
 
     private fun LifecycleBranchAssignmentDetail.toSummaryResponse() =
@@ -359,6 +366,10 @@ class BranchAssignmentController(
             branchId = branchId,
             assignmentType = assignmentType,
             status = status,
+            username = username,
+            displayName = displayName,
+            branchName = branchName,
+            assignedAt = assignedAt,
         )
 
     private fun LifecycleBranchAssignmentDetail.toResponse() =
@@ -375,6 +386,9 @@ class BranchAssignmentController(
             revokedBy = revokedBy,
             createdAt = createdAt,
             updatedAt = updatedAt,
+            username = username,
+            displayName = displayName,
+            branchName = branchName,
         )
 
     private companion object {

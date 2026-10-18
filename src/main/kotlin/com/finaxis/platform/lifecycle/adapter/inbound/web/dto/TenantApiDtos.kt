@@ -315,4 +315,33 @@ data class TenantSummaryResponse(
     val countryCode: String,
     val status: String,
     val createdAt: Instant,
+    val baseCurrencyCode: String,
+    val timezone: String,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "The initial-administrator bootstrap status, or `null` when the tenant has no " +
+                "bootstrap record.",
+    )
+    val bootstrapStatus: String?,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "The tenant's ACTIVE branches. `null` when the caller does not hold branch.view " +
+                "tenant-wide.",
+    )
+    val activeBranchCount: Int?,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        description =
+            "The tenant's ACTIVE memberships. `null` when the caller does not hold user.view " +
+                "tenant-wide.",
+    )
+    val activeUserCount: Int?,
 )

@@ -1215,6 +1215,11 @@ class PlatformTenantController(
             countryCode = countryCode,
             status = status,
             createdAt = createdAt,
+            baseCurrencyCode = baseCurrencyCode,
+            timezone = timezone,
+            bootstrapStatus = bootstrapStatus,
+            activeBranchCount = activeBranchCount,
+            activeUserCount = activeUserCount,
         )
 
     private fun TenantDetail.toResponse() =

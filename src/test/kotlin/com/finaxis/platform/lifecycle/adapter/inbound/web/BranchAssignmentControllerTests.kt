@@ -132,6 +132,10 @@ class BranchAssignmentControllerTests
                             uuidV7(),
                             "OPERATE",
                             "ACTIVE",
+                            "anita",
+                            "Anita Wanjiru",
+                            "Westlands",
+                            Instant.parse("2026-07-18T10:00:00Z"),
                         ),
                     ),
                     number = 1,
@@ -154,6 +158,10 @@ class BranchAssignmentControllerTests
                 }.andExpect {
                     status { isOk() }
                     jsonPath("$.items[0].id") { value(assignmentId.toString()) }
+                    jsonPath("$.items[0].username") { value("anita") }
+                    jsonPath("$.items[0].display_name") { value("Anita Wanjiru") }
+                    jsonPath("$.items[0].branch_name") { value("Westlands") }
+                    jsonPath("$.items[0].assigned_at") { value("2026-07-18T10:00:00Z") }
                     jsonPath("$.page.number") { value(1) }
                     jsonPath("$.page.size") { value(10) }
                 }
@@ -228,6 +236,38 @@ class BranchAssignmentControllerTests
             )
             kotlin.test.assertEquals("assignedAt", filterCaptor.firstValue.sortBy)
             kotlin.test.assertEquals("DESC", filterCaptor.firstValue.sortDir)
+        }
+
+        @Test
+        fun `searchBranchAssignments passes user_id to the query and rejects a malformed one`() {
+            val tenantId = uuidV7()
+            val userId = uuidV7()
+            whenever(
+                lifecycleIamReadService.searchBranchAssignments(eq(tenantId), any(), any()),
+            ).thenReturn(apiPageOf(emptyList(), number = 0, size = 25, totalItems = 0))
+
+            mockMvc
+                .get(ApiPaths.BRANCH_ASSIGNMENTS) {
+                    param("user_id", userId.toString())
+                    with(authentication(tenantToken(setOf("branch_assignment.view"), tenantId)))
+                }.andExpect {
+                    status { isOk() }
+                }
+            mockMvc
+                .get(ApiPaths.BRANCH_ASSIGNMENTS) {
+                    param("user_id", "not-a-uuid")
+                    with(authentication(tenantToken(setOf("branch_assignment.view"), tenantId)))
+                }.andExpect {
+                    status { isBadRequest() }
+                }
+
+            val filterCaptor = argumentCaptor<LifecycleBranchAssignmentFilter>()
+            verify(lifecycleIamReadService).searchBranchAssignments(
+                eq(tenantId),
+                filterCaptor.capture(),
+                any(),
+            )
+            kotlin.test.assertEquals(userId, filterCaptor.firstValue.userId)
         }
 
         @Test
@@ -523,6 +563,9 @@ class BranchAssignmentControllerTests
             revokedBy = null,
             createdAt = Instant.parse("2026-07-18T10:00:00Z"),
             updatedAt = Instant.parse("2026-07-18T10:00:00Z"),
+            username = "anita",
+            displayName = "Anita Wanjiru",
+            branchName = "Westlands",
         )
 
         private fun branchAssignmentMutationPayload(method: HttpMethod): String =

@@ -145,6 +145,38 @@ class MembershipControllerTests
         }
 
         @Test
+        fun `searchMemberships passes user_id to the query and rejects a malformed one`() {
+            val tenantId = uuidV7()
+            val userId = uuidV7()
+            whenever(
+                lifecycleIamReadService.searchMemberships(eq(tenantId), any(), any()),
+            ).thenReturn(apiPageOf(emptyList(), number = 0, size = 25, totalItems = 0))
+
+            mockMvc
+                .get(ApiPaths.MEMBERSHIPS) {
+                    param("user_id", userId.toString())
+                    with(authentication(tenantToken(setOf("membership.view"), tenantId)))
+                }.andExpect {
+                    status { isOk() }
+                }
+            mockMvc
+                .get(ApiPaths.MEMBERSHIPS) {
+                    param("user_id", "not-a-uuid")
+                    with(authentication(tenantToken(setOf("membership.view"), tenantId)))
+                }.andExpect {
+                    status { isBadRequest() }
+                }
+
+            val filterCaptor = argumentCaptor<LifecycleMembershipFilter>()
+            verify(lifecycleIamReadService).searchMemberships(
+                eq(tenantId),
+                filterCaptor.capture(),
+                any(),
+            )
+            kotlin.test.assertEquals(userId, filterCaptor.firstValue.userId)
+        }
+
+        @Test
         fun `searchMemberships returns a bounded page`() {
             val tenantId = uuidV7()
             val membershipId = uuidV7()
@@ -159,6 +191,11 @@ class MembershipControllerTests
                             "ACTIVE",
                             "ADMIN",
                             null,
+                            "admin",
+                            "admin@tenant.test",
+                            "Tenant Administrator",
+                            "Westlands",
+                            Instant.parse("2026-07-18T10:00:00Z"),
                         ),
                     ),
                     number = 1,
@@ -178,6 +215,11 @@ class MembershipControllerTests
                 }.andExpect {
                     status { isOk() }
                     jsonPath("$.items[0].id") { value(membershipId.toString()) }
+                    jsonPath("$.items[0].username") { value("admin") }
+                    jsonPath("$.items[0].email") { value("admin@tenant.test") }
+                    jsonPath("$.items[0].display_name") { value("Tenant Administrator") }
+                    jsonPath("$.items[0].primary_branch_name") { value("Westlands") }
+                    jsonPath("$.items[0].created_at") { value("2026-07-18T10:00:00Z") }
                     jsonPath("$.page.number") { value(1) }
                     jsonPath("$.page.size") { value(10) }
                 }

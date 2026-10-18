@@ -289,6 +289,10 @@ class TenantUserController(
             displayName = displayName,
             userStatus = userStatus,
             membershipStatus = membershipStatus,
+            membershipId = membershipId,
+            membershipType = membershipType,
+            createdAt = createdAt,
+            membershipCreatedAt = membershipCreatedAt,
         )
 
     private fun UserInTenantDetail.toResponse() =
@@ -299,6 +303,10 @@ class TenantUserController(
             displayName = displayName,
             userStatus = userStatus,
             membershipStatus = membershipStatus,
+            membershipId = membershipId,
+            membershipType = membershipType,
+            createdAt = createdAt,
+            membershipCreatedAt = membershipCreatedAt,
         )
 
     private companion object {

@@ -25,6 +25,7 @@ import com.finaxis.platform.iam.application.query.RoleSummary
 import com.finaxis.platform.iam.application.query.UserInTenantDetail
 import com.finaxis.platform.iam.application.query.UserInTenantFilter
 import com.finaxis.platform.iam.application.query.UserInTenantSummary
+import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.PERMISSION
 import com.finaxis.platform.jooq.tables.references.PERMISSION_VIEW_REQUIREMENT
 import com.finaxis.platform.jooq.tables.references.ROLE
@@ -36,6 +37,7 @@ import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
 import org.jooq.Condition
 import org.jooq.DSLContext
 import org.jooq.Field
+import org.jooq.Record
 import org.jooq.SortField
 import org.jooq.impl.DSL
 import org.springframework.stereotype.Component
@@ -52,6 +54,8 @@ class JooqIamAdministrationQueries(
 ) : IamUserQueries,
     IamRoleQueries,
     IamAssignmentQueries {
+    private val roleColumns = RoleSummaryColumns(dsl)
+
     override fun searchUsers(
         organisationId: UUID,
         filter: UserInTenantFilter,
@@ -92,7 +96,11 @@ class JooqIamAdministrationQueries(
                     USER_ACCOUNT.EMAIL,
                     USER_ACCOUNT.DISPLAY_NAME,
                     USER_ACCOUNT.STATUS,
+                    USER_ACCOUNT.CREATED_AT,
+                    USER_ORGANISATION_MEMBERSHIP.ID,
                     USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS,
+                    USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE,
+                    USER_ORGANISATION_MEMBERSHIP.CREATED_AT,
                 ).from(USER_ORGANISATION_MEMBERSHIP)
                 .join(USER_ACCOUNT)
                 .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID))
@@ -102,19 +110,7 @@ class JooqIamAdministrationQueries(
                     USER_ACCOUNT.ID.desc(),
                 ).limit(filter.size)
                 .offset(offset)
-                .fetch { record ->
-                    UserInTenantSummary(
-                        id = requireNotNull(record.get(USER_ACCOUNT.ID)),
-                        username = requireNotNull(record.get(USER_ACCOUNT.USERNAME)),
-                        email = requireNotNull(record.get(USER_ACCOUNT.EMAIL)),
-                        displayName = requireNotNull(record.get(USER_ACCOUNT.DISPLAY_NAME)),
-                        userStatus = requireNotNull(record.get(USER_ACCOUNT.STATUS)),
-                        membershipStatus =
-                            requireNotNull(
-                                record.get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS),
-                            ),
-                    )
-                }
+                .fetch { it.toUserInTenantSummary() }
 
         return apiPageOf(items, filter.page, filter.size, total)
     }
@@ -130,7 +126,11 @@ class JooqIamAdministrationQueries(
                 USER_ACCOUNT.EMAIL,
                 USER_ACCOUNT.DISPLAY_NAME,
                 USER_ACCOUNT.STATUS,
+                USER_ACCOUNT.CREATED_AT,
+                USER_ORGANISATION_MEMBERSHIP.ID,
                 USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS,
+                USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE,
+                USER_ORGANISATION_MEMBERSHIP.CREATED_AT,
             ).from(USER_ORGANISATION_MEMBERSHIP)
             .join(USER_ACCOUNT)
             .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID))
@@ -147,6 +147,16 @@ class JooqIamAdministrationQueries(
                         requireNotNull(
                             record.get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS),
                         ),
+                    membershipId = requireNotNull(record.get(USER_ORGANISATION_MEMBERSHIP.ID)),
+                    membershipType =
+                        requireNotNull(
+                            record.get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE),
+                        ),
+                    createdAt = requireNotNull(record.get(USER_ACCOUNT.CREATED_AT)).toInstant(),
+                    membershipCreatedAt =
+                        requireNotNull(
+                            record.get(USER_ORGANISATION_MEMBERSHIP.CREATED_AT),
+                        ).toInstant(),
                 )
             }
 
@@ -245,33 +255,23 @@ class JooqIamAdministrationQueries(
                     USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS,
                     USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE,
                     USER_ORGANISATION_MEMBERSHIP.PRIMARY_BRANCH_ID,
+                    USER_ORGANISATION_MEMBERSHIP.CREATED_AT,
+                    USER_ACCOUNT.USERNAME,
+                    USER_ACCOUNT.EMAIL,
+                    USER_ACCOUNT.DISPLAY_NAME,
+                    BRANCH.BRANCH_NAME,
                 ).from(USER_ORGANISATION_MEMBERSHIP)
                 .join(USER_ACCOUNT)
                 .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID))
+                .leftJoin(BRANCH)
+                .on(USER_ORGANISATION_MEMBERSHIP.PRIMARY_BRANCH_ID.eq(BRANCH.ID))
                 .where(condition)
                 .orderBy(
                     membershipSortOrder(filter),
                     USER_ORGANISATION_MEMBERSHIP.ID.desc(),
                 ).limit(filter.size)
                 .offset(offset)
-                .fetch { record ->
-                    MembershipSummary(
-                        id = requireNotNull(record.get(USER_ORGANISATION_MEMBERSHIP.ID)),
-                        userId = requireNotNull(record.get(USER_ORGANISATION_MEMBERSHIP.USER_ID)),
-                        membershipStatus =
-                            requireNotNull(
-                                record.get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS),
-                            ),
-                        membershipType =
-                            requireNotNull(
-                                record.get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE),
-                            ),
-                        primaryBranchId =
-                            record.get(
-                                USER_ORGANISATION_MEMBERSHIP.PRIMARY_BRANCH_ID,
-                            ),
-                    )
-                }
+                .fetch { it.toMembershipSummary() }
 
         return apiPageOf(items, filter.page, filter.size, total)
     }
@@ -286,6 +286,9 @@ class JooqIamAdministrationQueries(
         }
         filter.membershipType?.let {
             condition = condition.and(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE.eq(it))
+        }
+        filter.userId?.let {
+            condition = condition.and(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(it))
         }
         filter.q?.let { q ->
             val query = "%$q%"
@@ -315,6 +318,7 @@ class JooqIamAdministrationQueries(
                 condition.and(USER_BRANCH_ASSIGNMENT.ASSIGNMENT_TYPE.eq(it))
         }
         filter.status?.let { condition = condition.and(USER_BRANCH_ASSIGNMENT.STATUS.eq(it)) }
+        filter.userId?.let { condition = condition.and(USER_BRANCH_ASSIGNMENT.USER_ID.eq(it)) }
 
         val total = dsl.fetchCount(USER_BRANCH_ASSIGNMENT, condition).toLong()
         val offset =
@@ -328,25 +332,22 @@ class JooqIamAdministrationQueries(
                     USER_BRANCH_ASSIGNMENT.BRANCH_ID,
                     USER_BRANCH_ASSIGNMENT.ASSIGNMENT_TYPE,
                     USER_BRANCH_ASSIGNMENT.STATUS,
+                    USER_BRANCH_ASSIGNMENT.ASSIGNED_AT,
+                    USER_ACCOUNT.USERNAME,
+                    USER_ACCOUNT.DISPLAY_NAME,
+                    BRANCH.BRANCH_NAME,
                 ).from(USER_BRANCH_ASSIGNMENT)
+                .join(USER_ACCOUNT)
+                .on(USER_BRANCH_ASSIGNMENT.USER_ID.eq(USER_ACCOUNT.ID))
+                .join(BRANCH)
+                .on(USER_BRANCH_ASSIGNMENT.BRANCH_ID.eq(BRANCH.ID))
                 .where(condition)
                 .orderBy(
                     assignmentSortOrder(filter),
                     USER_BRANCH_ASSIGNMENT.ID.desc(),
                 ).limit(filter.size)
                 .offset(offset)
-                .fetch { record ->
-                    BranchAssignmentSummary(
-                        id = requireNotNull(record.get(USER_BRANCH_ASSIGNMENT.ID)),
-                        userId = requireNotNull(record.get(USER_BRANCH_ASSIGNMENT.USER_ID)),
-                        branchId = requireNotNull(record.get(USER_BRANCH_ASSIGNMENT.BRANCH_ID)),
-                        assignmentType =
-                            requireNotNull(
-                                record.get(USER_BRANCH_ASSIGNMENT.ASSIGNMENT_TYPE),
-                            ),
-                        status = requireNotNull(record.get(USER_BRANCH_ASSIGNMENT.STATUS)),
-                    )
-                }
+                .fetch { it.toBranchAssignmentSummary() }
 
         return apiPageOf(items, filter.page, filter.size, total)
     }
@@ -356,10 +357,20 @@ class JooqIamAdministrationQueries(
         id: UUID,
     ): BranchAssignmentDetail? =
         dsl
-            .selectFrom(USER_BRANCH_ASSIGNMENT)
+            .select(
+                USER_BRANCH_ASSIGNMENT.asterisk(),
+                USER_ACCOUNT.USERNAME,
+                USER_ACCOUNT.DISPLAY_NAME,
+                BRANCH.BRANCH_NAME,
+            ).from(USER_BRANCH_ASSIGNMENT)
+            .join(USER_ACCOUNT)
+            .on(USER_BRANCH_ASSIGNMENT.USER_ID.eq(USER_ACCOUNT.ID))
+            .join(BRANCH)
+            .on(USER_BRANCH_ASSIGNMENT.BRANCH_ID.eq(BRANCH.ID))
             .where(USER_BRANCH_ASSIGNMENT.ID.eq(id))
             .and(USER_BRANCH_ASSIGNMENT.ORGANISATION_ID.eq(organisationId))
-            .fetchOne { record ->
+            .fetchOne { joined ->
+                val record = joined.into(USER_BRANCH_ASSIGNMENT)
                 BranchAssignmentDetail(
                     id = requireNotNull(record.id),
                     organisationId = requireNotNull(record.organisationId),
@@ -373,6 +384,9 @@ class JooqIamAdministrationQueries(
                     revokedBy = record.revokedBy,
                     createdAt = requireNotNull(record.createdAt).toInstant(),
                     updatedAt = requireNotNull(record.updatedAt).toInstant(),
+                    username = requireNotNull(joined.get(USER_ACCOUNT.USERNAME)),
+                    displayName = requireNotNull(joined.get(USER_ACCOUNT.DISPLAY_NAME)),
+                    branchName = requireNotNull(joined.get(BRANCH.BRANCH_NAME)),
                 )
             }
 
@@ -413,8 +427,12 @@ class JooqIamAdministrationQueries(
                 ).limit(filter.size)
                 .offset(offset)
                 .fetch()
-        // One bounded query for the page's roles, so paging and totals stay on `role` alone.
-        val gaps = missingViewPermissions(organisationId, page.map { requireNotNull(it[ROLE.ID]) })
+        // One bounded query per derived column for the page's roles, so paging and totals stay on
+        // `role` alone and the statement count does not grow with the page size.
+        val roleIds = page.map { requireNotNull(it[ROLE.ID]) }
+        val gaps = roleColumns.missingViewPermissions(organisationId, roleIds)
+        val permissionCounts = roleColumns.permissionCounts(organisationId, roleIds)
+        val userCounts = roleColumns.activeUserCounts(organisationId, roleIds)
         val items =
             page.map { record ->
                 val id = requireNotNull(record.get(ROLE.ID))
@@ -425,6 +443,8 @@ class JooqIamAdministrationQueries(
                     systemRole = requireNotNull(record.get(ROLE.SYSTEM_ROLE)),
                     status = requireNotNull(record.get(ROLE.STATUS)),
                     missingViewPermissions = gaps[id].orEmpty(),
+                    permissionCount = permissionCounts[id] ?: 0,
+                    activeUserCount = userCounts[id] ?: 0,
                 )
             }
 
@@ -449,59 +469,13 @@ class JooqIamAdministrationQueries(
                     systemRole = requireNotNull(record.systemRole),
                     status = requireNotNull(record.status),
                     missingViewPermissions =
-                        missingViewPermissions(organisationId, listOf(id))[id].orEmpty(),
+                        roleColumns
+                            .missingViewPermissions(organisationId, listOf(id))[id]
+                            .orEmpty(),
                     createdAt = requireNotNull(record.createdAt).toInstant(),
                     updatedAt = requireNotNull(record.updatedAt).toInstant(),
                 )
             }
-
-    /**
-     * Sorted view codes each of [roleIds] needs and lacks, one query for the whole set.
-     *
-     * A role needs a view when it holds an `ACTIVE` mutation whose `permission_view_requirement`
-     * names it, and lacks it when it holds no `ACTIVE` grant of that view. Roles that comply are
-     * absent from the result. The operator report
-     * (`docs/operations/sql/permission-view-gap-roles.sql`) states the same rule.
-     */
-    private fun missingViewPermissions(
-        organisationId: UUID,
-        roleIds: Collection<UUID>,
-    ): Map<UUID, List<String>> {
-        if (roleIds.isEmpty()) return emptyMap()
-        val held = ROLE_PERMISSION.`as`("held")
-        val heldView = ROLE_PERMISSION.`as`("held_view")
-        val mutation = PERMISSION.`as`("held_mutation")
-        val heldViewPermission = PERMISSION.`as`("held_view_permission")
-        val view = PERMISSION.`as`("needed_view")
-        return dsl
-            .selectDistinct(held.ROLE_ID, view.PERMISSION_CODE)
-            .from(held)
-            .join(mutation)
-            .on(mutation.ID.eq(held.PERMISSION_ID))
-            .and(mutation.STATUS.eq(ACTIVE))
-            .join(PERMISSION_VIEW_REQUIREMENT)
-            .on(PERMISSION_VIEW_REQUIREMENT.PERMISSION_ID.eq(mutation.ID))
-            .join(view)
-            .on(view.ID.eq(PERMISSION_VIEW_REQUIREMENT.REQUIRED_VIEW_PERMISSION_ID))
-            .where(held.ORGANISATION_ID.eq(organisationId))
-            .and(held.ROLE_ID.`in`(roleIds))
-            .andNotExists(
-                dsl
-                    .selectOne()
-                    .from(heldView)
-                    .join(heldViewPermission)
-                    .on(heldViewPermission.ID.eq(heldView.PERMISSION_ID))
-                    .where(heldView.ORGANISATION_ID.eq(held.ORGANISATION_ID))
-                    .and(heldView.ROLE_ID.eq(held.ROLE_ID))
-                    .and(heldView.PERMISSION_ID.eq(view.ID))
-                    .and(heldViewPermission.STATUS.eq(ACTIVE)),
-            ).orderBy(view.PERMISSION_CODE)
-            .fetch()
-            .groupBy(
-                { requireNotNull(it.get(held.ROLE_ID)) },
-                { requireNotNull(it.get(view.PERMISSION_CODE)) },
-            )
-    }
 
     override fun searchRoleAssignments(
         organisationId: UUID,
@@ -731,3 +705,70 @@ private fun tenantListSortOrder(
     sortBy: String?,
     sortDir: String?,
 ): SortField<*> = if (sortBy != null && sortDir?.uppercase() == "ASC") field.asc() else field.desc()
+
+private fun Record.toUserInTenantSummary() =
+    UserInTenantSummary(
+        id = requireNotNull(get(USER_ACCOUNT.ID)),
+        username = requireNotNull(get(USER_ACCOUNT.USERNAME)),
+        email = requireNotNull(get(USER_ACCOUNT.EMAIL)),
+        displayName = requireNotNull(get(USER_ACCOUNT.DISPLAY_NAME)),
+        userStatus = requireNotNull(get(USER_ACCOUNT.STATUS)),
+        membershipStatus =
+            requireNotNull(
+                get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS),
+            ),
+        membershipId = requireNotNull(get(USER_ORGANISATION_MEMBERSHIP.ID)),
+        membershipType =
+            requireNotNull(
+                get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE),
+            ),
+        createdAt = requireNotNull(get(USER_ACCOUNT.CREATED_AT)).toInstant(),
+        membershipCreatedAt =
+            requireNotNull(
+                get(USER_ORGANISATION_MEMBERSHIP.CREATED_AT),
+            ).toInstant(),
+    )
+
+private fun Record.toMembershipSummary() =
+    MembershipSummary(
+        id = requireNotNull(get(USER_ORGANISATION_MEMBERSHIP.ID)),
+        userId = requireNotNull(get(USER_ORGANISATION_MEMBERSHIP.USER_ID)),
+        membershipStatus =
+            requireNotNull(
+                get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS),
+            ),
+        membershipType =
+            requireNotNull(
+                get(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE),
+            ),
+        primaryBranchId =
+            get(
+                USER_ORGANISATION_MEMBERSHIP.PRIMARY_BRANCH_ID,
+            ),
+        username = requireNotNull(get(USER_ACCOUNT.USERNAME)),
+        email = requireNotNull(get(USER_ACCOUNT.EMAIL)),
+        displayName = requireNotNull(get(USER_ACCOUNT.DISPLAY_NAME)),
+        primaryBranchName = get(BRANCH.BRANCH_NAME),
+        createdAt =
+            requireNotNull(
+                get(USER_ORGANISATION_MEMBERSHIP.CREATED_AT),
+            ).toInstant(),
+    )
+
+private fun Record.toBranchAssignmentSummary() =
+    BranchAssignmentSummary(
+        id = requireNotNull(get(USER_BRANCH_ASSIGNMENT.ID)),
+        userId = requireNotNull(get(USER_BRANCH_ASSIGNMENT.USER_ID)),
+        branchId = requireNotNull(get(USER_BRANCH_ASSIGNMENT.BRANCH_ID)),
+        assignmentType =
+            requireNotNull(
+                get(USER_BRANCH_ASSIGNMENT.ASSIGNMENT_TYPE),
+            ),
+        status = requireNotNull(get(USER_BRANCH_ASSIGNMENT.STATUS)),
+        username = requireNotNull(get(USER_ACCOUNT.USERNAME)),
+        displayName = requireNotNull(get(USER_ACCOUNT.DISPLAY_NAME)),
+        branchName = requireNotNull(get(BRANCH.BRANCH_NAME)),
+        assignedAt =
+            requireNotNull(get(USER_BRANCH_ASSIGNMENT.ASSIGNED_AT))
+                .toInstant(),
+    )

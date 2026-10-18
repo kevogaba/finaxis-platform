@@ -159,6 +159,81 @@ class FoundationQueryServiceTests {
     }
 
     @Test
+    fun `branch user counts are shown only where the caller may list the assignments`() {
+        val branchA = UUID.randomUUID()
+        val branchB = UUID.randomUUID()
+        store.branchSummaries = listOf(branchSummary(branchA, 4), branchSummary(branchB, 7))
+        permissionGuard.visibleOnly(tenantId, "branch_assignment.view", branchA)
+
+        val items =
+            service
+                .searchBranches(tenantId, BranchFilter(), TenantCaller(actorId, tenantId))
+                .items
+                .associateBy { it.id }
+
+        assertEquals(4, items.getValue(branchA).activeUserCount)
+        assertEquals(null, items.getValue(branchB).activeUserCount)
+    }
+
+    @Test
+    fun `a platform caller sees branch user counts only with the platform assignment view`() {
+        val branchA = UUID.randomUUID()
+        store.branchSummaries = listOf(branchSummary(branchA, 4))
+        val caller = PlatformCaller(actorId, UUID.randomUUID())
+
+        assertEquals(
+            4,
+            service
+                .searchBranches(tenantId, BranchFilter(), caller)
+                .items
+                .single()
+                .activeUserCount,
+        )
+
+        permissionGuard.deny(PLATFORM_ORGANISATION_ID, "branch_assignment.view")
+        assertEquals(
+            null,
+            service
+                .searchBranches(tenantId, BranchFilter(), caller)
+                .items
+                .single()
+                .activeUserCount,
+        )
+    }
+
+    @Test
+    fun `tenant counts are shown only to a caller holding the counted view tenant wide`() {
+        store.tenantSummaries = listOf(tenantSummary(tenantId, branches = 3, users = 9))
+        val caller = PlatformCaller(actorId, UUID.randomUUID())
+
+        val all = service.searchTenants(TenantFilter(), caller).items.single()
+        assertEquals(3, all.activeBranchCount)
+        assertEquals(9, all.activeUserCount)
+
+        permissionGuard.deny(PLATFORM_ORGANISATION_ID, "user.view")
+        val withoutUsers = service.searchTenants(TenantFilter(), caller).items.single()
+        assertEquals(3, withoutUsers.activeBranchCount)
+        assertEquals(null, withoutUsers.activeUserCount)
+
+        permissionGuard.deny(PLATFORM_ORGANISATION_ID, "branch.view")
+        val neither = service.searchTenants(TenantFilter(), caller).items.single()
+        assertEquals(null, neither.activeBranchCount)
+        assertEquals(null, neither.activeUserCount)
+    }
+
+    @Test
+    fun `a tenant caller reads its own tenant counts with a branch scoped grant withheld`() {
+        store.tenantSummaries = listOf(tenantSummary(tenantId, branches = 3, users = 9))
+        permissionGuard.visibleOnly(tenantId, "user.view", UUID.randomUUID())
+
+        val item =
+            service.searchTenants(TenantFilter(), TenantCaller(actorId, tenantId)).items.single()
+
+        assertEquals(3, item.activeBranchCount)
+        assertEquals(null, item.activeUserCount, "a branch-scoped user.view is not tenant-wide")
+    }
+
+    @Test
     fun `searchBranches refuses a caller that holds the view nowhere`() {
         permissionGuard.deny(tenantId, "branch.view")
 
@@ -217,13 +292,56 @@ class FoundationQueryServiceTests {
             service.getBranch(UUID.randomUUID(), UUID.randomUUID(), caller)
         }
     }
+
+    private fun branchSummary(
+        id: UUID,
+        users: Int,
+    ) = BranchSummary(
+        id = id,
+        organisationId = tenantId,
+        branchCode = "B-$id",
+        branchName = "Branch",
+        branchType = "BRANCH",
+        status = "ACTIVE",
+        createdAt = Instant.parse("2026-01-01T00:00:00Z"),
+        parentBranchId = null,
+        timezone = "Africa/Nairobi",
+        openedOn = null,
+        closedOn = null,
+        activeUserCount = users,
+    )
+
+    private fun tenantSummary(
+        id: UUID,
+        branches: Int,
+        users: Int,
+    ) = TenantSummary(
+        id = id,
+        tenantCode = "acme",
+        displayName = "Acme",
+        countryCode = "KE",
+        status = "ACTIVE",
+        createdAt = Instant.parse("2026-01-01T00:00:00Z"),
+        baseCurrencyCode = "KES",
+        timezone = "Africa/Nairobi",
+        bootstrapStatus = null,
+        activeBranchCount = branches,
+        activeUserCount = users,
+    )
+
+    private companion object {
+        val PLATFORM_ORGANISATION_ID: UUID = UUID.fromString("00000000-0000-0000-0000-000000000000")
+    }
 }
 
 private class FakeFoundationQueryStore : FoundationQueryStore {
+    var tenantSummaries: List<TenantSummary> = emptyList()
+    var branchSummaries: List<BranchSummary> = emptyList()
+
     override fun searchTenants(
         filter: TenantFilter,
         organisationId: UUID?,
-    ): ApiPage<TenantSummary> = apiPageOf(emptyList(), 0, 25, 0)
+    ): ApiPage<TenantSummary> = apiPageOf(tenantSummaries, 0, 25, tenantSummaries.size.toLong())
 
     val tenants = mutableMapOf<UUID, TenantDetail>()
 
@@ -237,7 +355,7 @@ private class FakeFoundationQueryStore : FoundationQueryStore {
         restrictToBranchIds: Set<UUID>?,
     ): ApiPage<BranchSummary> {
         lastBranchRestriction = restrictToBranchIds
-        return apiPageOf(emptyList(), 0, 25, 0)
+        return apiPageOf(branchSummaries, 0, 25, branchSummaries.size.toLong())
     }
 
     override fun findBranchById(

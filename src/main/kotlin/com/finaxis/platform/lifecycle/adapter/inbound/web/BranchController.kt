@@ -1034,6 +1034,11 @@ class BranchController(
             branchType = branchType,
             status = status,
             createdAt = createdAt,
+            parentBranchId = parentBranchId,
+            timezone = timezone,
+            openedOn = openedOn,
+            closedOn = closedOn,
+            activeUserCount = activeUserCount,
         )
 
     private fun BranchDetail.toResponse() =

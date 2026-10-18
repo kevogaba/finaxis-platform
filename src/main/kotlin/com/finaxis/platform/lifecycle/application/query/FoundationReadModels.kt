@@ -5,7 +5,11 @@ import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
 
-/** Summary projection of a tenant organisation. */
+/**
+ * Summary projection of a tenant organisation. [activeBranchCount] counts its `ACTIVE` branches
+ * and [activeUserCount] its `ACTIVE` memberships; each is null for a caller who may not list the
+ * rows it counts. [bootstrapStatus] is null for a tenant with no bootstrap record.
+ */
 data class TenantSummary(
     val id: UUID,
     val tenantCode: String,
@@ -13,6 +17,11 @@ data class TenantSummary(
     val countryCode: String,
     val status: String,
     val createdAt: Instant,
+    val baseCurrencyCode: String,
+    val timezone: String,
+    val bootstrapStatus: String?,
+    val activeBranchCount: Int?,
+    val activeUserCount: Int?,
 )
 
 /** Detailed projection of a tenant organisation. */
@@ -38,7 +47,10 @@ data class TenantDetail(
     val registrationNumber: String? = null,
 )
 
-/** Summary projection of an operating branch. */
+/**
+ * Summary projection of an operating branch. [activeUserCount] counts the distinct users with an
+ * `ACTIVE` assignment to it, and is null for a caller who may not list its assignments.
+ */
 data class BranchSummary(
     val id: UUID,
     val organisationId: UUID,
@@ -47,6 +59,11 @@ data class BranchSummary(
     val branchType: String,
     val status: String,
     val createdAt: Instant,
+    val parentBranchId: UUID?,
+    val timezone: String,
+    val openedOn: LocalDate?,
+    val closedOn: LocalDate?,
+    val activeUserCount: Int?,
 )
 
 /** Detailed projection of an operating branch. */
