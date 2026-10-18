@@ -385,6 +385,8 @@ class HighRiskOperationAuditCoverageTests(
                 "user.revoke_branch" to "branch.revoke_user",
                 "user.revoke_role" to "user.revoke_role",
                 "user.suspend" to "user_account.suspend",
+                "user.update" to "user.update",
+                "membership.update" to "membership.update",
             )
     }
 }

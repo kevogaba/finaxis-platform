@@ -11,11 +11,13 @@ Read this with [active organisation context](active-organisation-context.md),
 
 ## Permission catalogue and roles
 
-The global catalogue in `permission` holds **81 permission codes**: 54 foundation codes seeded by
+The global catalogue in `permission` holds **83 permission codes**: 54 foundation codes seeded by
 `V2__platform_reference_data.sql`, 26 accounting codes seeded by
-`V5__accounting_permission_catalogue.sql`, and `branch.update`, added to the `branch` module by
-`V19__branch_update_permission.sql` (#203). One of the 81, `branch.activate`, is **DEPRECATED**
-(see "Branch approval"), so 80 are `ACTIVE`. Each has a stable `permission_code`, `module_code`,
+`V5__accounting_permission_catalogue.sql`, `branch.update`, added to the `branch` module by
+`V19__branch_update_permission.sql` (#203), and `user.update` (platform scope) and
+`membership.update` (tenant scope), added by `V32__user_and_membership_update_permissions.sql`
+(#161, ADR 0033). One of the 83, `branch.activate`, is **DEPRECATED**
+(see "Branch approval"), so 82 are `ACTIVE`. Each has a stable `permission_code`, `module_code`,
 `risk_level`, `system_permission`, status, and a `kind` and `grant_scope` (see "Catalogue
 metadata"). Module codes are `tenant`, `branch`, `iam`,
 `audit`, `settings`, and `accounting`; risk levels are `LOW`, `MEDIUM`, `HIGH`, and `CRITICAL`.

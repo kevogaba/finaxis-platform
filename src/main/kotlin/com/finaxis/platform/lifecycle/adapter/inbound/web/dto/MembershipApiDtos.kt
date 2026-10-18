@@ -8,6 +8,7 @@ import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.Size
 import java.time.Instant
+import java.util.Optional
 import java.util.UUID
 
 /** Optional decision remark for activating (approving) a pending membership. */
@@ -85,4 +86,25 @@ data class MembershipSummaryResponse(
                 "callers).",
     )
     val createdBy: ActorRefResponse?,
+)
+
+/**
+ * Request payload for editing a membership. Absent keys leave a field unchanged; an explicit
+ * `null` primary branch clears it. At least one field is required.
+ */
+data class UpdateMembershipRequest(
+    @field:Schema(
+        allowableValues = ["STAFF", "ADMIN", "AUDITOR"],
+        description = "Absent leaves the type unchanged. `SYSTEM` is reserved and refused.",
+    )
+    val membershipType: String? = null,
+    @field:Schema(
+        type = "string",
+        format = "uuid",
+        nullable = true,
+        description =
+            "Absent leaves the primary branch unchanged; an explicit null clears it; an id " +
+                "sets it, and must be an ACTIVE branch of the tenant.",
+    )
+    val primaryBranchId: Optional<UUID>? = null,
 )

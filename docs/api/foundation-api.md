@@ -1296,9 +1296,21 @@ Base path: `/api/v1/platform/users`. List filters: `q`, `user_status`, `organisa
 |--------|-------------------------|--------------------------------|-------------------|----------|
 | GET    | `/`                     | Search user accounts, all organisations | `user.view` (platform) | page |
 | GET    | `/{user_id}`            | Get a user account and its memberships  | `user.view` (platform) | item |
+| PATCH  | `/{user_id}`            | Edit display name and phone    | `user.update` + `user.view` | mutation |
 | POST   | `/{user_id}/suspend`    | Suspend global user account    | `user.suspend` + `user.view` | mutation |
 | POST   | `/{user_id}/reactivate` | Reactivate global user account | `user.activate` + `user.view` | mutation |
 | POST   | `/{user_id}/deactivate` | Deactivate global user account | `user.deactivate` + `user.view` | mutation |
+
+**Profile edit (#161).** `PATCH /api/v1/platform/users/{user_id}` takes `display_name` (2 to 100
+characters after trimming; the trimmed value is stored) and `phone_e164` (E.164); a `DEACTIVATED`
+or `ARCHIVED` account is not edited (`422`); an absent key leaves the field as it is, a phone is replaced
+and never cleared, and at least one field is required (`422`). It needs `user.update` and `user.view`
+in the platform organisation (`user.update` without `user.view` is `403` naming `user.view`), is
+idempotent, answers the directory detail, and is audited as `user.update` naming the changed fields
+and never their values. The directory detail returns the platform-only `phone_e164` and
+`last_login_at` (both always present, nullable; no tenant route returns them). An invitation for an
+email that already has an account keeps ignoring the phone, username and display name it carries:
+the account's profile is edited here, not by inviting (ADR 0033).
 
 **Directory reads (#160).** `GET /` pages user accounts across every organisation, newest first by
 default (`sort_by`: `createdAt`, `username`, `displayName`, `email`, `userStatus`; `sort_dir` applies
@@ -1447,6 +1459,16 @@ membership here is an empty page). Sorting is described under [Pagination](#pagi
 | POST   | `/{membership_id}/suspend`    | Suspend membership              | `membership.suspend` + `membership.view` | mutation |
 | POST   | `/{membership_id}/reactivate` | Reactivate                      | `membership.reactivate` + `membership.view` | mutation |
 | POST   | `/{membership_id}/revoke`     | Revoke membership               | `membership.revoke` + `membership.view` | mutation |
+| PATCH  | `/{membership_id}`            | Edit type and primary branch    | `membership.update` + `membership.view` | mutation |
+
+**Edit (`PATCH /{membership_id}`, #161).** The body takes `membership_type` (`STAFF`, `ADMIN` or
+`AUDITOR`) and `primary_branch_id`; an absent key leaves the field as it is, an explicit
+`primary_branch_id: null` clears it, and at least one field is required (else `422`). A revoked or
+`SYSTEM` membership, a `SYSTEM` type and a branch that is not an ACTIVE branch of the tenant are
+`422 invalid_operation`; an ACTIVE membership cannot move to `STAFF` or `ADMIN` while the user holds
+no active branch assignment (`409`, as activation requires one; an `AUDITOR` may have none); an
+unknown membership is `404`. Idempotent, answers the membership detail,
+and is audited as `membership.update` naming the changed fields (ADR 0033).
 
 Membership response and revoke request:
 
