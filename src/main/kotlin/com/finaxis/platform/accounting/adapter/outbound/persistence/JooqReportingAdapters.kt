@@ -204,7 +204,7 @@ class JooqBalanceCheckpointQueries(
                 .fetchOne(0, LocalDate::class.java)
         val earliestUnprojected =
             dsl
-                .select(DSL.min(JOURNAL_ENTRY.POSTING_DATE))
+                .select(DSL.min(earliestPostingDate(watermark != null)))
                 .from(JOURNAL_ENTRY)
                 .where(JOURNAL_ENTRY.ORGANISATION_ID.eq(organisationId))
                 .and(
