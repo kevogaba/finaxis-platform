@@ -208,6 +208,11 @@ class RoleAssignmentController(
             description = "Assignment conflicts with current state",
             content = [Content(schema = Schema(implementation = ApiProblem::class))],
         ),
+        ApiResponse(
+            responseCode = "422",
+            description = "A new assignment of a role that is not ACTIVE, or the scope is invalid",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
     )
     fun assignRole(
         @RequestBody @Valid request: AssignRoleRequest,

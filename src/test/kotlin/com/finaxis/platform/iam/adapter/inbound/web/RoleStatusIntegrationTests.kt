@@ -26,9 +26,11 @@ import java.util.UUID
 import kotlin.test.assertEquals
 
 /**
- * Full-stack proof that a role changes status only from the state the operation names: an active
- * role is disabled once and a disabled role re-enabled once, and any other call is a 409 that
- * writes and audits nothing (#171). A repeat used to answer 200 and add an audit row each time.
+ * Full-stack proof of the role lifecycle rules of #171. A role changes status only from the state
+ * the operation names: an active role is disabled once and a disabled role re-enabled once, and
+ * any other call is a 409 that writes and audits nothing (a repeat used to answer 200 and add an
+ * audit row each time). A role that is not ACTIVE cannot be assigned, and the caller is
+ * authorised before the role or the member is looked up.
  */
 @Import(PostgresTestConfiguration::class)
 @SpringBootTest
@@ -84,6 +86,63 @@ class RoleStatusIntegrationTests
             assertEquals(1, audits("role.deactivate", roleId))
         }
 
+        @Test
+        fun `a disabled role is not assignable and an unauthorised caller gets 403 first`() {
+            val roleId = createRole("DORMANT")
+            val member = seedUser()
+            fixture.grantTenantAdmin(organisationId, member)
+            val other = seedUser()
+            fixture.grantTenantAdmin(organisationId, other)
+            val existing = assignmentBody(member, roleId)
+            val existingId =
+                post(ApiPaths.ROLE_ASSIGNMENTS, "user.assign_role", existing)
+                    .andExpect { status { isCreated() } }
+                    .andReturn()
+                    .response.contentAsString
+                    .let { ID.find(it)!!.groupValues[1] }
+            post("$ROLE_PATH/$roleId/deactivate", "role.deactivate").andExpect {
+                status { isOk() }
+            }
+
+            // A new assignment of a disabled role is refused ...
+            post(ApiPaths.ROLE_ASSIGNMENTS, "user.assign_role", assignmentBody(other, roleId))
+                .andExpect {
+                    status { isUnprocessableContent() }
+                    jsonPath("$.code") { value("invalid_operation") }
+                }
+            // ... repeating the one that exists is still idempotent ...
+            post(ApiPaths.ROLE_ASSIGNMENTS, "user.assign_role", existing).andExpect {
+                status { isCreated() }
+                jsonPath("$.id") { value(existingId) }
+            }
+            // ... and a caller with no grant at all gets the same 403 whatever the role's state.
+            post(
+                ApiPaths.ROLE_ASSIGNMENTS,
+                "user.assign_role",
+                assignmentBody(other, roleId),
+                seedUser(),
+            ).andExpect {
+                status { isForbidden() }
+                jsonPath("$.code") { value("forbidden") }
+            }
+
+            assertEquals(1, activeAssignments(roleId))
+        }
+
+        private fun assignmentBody(
+            userId: UUID,
+            roleId: UUID,
+        ) = """{"user_id":"$userId","role_id":"$roleId","scope_type":"TENANT"}"""
+
+        private fun activeAssignments(roleId: UUID): Int =
+            dsl
+                .fetchValue(
+                    "SELECT count(*) FROM user_role_assignment " +
+                        "WHERE role_id = ? AND status = 'ACTIVE'",
+                    roleId,
+                ).toString()
+                .toInt()
+
         private fun createRole(code: String): UUID {
             val body =
                 post(ROLE_PATH, "role.create", """{"role_code":"$code","role_name":"$code"}""")
@@ -114,29 +173,32 @@ class RoleStatusIntegrationTests
             path: String,
             permission: String,
             body: String = "{}",
+            actor: UUID = admin,
         ): ResultActionsDsl =
             mockMvc.post(path) {
                 header(IdempotencyKeyFilter.IDEMPOTENCY_KEY_HEADER, uuidV7().toString())
                 contentType = MediaType.APPLICATION_JSON
                 content = body
-                with(authentication(token(permission)))
+                with(authentication(token(permission, actor)))
             }
 
         // The administrator holds every tenant permission in the database; the token carries the
         // coarse authority the route's gate reads.
-        private fun token(permission: String) =
-            AppPrincipalAuthenticationToken(
-                AppPrincipal(
-                    userId = admin,
-                    keycloakSubject = "user-$admin",
-                    organisationId = organisationId,
-                    membershipId = uuidV7(),
-                    branchId = null,
-                    email = "admin@rsi.test",
-                    fullName = "Role Status Admin",
-                    permissions = setOf(permission, "role.view"),
-                ),
-            )
+        private fun token(
+            permission: String,
+            actor: UUID,
+        ) = AppPrincipalAuthenticationToken(
+            AppPrincipal(
+                userId = actor,
+                keycloakSubject = "user-$actor",
+                organisationId = organisationId,
+                membershipId = uuidV7(),
+                branchId = null,
+                email = "admin@rsi.test",
+                fullName = "Role Status Admin",
+                permissions = setOf(permission, "role.view"),
+            ),
+        )
 
         private fun seedUser(): UUID {
             val id = uuidV7()
