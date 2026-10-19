@@ -33,6 +33,7 @@ import com.finaxis.platform.lifecycle.application.SuspendUserCommand
 import com.finaxis.platform.lifecycle.application.UserProvisioningService
 import com.finaxis.platform.lifecycle.application.query.FoundationQueryService
 import com.finaxis.platform.lifecycle.withRequestContext
+import org.awaitility.Awaitility.await
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito.doAnswer
@@ -43,6 +44,7 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.cache.CacheManager
 import org.springframework.context.annotation.Import
+import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.http.MediaType
 import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
@@ -54,6 +56,7 @@ import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.patch
 import org.springframework.test.web.servlet.post
 import org.springframework.test.web.servlet.put
+import java.time.Duration
 import java.time.OffsetDateTime
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -86,6 +89,7 @@ class MutationRequiresViewIntegrationTests
         private val foundationQueryService: FoundationQueryService,
         private val iamQueryService: IamQueryService,
         private val cacheManager: CacheManager,
+        private val redis: StringRedisTemplate,
     ) {
         @MockitoSpyBean
         private lateinit var branchProvisioningService: BranchProvisioningService
@@ -1078,6 +1082,7 @@ class MutationRequiresViewIntegrationTests
             organisation: UUID,
             view: String,
         ) {
+            awaitCachedPermissions(actor, organisation)
             dsl.execute(
                 "DELETE FROM role_permission WHERE organisation_id = ? " +
                     "AND permission_id = (SELECT id FROM permission WHERE permission_code = ?) " +
@@ -1090,6 +1095,31 @@ class MutationRequiresViewIntegrationTests
             )
             // invalidate() deletes synchronously; the Redis cache's clear() may run asynchronously.
             cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.invalidate()
+        }
+
+        /**
+         * The resolver's cache write is asynchronous on Redis, so the pre-check's write can still
+         * be in flight when the view is revoked and the cache invalidated: it then lands after the
+         * invalidation and the stale set stays readable for a cache with no time-to-live. Waiting
+         * for the entry first makes the invalidation the last write. Matches by membership, not
+         * by key, because the entry is keyed by the branch selection as well.
+         */
+        private fun awaitCachedPermissions(
+            actor: UUID,
+            organisation: UUID,
+        ) {
+            val membershipId =
+                dsl
+                    .fetchOne(
+                        "SELECT id FROM user_organisation_membership " +
+                            "WHERE organisation_id = ? AND user_id = ?",
+                        organisation,
+                        actor,
+                    )!!
+                    .get(0, UUID::class.java)
+            await()
+                .atMost(Duration.ofSeconds(CACHE_WRITE_SECONDS))
+                .until { redis.keys("*$membershipId:*").isNotEmpty() }
         }
 
         private fun MockMvcResultMatchersDsl.forbiddenGeneric() {
@@ -1421,5 +1451,6 @@ class MutationRequiresViewIntegrationTests
 
         private companion object {
             val BRANCH_ID = Regex("\"branch_id\"\\s*:\\s*\"([^\"]+)\"")
+            const val CACHE_WRITE_SECONDS = 10L
         }
     }
