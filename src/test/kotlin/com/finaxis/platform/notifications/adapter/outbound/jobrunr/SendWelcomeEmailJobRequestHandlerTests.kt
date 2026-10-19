@@ -15,6 +15,7 @@ import com.finaxis.platform.notifications.application.port.outbound.email.EmailM
 import com.finaxis.platform.notifications.application.port.outbound.email.PermanentEmailDeliveryException
 import com.finaxis.platform.notifications.application.port.outbound.email.RetryableEmailDeliveryException
 import org.jobrunr.JobRunrException
+import org.springframework.dao.DataAccessResourceFailureException
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -141,6 +142,96 @@ class SendWelcomeEmailJobRequestHandlerTests {
 
         assertEquals(true, exception.isProblematicAndDoNotRetry())
         assertEquals(AuditOutcome.FAILURE, audits.items.single().outcome)
+    }
+
+    @Test
+    fun `a failing recipient lookup is retried without its message or cause`() {
+        val failingDirectory =
+            WelcomeEmailRecipientDirectory { _, _ ->
+                throw DataAccessResourceFailureException(
+                    "could not read $SENTINEL",
+                    IllegalStateException("connection for $SENTINEL"),
+                )
+            }
+        val handler =
+            SendWelcomeEmailJobRequestHandler(
+                failingDirectory,
+                EmailGateway { EmailDeliveryReceipt("msg-1") },
+                InMemoryJobStepGuard(),
+                auditService,
+            )
+
+        val exception = assertFailsWith<RuntimeException> { handler.run(request()) }
+
+        assertFalse(exception is JobRunrException && exception.isProblematicAndDoNotRetry())
+        assertEquals("DataAccessResourceFailureException", exception.message)
+        assertNoSentinel(exception)
+        assertNull(exception.cause)
+    }
+
+    @Test
+    fun `an unrelated IllegalStateException is retried and not treated as a missing recipient`() {
+        val failingDirectory =
+            WelcomeEmailRecipientDirectory { _, _ -> error("row state for $SENTINEL") }
+        val handler =
+            SendWelcomeEmailJobRequestHandler(
+                failingDirectory,
+                EmailGateway { EmailDeliveryReceipt("msg-1") },
+                InMemoryJobStepGuard(),
+                auditService,
+            )
+
+        val exception = assertFailsWith<RuntimeException> { handler.run(request()) }
+
+        assertFalse(exception is JobRunrException && exception.isProblematicAndDoNotRetry())
+        assertEquals("IllegalStateException", exception.message)
+        assertNoSentinel(exception)
+        assertNull(exception.cause)
+    }
+
+    @Test
+    fun `a failing audit write after the send is retried without its message and sends once`() {
+        val sentMessages = mutableListOf<EmailMessage>()
+        val gateway =
+            EmailGateway { message ->
+                sentMessages.add(message)
+                EmailDeliveryReceipt("msg-1")
+            }
+        val stepGuard = InMemoryJobStepGuard()
+        val failingAudits =
+            AuditEventRepository {
+                throw DataAccessResourceFailureException(
+                    "insert for $SENTINEL",
+                )
+            }
+        val handler =
+            SendWelcomeEmailJobRequestHandler(
+                recipientDirectory,
+                gateway,
+                stepGuard,
+                AuditService(failingAudits, clock),
+            )
+
+        val exception = assertFailsWith<RuntimeException> { handler.run(request()) }
+        assertFailsWith<RuntimeException> { handler.run(request()) }
+
+        assertFalse(exception is JobRunrException && exception.isProblematicAndDoNotRetry())
+        assertEquals("DataAccessResourceFailureException", exception.message)
+        assertNoSentinel(exception)
+        assertNull(exception.cause)
+        assertEquals(1, sentMessages.size)
+    }
+
+    @Test
+    fun `an unclassified gateway failure is retried without its message`() {
+        val gateway = EmailGateway { throw IllegalArgumentException("template for $SENTINEL") }
+
+        val exception = assertFailsWith<RuntimeException> { handler(gateway).run(request()) }
+
+        assertFalse(exception is JobRunrException && exception.isProblematicAndDoNotRetry())
+        assertEquals("IllegalArgumentException", exception.message)
+        assertNoSentinel(exception)
+        assertNull(exception.cause)
     }
 
     @Test

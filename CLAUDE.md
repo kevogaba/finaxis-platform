@@ -275,9 +275,9 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   `jobrunr_jobs` keeps the job request's input (the administrator's email and username), an
   exception type the invite handler does not catch reaches JobRunr as raised, and the Keycloak
   handler's uncaught types and already-succeeded branch are sanitised and logged but not recorded as
-  a failure. The welcome-email handler does not catch a `DataAccessException` (or any other
-  exception) from its recipient lookup or audit write: it reaches JobRunr raw, with its message.
-  Only a failed retry's audit row holds the code and the exception class name (the
+  a failure. The welcome-email handler also sanitises any other exception (its recipient lookup,
+  audit write or an unclassified gateway error): it logs a message-free `WARN` and rethrows the
+  message-free retryable exception. Only a failed retry's audit row holds the code and the exception class name (the
   Keycloak-job row has the class name only). **A new failure kind needs a new enum member and a
   forward migration that widens the CHECK in the same change.** Idempotent, with pre- and
   post-condition asserts in-file — see `docs/operations/tenant-provisioning.md` ("Failed

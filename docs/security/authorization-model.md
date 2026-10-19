@@ -689,11 +689,11 @@ that handler resolves. The welcome-email handler (`SendWelcomeEmailJobRequestHan
 same rule: a permanent failure throws `JobRunrException` with `doNotRetry` and the simple class
 name as its message, with no cause; a retryable failure throws a message-free exception named by the
 failure's class, with no cause, so JobRunr still retries it; each logs a message-free `WARN` with the
-exception and root-cause classes and frames first. A failed Keycloak or invite job stores the closed
+exception and root-cause classes and frames first; any other exception from it (the recipient
+lookup, the audit write, an unclassified gateway error) is logged the same way and rethrown as the
+message-free retryable exception. A failed Keycloak or invite job stores the closed
 code and the exception class name (`<CODE>:<ExceptionClass>`) in `identity_dispatch_log.last_error`,
-never the message. **Still stored or not covered:** the welcome-email handler's recipient lookup or
-audit write raising a `DataAccessException` (or any other exception) is not caught and reaches
-JobRunr raw, with its message; the rows of `identity_dispatch_log.last_error` written before that
+never the message. **Still stored or not covered:** the rows of `identity_dispatch_log.last_error` written before that
 change, which keep the raw message of a failed Keycloak or invite job (database only, no API returns
 it, not rewritten); the job request's input (the administrator's email and username) in
 `jobrunr_jobs`; an exception type the invite handler does not catch reaches JobRunr as

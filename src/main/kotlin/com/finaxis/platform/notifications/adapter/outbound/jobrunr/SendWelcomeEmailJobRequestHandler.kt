@@ -31,18 +31,41 @@ class SendWelcomeEmailJobRequestHandler(
     /**
      * Resolves the recipient, sends the welcome email at most once per job, and audits the
      * outcome. Permanent delivery failures stop further JobRunr retries; retryable failures
-     * throw a plain exception so JobRunr retries the job. Neither thrown exception carries the
-     * original failure: its message can quote the recipient's address, so JobRunr would store and
-     * log it. Only the failure's class name is kept.
+     * throw a plain exception so JobRunr retries the job. So does any other failure (the
+     * recipient lookup, the audit write, an unclassified gateway error). None of the exceptions
+     * thrown carries the original failure: its message can quote the recipient's address or SQL,
+     * so JobRunr would store and log it. Only the failure's class name is kept.
      *
      * @param jobRequest the welcome email job details
      */
+    @Suppress("TooGenericExceptionCaught") // every failure, whatever its type, is sanitised
     override fun run(jobRequest: SendWelcomeEmailJobRequest) {
         try {
+            deliver(jobRequest)
+        } catch (ex: Exception) {
+            // Already sanitised, or a do-not-retry JobRunrException (wrapping it would make it
+            // retryable): propagate unchanged; anything else is logged and sanitised.
+            throw when (ex) {
+                is JobRunrException, is SendWelcomeEmailRetryException -> {
+                    ex
+                }
+
+                else -> {
+                    logFailure(jobRequest, ex)
+                    SendWelcomeEmailRetryException(
+                        ex.toAuditFailureReason(),
+                        ex.holdsInterruption(),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun deliver(jobRequest: SendWelcomeEmailJobRequest) {
+        try {
             val recipient =
-                checkNotNull(
-                    recipientDirectory.findRecipient(jobRequest.userId, jobRequest.organisationId),
-                ) { "Welcome email recipient not found for user ${jobRequest.userId}" }
+                recipientDirectory.findRecipient(jobRequest.userId, jobRequest.organisationId)
+                    ?: throw WelcomeEmailRecipientNotFoundException()
             jobStepGuard.runOnce(SEND_STEP) {
                 emailGateway.send(
                     EmailMessage(
@@ -63,7 +86,7 @@ class SendWelcomeEmailJobRequestHandler(
                 resourceId = jobRequest.userId.toString(),
                 subjectUserId = jobRequest.userId,
             )
-        } catch (ex: IllegalStateException) {
+        } catch (ex: WelcomeEmailRecipientNotFoundException) {
             recordFailureAndFailPermanently(jobRequest, ex)
         } catch (ex: PermanentEmailDeliveryException) {
             recordFailureAndFailPermanently(jobRequest, ex)
@@ -76,8 +99,8 @@ class SendWelcomeEmailJobRequestHandler(
         jobRequest: SendWelcomeEmailJobRequest,
         cause: Throwable,
     ): Nothing {
-        auditFailure(jobRequest, cause)
         logFailure(jobRequest, cause)
+        auditFailure(jobRequest, cause)
         throw JobRunrException(cause.toAuditFailureReason(), true)
     }
 
@@ -85,8 +108,8 @@ class SendWelcomeEmailJobRequestHandler(
         jobRequest: SendWelcomeEmailJobRequest,
         cause: RetryableEmailDeliveryException,
     ): Nothing {
-        auditFailure(jobRequest, cause)
         logFailure(jobRequest, cause)
+        auditFailure(jobRequest, cause)
         // JobRunr retries it with its default count and backoff. It carries no cause but a
         // message-free InterruptedException (JobRunr recognises a stopped server or a deleted job
         // by one), so the SMTP text the original may hold never reaches jobrunr_jobs or the log.
@@ -139,6 +162,13 @@ class SendWelcomeEmailJobRequestHandler(
         const val USER_RESOURCE = "USER"
     }
 }
+
+/**
+ * The one condition that is permanent without a delivery attempt: the user has no recipient in the
+ * organisation. It carries no message (its class name is the audit reason), and it is the only
+ * failure here that stops retries on its own, so any other unexpected exception is retried.
+ */
+private class WelcomeEmailRecipientNotFoundException : RuntimeException()
 
 /**
  * The message-free failure a retryable welcome email throws to JobRunr. Its message is the
