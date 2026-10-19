@@ -309,6 +309,25 @@ class JooqInitialAdministratorBootstrapStoreTests(
     }
 
     @Test
+    fun `a COMPLETED record refuses every status write but COMPLETED`() {
+        val organisationId = insertOrganisation()
+        store.createDraft(organisationId, defaultAdmin(), uuidV7())
+        store.updateStatus(organisationId, InitialAdministratorBootstrapStatus.COMPLETED, null)
+        val before = assertNotNull(store.find(organisationId))
+
+        InitialAdministratorBootstrapStatus.entries
+            .filter { it != InitialAdministratorBootstrapStatus.COMPLETED }
+            .forEach { status ->
+                val changed =
+                    store.updateStatus(organisationId, status, incrementAttempts = true)
+
+                assertEquals(0, changed, "a $status write must be refused")
+            }
+
+        assertEquals(before, assertNotNull(store.find(organisationId)))
+    }
+
+    @Test
     fun `a FAILED write still moves an unfinished record and a retry can follow`() {
         val organisationId = insertOrganisation()
         store.createDraft(organisationId, defaultAdmin(), uuidV7())

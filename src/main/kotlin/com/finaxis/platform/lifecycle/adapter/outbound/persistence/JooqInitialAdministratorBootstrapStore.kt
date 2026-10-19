@@ -154,10 +154,13 @@ class JooqInitialAdministratorBootstrapStore(
             update.set(t.ATTEMPTS, t.ATTEMPTS.plus(1))
         }
 
+        // COMPLETED is terminal for every other target: a retry that read the record before the
+        // administrator's job completed it must not move it back (to PROVISIONING_IDENTITY, where
+        // only SQL could free it, as a retry needs FAILED) any more than a failure may.
         val condition = t.ORGANISATION_ID.eq(organisationId)
         return update
             .where(
-                if (status == InitialAdministratorBootstrapStatus.FAILED) {
+                if (status != InitialAdministratorBootstrapStatus.COMPLETED) {
                     condition.and(t.STATUS.ne(InitialAdministratorBootstrapStatus.COMPLETED.name))
                 } else {
                     condition
