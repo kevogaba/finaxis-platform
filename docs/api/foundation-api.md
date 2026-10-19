@@ -1734,10 +1734,10 @@ Endpoints:
 - `POST /`: create role. Permission `role.create` + `role.view`. Shape: mutation.
 - `GET /{role_id}`: get role. Permission `role.view`. Shape: item.
 - `PATCH /{role_id}`: update role metadata. Permission `role.update` + `role.view`. Shape: mutation.
-- `POST /{role_id}/activate`: activate role. Permission `role.activate` + `role.view`.
-  Shape: mutation.
-- `POST /{role_id}/deactivate`: deactivate role. Permission `role.deactivate` + `role.view`.
-  Shape: mutation.
+- `POST /{role_id}/activate`: re-enable a `DISABLED` role. Permission `role.activate` +
+  `role.view`. Shape: mutation. Any other status (including a repeat) is 409 `conflict`.
+- `POST /{role_id}/deactivate`: disable an `ACTIVE` role. Permission `role.deactivate` +
+  `role.view`. Shape: mutation. Any other status (including a repeat) is 409 `conflict`.
 - `GET /{role_id}/permissions`: list role permissions. Permission `role.view`.
   Shape: page.
 - `POST /{role_id}/permissions`: grant role permission. Permission `role.assign_permission` +

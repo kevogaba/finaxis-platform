@@ -359,7 +359,7 @@ class RoleController(
         ),
         ApiResponse(
             responseCode = "409",
-            description = "Immutable role",
+            description = "Immutable role, or the role is not DISABLED",
             content = [Content(schema = Schema(implementation = ApiProblem::class))],
         ),
     )
@@ -411,7 +411,7 @@ class RoleController(
         ),
         ApiResponse(
             responseCode = "409",
-            description = "Immutable role",
+            description = "Immutable role, or the role is not ACTIVE",
             content = [Content(schema = Schema(implementation = ApiProblem::class))],
         ),
     )
