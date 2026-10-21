@@ -12,8 +12,8 @@ import org.springframework.stereotype.Component
  *
  * Eviction through the Spring cache API reaches only the namespace of the running instance. The
  * start-up clear also needs to remove the namespaces of earlier schema versions, which no
- * instance reads once its release is replaced and which, with no time-to-live, would otherwise
- * accumulate one per migration. Deleting all of them is safe: an entry is only ever a cache of
+ * instance reads once its release is replaced and which would otherwise linger until each entry's
+ * time-to-live ran out. Deleting all of them is safe: an entry is only ever a cache of
  * rows, so an instance of an older release still running during a rolling deploy merely
  * repopulates its own namespace from the database. Does nothing unless the application cache is a
  * [RedisCacheManager], so it never touches Redis for a Caffeine, concurrent-map or no-op cache.

@@ -12,6 +12,7 @@ import org.springframework.beans.factory.ObjectProvider
 import org.springframework.boot.flyway.autoconfigure.FlywayMigrationInitializer
 import org.springframework.data.redis.cache.RedisCacheManager
 import org.springframework.data.redis.connection.RedisConnectionFactory
+import java.time.Duration
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -68,8 +69,11 @@ class EffectivePermissionCacheNamespaceTests {
         val initializer = mock<ObjectProvider<FlywayMigrationInitializer>>()
 
         EffectivePermissionCacheConfiguration()
-            .effectivePermissionCacheNamespaceCustomizer(provider(flywayAt("19")), initializer)
-            .customize(builder)
+            .effectivePermissionCacheNamespaceCustomizer(
+                provider(flywayAt("19")),
+                initializer,
+                connectionFactory(),
+            ).customize(builder)
 
         val configured = builder.getCacheConfigurationFor(cacheName).get()
         assertEquals("iam.effective-permissions:v19::", configured.getKeyPrefixFor(cacheName))
@@ -86,6 +90,7 @@ class EffectivePermissionCacheNamespaceTests {
             .effectivePermissionCacheNamespaceCustomizer(
                 provider(flywayAt("19")),
                 mock<ObjectProvider<FlywayMigrationInitializer>>(),
+                connectionFactory(),
             ).customize(builder)
 
         val configured = builder.getCacheConfigurationFor(cacheName).get()
@@ -94,6 +99,29 @@ class EffectivePermissionCacheNamespaceTests {
             builder.cacheDefaults().valueSerializationPair,
             configured.valueSerializationPair,
         )
+    }
+
+    @Test
+    fun `the customizer keeps the time-to-live of the application defaults`() {
+        val timeToLive = Duration.ofMinutes(5)
+        val builder = RedisCacheManager.builder(mock<RedisConnectionFactory>())
+        builder.cacheDefaults(builder.cacheDefaults().entryTtl(timeToLive))
+
+        EffectivePermissionCacheConfiguration()
+            .effectivePermissionCacheNamespaceCustomizer(
+                provider(flywayAt("19")),
+                mock<ObjectProvider<FlywayMigrationInitializer>>(),
+                connectionFactory(),
+            ).customize(builder)
+
+        val configured = builder.getCacheConfigurationFor(cacheName).get()
+        assertEquals(timeToLive, configured.getTtlFunction().getTimeToLive("key", "value"))
+    }
+
+    private fun connectionFactory(): ObjectProvider<RedisConnectionFactory> {
+        val provider = mock<ObjectProvider<RedisConnectionFactory>>()
+        whenever(provider.getObject()).thenReturn(mock<RedisConnectionFactory>())
+        return provider
     }
 
     private fun provider(flyway: Flyway): ObjectProvider<Flyway> {

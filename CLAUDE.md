@@ -145,7 +145,8 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   (`ON CONFLICT DO NOTHING`), asserts its preconditions and post-conditions in-file, and
   supersedes the #165 docs' "reuses `branch.create`" — see `docs/security/authorization-model.md`
   ("Branch update"). A permission migration bypasses the Redis `iam.effective-permissions` cache
-  (no TTL), so from `V19` that cache is **namespaced by the applied schema version**
+  (whose 5-minute TTL is only a backstop), so from `V19` that cache is **namespaced by the applied
+  schema version**
   (`iam.effective-permissions:v<N>::…`, so an old rolling-deploy instance never feeds a stale set
   to a new one) **and cleared on every start** (`EffectivePermissionCacheStartupClearer`, after
   Flyway, before traffic; a Redis outage then is a logged warning, not a failed boot): the new
