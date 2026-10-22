@@ -10,17 +10,17 @@ import org.springframework.stereotype.Component
 /**
  * Clears the `iam.effective-permissions` cache on every application start.
  *
- * The cache has no time-to-live and lives in Redis, so it outlives a deployment. A migration that
- * changes who holds a permission (`V19` copies `branch.create` grants to `branch.update`) writes
- * straight to the tables and bypasses [PermissionCacheInvalidator], so an entry cached before the
- * deploy would keep answering with the old set until something evicted it. Two things prevent
- * that, and this is the second: the cache key is namespaced by the applied schema version (see
- * `EffectivePermissionCacheNamespace`), so a new instance never reads what an older release
- * wrote; and it clears here, after every singleton exists, which covers a restart on the *same*
- * schema version after an out-of-band SQL change. Flyway has finished by then (the migration runs
- * when the data source is initialised, before the singletons it feeds), and the web server only
- * starts accepting traffic after singleton initialisation, so no request can read an entry this
- * call is about to drop.
+ * The cache lives in Redis, so it outlives a deployment, and its time-to-live is a backstop of
+ * minutes, not an invalidation. A migration that changes who holds a permission (`V19` copies
+ * `branch.create` grants to `branch.update`) writes straight to the tables and bypasses
+ * [PermissionCacheInvalidator], so an entry cached before the deploy would keep answering with the
+ * old set until something evicted it. Two things prevent that, and this is the second: the cache
+ * key is namespaced by the applied schema version (see `EffectivePermissionCacheNamespace`), so a
+ * new instance never reads what an older release wrote; and it clears here, after every singleton
+ * exists, which covers a restart on the *same* schema version after an out-of-band SQL change.
+ * Flyway has finished by then (the migration runs when the data source is initialised, before the
+ * singletons it feeds), and the web server only starts accepting traffic after singleton
+ * initialisation, so no request can read an entry this call is about to drop.
  *
  * The clear drops this instance's namespace through the cache API and then sweeps the namespaces
  * of every other schema version, so earlier versions' entries do not accumulate.

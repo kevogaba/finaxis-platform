@@ -79,6 +79,11 @@ spring:
   cache:
     cache-names:
       - iam.effective-permissions
+    redis:
+      # A backstop, not the invalidation: a permission change still evicts at once. It bounds the
+      # one race no write ordering closes (a resolve that read the database before a revoke and
+      # writes after the eviction), so a stale set can outlive a revoke by at most this long.
+      time-to-live: 5m
   session:
     timeout: 8h
     data:

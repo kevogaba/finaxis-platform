@@ -819,14 +819,26 @@ The cache key includes membership id and selected branch id, so branch switches 
 another branch's permissions.
 
 `PermissionCacheInvalidator` evicts cached selections when role grants or role assignments change.
-It can also clear the entire effective-permission cache (with `invalidate()`, because the Redis
-cache's `clear()` may run on its asynchronous writer and return before the keys are gone). On
-Redis both act on the running instance's own schema-version namespace (below) through the Spring
-cache API.
+It can also clear the entire effective-permission cache (with `invalidate()`, which deletes in one
+synchronous pass). On Redis both act on the running instance's own schema-version namespace (below)
+through the Spring cache API.
 
-**The Redis keys are namespaced by the applied schema version.** The cache lives in Redis with no
-time-to-live, so it outlives a deployment, and a Flyway migration that changes who holds a
-permission writes the tables directly and cannot evict anything. A key is therefore
+**The Redis cache writes immediately and its entries expire.** Spring Data Redis writes
+asynchronously by default, so `put` could return before the entry landed and a revoke that evicted
+the cache could be undone by the write of an earlier resolve still in flight, leaving the revoked
+set readable (a probe measured about a third of such writes landing after an immediate
+`invalidate()`). `EffectivePermissionCacheConfiguration` therefore makes the writes immediate, which
+orders every write before the call that follows it. The race no write ordering closes (a resolve
+that read the database before a revoke and writes after the eviction) is bounded in time instead:
+entries expire after `spring.cache.redis.time-to-live` (5 minutes by default; a deployment can set
+it with `SPRING_CACHE_REDIS_TIME_TO_LIVE`). The TTL is a backstop for that one race, not the
+invalidation: a role or assignment change still evicts at once, and a shorter TTL only trades a
+smaller stale window for more database resolves.
+
+**The Redis keys are namespaced by the applied schema version.** The cache lives in Redis, so it
+outlives a deployment (its entries expire only after the TTL above), and a Flyway migration that
+changes who holds a permission writes the tables directly and cannot evict anything. A key is
+therefore
 `iam.effective-permissions:v<N>::<membership_id>:<branch_id|none>`, where `N` is the highest Flyway
 version applied when the instance started (read after migrations ran, by
 `EffectivePermissionCacheConfiguration`; `none` if Flyway reports nothing). An instance on a newer
@@ -841,8 +853,8 @@ of every schema version (`iam.effective-permissions:*`, the pre-versioning
 and before the web server accepts traffic. It logs one info line. If Redis is unreachable at that
 moment the clear is logged as a warning and the boot continues, because an unreachable cache cannot serve stale entries
 either; entries of the same schema version written before an out-of-band change could then
-survive a Redis that returns later until the next start or a role or assignment change, so an
-operator seeing that warning should restart once Redis is back.
+survive a Redis that returns later until their TTL runs out, the next start or a role or
+assignment change, so an operator seeing that warning should restart once Redis is back.
 
 What this protects, and what it does not:
 
@@ -856,7 +868,8 @@ What this protects, and what it does not:
   are replaced; their entries are removed by the next start-up sweep.
 - **A role or assignment change handled by a new instance evicts its own namespace only.** An old
   instance still running during a rolling deploy can serve a revoked grant from its namespace
-  until it is replaced; this adds nothing to the per-instance eviction limit that already exists
+  until it is replaced or the entry's TTL runs out; this adds nothing to the per-instance eviction
+  limit that already exists
   (the set of cached branch selections per membership is held in each instance's memory).
 - **SQL run outside Flyway while instances stay up is not covered.** The schema version does not
   change and nothing evicts, so a manual `INSERT`/`UPDATE` of `role_permission`,

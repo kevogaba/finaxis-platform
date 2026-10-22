@@ -12,8 +12,8 @@ import org.springframework.data.redis.cache.RedisCacheConfiguration
  * previous release (older `N`, or the unversioned `iam.effective-permissions::` of a release that
  * predates this scheme) reads and writes a different namespace from a new one, so a permission set
  * an old instance resolved before a migration committed can never be read by an instance that
- * started after it. The cache has no time-to-live, so without this separation such an entry would
- * stay live indefinitely.
+ * started after it. Entries do expire (`spring.cache.redis.time-to-live`), but only after minutes,
+ * so without this separation such an entry would stay readable that long.
  */
 object EffectivePermissionCacheNamespace {
     /** The version segment used when no migration is known (Flyway absent or nothing applied). */
