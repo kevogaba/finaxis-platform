@@ -1581,7 +1581,9 @@ membership and its Keycloak provisioning dispatch, not a new lifecycle state (th
 membership state machines are unchanged): `FAILED` is a membership still awaiting approval whose
 user waits on provisioning and whose last attempt failed (a failed dispatch behind an `ACTIVE` or
 `SUSPENDED` member is stale and reads `COMPLETED`). The membership and its dispatch are read by
-one statement. `last_error_code` is the closed failure
+one statement, and the dispatch is that of the membership's current generation: a re-invited member
+awaits approval until that life's approval queues its own, whatever the first life's dispatch ended
+as (ADR 0037). `last_error_code` is the closed failure
 code (`IDENTITY_PROVIDER_FAILED`, `CONFLICT`, `NOT_FOUND`, `INVALID_STATE`, `DATABASE_ERROR`,
 `UNEXPECTED`, `CANCELLED` for a job ended because its membership was revoked, or `UNKNOWN` for a
 failure recorded before codes existed) and only while `FAILED`:

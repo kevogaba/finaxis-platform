@@ -30,7 +30,9 @@ import com.finaxis.platform.lifecycle.application.RoleAssignmentScopeType
 import com.finaxis.platform.lifecycle.application.UserDeactivationAssignmentRevoker
 import com.finaxis.platform.lifecycle.application.UserProvisioningService
 import com.finaxis.platform.lifecycle.application.allControlsOn
+import com.finaxis.platform.lifecycle.application.keycloakDispatchKey
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
+import com.jayway.jsonpath.JsonPath
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -42,6 +44,7 @@ import org.springframework.http.MediaType
 import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActionsDsl
+import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
 import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.support.TransactionTemplate
@@ -354,6 +357,73 @@ class MemberReinviteIntegrationTests
         }
 
         @Test
+        fun `a re-invited member awaits approval whatever the first life's dispatch ended as`() {
+            listOf(
+                "SUCCEEDED" to null,
+                "FAILED" to "CANCELLED:MembershipRevoked",
+            ).forEach { (firstLifeStatus, firstLifeError) ->
+                val member = pendingMember(newUser = true)
+                approve(member, checker()).andExpect { status { isAccepted() } }
+                val firstKey = "$organisationId:${member.userId}:KEYCLOAK_PROVISIONING"
+                assertEquals("IN_PROGRESS", invitationStatus(member))
+                dsl.execute(
+                    "UPDATE identity_dispatch_log SET status = ?, last_error = ?, attempts = 1 " +
+                        "WHERE dispatch_key = ?",
+                    firstLifeStatus,
+                    firstLifeError,
+                    firstKey,
+                )
+                revoke(member).andExpect { status { isOk() } }
+                reinvite(member).andExpect { status { isCreated() } }
+
+                // The first life's row is not this life's: no COMPLETED, and no FAILED/CANCELLED
+                // that would offer a retry the current generation cannot answer.
+                invitation(member).andExpect {
+                    jsonPath("$.invitation.status") { value("AWAITING_APPROVAL") }
+                    jsonPath("$.invitation.attempts") { value(0) }
+                    jsonPath("$.invitation.last_error_code") { value(null) }
+                }
+            }
+        }
+
+        @Test
+        fun `a re-invited member shows each generation's own dispatch once it exists`() {
+            val member = pendingMember(newUser = true)
+            val firstKey = keycloakDispatchKey(organisationId, member.userId, 0)
+            approve(member, checker()).andExpect { status { isAccepted() } }
+            // Generation 0 keeps the key it always had, and the reader finds it under that key.
+            assertEquals("IN_PROGRESS", invitationStatus(member))
+            dsl.execute(
+                "UPDATE identity_dispatch_log SET status = 'SUCCEEDED' WHERE dispatch_key = ?",
+                firstKey,
+            )
+            assertEquals("COMPLETED", invitationStatus(member))
+
+            (1..2).forEach { generation ->
+                revoke(member).andExpect { status { isOk() } }
+                reinvite(member).andExpect { status { isCreated() } }
+                assertEquals("AWAITING_APPROVAL", invitationStatus(member))
+
+                approve(member, checker()).andExpect { status { isAccepted() } }
+                val key = keycloakDispatchKey(organisationId, member.userId, generation)
+                assertEquals("PENDING", dispatchStatus(key))
+                assertEquals("IN_PROGRESS", invitationStatus(member))
+
+                dsl.execute(
+                    "UPDATE identity_dispatch_log SET status = 'FAILED', attempts = 2, " +
+                        "last_error = 'IDENTITY_PROVIDER_FAILED:SomeException' " +
+                        "WHERE dispatch_key = ?",
+                    key,
+                )
+                invitation(member).andExpect {
+                    jsonPath("$.invitation.status") { value("FAILED") }
+                    jsonPath("$.invitation.attempts") { value(2) }
+                    jsonPath("$.invitation.last_error_code") { value("IDENTITY_PROVIDER_FAILED") }
+                }
+            }
+        }
+
+        @Test
         fun `a re-approved member is served the narrower new permissions not the cached old`() {
             val member = activeMember()
             val membership = member.membershipId
@@ -644,6 +714,18 @@ class MemberReinviteIntegrationTests
                 """"send_application_invite":$sendApplicationInvite}"""
 
         // ----- reads -----
+
+        private fun invitation(member: Member): ResultActionsDsl =
+            mockMvc
+                .get("${ApiPaths.MEMBERSHIPS}/${member.membershipId}") {
+                    with(authentication(token(admin, setOf("membership.view"))))
+                }.andExpect { status { isOk() } }
+
+        private fun invitationStatus(member: Member): String =
+            JsonPath.read(
+                invitation(member).andReturn().response.contentAsString,
+                "$.invitation.status",
+            )
 
         private fun membershipColumn(
             membershipId: UUID,
