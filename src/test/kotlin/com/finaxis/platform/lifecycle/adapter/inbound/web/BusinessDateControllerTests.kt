@@ -21,6 +21,10 @@ import com.finaxis.platform.lifecycle.application.BusinessDateHistoryPage
 import com.finaxis.platform.lifecycle.application.BusinessDateHistoryRecord
 import com.finaxis.platform.lifecycle.application.BusinessDateService
 import com.finaxis.platform.lifecycle.application.BusinessDateView
+import com.finaxis.platform.lifecycle.application.CobCheckSeverity
+import com.finaxis.platform.lifecycle.application.CobCheckStatus
+import com.finaxis.platform.lifecycle.application.CobReadinessCheck
+import com.finaxis.platform.lifecycle.application.CobReadinessView
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
@@ -151,6 +155,59 @@ class BusinessDateControllerTests
                     status { isNotFound() }
                     jsonPath("$.code") { value("resource_not_found") }
                 }
+        }
+
+        @Test
+        fun `cob readiness serialises checks in snake case and omits an absent count`() {
+            val organisationId = uuidV7()
+            whenever(businessDateService.cobReadiness(any())).thenReturn(
+                CobReadinessView(
+                    LocalDate.of(2026, 7, 18),
+                    "OPEN",
+                    false,
+                    listOf(
+                        CobReadinessCheck(
+                            "business_date_open",
+                            CobCheckSeverity.BLOCKING,
+                            CobCheckStatus.PASS,
+                            "The business date is OPEN.",
+                        ),
+                        CobReadinessCheck(
+                            "manual_journals_pending_approval",
+                            CobCheckSeverity.BLOCKING,
+                            CobCheckStatus.FAIL,
+                            "2 manual journal(s) await approval; decide them before closing.",
+                            2,
+                        ),
+                    ),
+                ),
+            )
+
+            mockMvc
+                .get("${ApiPaths.BUSINESS_DATE}/cob/readiness") {
+                    with(authentication(tenantToken(setOf("cob.start"), organisationId)))
+                }.andExpect {
+                    status { isOk() }
+                    jsonPath("$.business_date") { value("18-07-2026") }
+                    jsonPath("$.ready") { value(false) }
+                    jsonPath("$.checks[0].severity") { value("BLOCKING") }
+                    jsonPath("$.checks[0].status") { value("PASS") }
+                    jsonPath("$.checks[0].count") { doesNotExist() }
+                    jsonPath("$.checks[1].status") { value("FAIL") }
+                    jsonPath("$.checks[1].count") { value(2) }
+                }
+        }
+
+        @Test
+        fun `cob readiness requires authentication and the cob start authority`() {
+            val organisationId = uuidV7()
+            mockMvc
+                .get("${ApiPaths.BUSINESS_DATE}/cob/readiness")
+                .andExpect { status { isUnauthorized() } }
+            mockMvc
+                .get("${ApiPaths.BUSINESS_DATE}/cob/readiness") {
+                    with(authentication(tenantToken(setOf("business_date.view"), organisationId)))
+                }.andExpect { status { isForbidden() } }
         }
 
         @Test

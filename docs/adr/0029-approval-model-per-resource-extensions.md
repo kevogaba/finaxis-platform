@@ -97,6 +97,10 @@ Reasons:
   no migration number.
 - **No demand for a cross-resource inbox.** Nothing in the frontend gap needs one list of "things
   waiting for me" across resources; each resource already lists its own `PENDING_APPROVAL` rows.
+  **Update ([ADR 0038](0038-cob-readiness-and-approval-counts.md)):** the badge need is answered by
+  two small per-resource count reads (`GET /api/v1/tenant/approvals/pending-count` and
+  `GET /api/v1/platform/approvals/pending-count`), still with no inbox and no new table, and this
+  point stands.
 
 Option A remains the path if assignments or settings later need approval (point 2): that is the
 first requirement a per-resource FSM cannot express without a new state on a high-volume table.

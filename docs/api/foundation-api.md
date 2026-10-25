@@ -2272,6 +2272,7 @@ Base path: `/api/v1/tenant/business-date`.
 |--------|-----------------|----------------------------|-------------------------|----------|
 | GET    | `/`             | Get current business date  | `business_date.view`    | item     |
 | GET    | `/history`      | List business date history | `business_date.view`    | page     |
+| GET    | `/cob/readiness` | Get close-of-business readiness | `cob.start` + `business_date.view` | item |
 | POST   | `/advance`      | Advance business date      | `business_date.advance` + `business_date.view` | mutation |
 | POST   | `/cob/start`    | Start close of business    | `cob.start` + `business_date.view` | mutation |
 | POST   | `/cob/complete` | Complete close of business | `cob.complete` + `business_date.view` | mutation |
@@ -2282,6 +2283,40 @@ holding, so each can return `409` with `lifecycle.business_date_lock_timeout` wh
 it within the configured bound. That is retryable and is not the same as the plain `conflict` an
 optimistic-lock clash produces. See
 [business date and COB status](../operations/business-date.md).
+
+Close-of-business readiness (#168, [ADR 0038](../adr/0038-cob-readiness-and-approval-counts.md)):
+`GET /cob/readiness` reports whether the tenant is ready to start close-of-business. It is one
+object, so it is not paginated, and it is **advice**: a point-in-time snapshot read without a lock,
+which `cob/start` and `cob/complete` do not consult (no new `409`). `ready` is `true` when no
+`BLOCKING` check failed. A `BLOCKING` check can `FAIL`, an `ADVISORY` check can only `WARN`, and a
+check that finds nothing is `PASS`. `count` is present on the three accounting checks (`0` when
+they pass) and omitted on the two lifecycle checks. It needs `cob.start` and the
+`business_date.view` it implies (a missing code is the named 403), tenant-wide. A tenant with no
+accounting data is `ready` with every check `PASS`.
+
+```json
+{
+  "business_date": "25-07-2026",
+  "status": "OPEN",
+  "ready": false,
+  "checks": [
+    {"code": "business_date_open", "severity": "BLOCKING", "status": "PASS",
+     "detail": "The business date is OPEN."},
+    {"code": "organisation_active", "severity": "BLOCKING", "status": "PASS",
+     "detail": "The organisation is ACTIVE."},
+    {"code": "manual_journals_pending_approval", "severity": "BLOCKING", "status": "FAIL",
+     "detail": "2 manual journal(s) await approval; decide them before closing.", "count": 2},
+    {"code": "manual_journals_draft", "severity": "ADVISORY", "status": "WARN",
+     "detail": "1 draft manual journal(s) are not yet submitted.", "count": 1},
+    {"code": "reconciliation_breaks", "severity": "ADVISORY", "status": "PASS",
+     "detail": "No control account's latest reconciliation run is a break.", "count": 0}
+  ]
+}
+```
+
+`reconciliation_breaks` counts a control account only when its **latest** run is a `BREAK`; a break
+a later run superseded does not count. There is deliberately no check for pending posting requests
+(none is ever committed `PENDING`) and none for background jobs or the audit stream (no signal).
 
 Advance request and response:
 
@@ -2299,6 +2334,41 @@ Advance request and response:
   "new_business_date": "26-07-2026"
 }
 ```
+
+### Approval Counts
+
+Two small reads for an approvals badge (#169, [ADR 0038](../adr/0038-cob-readiness-and-approval-counts.md)).
+They are **not an inbox**: one bounded count per resource, no list, no item ids, and no new
+permission code. Each is one object, so neither is paginated; list the resource itself (for
+example `GET /api/v1/branches?status=PENDING_APPROVAL`) for the items.
+
+| Method | Path                                    | Summary                          | Permission                  | Shape |
+|--------|-----------------------------------------|----------------------------------|-----------------------------|-------|
+| GET    | `/api/v1/tenant/approvals/pending-count`   | Count pending memberships and branches | `user.approve` and/or `branch.approve` | item |
+| GET    | `/api/v1/platform/approvals/pending-count` | Count pending tenants            | `tenant.approve` (platform) | item  |
+
+```json
+{ "memberships": 3, "branches": 1 }
+```
+
+```json
+{ "tenants": 2 }
+```
+
+- `memberships` is present for a caller holding `user.approve` (and the `membership.view` it
+  implies); `branches` for a caller holding `branch.approve` **tenant-wide** (and `branch.view`). A
+  key the caller may not act on is **omitted**, never `0`, so a caller learns nothing about a
+  resource it cannot approve. A tenant caller who holds neither is refused with the named 403.
+- Branch approval is tenant-wide only: a branch-scope grant counts only while its branch is
+  `ACTIVE`, and a `PENDING_APPROVAL` branch has none, so a branch-scoped holder sees no `branches`.
+- `tenants` is counted across tenants for a `tenant.approve` holder (with `tenant.view`) in the
+  platform organisation. A tenant context calling it is refused (403).
+- **Counts exclude what the caller made** (memberships it invited, branches it created, tenants it
+  requested or last submitted), and are an **upper bound** on what the caller can approve: a branch
+  or tenant the caller amended, the platform checker's bootstrap-only window and an organisation
+  that is not `ACTIVE` can still refuse an approval the count included. A tenant that switched its
+  maker-checker control off (ADR 0032) counts the caller's own items too, since they are approvable.
+- Accounting approvals (manual journals, posting rules) are not included.
 
 ### Tenant Settings
 

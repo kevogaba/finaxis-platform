@@ -662,6 +662,40 @@ on a draft: a draft is discarded by a **tenant-wide** `branch.create` holder. Th
 route, so no platform-checker rule applies. The head office is refused for everyone
 (`409 lifecycle.head_office_branch_protected`), since tenant approval activates it.
 
+## Pending-approval counts and close-of-business readiness
+
+Three read routes use only existing permission codes, with no migration
+([ADR 0038](../adr/0038-cob-readiness-and-approval-counts.md)). Each is a `@GatedRead` method that
+asks the permission guard before its first store call, so the central rule of ADR 0030 decision 4
+applies: the code **and every view the catalogue pairs with it**, at the same scope, and a refusal
+is the named 403.
+
+| Route | Authority | Implies | Scope | Absent authority |
+| --- | --- | --- | --- | --- |
+| `GET /tenant/approvals/pending-count`, `memberships` | `user.approve` | `membership.view` | tenant | key omitted |
+| `GET /tenant/approvals/pending-count`, `branches` | `branch.approve` | `branch.view` | tenant-wide only | key omitted |
+| `GET /platform/approvals/pending-count`, `tenants` | `tenant.approve` | `tenant.view` | platform organisation | named 403 |
+| `GET /tenant/business-date/cob/readiness` | `cob.start` | `business_date.view` | tenant | named 403 |
+
+- **A key is omitted, not zeroed**, when the caller lacks that resource's authority, so the answer
+  discloses nothing about a resource the caller cannot act on. A caller who holds neither tenant
+  code is refused by name (`user.approve`, or the view it implies, first).
+- **Branches are counted for tenant-wide holders only.** A branch-scope grant counts only while its
+  branch is `ACTIVE` (#242) and a pending branch has none, so only a tenant-wide `branch.approve`
+  holder can approve one. The check is `PermissionGuard.mutationBranchVisibility`, the answer the
+  approve route's combined lookups use, and a scoped holder sees no `branches` key.
+- **Items the caller made are excluded** (ADR 0028): memberships it invited, branches it created,
+  tenants it requested or last submitted. The count is therefore an **upper bound** on what the
+  caller can approve: it does not replay the amender refusals
+  (`lifecycle.approver_is_branch_modifier`, `lifecycle.approver_is_tenant_modifier`), the platform
+  checker's bootstrap-only window or the organisation state. A tenant that switched the
+  maker-checker control off (ADR 0032) counts the caller's own items, which are approvable.
+  The platform checker is always held to the rule, so the platform count always excludes its own.
+- **The readiness route is advice.** `cob.start` is the permission that starts the close, so it is
+  the one that asks whether to; the route changes nothing and `cob/start` does not consult it.
+- A tenant administrator calling the platform route is refused: it resolves the platform context
+  and checks `tenant.approve` in the platform organisation, which tenant roles do not hold (V23).
+
 ## Tenant return for changes
 
 `POST /platform/tenants/{tenant_id}/return` sends a `PENDING_APPROVAL` tenant back to `DRAFT`

@@ -11,11 +11,15 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BusinessDateAdvanc
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BusinessDateHistoryEntryResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BusinessDateResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BusinessDateStatusTransitionRequest
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CobReadinessCheckResponse
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CobReadinessResponse
 import com.finaxis.platform.lifecycle.application.AdvanceBusinessDateCommand
 import com.finaxis.platform.lifecycle.application.BusinessDateAdvanceResult
 import com.finaxis.platform.lifecycle.application.BusinessDateHistoryRecord
 import com.finaxis.platform.lifecycle.application.BusinessDateService
 import com.finaxis.platform.lifecycle.application.BusinessDateView
+import com.finaxis.platform.lifecycle.application.CobReadinessCheck
+import com.finaxis.platform.lifecycle.application.CobReadinessView
 import com.finaxis.platform.lifecycle.application.CompleteCobCommand
 import com.finaxis.platform.lifecycle.application.GetBusinessDateQuery
 import com.finaxis.platform.lifecycle.application.ListBusinessDateHistoryQuery
@@ -138,6 +142,48 @@ class BusinessDateController(
                 ),
             )
         return apiPageOf(result.items.map { it.toResponse() }, page, size, result.totalItems)
+    }
+
+    /** Reports whether the active organisation is ready to start close-of-business. */
+    @GetMapping("/cob/readiness")
+    @PreAuthorize("hasAuthority('cob.start')")
+    @Operation(
+        summary = "Get close-of-business readiness",
+        description =
+            "Reports BLOCKING and ADVISORY checks for starting close-of-business on the " +
+                "current business date: the business date and organisation state, manual " +
+                "journals awaiting approval or still in draft, and control accounts whose " +
+                "latest reconciliation run is a break. A point-in-time snapshot and advice " +
+                "only: `cob/start` does not consult it. Needs `cob.start` and the " +
+                "`business_date.view` it implies. Not paginated: it is one object.",
+    )
+    @ApiResponses(
+        ApiResponse(
+            responseCode = "200",
+            description = "Close-of-business readiness",
+            content = [Content(schema = Schema(implementation = CobReadinessResponse::class))],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description = "Business date not found",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+    )
+    fun getCobReadiness(): CobReadinessResponse {
+        val caller = CallerContextResolver.getTenantCaller()
+        return businessDateService
+            .cobReadiness(GetBusinessDateQuery(caller.activeOrganisationId, caller.actorId))
+            .toResponse()
     }
 
     /** Advances the active organisation's open business date. */
@@ -386,6 +432,12 @@ class BusinessDateController(
 
     private fun BusinessDateView.toResponse() =
         BusinessDateResponse(organisationId, currentBusinessDate, status)
+
+    private fun CobReadinessView.toResponse() =
+        CobReadinessResponse(businessDate, status, ready, checks.map { it.toResponse() })
+
+    private fun CobReadinessCheck.toResponse() =
+        CobReadinessCheckResponse(code, severity.name, status.name, detail, count)
 
     private fun BusinessDateAdvanceResult.toResponse() =
         BusinessDateAdvanceResponse(organisationId, previousBusinessDate, newBusinessDate)
