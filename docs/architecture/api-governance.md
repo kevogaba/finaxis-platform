@@ -39,6 +39,11 @@ query services reject an unknown `sort_by` or a `sort_dir` other than `ASC`/`DES
 violation where applicable). Do not use `require()` on a client-supplied paging, sort or filter
 value: an `IllegalArgumentException` has no mapping and surfaces as `internal_error`.
 
+Cross-resource search (one bounded page per type) and bulk export (a streamed file with a row cap,
+its own permission and its own rate-limit policy) are the documented exceptions to the paged
+listing shape; their conventions are in
+[ADR 0039](../adr/0039-global-search-and-audit-export.md).
+
 ## Versioning
 
 `/api/v1` is the baseline namespace. New versions should be introduced as new path namespaces such
