@@ -347,7 +347,7 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   seeded `TENANT_ADMIN` and the bootstrap `local-admin` get the code (V23's rule); no other role
   does. It writes `kind`, `grant_scope` and the view requirement in the same file, asserts its
   pre- and post-conditions in-file, and is idempotent (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`).
-  No trigger. The catalogue is now 84 codes, 83 `ACTIVE`. ADR 0035 supersedes ADR 0034 decisions 1
+  No trigger. The catalogue was then 84 codes, 83 `ACTIVE`. ADR 0035 supersedes ADR 0034 decisions 1
   and 2: see "Authorization" for the lock every assignment path must take.
 - `V34__audit_export_permission.sql` — **reference data only, no schema** (#167, ADR 0039):
   `audit.export` (`MUTATION`, `TENANT` scope, `HIGH`, module `audit`, requires `audit.view`, id

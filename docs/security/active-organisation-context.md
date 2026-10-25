@@ -27,7 +27,7 @@ Authorization: Bearer <keycloak-jwt>
 Content-Type: application/json
 
 {
-  "organisationId": "..."
+  "organisation_id": "..."
 }
 ```
 
@@ -37,14 +37,16 @@ Selection is a convenience step, not the final security boundary. `AuthSelection
 that the requested organisation is ACTIVE, the membership is ACTIVE, and branch selections are
 currently assigned to an ACTIVE branch in the selected organisation.
 
-If the membership has exactly one assigned branch, the branch is auto-selected and the returned context includes `branchId`.
+If the membership has exactly one assigned branch, the branch is auto-selected and the returned
+context includes `branch_id`.
 
-If the membership has more than one assigned branch, the response sets `requiresBranchSelection` to `true` and includes `assignedBranchIds`.
+If the membership has more than one assigned branch, the response sets
+`requires_branch_selection` to `true` and includes `assigned_branch_ids`.
 
 "Assigned branch" here means a **distinct** branch that is `ACTIVE` and holds at least one ACTIVE
 assignment row for the membership. A branch held through two rows (for example `HOME` and
 `OPERATE`) is one branch, so it can never turn a single choice into an apparent multi-choice that
-skips the auto-selection (and `assignedBranchIds` and `GET /auth/branches` list it once). A
+skips the auto-selection (and `assigned_branch_ids` and `GET /auth/branches` list it once). A
 `SUSPENDED` or `CLOSED` branch is not a choice. `GET /auth/me` follows the same rule for its
 `branches` list and also omits `DISABLED`/`ARCHIVED` roles and lists a role once however many
 tenant- and branch-scope assignments grant it; its `permissions` are untouched, because the
@@ -164,7 +166,7 @@ Mobile apps, CLI clients, and integrations use the same selection endpoints, the
 
 ```http
 Authorization: Bearer <keycloak-jwt>
-X-Active-Organisation-Context: <contextToken>
+X-Active-Organisation-Context: <context_token>
 ```
 
 The header token is not authentication. It only identifies the selected app membership and optional branch context, and is valid only with the matching authenticated Keycloak subject.
@@ -174,8 +176,10 @@ The header token is not authentication. It only identifies the selected app memb
 Every request with an active organisation context is rechecked by
 `ActiveOrganisationContextFilter` and `AppPrincipalLoader` before an `AppPrincipal` is installed:
 
-- user context: the Keycloak subject must resolve to the context `userId`, and the app user must
-  be ACTIVE or INVITED. SUSPENDED, LOCKED, DEACTIVATED, and other non-login states are rejected.
+- user context: the Keycloak subject must resolve to the context `userId` (these names, with
+  `membershipId` and `branchId` below, are fields of the internal signed context, not response
+  JSON), and the app user must be ACTIVE or INVITED. SUSPENDED, LOCKED, DEACTIVATED, and other
+  non-login states are rejected.
 - first login: INVITED users are activated through the lifecycle module's public
   `UserFirstLoginActivation` API before the principal is built. ACTIVE users use the same API to
   refresh `user_account.last_login_at`.

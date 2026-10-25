@@ -1,8 +1,9 @@
 # Foundation REST API
 
 This guide is the canonical REST contract reference for the implemented foundation API.
-It complements the generated OpenAPI document at `/v3/api-docs` and the local Scalar UI at
-`/scalar`.
+It complements the generated OpenAPI document at `/v3/api-docs` and the Scalar UI at
+`/scalar`, both public unless `finaxis.security.api-docs.public-access-enabled` is `false`
+(see [Production hardening](../security/production-hardening.md#documentation-and-required-secret)).
 
 ## Overview
 
@@ -634,18 +635,31 @@ Profile response example:
   "full_name": "Local Administrator",
   "organisation": {
     "id": "11111111-1111-7111-8111-111111111111",
-    "tenant_code": "acme-corp",
-    "display_name": "Acme Financial Services",
+    "code": "acme-corp",
+    "name": "Acme Financial Services",
     "status": "ACTIVE"
   },
   "membership": {
     "id": "22222222-2222-7222-8222-222222222222",
-    "status": "ACTIVE",
-    "membership_type": "ADMIN"
+    "status": "ACTIVE"
   },
   "selected_branch": null,
-  "branches": [],
-  "roles": [],
+  "branches": [
+    {
+      "id": "33333333-3333-7333-8333-333333333333",
+      "code": "HQ",
+      "name": "Head Office",
+      "status": "ACTIVE"
+    }
+  ],
+  "roles": [
+    {
+      "id": "55555555-5555-7555-8555-555555555555",
+      "code": "TENANT_ADMIN",
+      "name": "Tenant Administrator",
+      "status": "ACTIVE"
+    }
+  ],
   "permissions": [
     "iam.profile.read"
   ],
@@ -2059,7 +2073,7 @@ Permission response:
   "id": "aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa",
   "permission_code": "tenant.view",
   "permission_name": "View Tenant",
-  "module_code": "lifecycle",
+  "module_code": "tenant",
   "description": "View active tenant metadata.",
   "risk_level": "LOW",
   "status": "ACTIVE",
@@ -2070,6 +2084,9 @@ Permission response:
   "updated_at": "2026-07-25T08:00:00Z"
 }
 ```
+
+`module_code` is one of `accounting`, `audit`, `branch`, `iam`, `settings` or `tenant` (the codes
+seeded by `V2`, `V5` and the later permission migrations); there is no `lifecycle` module code.
 
 Catalogue metadata (ADR 0030, `V22`), on both the list items and the detail, with the same
 fields:

@@ -14,20 +14,37 @@ application to a Spring Boot starter that may lag Spring Boot 4.x compatibility.
 ```yaml
 finaxis:
   rate-limit:
-    enabled: true
-    include-headers: true
-    fail-open: true
-    anonymous:
-      capacity: 100
-      refill-tokens: 100
-      refill-period: 1m
-    authenticated:
-      capacity: 1000
-      refill-tokens: 1000
-      refill-period: 1m
+    enabled: true            # FINAXIS_RATE_LIMIT_ENABLED
+    include-headers: true    # FINAXIS_RATE_LIMIT_INCLUDE_HEADERS
+    fail-open: true          # FINAXIS_RATE_LIMIT_FAIL_OPEN
+    policies:                # exactly the RateLimitPolicyId entries, no more, no fewer
+      tenant-read:
+        capacity: 600
+        refill-tokens: 600
+        refill-period: 1m
+      # auth-selection, platform-read, platform-command, tenant-command and
+      # tenant-export have the same three keys (defaults in the table below)
+    paths:
+      enabled: true
+      excluded: [/, /actuator/health/**, /actuator/prometheus, /error, /scalar/**,
+                 /v3/api-docs/**, /swagger-ui/**]
+      rules:                 # first matching method and path wins
+        - { method: GET, path: /api/v1/tenant/audit-events/export, policy: tenant-export }
+        - { method: GET, path: /api/v1/**, policy: tenant-read }
 ```
 
-All values can be overridden with environment variables. Keep limits out of business logic.
+The shape is `RateLimitProperties` (`enabled`, `include-headers`, `fail-open`, `policies`, `paths`)
+and `RateLimitPathProperties` (`enabled`, `excluded`, `rules`); the complete set of policies and
+rules is in `application.yaml` and mirrors the defaults in `RateLimitProperties.kt` and
+`RateLimitPathProperties.kt`. Excluded paths and `OPTIONS` requests are not limited; any other
+request that matches no rule is refused with `429` (`rate_limit_policy_unavailable`). For example
+`HEAD /api/v1/branches` matches none (the rules name `GET`, `POST`, `PUT`, `PATCH` and `DELETE`),
+and neither does a path outside `/api/v1` that is not excluded. `paths.enabled` switches only the
+`excluded` list off, never the rules.
+
+The switches and every policy's `capacity`, `refill-tokens` and `refill-period` have
+`FINAXIS_RATE_LIMIT_*` environment variables; `paths.excluded` and `paths.rules` have none and
+change through configuration properties. Keep limits out of business logic.
 
 ## Keys
 
@@ -76,8 +93,9 @@ refill 5 per 1 minute), set with `FINAXIS_RATE_LIMIT_TENANT_EXPORT_CAPACITY`,
 `FINAXIS_RATE_LIMIT_TENANT_EXPORT_REFILL_PERIOD`.
 The key is the usual per-user and tenant one, `rate-limit:tenant-export:auth:{tenantId}:{userId}`.
 Its path rule `GET /api/v1/tenant/audit-events/export` sits **before** `GET /api/v1/**` in both
-`defaultRateLimitPathRules()` and `application.yaml`: without it the route would fall under
-`tenant-read` and could be called 600 times a minute. A `429` carries the headers above.
+the defaults in `RateLimitPathProperties.kt` and `application.yaml`: without it the route would
+fall under `tenant-read` and could be called 600 times a minute. A `429` carries the headers
+above.
 
 The limiter is fail-open like every other policy (`fail-open: true`); a per-policy fail-closed mode
 is not offered. During a Redis outage the 31-day window and the 10,000-row cap remain the bound on
@@ -140,8 +158,10 @@ details.
 
 ## Failure Mode
 
-The default is fail-open for availability if Redis is temporarily unavailable. Sensitive/admin
-paths may later use stricter policies if explicitly configured. Failures are logged as warnings.
+The default is fail-open for availability if Redis is temporarily unavailable
+(`finaxis.rate-limit.fail-open`, one switch for every policy; none is fail-closed on its own).
+Sensitive routes get a tighter policy by path rule instead, as the audit export does with
+`tenant-export`. Failures are logged as warnings.
 
 ## Testing
 
