@@ -1449,6 +1449,11 @@ private class ProvisioningFake(
         parentBranchId: UUID,
     ) = true
 
+    override fun isHeadOffice(
+        organisationId: UUID,
+        branchId: UUID,
+    ): Boolean = false
+
     override fun branchState(
         organisationId: UUID,
         branchId: UUID,

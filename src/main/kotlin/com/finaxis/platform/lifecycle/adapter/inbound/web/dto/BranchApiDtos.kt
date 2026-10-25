@@ -115,6 +115,14 @@ data class CloseBranchRequest(
     val reason: String,
 )
 
+/** Request payload for discarding a draft branch. */
+data class DiscardBranchRequest(
+    @field:NotBlank
+    @field:Size(min = Reason.MIN_LENGTH, max = Reason.MAX_LENGTH)
+    @field:Schema(example = "Created against the wrong organisation.")
+    val reason: String,
+)
+
 /** Result returned when a branch draft is created. */
 data class BranchDraftResultResponse(
     val branchId: UUID,

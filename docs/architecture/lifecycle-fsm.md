@@ -29,6 +29,7 @@ stateDiagram-v2
     ACTIVE --> SUSPENDED: SUSPEND
     SUSPENDED --> ACTIVE: REACTIVATE
     ACTIVE --> CLOSED: CLOSE
+    DRAFT --> CLOSED: DISCARD
     CLOSED --> ARCHIVED: ARCHIVE
 ```
 
@@ -147,6 +148,30 @@ The transition uses `internalEventFactories()` and publishes no externalized eve
 each resubmission with no exit event in between; externalizing a `*.returned-for-changes` event is
 a follow-up of its own if a consumer needs it
 ([transactional outbox](transactional-outbox-amqp.md)).
+
+## Discard a draft branch (ADR 0036, #222)
+
+`BranchLifecycleTransition.DISCARD` is the edge `DRAFT` to `CLOSED`, with a required reason (3 to
+500 characters) in `status_reason`, the transition log and the `branch.discard` audit row. It is
+not `CLOSE` with another source: a transition has one source state, and its own name tells the log
+that the branch **never opened** (`opened_on` stays null, `closed_on` is the business date, stamped
+by `saveBranch` like any close). It carries the same `branchClosureGuard` as `CLOSE` and
+`CLOSE_SUSPENDED`, so a draft with an `ACTIVE` child is refused (`409`, "...before discarding this
+branch"). It uses `internalEventFactories()`: **no `finaxis.lifecycle.branch.closed` event**, since
+a branch that never opened has nothing to announce, which is what `CLOSE` and `CLOSE_SUSPENDED`
+do announce.
+
+`BranchProvisioningService.discard` checks `branch.create` against the target branch (before any
+existence signal), the branch (404), locks the organisation and requires it `ACTIVE` or
+`PROVISIONING`, refuses the head office (`409 lifecycle.head_office_branch_protected`: tenant
+approval activates it), then lets the FSM refuse any state but `DRAFT`. **The code stays taken**
+(`uq_branch_organisation_code` ignores status), as for every closed branch. It is the direct route
+to the `CLOSED` state a draft already reaches by way of `SUSPEND_DRAFT` (the tenant suspend and
+deprovision cascade) then `CLOSE_SUSPENDED` (the close route); those edges are unchanged, and that
+path still announces `finaxis.lifecycle.branch.closed`, which `DISCARD` does not. See
+[foundation API](../api/foundation-api.md#discard-a-draft-branch),
+[authorization model](../security/authorization-model.md#branch-discard) and
+[ADR 0036](../adr/0036-discard-a-draft-branch.md).
 
 ## Return a pending tenant to draft (ADR 0029, #181)
 

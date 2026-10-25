@@ -1,12 +1,20 @@
 package com.finaxis.platform.lifecycle.domain
 
+import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
+import com.finaxis.platform.common.transitions.InternalTransitionEvent
+import com.finaxis.platform.common.transitions.TransitionActor
+import com.finaxis.platform.common.transitions.TransitionCommand
+import com.finaxis.platform.common.transitions.TransitionContext
 import com.finaxis.platform.common.transitions.TransitionException
 import com.finaxis.platform.common.transitions.TransitionGraph
+import com.finaxis.platform.common.transitions.TransitionGuardException
 import com.finaxis.platform.common.transitions.Transitionable
 import org.junit.jupiter.api.Test
+import java.time.Instant
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 /**
  * Exhaustive matrix tests for every foundation lifecycle graph so no undeclared state/transition
@@ -129,6 +137,142 @@ class FoundationLifecycleTransitionTests {
                 ).to,
         )
     }
+
+    @Test
+    fun `a draft branch is discarded to closed through exactly one declared edge`() {
+        val graph =
+            FoundationLifecycleDefinitions.branchGraph(
+                prerequisites = allowingPrerequisites,
+                organisationId = ORGANISATION_ID,
+                branchId = BRANCH_ID,
+            )
+
+        val discards =
+            graph.definitions().filter { it.transition == BranchLifecycleTransition.DISCARD }
+
+        assertEquals(
+            listOf(BranchLifecycleState.DRAFT to BranchLifecycleState.CLOSED),
+            discards.map { it.from to it.to },
+        )
+        // Every other state refuses it, whatever else can reach CLOSED from there.
+        BranchLifecycleState.entries
+            .filter { it != BranchLifecycleState.DRAFT }
+            .forEach { state ->
+                assertFailsWith<TransitionException>("$state") {
+                    graph.requireDefinition(state, BranchLifecycleTransition.DISCARD)
+                }
+            }
+        // The ways into CLOSED stay exactly these three: DISCARD has a name of its own, so the
+        // transition log tells a branch that never opened from one that was closed.
+        assertEquals(
+            setOf(
+                BranchLifecycleTransition.CLOSE,
+                BranchLifecycleTransition.CLOSE_SUSPENDED,
+                BranchLifecycleTransition.DISCARD,
+            ),
+            graph
+                .definitions()
+                .filter { it.to == BranchLifecycleState.CLOSED }
+                .map { it.transition }
+                .toSet(),
+        )
+        // Nothing new leaves DRAFT: SUBMIT and the cascade's SUSPEND_DRAFT keep their edges.
+        assertEquals(
+            setOf(
+                BranchLifecycleTransition.SUBMIT,
+                BranchLifecycleTransition.SUSPEND_DRAFT,
+                BranchLifecycleTransition.DISCARD,
+            ),
+            graph
+                .definitions()
+                .filter { it.from == BranchLifecycleState.DRAFT }
+                .map { it.transition }
+                .toSet(),
+        )
+    }
+
+    @Test
+    fun `discarding a draft announces nothing outside the process`() {
+        val graph = branchGraphWith(allowingPrerequisites)
+        val definition =
+            graph.requireDefinition(BranchLifecycleState.DRAFT, BranchLifecycleTransition.DISCARD)
+
+        val events = definition.eventFactories.map { it.create(draftDiscardContext()) }
+
+        // A branch that never opened has nothing to announce: no finaxis.lifecycle.branch.closed.
+        assertTrue(events.isNotEmpty() && events.all { it is InternalTransitionEvent }, "$events")
+        // CLOSE and CLOSE_SUSPENDED still announce, which is what DISCARD must not copy.
+        listOf(
+            BranchLifecycleState.ACTIVE to BranchLifecycleTransition.CLOSE,
+            BranchLifecycleState.SUSPENDED to BranchLifecycleTransition.CLOSE_SUSPENDED,
+        ).forEach { (from, transition) ->
+            val closing = graph.requireDefinition(from, transition)
+            val announced =
+                closing.eventFactories.map {
+                    it.create(
+                        draftDiscardContext(from, transition),
+                    )
+                }
+            assertTrue(announced.single() is ExternalizedTransitionEvent, "$transition")
+        }
+    }
+
+    @Test
+    fun `discarding a draft carries the closure guard for children and assignments`() {
+        val withChildren =
+            object : LifecyclePrerequisites by allowingPrerequisites {
+                override fun branchHasActiveChildren(
+                    organisationId: UUID,
+                    branchId: UUID,
+                ): Boolean = true
+            }
+        val withAssignments =
+            object : LifecyclePrerequisites by allowingPrerequisites {
+                override fun branchHasActiveAssignments(
+                    organisationId: UUID,
+                    branchId: UUID,
+                ): Boolean = true
+            }
+
+        listOf(withChildren, withAssignments).forEach { prerequisites ->
+            val definition =
+                branchGraphWith(prerequisites)
+                    .requireDefinition(
+                        BranchLifecycleState.DRAFT,
+                        BranchLifecycleTransition.DISCARD,
+                    )
+            val error =
+                assertFailsWith<TransitionGuardException> {
+                    definition.guards.forEach { it.check(draftDiscardContext()) }
+                }
+            assertTrue(error.message.orEmpty().contains("discarding"), error.message)
+        }
+        // With neither, every guard passes.
+        branchGraphWith(allowingPrerequisites)
+            .requireDefinition(BranchLifecycleState.DRAFT, BranchLifecycleTransition.DISCARD)
+            .guards
+            .forEach { it.check(draftDiscardContext()) }
+    }
+
+    private fun branchGraphWith(prerequisites: LifecyclePrerequisites) =
+        FoundationLifecycleDefinitions.branchGraph(
+            prerequisites = prerequisites,
+            organisationId = ORGANISATION_ID,
+            branchId = BRANCH_ID,
+        )
+
+    private fun draftDiscardContext(
+        from: BranchLifecycleState = BranchLifecycleState.DRAFT,
+        transition: BranchLifecycleTransition = BranchLifecycleTransition.DISCARD,
+    ) = TransitionContext(
+        aggregate = LifecycleAggregate(BRANCH_ID, from, "BRANCH", ORGANISATION_ID, 0L),
+        transition = transition,
+        fromState = from,
+        toState = BranchLifecycleState.CLOSED,
+        actor = TransitionActor("USER", USER_ID.toString()),
+        command = TransitionCommand(reason = "Opened by mistake"),
+        occurredAt = Instant.EPOCH,
+    )
 
     @Test
     fun `user lifecycle accepts only graph-declared transitions`() {

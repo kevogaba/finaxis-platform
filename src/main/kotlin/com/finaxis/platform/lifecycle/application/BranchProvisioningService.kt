@@ -32,6 +32,9 @@ import java.util.UUID
  * the foundation FSM; assignment changes are externally published through the Modulith outbox.
  */
 @Service
+// One cohesive branch-lifecycle use-case service: every status change shares the permission,
+// organisation and maker-checker helpers below, and splitting it would change its constructor.
+@Suppress("TooManyFunctions", "LargeClass")
 class BranchProvisioningService(
     private val lifecycleService: FoundationLifecycleService,
     private val lifecycleStore: BranchLifecycleStore,
@@ -379,6 +382,47 @@ class BranchProvisioningService(
                 command.organisationId,
                 command.branchId,
                 transition,
+                TransitionCommand(reason = command.reason.value),
+            ),
+        )
+    }
+
+    /**
+     * Discards a draft branch (#222, ADR 0036): `DRAFT` to `CLOSED` through the `DISCARD` edge, so
+     * a branch created by mistake, or that will never be approved, can be put away instead of
+     * lingering as a draft. `branch.create` is the permission, as for submit and withdraw, checked
+     * against the target branch before any signal of whether it exists; the branch-scope grant
+     * counts only while the branch is ACTIVE (#242), so a draft is discarded by a tenant-wide
+     * holder.
+     *
+     * After the permission and the 404 the organisation row is locked, so the state read cannot be
+     * overtaken by a concurrent suspension, and it must be ACTIVE or PROVISIONING. The head office
+     * is refused, then the FSM refuses any source state but DRAFT and runs the closure guard (no
+     * active assignments or children). The branch keeps its code: the FSM row, which carries the
+     * reason, is the only audit row, and no externalized event is published, because a branch that
+     * never opened has nothing to announce.
+     */
+    @Transactional
+    fun discard(command: DiscardBranchCommand) {
+        requireBranchPermission(
+            command.actorId,
+            command.organisationId,
+            command.branchId,
+            "branch.create",
+        )
+        lifecycleStore.lockOrganisation(command.organisationId)
+        requireOrganisationAllowsBranch(command.organisationId)
+        if (lifecycleStore.isHeadOffice(command.organisationId, command.branchId)) {
+            throw ConflictException(
+                LifecycleErrorCodes.HEAD_OFFICE_BRANCH_PROTECTED,
+                LifecycleErrorCodes.HEAD_OFFICE_BRANCH_PROTECTED_DETAIL,
+            )
+        }
+        lifecycleService.transition(
+            BranchTransitionCommand(
+                command.organisationId,
+                command.branchId,
+                BranchLifecycleTransition.DISCARD,
                 TransitionCommand(reason = command.reason.value),
             ),
         )

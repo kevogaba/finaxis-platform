@@ -113,6 +113,17 @@ object LifecycleErrorCodes {
         FoundationLifecycleDefinitions.PLATFORM_ORGANISATION_PROTECTED_DETAIL
 
     /**
+     * A discard was asked for the organisation's head office. The bootstrap seeds it as a draft
+     * and tenant approval submits and activates it, so abandoning it would leave the tenant
+     * unable to be approved (ADR 0036). A refusal, not a 404: the branch exists.
+     */
+    const val HEAD_OFFICE_BRANCH_PROTECTED = "lifecycle.head_office_branch_protected"
+
+    /** The safe detail that accompanies [HEAD_OFFICE_BRANCH_PROTECTED]. */
+    const val HEAD_OFFICE_BRANCH_PROTECTED_DETAIL =
+        "The head office branch cannot be discarded; it is activated with the tenant."
+
+    /**
      * An invitation resend was asked for a member whose account is not `INVITED`: it has not been
      * provisioned yet (retry or approve it) or it has already logged in (nothing to resend).
      */

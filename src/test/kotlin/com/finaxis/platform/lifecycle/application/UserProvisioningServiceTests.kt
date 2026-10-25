@@ -1852,6 +1852,11 @@ private class UserProvisioningFake :
         membershipId: UUID,
     ): UUID? = membershipInviters[organisationId to membershipId]
 
+    override fun isHeadOffice(
+        organisationId: UUID,
+        branchId: UUID,
+    ): Boolean = false
+
     override fun branchState(
         organisationId: UUID,
         branchId: UUID,

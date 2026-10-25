@@ -705,6 +705,7 @@ Base path: `/api/v1/branches`. List filters: `q`, `status`, `type`, `sort_by`, `
 | POST   | `/{branch_id}/suspend`    | Suspend branch                       | `branch.suspend` + `branch.view` | mutation |
 | POST   | `/{branch_id}/reactivate` | Reactivate branch                    | `branch.reactivate` + `branch.view` | mutation |
 | POST   | `/{branch_id}/close`      | Close branch                         | `branch.close` + `branch.view` | mutation |
+| POST   | `/{branch_id}/discard`    | Discard a draft branch               | `branch.create` + `branch.view` | mutation |
 
 #### Reading branches (target-aware, ADR 0030)
 
@@ -871,7 +872,7 @@ business date, never the wall clock, and are `null` until they apply:
 - `opened_on` is set when the branch first becomes `ACTIVE`, including the head office that tenant
   approval activates. A suspend and reactivate does not move it.
 - `closed_on` is set when the branch is `CLOSED`. `CLOSED` only moves on to `ARCHIVED`, so it is
-  never cleared.
+  never cleared. A discarded draft (below) has a `closed_on` and no `opened_on`.
 
 Branches that predate this behaviour were backfilled once, best-effort, by migration `V18`: where
 a date was still `null`, it is the day of the branch's earliest transition into `ACTIVE` (or
@@ -940,6 +941,49 @@ a flag in the request:
 
 The platform route is `POST /api/v1/platform/tenants/{tenant_id}/branches/{branch_id}/return`
 (see [Platform Tenant Branches](#platform-tenant-branches)).
+
+#### Discard a draft branch
+
+`POST /api/v1/branches/{branch_id}/discard` abandons a branch that is a `DRAFT`
+([ADR 0036](../adr/0036-discard-a-draft-branch.md), issue #222): it moves to `CLOSED` through its
+own `DISCARD` transition and answers `200` with the branch detail (`status` `CLOSED`,
+`status_reason` the reason, `closed_on` the tenant's business date, `opened_on` `null`). The body
+is required, as for `return` and `close`:
+
+```json
+{ "reason": "Created against the wrong organisation." }
+```
+
+`reason` is 3 to 500 characters and not blank. A missing or unreadable body, or an absent or `null`
+`reason`, is `400 invalid_json`; a blank or out-of-range `reason` is `400 validation_failed`.
+Validation runs when the body is bound, before any permission or existence check.
+
+- **Permission: `branch.create`, plus its view `branch.view`**, both against the **target branch**
+  (`403` naming the first missing code, before any existence signal), as for submit and withdraw.
+  No new code and no migration. A grant scoped to a branch counts only while that branch is
+  `ACTIVE`, so a draft is discarded by a tenant-wide holder.
+- **Check order.** Permission (`403`); the branch in the path organisation (`404`); the organisation
+  state, which must be `ACTIVE` or `PROVISIONING` (`409`; permission resolution already refuses a
+  tenant caller whose organisation is not `ACTIVE` with `403`); the head office (`409
+  lifecycle.head_office_branch_protected`: the bootstrap seeds it as a draft and tenant approval
+  activates it); then the branch state and the closure guard (`409`).
+- **State.** Only `DRAFT` can be discarded; `PENDING_APPROVAL` (withdraw it first), `ACTIVE`,
+  `SUSPENDED`, `CLOSED` and `ARCHIVED` answer `409 conflict` and change nothing. A draft with an
+  `ACTIVE` child branch, or an active assignment, is `409` with a message that says to close or
+  re-parent the child (or reassign) "before discarding this branch".
+- **The code stays taken.** The discarded branch keeps its `branch_code` and
+  `uq_branch_organisation_code` ignores status, so creating a branch with that code is `409
+  conflict`, as it is for any closed branch. It is not freed, and there is no hard delete.
+- **Audit and log.** One FSM row, action `branch.discard`, with the reason and the actor, and one
+  `branch_transition_log` row named `DISCARD` (`DRAFT` to `CLOSED`), which tells a branch that never
+  opened from one that was closed. No service row repeats it (ADR 0031).
+- **Events.** None. The transition publishes an internal event only; unlike `close` it emits no
+  `finaxis.lifecycle.branch.closed`, because a branch that never opened has nothing to announce.
+- **Response and idempotency.** The route accepts an optional `Idempotency-Key`; a replay returns
+  the stored response and discards the branch once. A fresh key against the now-closed branch is
+  `409`. A discarded branch can still be archived like any closed one.
+
+There is no platform route for discard.
 
 ### Platform Tenant Administration
 
@@ -1649,7 +1693,8 @@ request text by Bean Validation and again after trimming by the value object, so
 past 500 characters is rejected even if its trimmed text would fit.
 
 - **Required, 3 to 500 characters and not blank (`Reason`):** tenant suspend, return, reject and
-  deprovision; branch suspend, close and return (withdraw; return also on the platform routes);
+  deprovision; branch suspend, close, discard and return (withdraw; return also on the platform
+  routes);
   membership suspend and revoke; user suspend and deactivate.
 - **Optional, at most 500 characters (`DecisionRemark`):** branch submit, activate and reactivate
   (submit and activate also on the platform routes), tenant approve and reactivate, membership

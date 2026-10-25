@@ -15,6 +15,7 @@ import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BranchDraftResultR
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.BranchSummaryResponse
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CloseBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.CreateBranchRequest
+import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.DiscardBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReactivateBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.ReturnBranchRequest
 import com.finaxis.platform.lifecycle.adapter.inbound.web.dto.SubmitBranchRequest
@@ -25,6 +26,7 @@ import com.finaxis.platform.lifecycle.application.BranchProvisioningService
 import com.finaxis.platform.lifecycle.application.CloseBranchCommand
 import com.finaxis.platform.lifecycle.application.CreateBranchCommand
 import com.finaxis.platform.lifecycle.application.DecisionRemark
+import com.finaxis.platform.lifecycle.application.DiscardBranchCommand
 import com.finaxis.platform.lifecycle.application.ReactivateBranchCommand
 import com.finaxis.platform.lifecycle.application.Reason
 import com.finaxis.platform.lifecycle.application.ReturnBranchCommand
@@ -1024,6 +1026,113 @@ class BranchController(
                 caller,
             )
         return updated.toResponse()
+    }
+
+    /**
+     * Discards a draft branch.
+     */
+    @PostMapping("/{branch_id}/discard")
+    @IdempotentMutation(scope = IdempotencyScopeKind.TENANT)
+    @PreAuthorize("hasAuthority('branch.create')")
+    @Operation(
+        summary = "Discard branch draft",
+        description =
+            "Abandons a branch that is still a draft, with a required reason: it moves to " +
+                "CLOSED through its own DISCARD transition, never having opened. It needs " +
+                "`branch.create`, held tenant-wide (a grant scoped to a branch counts only " +
+                "while that branch is ACTIVE). The head office, a draft with an active child " +
+                "branch, and a branch of a tenant that is not active or provisioning are " +
+                "refused. The branch keeps its code, which stays taken, and nothing is " +
+                "published to the integration broker.",
+        parameters = [
+            Parameter(
+                name = "Idempotency-Key",
+                description = "Optional UUID; the server generates one when omitted.",
+                `in` = ParameterIn.HEADER,
+                schema = Schema(type = "string", format = "uuid"),
+            ),
+        ],
+    )
+    @ApiResponses(
+        ApiResponse(
+            responseCode = "200",
+            description = "Branch discarded",
+            content = [Content(schema = Schema(implementation = BranchDetailResponse::class))],
+        ),
+        ApiResponse(
+            responseCode = "400",
+            description =
+                "Missing body or reason (`invalid_json`), or a reason that is blank or not " +
+                    "3 to 500 characters (`validation_failed`)",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Caller lacks `branch.create` (or its view) for the branch",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description = "Branch not found",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "409",
+            description =
+                "Branch is not a draft, is the head office (`lifecycle.head_office_branch_" +
+                    "protected`), has an active child branch, or the tenant is not active or " +
+                    "provisioning",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+    )
+    fun discard(
+        @PathVariable("branch_id") branchId: UUID,
+        @RequestBody @Valid request: DiscardBranchRequest,
+    ): BranchDetailResponse {
+        val caller = CallerContextResolver.getTenantCaller()
+        branchProvisioningService.discard(
+            DiscardBranchCommand(
+                organisationId = caller.activeOrganisationId,
+                branchId = branchId,
+                reason = Reason.required(request.reason),
+                actorId = caller.actorId,
+            ),
+        )
+        // The service has checked branch.create and its views on this very branch, so the gated
+        // read at that scope cannot fail on grants (ADR 0030).
+        return foundationQueryService
+            .getBranch(caller.activeOrganisationId, branchId, caller)
+            .toResponse()
     }
 
     private fun BranchSummary.toResponse() =
