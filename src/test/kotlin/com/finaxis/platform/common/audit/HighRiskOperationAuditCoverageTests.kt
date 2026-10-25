@@ -359,6 +359,7 @@ class HighRiskOperationAuditCoverageTests(
                 "membership.revoke" to "membership.revoke",
                 "membership.suspend" to "membership.suspend",
                 "role.activate" to "role.activate",
+                "role.archive" to "role.archive",
                 "role.assign_permission" to "role.assign_permission",
                 "role.create" to "role.create",
                 "role.deactivate" to "role.deactivate",

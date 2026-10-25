@@ -31,6 +31,17 @@ data class ActivateRole(
     val requestId: String? = null,
 )
 
+/**
+ * Archives a role that belongs to the selected organisation: a terminal state, refused while the
+ * role has an ACTIVE assignment.
+ */
+data class ArchiveRole(
+    val organisationId: UUID,
+    val roleId: UUID,
+    val actorId: UUID,
+    val requestId: String? = null,
+)
+
 /** Disables a mutable role that belongs to the selected organisation. */
 data class DeactivateRole(
     val organisationId: UUID,

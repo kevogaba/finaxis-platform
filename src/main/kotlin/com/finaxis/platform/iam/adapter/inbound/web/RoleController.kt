@@ -20,6 +20,7 @@ import com.finaxis.platform.iam.application.query.RolePermissionFilter
 import com.finaxis.platform.iam.application.query.RolePermissionSummary
 import com.finaxis.platform.iam.application.query.RoleSummary
 import com.finaxis.platform.iam.application.role.ActivateRole
+import com.finaxis.platform.iam.application.role.ArchiveRole
 import com.finaxis.platform.iam.application.role.AssignPermissionToRole
 import com.finaxis.platform.iam.application.role.CreateTenantRole
 import com.finaxis.platform.iam.application.role.DeactivateRole
@@ -418,6 +419,71 @@ class RoleController(
     fun deactivateRole(
         @PathVariable("role_id") roleId: UUID,
     ): RoleDetailResponse = mutateStatus(roleId, false)
+
+    /** Archives a tenant-managed role, a terminal state. */
+    @PostMapping("/{role_id}/archive")
+    @IdempotentMutation(scope = IdempotencyScopeKind.TENANT)
+    @PreAuthorize("hasAuthority('role.archive')")
+    @Operation(
+        summary = "Archive role",
+        description =
+            "Archives a tenant-managed role. ARCHIVED is terminal: the role cannot be activated, " +
+                "deactivated, edited or assigned again, it is hidden from the default role list " +
+                "(status=ARCHIVED lists it) and its code stays reserved. Allowed from ACTIVE or " +
+                "DISABLED, and refused with 409 while the role has an ACTIVE assignment (the " +
+                "detail names the count; revoke them first). A system role is refused with 409.",
+        parameters = [
+            Parameter(
+                name = "Idempotency-Key",
+                description = "Optional UUID; the server generates one when omitted.",
+                `in` = ParameterIn.HEADER,
+                schema = Schema(type = "string", format = "uuid"),
+            ),
+        ],
+    )
+    @ApiResponses(
+        ApiResponse(
+            responseCode = "200",
+            description = "Role archived",
+            content = [Content(schema = Schema(implementation = RoleDetailResponse::class))],
+        ),
+        ApiResponse(
+            responseCode = "401",
+            description = "Unauthenticated",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "403",
+            description = "Forbidden",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "404",
+            description = "Role not found",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "409",
+            description =
+                "System role, already archived, or the role has active assignments " +
+                    "(the detail names how many)",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+    )
+    fun archiveRole(
+        @PathVariable("role_id") roleId: UUID,
+    ): RoleDetailResponse {
+        val caller = CallerContextResolver.getTenantCaller()
+        roleManagementService.archiveRole(
+            ArchiveRole(
+                caller.activeOrganisationId,
+                roleId,
+                caller.actorId,
+                uuidV7().toString(),
+            ),
+        )
+        return iamQueryService.getRole(caller.activeOrganisationId, roleId, caller).toResponse()
+    }
 
     /** Lists permission grants on a role. */
     @GetMapping("/{role_id}/permissions")

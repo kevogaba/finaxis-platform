@@ -51,9 +51,9 @@ class JooqIamPermissionQueriesTests(
                 PermissionFilter(page = 2, size = 30, sortBy = "permissionCode", sortDir = "ASC"),
             )
 
-        assertEquals(83, first.page.totalItems)
+        assertEquals(84, first.page.totalItems)
         assertEquals(30, first.items.size)
-        assertEquals(23, last.items.size)
+        assertEquals(24, last.items.size)
         assertEquals("accounting_report.export", first.items.first().permissionCode)
         assertEquals(
             0,
@@ -71,7 +71,7 @@ class JooqIamPermissionQueriesTests(
         assertTrue(high.items.isNotEmpty())
         assertTrue(high.items.all { it.riskLevel == "HIGH" })
         assertTrue(high.items.any { it.permissionCode == "user.invite" })
-        assertTrue(high.page.totalItems < 83)
+        assertTrue(high.page.totalItems < 84)
     }
 
     @Test

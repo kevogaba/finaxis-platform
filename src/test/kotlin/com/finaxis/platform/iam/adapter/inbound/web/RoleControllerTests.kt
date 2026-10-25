@@ -13,6 +13,7 @@ import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.adapter.inbound.web.dto.AssignPermissionRequest
 import com.finaxis.platform.iam.adapter.inbound.web.dto.CreateRoleRequest
 import com.finaxis.platform.iam.adapter.inbound.web.dto.UpdateRoleRequest
+import com.finaxis.platform.iam.application.role.ArchiveRole
 import com.finaxis.platform.iam.application.role.RoleResult
 import com.finaxis.platform.iam.domain.RoleStatus
 import org.junit.jupiter.api.Test
@@ -38,6 +39,7 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.reque
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.header
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
+import kotlin.test.assertEquals
 
 @WebMvcTest(
     controllers = [RoleController::class],
@@ -75,6 +77,9 @@ class RoleControllerTests
             whenever(roleManagementService.deactivateRole(any())).thenReturn(
                 RoleResult(roleId, RoleStatus.DISABLED),
             )
+            whenever(roleManagementService.archiveRole(any())).thenReturn(
+                RoleResult(roleId, RoleStatus.ARCHIVED),
+            )
             whenever(iamQueryService.getRole(eq(tenantId), eq(roleId), any())).thenReturn(
                 roleDetail(tenantId, roleId),
             )
@@ -106,6 +111,14 @@ class RoleControllerTests
                 .post("${ApiPaths.ROLES}/$roleId/deactivate") {
                     with(authentication(tenantToken(setOf("role.deactivate"), tenantId)))
                 }.andExpect { status { isOk() } }
+            mockMvc
+                .post("${ApiPaths.ROLES}/$roleId/archive") {
+                    with(authentication(tenantToken(setOf("role.archive"), tenantId)))
+                }.andExpect { status { isOk() } }
+            val archived = argumentCaptor<ArchiveRole>()
+            verify(roleManagementService).archiveRole(archived.capture())
+            assertEquals(roleId, archived.firstValue.roleId)
+            assertEquals(tenantId, archived.firstValue.organisationId)
         }
 
         @Test
@@ -201,6 +214,7 @@ class RoleControllerTests
             val roleId = uuidV7()
             whenever(roleManagementService.updateTenantRole(any())).thenThrow(ConflictException())
             whenever(roleManagementService.deactivateRole(any())).thenThrow(ConflictException())
+            whenever(roleManagementService.archiveRole(any())).thenThrow(ConflictException())
             whenever(
                 roleManagementService.assignPermissionToRole(any()),
             ).thenThrow(ConflictException())
@@ -211,6 +225,7 @@ class RoleControllerTests
             listOf(
                 HttpMethod.PATCH to "${ApiPaths.ROLES}/$roleId",
                 HttpMethod.POST to "${ApiPaths.ROLES}/$roleId/deactivate",
+                HttpMethod.POST to "${ApiPaths.ROLES}/$roleId/archive",
                 HttpMethod.POST to "${ApiPaths.ROLES}/$roleId/permissions",
                 HttpMethod.DELETE to "${ApiPaths.ROLES}/$roleId/permissions/${uuidV7()}",
             ).forEach { (method, path) ->

@@ -6,7 +6,7 @@ package com.finaxis.platform.foundation
  * `V1` created the first 23; `V6` added the five fiscal-calendar and chart-of-accounts tables; `V7`
  * added the three journal tables; `V8` added the four posting-rule tables; `V9` the reconciliation
  * evidence table; `V10` the three manual-journal tables; `V14` the daily-balance projection; `V22`
- * the permission view-requirement join table.
+ * the permission view-requirement join table; `V33` the role transition log.
  * Starter-managed tables — `outbox_record`, `event_publication` and JobRunr's — are deliberately
  * absent: they live outside Flyway and carry no `guid`, so the conventions asserted against this
  * list do not apply to them.
@@ -52,6 +52,7 @@ val APPLICATION_TABLES =
         "reference_sequence",
         "role",
         "role_permission",
+        "role_transition_log",
         "user_account",
         "user_account_transition_log",
         "user_branch_assignment",

@@ -28,6 +28,7 @@ import com.finaxis.platform.iam.application.query.UserInTenantDetail
 import com.finaxis.platform.iam.application.query.UserInTenantFilter
 import com.finaxis.platform.iam.application.query.UserInTenantSummary
 import com.finaxis.platform.iam.application.query.deriveInvitationStatus
+import com.finaxis.platform.iam.domain.RoleStatus
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.PERMISSION
 import com.finaxis.platform.jooq.tables.references.PERMISSION_VIEW_REQUIREMENT
@@ -383,7 +384,11 @@ class JooqIamAdministrationQueries(
         filter: RoleFilter,
     ): ApiPage<RoleSummary> {
         var condition: Condition = ROLE.ORGANISATION_ID.eq(organisationId)
-        filter.status?.let { condition = condition.and(ROLE.STATUS.eq(it)) }
+        // An archived role is final and listed only on request: a status filter shows it, and no
+        // filter hides it (ADR 0035). `idx_role_organisation_status` serves either shape.
+        condition =
+            filter.status?.let { condition.and(ROLE.STATUS.eq(it)) }
+                ?: condition.and(ROLE.STATUS.ne(RoleStatus.ARCHIVED.name))
         filter.systemRole?.let { condition = condition.and(ROLE.SYSTEM_ROLE.eq(it)) }
         filter.q?.let { q ->
             val query = "%$q%"

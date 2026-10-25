@@ -9,14 +9,23 @@ import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
+import com.finaxis.platform.common.transitions.TransitionCommand
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
+import com.finaxis.platform.common.transitions.TransitionException
+import com.finaxis.platform.common.transitions.TransitionExecution
+import com.finaxis.platform.common.transitions.TransitionExecutor
+import com.finaxis.platform.common.transitions.TransitionGuardException
+import com.finaxis.platform.common.transitions.TransitionNotAllowedException
 import com.finaxis.platform.iam.application.authorization.PermissionCacheInvalidator
 import com.finaxis.platform.iam.application.port.outbound.IamAdministrationPersistence
 import com.finaxis.platform.iam.application.port.outbound.RoleAssignmentTarget
 import com.finaxis.platform.iam.application.port.outbound.RoleSnapshot
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
+import com.finaxis.platform.iam.domain.RoleAggregate
+import com.finaxis.platform.iam.domain.RoleLifecycle
 import com.finaxis.platform.iam.domain.RoleStatus
+import com.finaxis.platform.iam.domain.RoleTransition
 import com.finaxis.platform.lifecycle.BranchVisibility
 import com.finaxis.platform.lifecycle.PermissionGuard
 import org.springframework.stereotype.Service
@@ -34,14 +43,22 @@ class RoleManagementService(
     private val permissionCacheInvalidator: PermissionCacheInvalidator,
     private val permissionGuard: PermissionGuard,
     private val compositionGuard: RoleCompositionGuard,
+    private val transitionExecutor: TransitionExecutor,
 ) {
+    private val roleGraph = RoleLifecycle.graph(persistence::countActiveAssignmentsForRole)
+
     /** Creates an active tenant-managed role after validating its unique code and name. */
     @Transactional
     fun createTenantRole(command: CreateTenantRole): RoleResult {
         requireTenantPermission(command.actorId, command.organisationId, "role.create")
         invalidOperationUnless(command.roleCode.isNotBlank())
         invalidOperationUnless(command.roleName.isNotBlank())
-        conflictUnless(!persistence.roleCodeExists(command.organisationId, command.roleCode))
+        // An archived role keeps its code, so the code can be taken by a role nobody lists.
+        conflictUnless(
+            !persistence.roleCodeExists(command.organisationId, command.roleCode),
+            "A role with this code already exists in the organisation. An archived role keeps " +
+                "its code reserved.",
+        )
         val roleId =
             persistence.createRole(
                 command.organisationId,
@@ -59,7 +76,7 @@ class RoleManagementService(
     fun updateTenantRole(command: UpdateTenantRole): RoleResult {
         requireTenantPermission(command.actorId, command.organisationId, "role.update")
         val role = requiredRole(command.organisationId, command.roleId)
-        requireMutable(role)
+        requireEditable(role)
         persistence.updateRole(
             command.organisationId,
             command.roleId,
@@ -81,35 +98,55 @@ class RoleManagementService(
     /** Re-enables a disabled tenant-managed role that is visible in the selected organisation. */
     @Transactional
     fun activateRole(command: ActivateRole): RoleResult =
-        changeStatus(
+        transition(
             command.organisationId,
             command.roleId,
             command.actorId,
             command.requestId,
             "role.activate",
-            RoleStatus.DISABLED,
-            RoleStatus.ACTIVE,
-        )
+        ) { RoleTransition.ACTIVATE }
 
     /** Disables an active tenant-managed role that is visible in the selected organisation. */
     @Transactional
     fun deactivateRole(command: DeactivateRole): RoleResult =
-        changeStatus(
+        transition(
             command.organisationId,
             command.roleId,
             command.actorId,
             command.requestId,
             "role.deactivate",
-            RoleStatus.ACTIVE,
-            RoleStatus.DISABLED,
-        )
+        ) { RoleTransition.DEACTIVATE }
+
+    /**
+     * Archives an `ACTIVE` or `DISABLED` tenant-managed role: a terminal state with no way back.
+     * Refused with a 409 naming the count while the role has an ACTIVE assignment, for a system
+     * role, and for a role that is already archived. The role's row lock is taken before the
+     * assignments are counted, and `assignRoleToUser` and the invitation take the same lock, so a
+     * concurrent assignment either commits first (and is counted) or waits and is refused
+     * (ADR 0035). The FSM row is the audit record; the code stays reserved.
+     */
+    @Transactional
+    fun archiveRole(command: ArchiveRole): RoleResult =
+        transition(
+            command.organisationId,
+            command.roleId,
+            command.actorId,
+            command.requestId,
+            "role.archive",
+        ) { status ->
+            if (status == RoleStatus.DISABLED) {
+                RoleTransition.ARCHIVE_DISABLED
+            } else {
+                RoleTransition.ARCHIVE
+            }
+        }
 
     /** Idempotently grants a catalogue permission and evicts affected permission caches. */
     @Transactional
     fun assignPermissionToRole(command: AssignPermissionToRole) {
         requireTenantPermission(command.actorId, command.organisationId, "role.assign_permission")
         val role = persistence.lockRole(command.organisationId, command.roleId).orResourceNotFound()
-        requireMutable(role)
+        requireEditable(role)
         val permissionId =
             persistence
                 .permissionIdByCode(
@@ -157,7 +194,7 @@ class RoleManagementService(
                     command.roleId,
                     command.rolePermissionId,
                 ).orResourceNotFound(safeDetail = "Role permission not found")
-        requireMutable(role)
+        requireEditable(role)
         val permissionId = persistence.permissionIdByCode(permissionCode).orResourceNotFound()
         compositionGuard.requireNoDependants(
             command.organisationId,
@@ -203,7 +240,11 @@ class RoleManagementService(
         conflictUnless(
             persistence.organisationStatus(command.organisationId) == OrganisationStatus.ACTIVE,
         )
-        val role = requiredRole(command.organisationId, command.roleId)
+        // Locked before the status is read, and held until commit, so an archive of this role
+        // either committed first (the status below is ARCHIVED and the assignment is refused) or
+        // waits for this one and counts it. The foreign key alone does not serialise the two:
+        // its FOR KEY SHARE does not conflict with the archive's FOR NO KEY UPDATE (ADR 0035).
+        val role = persistence.lockRole(command.organisationId, command.roleId).orResourceNotFound()
         validateScope(command)
         persistence
             .activeRoleAssignment(
@@ -344,29 +385,101 @@ class RoleManagementService(
     }
 
     /**
-     * Moves a role from [from] to [to], the only legal source of that [action]. Any other status
-     * (a repeat, or a role that is archived) is a 409 before anything is written or audited.
+     * Runs the role transition [pick] chooses for the role's current status through the shared
+     * executor: the status change, its `role_transition_log` row and its single audit row commit
+     * together. Any status the graph has no edge from (a repeat, or an archived role) is a 409
+     * before anything is written or audited.
      */
-    private fun changeStatus(
+    private fun transition(
         organisationId: UUID,
         roleId: UUID,
         actorId: UUID,
         requestId: String?,
-        action: String,
-        from: RoleStatus,
-        to: RoleStatus,
+        permissionCode: String,
+        pick: (RoleStatus) -> RoleTransition,
     ): RoleResult {
-        requireTenantPermission(actorId, organisationId, action)
+        requireTenantPermission(actorId, organisationId, permissionCode)
         // Locked, so of two concurrent calls the second reads the state the first left and is a
-        // clean 409, not a stale `row_version` write that surfaces as a 500.
+        // clean 409, not a stale `row_version` write that surfaces as a 500, and so an archive
+        // counts assignments no concurrent assignment can add to (ADR 0035).
         val role = persistence.lockRole(organisationId, roleId).orResourceNotFound()
         requireMutable(role)
-        conflictUnless(role.status == from)
-        persistence.setRoleStatus(organisationId, roleId, to, role.rowVersion, actorId)
+        val transition = pick(role.status)
+        val result =
+            try {
+                transitionExecutor.execute(
+                    TransitionExecution(
+                        aggregate = RoleAggregate(roleId, organisationId, role.status),
+                        transition = transition,
+                        graph = roleGraph,
+                        command =
+                            TransitionCommand(
+                                metadata = mapOf("organisationId" to organisationId.toString()),
+                                requestId = requestId,
+                            ),
+                        actor = TransitionActor("USER", actorId.toString()),
+                        persist = { aggregate ->
+                            persistence.setRoleStatus(
+                                organisationId,
+                                roleId,
+                                aggregate.state,
+                                role.rowVersion,
+                                actorId,
+                            )
+                            aggregate
+                        },
+                    ),
+                )
+            } catch (ex: TransitionException) {
+                throw mapTransitionFailure(ex)
+            }
         invalidateRoleMemberships(organisationId, roleId)
-        audit(organisationId, roleId, action, actorId, requestId)
-        return RoleResult(roleId, to)
+        auditService.recordLifecycleTransition(
+            actorId = actorId,
+            tenantId = organisationId,
+            aggregateType = RoleAggregate.AGGREGATE_TYPE,
+            aggregateId = roleId.toString(),
+            // Both archive edges are one action, so every archive is one search; the from-state
+            // in the row says which state it left, and the log keeps the exact edge.
+            transition = auditedName(result.transition),
+            fromState = result.fromState.name,
+            toState = result.toState.name,
+            outcome = AuditOutcome.SUCCESS,
+            requestId = requestId,
+        )
+        return RoleResult(roleId, result.toState)
     }
+
+    private fun auditedName(transition: RoleTransition): String =
+        if (transition == RoleTransition.ARCHIVE_DISABLED) {
+            RoleTransition.ARCHIVE.name
+        } else {
+            transition.name
+        }
+
+    /**
+     * An FSM refusal is a foreseeable client-facing conflict, not a server fault. The guard's
+     * message is written as safe business text (it names a count, no identifier), so it is passed
+     * through; a wrong-source-state message names internal states, so it is not.
+     */
+    private fun mapTransitionFailure(ex: TransitionException): RuntimeException =
+        when (ex) {
+            is TransitionNotAllowedException -> {
+                ConflictException(cause = ex)
+            }
+
+            is TransitionGuardException -> {
+                ConflictException(
+                    safeDetail =
+                        ex.message ?: "The request conflicts with the current resource state.",
+                    cause = ex,
+                )
+            }
+
+            else -> {
+                ex
+            }
+        }
 
     private fun requiredRole(
         organisationId: UUID,
@@ -375,6 +488,15 @@ class RoleManagementService(
 
     private fun requireMutable(role: RoleSnapshot) {
         conflictUnless(!role.systemRole)
+    }
+
+    /** A system role is fixed, and an archived one is final: neither is edited (ADR 0035). */
+    private fun requireEditable(role: RoleSnapshot) {
+        requireMutable(role)
+        conflictUnless(
+            role.status != RoleStatus.ARCHIVED,
+            "An archived role is final and cannot be changed.",
+        )
     }
 
     private fun validateScope(command: AssignRoleToUser) {
@@ -571,8 +693,13 @@ private fun invalidOperationUnless(condition: Boolean) {
     if (!condition) throw InvalidOperationException()
 }
 
-private fun conflictUnless(condition: Boolean) {
-    if (!condition) throw ConflictException()
+private fun conflictUnless(
+    condition: Boolean,
+    safeDetail: String? = null,
+) {
+    if (!condition) {
+        throw safeDetail?.let { ConflictException(safeDetail = it) } ?: ConflictException()
+    }
 }
 
 /** A `TENANT` row needs a tenant-wide grant; a `BRANCH` row, a grant on that branch. */

@@ -12,6 +12,9 @@ import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
+import com.finaxis.platform.common.transitions.TransitionExecutor
+import com.finaxis.platform.common.transitions.TransitionLog
+import com.finaxis.platform.common.transitions.TransitionLogRepository
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
 import com.finaxis.platform.iam.application.authorization.PermissionCacheInvalidator
 import com.finaxis.platform.iam.application.port.outbound.IamAdministrationPersistence
@@ -243,6 +246,222 @@ class RoleManagementServiceTests {
         }
         assertTrue(fixture.persistence.statusChanges.isEmpty())
         assertTrue(fixture.audits.events.isEmpty())
+    }
+
+    /** Activate and deactivate write one log row each, with the edge's names. */
+    @Test
+    fun `a status change writes its transition log row and one audit row`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.membershipsWithRole[fixture.roleId] = listOf(fixture.membershipId)
+
+        fixture.service.deactivateRole(fixture.deactivateRole(requestId = "req-d"))
+        fixture.persistence.roles[fixture.roleId] =
+            fixture.tenantRole().copy(status = RoleStatus.DISABLED)
+        fixture.service.activateRole(fixture.activateRole(requestId = "req-a"))
+
+        assertEquals(
+            listOf(
+                Triple("DEACTIVATE", "ACTIVE", "DISABLED"),
+                Triple("ACTIVATE", "DISABLED", "ACTIVE"),
+            ),
+            fixture.logs.rows.map { Triple(it.transition, it.fromState, it.toState) },
+        )
+        assertEquals(
+            fixture.organisationId.toString(),
+            fixture.logs.rows
+                .first()
+                .metadata["organisationId"],
+        )
+        assertEquals(
+            listOf("role.deactivate", "role.activate"),
+            fixture.audits.events.map { it.action },
+        )
+        assertEquals(listOf("ROLE", "ROLE"), fixture.audits.events.map { it.resourceType })
+    }
+
+    /** An ACTIVE role with no assignment is archived: status, log row and one audit row. */
+    @Test
+    fun `archiving an active role with no assignment writes status, log row and audit row`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole().copy(rowVersion = 4)
+        fixture.persistence.membershipsWithRole[fixture.roleId] = listOf(fixture.membershipId)
+        fixture.primePermissionCache(fixture.membershipId)
+
+        val result = fixture.service.archiveRole(fixture.archiveRole(requestId = "req-archive"))
+        val audit = fixture.audits.events.single()
+        val log = fixture.logs.rows.single()
+
+        assertEquals(RoleResult(fixture.roleId, RoleStatus.ARCHIVED), result)
+        assertEquals(
+            fixture.roleId to RoleStatus.ARCHIVED,
+            fixture.persistence.statusChanges.single(),
+        )
+        assertEquals(4, fixture.persistence.statusRowVersions.single())
+        assertEquals(
+            Triple("ARCHIVE", "ACTIVE", "ARCHIVED"),
+            Triple(log.transition, log.fromState, log.toState),
+        )
+        assertEquals("role.archive", audit.action)
+        assertEquals("req-archive", audit.requestId)
+        assertEquals(fixture.roleId.toString(), audit.resourceId)
+        assertNull(fixture.permissionCache.get(fixture.membershipId.toString() + ":none"))
+    }
+
+    /** A DISABLED role takes its own edge, and every archive is still the one audit action. */
+    @Test
+    fun `archiving a disabled role logs its own edge and audits role archive`() {
+        fixture.persistence.roles[fixture.roleId] =
+            fixture.tenantRole().copy(status = RoleStatus.DISABLED)
+
+        fixture.service.archiveRole(fixture.archiveRole())
+
+        val log = fixture.logs.rows.single()
+        assertEquals(
+            Triple("ARCHIVE_DISABLED", "DISABLED", "ARCHIVED"),
+            Triple(log.transition, log.fromState, log.toState),
+        )
+        assertEquals(
+            "role.archive",
+            fixture.audits.events
+                .single()
+                .action,
+        )
+        assertEquals(
+            "DISABLED",
+            fixture.audits.events
+                .single()
+                .metadata["from"],
+        )
+    }
+
+    /** The assignments are counted under the role lock, and a non-zero count is a 409 naming it. */
+    @Test
+    fun `archiving a role with active assignments conflicts naming the count and writes nothing`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.activeAssignmentCounts[fixture.roleId] = 3
+
+        val exception =
+            assertFailsWith<ConflictException> {
+                fixture.service.archiveRole(
+                    fixture.archiveRole(),
+                )
+            }
+
+        assertEquals("conflict", exception.code)
+        assertTrue("3 active assignments" in exception.safeDetail, exception.safeDetail)
+        assertEquals(listOf("lock", "count"), fixture.persistence.calls)
+        assertTrue(fixture.persistence.statusChanges.isEmpty())
+        assertTrue(fixture.logs.rows.isEmpty())
+        assertTrue(fixture.audits.events.isEmpty())
+    }
+
+    /** One assignment reads as the singular. */
+    @Test
+    fun `the count is singular for one assignment`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.activeAssignmentCounts[fixture.roleId] = 1
+
+        val exception =
+            assertFailsWith<ConflictException> {
+                fixture.service.archiveRole(
+                    fixture.archiveRole(),
+                )
+            }
+
+        assertTrue("1 active assignment;" in exception.safeDetail, exception.safeDetail)
+    }
+
+    /** A system role, an unknown role and an archived role are refused before any write. */
+    @Test
+    fun `archiving a system role, an unknown role or an archived role is refused`() {
+        assertFailsWith<ResourceNotFoundException> {
+            fixture.service.archiveRole(fixture.archiveRole())
+        }
+
+        fixture.persistence.roles[fixture.roleId] = fixture.systemRole()
+        assertFailsWith<ConflictException> { fixture.service.archiveRole(fixture.archiveRole()) }
+
+        fixture.persistence.roles[fixture.roleId] =
+            fixture.tenantRole().copy(status = RoleStatus.ARCHIVED)
+        assertFailsWith<ConflictException> { fixture.service.archiveRole(fixture.archiveRole()) }
+
+        assertTrue(fixture.persistence.statusChanges.isEmpty())
+        assertTrue(fixture.logs.rows.isEmpty())
+        assertTrue(fixture.audits.events.isEmpty())
+    }
+
+    /** The caller is authorised first, naming the code, before the role is looked up. */
+    @Test
+    fun `archiving is refused before any lookup without the permission`() {
+        doThrow(MissingPermissionException("role.archive"))
+            .`when`(fixture.permissionGuard)
+            .requireTenantPermission(fixture.actorId, fixture.organisationId, "role.archive")
+
+        assertFailsWith<MissingPermissionException> {
+            fixture.service.archiveRole(fixture.archiveRole())
+        }
+
+        assertTrue(fixture.persistence.calls.isEmpty())
+    }
+
+    /** Nothing leaves ARCHIVED: activate, deactivate and a second archive are all 409. */
+    @Test
+    fun `no transition leaves archived`() {
+        fixture.persistence.roles[fixture.roleId] =
+            fixture.tenantRole().copy(status = RoleStatus.ARCHIVED)
+
+        listOf<() -> Unit>(
+            { fixture.service.activateRole(fixture.activateRole()) },
+            { fixture.service.deactivateRole(fixture.deactivateRole()) },
+            { fixture.service.archiveRole(fixture.archiveRole()) },
+        ).forEach { operation ->
+            assertFailsWith<ConflictException> { operation() }
+        }
+        assertTrue(fixture.persistence.statusChanges.isEmpty())
+    }
+
+    /** An archived role is final: its metadata and permissions are not edited. */
+    @Test
+    fun `an archived role refuses metadata and permission edits`() {
+        fixture.persistence.roles[fixture.roleId] =
+            fixture.tenantRole().copy(status = RoleStatus.ARCHIVED)
+        fixture.persistence.permissions["tenant.approve"] = fixture.permissionId
+
+        listOf<() -> Unit>(
+            { fixture.service.updateTenantRole(fixture.updateRole()) },
+            { fixture.service.assignPermissionToRole(fixture.assignPermission()) },
+            { fixture.service.removePermissionFromRole(fixture.removePermission()) },
+        ).forEach { operation ->
+            val exception = assertFailsWith<ConflictException> { operation() }
+            assertTrue("archived" in exception.safeDetail, exception.safeDetail)
+        }
+        assertTrue(fixture.persistence.updatedRoles.isEmpty())
+        assertTrue(fixture.persistence.grantedPermissions.isEmpty())
+        assertTrue(fixture.persistence.removedPermissions.isEmpty())
+    }
+
+    /** Assigning takes the role lock before it reads the status it decides on (ADR 0035). */
+    @Test
+    fun `assigning a role locks the role before it decides`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.memberships[fixture.userId] = fixture.activeMembership()
+
+        fixture.service.assignRoleToUser(fixture.assignRole())
+
+        assertEquals("lock", fixture.persistence.calls.first())
+    }
+
+    /** A role archived by a transaction that committed first is refused, not assigned. */
+    @Test
+    fun `assigning an archived role is an invalid operation`() {
+        fixture.persistence.roles[fixture.roleId] =
+            fixture.tenantRole().copy(status = RoleStatus.ARCHIVED)
+        fixture.persistence.memberships[fixture.userId] = fixture.activeMembership()
+
+        assertFailsWith<InvalidOperationException> {
+            fixture.service.assignRoleToUser(fixture.assignRole())
+        }
+
+        assertTrue(fixture.persistence.assignedScopes.isEmpty())
     }
 
     /** Records permission grants and invalidates every membership that receives the role. */
@@ -928,6 +1147,7 @@ class RoleManagementServiceTests {
         val assignmentId: UUID = persistence.assignmentId
         val events = EventCapture()
         val audits = AuditCapture()
+        val logs = LogCapture()
         val cacheManager = ConcurrentMapCacheManager(EffectivePermissionResolver.CACHE_NAME)
         val permissionCache =
             requireNotNull(cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME))
@@ -942,6 +1162,7 @@ class RoleManagementServiceTests {
                 invalidator,
                 permissionGuard,
                 RoleCompositionGuard(persistence),
+                TransitionExecutor(clock, logs, events),
             )
 
         fun createRole(
@@ -960,6 +1181,9 @@ class RoleManagementServiceTests {
 
         fun deactivateRole(requestId: String? = null) =
             DeactivateRole(organisationId, roleId, actorId, requestId)
+
+        fun archiveRole(requestId: String? = null) =
+            ArchiveRole(organisationId, roleId, actorId, requestId)
 
         /** A command removing a registered grant row of [code] on the role. */
         fun removePermission(
@@ -1046,6 +1270,15 @@ class RoleManagementServiceTests {
         }
     }
 
+    /** Captures transition-log rows without a database. */
+    private class LogCapture : TransitionLogRepository {
+        val rows = mutableListOf<TransitionLog>()
+
+        override fun save(log: TransitionLog) {
+            rows += log
+        }
+    }
+
     /** Captures audit records without a database. */
     private class AuditCapture : AuditEventRepository {
         val events = mutableListOf<AuditEvent>()
@@ -1102,6 +1335,7 @@ class RoleManagementServiceTests {
         val grantRows = mutableMapOf<UUID, Pair<UUID, String>>()
         val roleAssignmentRows = mutableMapOf<UUID, RoleAssignmentTarget>()
         val calls = mutableListOf<String>()
+        val activeAssignmentCounts = mutableMapOf<UUID, Long>()
         val inactiveCodes = mutableSetOf<String>()
         val assignedScopes = mutableListOf<Pair<RoleScopeType, UUID?>>()
         val assignmentId: UUID = uuidV7()
@@ -1258,6 +1492,14 @@ class RoleManagementServiceTests {
         ): Boolean {
             revokeCalls += 1
             return true
+        }
+
+        override fun countActiveAssignmentsForRole(
+            organisationId: UUID,
+            roleId: UUID,
+        ): Long {
+            calls += "count"
+            return activeAssignmentCounts[roleId] ?: 0L
         }
 
         override fun membershipIdsWithRole(

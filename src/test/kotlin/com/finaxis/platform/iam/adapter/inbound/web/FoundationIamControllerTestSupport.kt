@@ -124,6 +124,7 @@ abstract class FoundationIamControllerTestSupport(
             method == HttpMethod.PATCH -> "role.update"
             method == HttpMethod.DELETE -> "role.remove_permission"
             path.endsWith("/deactivate") -> "role.deactivate"
+            path.endsWith("/archive") -> "role.archive"
             else -> "role.assign_permission"
         }
 
