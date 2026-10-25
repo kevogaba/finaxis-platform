@@ -5,6 +5,7 @@ import com.finaxis.platform.iam.FixedViewRequirements
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
 import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
+import com.finaxis.platform.iam.application.port.outbound.PermissionScope
 import com.finaxis.platform.iam.domain.MembershipStatus
 import org.springframework.cache.concurrent.ConcurrentMapCacheManager
 import java.util.UUID
@@ -87,6 +88,8 @@ private class CountingPermissionQueries(
         membershipId: UUID,
         permissionCode: String,
     ): Set<UUID> = emptySet()
+
+    override fun grantsByScope(membershipId: UUID): List<PermissionScope> = emptyList()
 
     override fun lockedBreakGlassGrant(
         membershipId: UUID,

@@ -48,11 +48,14 @@ internal object ReadGateRules {
      */
     val UNMARKED_GET_ALLOWLIST: Set<String> =
         setOf(
-            // The caller's own profile, assembled from the authenticated principal. It is gated
-            // only by the route's `@PreAuthorize("hasAuthority('iam.profile.read')")`; the
-            // principal itself is built by the security configuration, which matches the JWT
-            // subject, the membership, the organisation and the branch. The service makes no
-            // check of its own (finding recorded in ADR 0030, open items).
+            // The caller's own profile, assembled from the authenticated principal plus two
+            // reads keyed by that principal's own membership: its role grants by scope (all
+            // ACTIVE branches, read fresh) and its direct overrides. It is gated only by the
+            // route's `@PreAuthorize("hasAuthority('iam.profile.read')")`; the principal itself
+            // is built by the security configuration, which matches the JWT subject, the
+            // membership, the organisation and the branch. The service makes no permission
+            // check of its own: it discloses only the caller's own grants (finding recorded in
+            // ADR 0030, open items).
             "${UserProfileService::class.java.name}.profile",
             // The organisations and branches the authenticated subject itself may select; the
             // lookup is keyed by that subject (the membership), not by a permission code.

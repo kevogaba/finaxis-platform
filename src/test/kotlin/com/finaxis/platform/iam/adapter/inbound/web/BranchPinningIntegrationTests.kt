@@ -450,6 +450,17 @@ class BranchPinningIntegrationTests {
         permissionsFor(null).andExpectPermission("branch.suspend", present = false)
         permissionsFor(OPERATIONS_BRANCH_ID).andExpectPermission("branch.suspend", present = true)
 
+        // The scope list reports the grant on OPS whichever branch is selected, while the flat
+        // list above is narrowed to the selected one (issue #175).
+        permissionsFor(HEAD_OFFICE_BRANCH_ID).andExpect {
+            jsonPath("$.permission_scopes[?(@.code=='branch.suspend')].scope") {
+                value(hasItem("BRANCH"))
+            }
+            jsonPath("$.permission_scopes[?(@.code=='branch.suspend')].branch_ids[0]") {
+                value(hasItem(OPERATIONS_BRANCH_ID.toString()))
+            }
+        }
+
         // And the permission gate in front of an administrative endpoint follows it.
         mockMvc
             .post("/api/v1/branches/$OPERATIONS_BRANCH_ID/suspend") {

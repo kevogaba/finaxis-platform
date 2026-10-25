@@ -8,6 +8,7 @@ import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
+import com.finaxis.platform.iam.application.port.outbound.PermissionScope
 import com.finaxis.platform.iam.application.security.RequestPermissionCache
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
@@ -299,6 +300,8 @@ class AuthorizationServiceViewCouplingTests {
             membershipId: UUID,
             permissionCode: String,
         ): Set<UUID> = branchGrants[permissionCode].orEmpty()
+
+        override fun grantsByScope(membershipId: UUID): List<PermissionScope> = emptyList()
 
         override fun lockedBreakGlassGrant(
             membershipId: UUID,

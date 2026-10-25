@@ -2,8 +2,9 @@ package com.finaxis.platform.iam.adapter.inbound.web
 
 import com.finaxis.platform.common.web.api.ApiProblem
 import com.finaxis.platform.common.web.versioning.ApiPaths
+import com.finaxis.platform.iam.adapter.inbound.web.dto.UserProfileResponse
+import com.finaxis.platform.iam.adapter.inbound.web.dto.toResponse
 import com.finaxis.platform.iam.application.context.AppPrincipal
-import com.finaxis.platform.iam.application.profile.UserProfile
 import com.finaxis.platform.iam.application.profile.UserProfileService
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.media.Content
@@ -34,8 +35,9 @@ class UserProfileController(
         summary = "Get current user profile",
         description =
             "Returns the authenticated application user, selected organisation, selected branch, " +
-                "ACTIVE assigned branches and ACTIVE roles (each listed once), and effective " +
-                "permissions.",
+                "ACTIVE assigned branches and ACTIVE roles (each listed once), effective " +
+                "permissions, and permission_scopes: where each permission is held, tenant-wide " +
+                "or on which ACTIVE branches.",
         security = [SecurityRequirement(name = "bearer-key")],
     )
     @ApiResponses(
@@ -55,5 +57,5 @@ class UserProfileController(
     @GetMapping("/me")
     fun me(
         @AuthenticationPrincipal principal: AppPrincipal,
-    ): UserProfile = service.profile(principal)
+    ): UserProfileResponse = service.profile(principal).toResponse()
 }

@@ -381,7 +381,7 @@ it, at the same scope**: the tenant, the target branch, or the PLATFORM organisa
   query service rely on the mutation service's own check. A new read must carry the marker and
   authorise its caller, or no controller can call it. Finding: `UserProfileService.profile` makes
   no application-layer check; `GET /api/v1/auth/me` is gated only by `@PreAuthorize` and serves
-  the authenticated principal's own profile.
+  the authenticated principal's own profile and, in `permission_scopes`, its own grants by scope.
 - **A direct `DENY` of a view** removes it from the resolved set, so the operator who holds a
   mutation and a `DENY` of its view cannot mutate either, by design.
 - **Hand SQL on the catalogue fails open.** The pairing is reference data changed only by forward
@@ -433,6 +433,25 @@ Effective permissions are resolved for one active membership and optional select
 
 The schema supports direct membership overrides in `membership_permission` with `ALLOW` and
 `DENY`. The resolver returns permission codes only.
+
+### Where a grant applies: `permission_scopes` on `/auth/me`
+
+The resolved set is codes only and is narrowed to the selected branch, so a client cannot tell
+from it which branch a branch-scope grant belongs to. `GET /api/v1/auth/me` therefore also returns
+`permission_scopes: [{code, scope, branch_ids?}]` (issue #175), built by
+`UserProfileService` from `PermissionResolutionQueries.grantsByScope` and the direct overrides:
+
+- A tenant-scope role grant reports `TENANT`; a branch-scope grant reports `BRANCH` with the
+  branches it applies to, counted only while the branch is `ACTIVE` (the #242 rule, in the same
+  joins as `branchIdsGranting`). A code held both ways is reported once, as `TENANT`.
+- A direct `ALLOW` is tenant-wide and reports `TENANT`; a direct `DENY` removes the code from the
+  list, as it does from the resolved set. A membership that is not `ACTIVE` reports none.
+- It spans every `ACTIVE` branch rather than only the selected one, so it is **read fresh** and
+  never stored under the resolver's `(membershipId, branchId)` cache key: a revocation or a
+  branch suspension shows on the next request, with no eviction.
+- It adds no authority and no check: it discloses only the caller's own grants. `/auth/me` stays
+  the endpoint with no application-layer permission check (gated by `iam.profile.read`), and
+  nothing authorises from this list.
 
 ### Target-aware reads of branch resources
 

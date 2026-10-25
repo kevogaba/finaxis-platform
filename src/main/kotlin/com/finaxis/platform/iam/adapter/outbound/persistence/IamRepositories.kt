@@ -9,6 +9,7 @@ import com.finaxis.platform.iam.application.port.outbound.OrganisationSelection
 import com.finaxis.platform.iam.application.port.outbound.OrganisationSelectionPage
 import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
+import com.finaxis.platform.iam.application.port.outbound.PermissionScope
 import com.finaxis.platform.iam.application.port.outbound.PrincipalMembership
 import com.finaxis.platform.iam.application.port.outbound.PrincipalUser
 import com.finaxis.platform.iam.domain.MembershipStatus
@@ -393,6 +394,61 @@ class JooqPermissionResolutionQueries(
             .fetchSet(USER_ROLE_ASSIGNMENT.BRANCH_ID)
             .filterNotNull()
             .toSet()
+
+    override fun grantsByScope(membershipId: UUID): List<PermissionScope> {
+        val scopeType = USER_ROLE_ASSIGNMENT.SCOPE_TYPE
+        val rows =
+            dsl
+                .selectDistinct(
+                    PERMISSION.PERMISSION_CODE,
+                    scopeType,
+                    USER_ROLE_ASSIGNMENT.BRANCH_ID,
+                ).from(USER_ROLE_ASSIGNMENT)
+                .join(USER_ORGANISATION_MEMBERSHIP)
+                .on(
+                    USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(
+                        USER_ROLE_ASSIGNMENT.ORGANISATION_ID,
+                    ),
+                ).and(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ROLE_ASSIGNMENT.USER_ID))
+                .join(ROLE)
+                .on(ROLE.ID.eq(USER_ROLE_ASSIGNMENT.ROLE_ID))
+                .and(ROLE.ORGANISATION_ID.eq(USER_ROLE_ASSIGNMENT.ORGANISATION_ID))
+                .join(ROLE_PERMISSION)
+                .on(ROLE_PERMISSION.ROLE_ID.eq(ROLE.ID))
+                .and(ROLE_PERMISSION.ORGANISATION_ID.eq(ROLE.ORGANISATION_ID))
+                .join(PERMISSION)
+                .on(PERMISSION.ID.eq(ROLE_PERMISSION.PERMISSION_ID))
+                // Issue #242, as in branchIdsGranting: a branch-scope grant counts only while its
+                // branch is ACTIVE. A tenant-scope assignment has no branch, hence the outer join.
+                .leftJoin(BRANCH)
+                .on(BRANCH.ID.eq(USER_ROLE_ASSIGNMENT.BRANCH_ID))
+                .and(BRANCH.ORGANISATION_ID.eq(USER_ROLE_ASSIGNMENT.ORGANISATION_ID))
+                .where(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
+                .and(USER_ROLE_ASSIGNMENT.STATUS.eq(ACTIVE))
+                .and(ROLE.STATUS.eq(ACTIVE))
+                .and(PERMISSION.STATUS.eq(ACTIVE))
+                .and(
+                    scopeType
+                        .eq(TENANT_SCOPE)
+                        .or(scopeType.eq(BRANCH_SCOPE).and(BRANCH.STATUS.eq(ACTIVE))),
+                ).fetch()
+        return rows
+            .groupBy { requireNotNull(it[PERMISSION.PERMISSION_CODE]) }
+            .toSortedMap()
+            .flatMap { (code, codeRows) ->
+                val branchIds =
+                    codeRows
+                        .filter { it[scopeType] == BRANCH_SCOPE }
+                        .mapNotNull { it[USER_ROLE_ASSIGNMENT.BRANCH_ID] }
+                        .sortedBy { it.toString() }
+                listOfNotNull(
+                    PermissionScope(code, PermissionScope.Scope.TENANT)
+                        .takeIf { codeRows.any { it[scopeType] == TENANT_SCOPE } },
+                    PermissionScope(code, PermissionScope.Scope.BRANCH, branchIds)
+                        .takeIf { branchIds.isNotEmpty() },
+                )
+            }
+    }
 
     override fun directPermissionEffects(membershipId: UUID): List<PermissionEffectAssignment> =
         dsl

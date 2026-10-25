@@ -11,11 +11,13 @@ import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
+import com.finaxis.platform.iam.application.port.outbound.PermissionScope
 import com.finaxis.platform.iam.application.port.outbound.ProfileBranch
 import com.finaxis.platform.iam.application.port.outbound.ProfileMembership
 import com.finaxis.platform.iam.application.port.outbound.ProfileOrganisation
 import com.finaxis.platform.iam.application.port.outbound.ProfileRole
 import com.finaxis.platform.iam.application.port.outbound.UserProfileLookup
+import com.finaxis.platform.iam.application.profile.FakeProfilePermissionQueries
 import com.finaxis.platform.iam.application.profile.UserProfileService
 import com.finaxis.platform.iam.application.security.RequestPermissionCache
 import com.finaxis.platform.iam.application.selection.AuthSelectionService
@@ -138,7 +140,10 @@ class WebAdapterUnitTests {
             principal(setOf("iam.profile.read", "iam.user.invite"), HEAD_OFFICE_BRANCH_ID)
         val response =
             UserProfileController(
-                UserProfileService(StaticUserProfileLookup(principal)),
+                UserProfileService(
+                    StaticUserProfileLookup(principal),
+                    FakeProfilePermissionQueries(),
+                ),
             ).me(principal)
 
         assertEquals(principal.userId, response.userId)
@@ -165,6 +170,8 @@ class WebAdapterUnitTests {
                     membershipId: UUID,
                     permissionCode: String,
                 ): Set<UUID> = emptySet()
+
+                override fun grantsByScope(membershipId: UUID): List<PermissionScope> = emptyList()
 
                 override fun lockedBreakGlassGrant(
                     membershipId: UUID,
