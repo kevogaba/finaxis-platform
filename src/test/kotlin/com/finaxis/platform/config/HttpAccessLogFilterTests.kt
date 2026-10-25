@@ -127,6 +127,45 @@ class HttpAccessLogFilterTests {
     }
 
     @Test
+    fun `filter redacts the query string of the audit export route in every spelling`() {
+        listOf(
+            "/api/v1/tenant/audit-events/export",
+            "/api/v1/tenant/audit-events/export/",
+            "/API/V1/TENANT/AUDIT-EVENTS/EXPORT",
+            "/api/v1/tenant/audit-events/export;jsessionid=abc",
+            "/api/v1/tenant/audit-events/%65xport",
+            "/api/v1/tenant/audit%2Devents/export",
+        ).forEach { uri ->
+            val message =
+                logged(
+                    MockHttpServletRequest("GET", uri).apply {
+                        queryString =
+                            "occurred_from=2026-10-01T00:00:00Z&q=a@b.example&actor_subject=kc-1"
+                    },
+                )
+
+            assertFalse(message.contains("a@b.example"), "$uri: $message")
+            assertFalse(message.contains("kc-1"), "$uri: $message")
+            assertTrue(message.contains("""query="[redacted]""""), "$uri: $message")
+        }
+    }
+
+    @Test
+    fun `filter leaves the sibling audit event routes and every other query string alone`() {
+        listOf(
+            "/api/v1/tenant/audit-events/export-copy",
+            "/api/v1/tenant/audit-events/export/more",
+            "/api/v1/tenant/audit-events/00000000-0000-7000-8000-000000000001",
+            "/api/v1/tenant/searching",
+        ).forEach { uri ->
+            val message =
+                logged(MockHttpServletRequest("GET", uri).apply { queryString = "size=5" })
+
+            assertTrue(message.contains("""query="size=5""""), "$uri: $message")
+        }
+    }
+
+    @Test
     fun `a path that cannot be decoded is redacted and never throws`() {
         listOf("/api/v1/tenant/se%zzrch", "/api/v1/tenant/search%", "/api/v1/tenant/se%2").forEach {
             val message =

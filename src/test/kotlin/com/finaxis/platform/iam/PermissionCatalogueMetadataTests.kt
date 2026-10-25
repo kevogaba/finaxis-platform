@@ -39,12 +39,12 @@ class PermissionCatalogueMetadataTests(
                 Long::class.java,
             ),
         )
-        assertEquals(CATALOGUE_SIZE, catalogue.size, "the live catalogue is 84 codes")
+        assertEquals(CATALOGUE_SIZE, catalogue.size, "the live catalogue is 85 codes")
         assertTrue(catalogue.values.all { it.kind in KINDS && it.grantScope in SCOPES })
     }
 
     @Test
-    fun `the catalogue holds eighteen views, three context codes and sixty three mutations`() {
+    fun `the catalogue holds eighteen views, three context codes and sixty four mutations`() {
         val byKind = catalogue.values.groupingBy { it.kind }.eachCount()
 
         assertEquals(VIEW_COUNT, byKind["VIEW"])
@@ -73,7 +73,7 @@ class PermissionCatalogueMetadataTests(
     }
 
     @Test
-    fun `fifteen codes are platform scope and sixty nine are tenant scope`() {
+    fun `fifteen codes are platform scope and seventy are tenant scope`() {
         assertEquals(PLATFORM_CODES, codesOfScope("PLATFORM"))
         assertEquals(TENANT_SCOPE_COUNT, codesOfScope("TENANT").size)
         assertEquals(PLATFORM_SCOPE_COUNT, codesOfScope("PLATFORM").size)
@@ -276,12 +276,12 @@ class PermissionCatalogueMetadataTests(
     )
 
     private companion object {
-        const val CATALOGUE_SIZE = 84
+        const val CATALOGUE_SIZE = 85
         const val VIEW_COUNT = 18
         const val CONTEXT_COUNT = 3
-        const val MUTATION_COUNT = 63
+        const val MUTATION_COUNT = 64
         const val PLATFORM_SCOPE_COUNT = 15
-        const val TENANT_SCOPE_COUNT = 69
+        const val TENANT_SCOPE_COUNT = 70
 
         /** The complete pairing table of `V22`: mutation code to the views it requires. */
         val EXPECTED_REQUIREMENTS: Map<String, Set<String>> =
@@ -322,6 +322,7 @@ class PermissionCatalogueMetadataTests(
                 "role.activate" to setOf("role.view"),
                 "role.deactivate" to setOf("role.view"),
                 "role.archive" to setOf("role.view"),
+                "audit.export" to setOf("audit.view"),
                 "role.assign_permission" to setOf("role.view"),
                 "role.remove_permission" to setOf("role.view"),
                 "settings.update" to setOf("settings.view"),

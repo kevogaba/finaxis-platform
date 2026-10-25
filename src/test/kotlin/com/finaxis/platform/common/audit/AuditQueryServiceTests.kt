@@ -19,7 +19,12 @@ class AuditQueryServiceTests {
     private val queries = CapturingAuditEventQueries()
     private val permissionGuard = FakeAuditPermissionGuard()
     private val service =
-        AuditQueryService(queries, permissionGuard, Clock.fixed(NOW, ZoneOffset.UTC))
+        AuditQueryService(
+            queries,
+            permissionGuard,
+            AuditService(RecordingAuditEventRepository(), Clock.fixed(NOW, ZoneOffset.UTC)),
+            Clock.fixed(NOW, ZoneOffset.UTC),
+        )
 
     @Test
     fun `listByTenant delegates a tenant-scoped filter and verifies permission`() {
@@ -339,10 +344,29 @@ private class CapturingAuditEventQueries : AuditEventQueries {
         return AuditEventPage(emptyList(), 0)
     }
 
+    override fun countBounded(
+        filter: AuditEventFilter,
+        limit: Int,
+    ): Int = 0
+
+    override fun exportBatch(
+        filter: AuditEventFilter,
+        after: AuditExportCursor?,
+        limit: Int,
+    ): AuditExportBatch = AuditExportBatch(emptyList(), null)
+
     override fun findById(
         id: UUID,
         organisationId: UUID,
     ): AuditEventDetail? = stubDetail
+}
+
+private class RecordingAuditEventRepository : AuditEventRepository {
+    val saved = mutableListOf<AuditEvent>()
+
+    override fun save(event: AuditEvent) {
+        saved += event
+    }
 }
 
 private class FakeAuditPermissionGuard : AuditPermissionGuard {

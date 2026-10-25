@@ -243,6 +243,9 @@ class HttpAccessLogFilter : OncePerRequestFilter() {
         private const val SERVER_ERROR_STATUS = 500
         private const val SINGLE_BYTE = 1
         private const val REDACTED_QUERY = "[redacted]"
+
+        /** The routes whose query string may hold an email address or an identity subject. */
+        private val REDACTED_ROUTES = listOf(ApiPaths.SEARCH, "${ApiPaths.AUDIT_EVENTS}/export")
         private val accessLogger = LoggerFactory.getLogger("com.finaxis.platform.http.access")
 
         private fun HttpServletRequest.requestId(): String =
@@ -252,17 +255,19 @@ class HttpAccessLogFilter : OncePerRequestFilter() {
 
         /**
          * The query string as logged. The global search carries free text in `q`, which may be an
-         * email address (ADR 0039, point 6), so its query string is replaced by a fixed marker;
-         * every other route logs it verbatim. The route is recognised on the **decoded** path,
+         * email address (ADR 0039, point 6), and the audit export takes the same `q` and an
+         * identity subject (`actor_subject`) as filters, which its own audit row stores redacted
+         * (point 17); so the query string of those two routes is replaced by a fixed marker and
+         * every other route logs it verbatim. A route is recognised on the **decoded** path,
          * which is what Spring routes on (`/api/v1/tenant/%73earch` reaches the handler), so every
          * spelling Spring routes to it is redacted. Context path, path parameters, trailing
          * slashes and letter case are also ignored, which only ever over-redacts. A path that
          * cannot be decoded is redacted to be safe.
          */
         private fun HttpServletRequest.loggableQueryString(): String? =
-            queryString?.let { if (isSearchRoute()) REDACTED_QUERY else it }
+            queryString?.let { if (isRedactedRoute()) REDACTED_QUERY else it }
 
-        private fun HttpServletRequest.isSearchRoute(): Boolean {
+        private fun HttpServletRequest.isRedactedRoute(): Boolean {
             val raw = requestURI.removePrefix(contextPath.orEmpty())
             // Decoded once, as Spring's RequestPath does: a double-encoded `%2573earch` becomes
             // the literal `%73earch`, which Spring does not route to the search, so it stays raw.
@@ -272,10 +277,8 @@ class HttpAccessLogFilter : OncePerRequestFilter() {
                 } catch (_: IllegalArgumentException) {
                     return true
                 }
-            return decoded
-                .substringBefore(';')
-                .trimEnd('/')
-                .equals(ApiPaths.SEARCH, ignoreCase = true)
+            val path = decoded.substringBefore(';').trimEnd('/')
+            return REDACTED_ROUTES.any { it.equals(path, ignoreCase = true) }
         }
 
         private fun token(value: String): String = value.replace(WHITESPACE_REGEX, "_")

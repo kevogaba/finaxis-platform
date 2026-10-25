@@ -181,6 +181,22 @@ class RateLimitFilterTests {
         assertEquals(expected, identity.policyId)
     }
 
+    @ParameterizedTest
+    @MethodSource("auditRoutes")
+    fun `the audit export has its own policy and its siblings keep the read policy`(
+        method: String,
+        path: String,
+        expected: RateLimitPolicyId,
+    ) {
+        val identity =
+            RateLimitKeyResolver().resolve(
+                MockHttpServletRequest(method, path),
+                RateLimitProperties(),
+            ) as RateLimitIdentity
+
+        assertEquals(expected, identity.policyId)
+    }
+
     @Test
     fun `specific auth selection rule wins before platform command catch all`() {
         val identity =
@@ -238,6 +254,27 @@ class RateLimitFilterTests {
     }
 
     companion object {
+        @JvmStatic
+        fun auditRoutes() =
+            listOf(
+                Arguments.of(
+                    "GET",
+                    "/api/v1/tenant/audit-events/export",
+                    RateLimitPolicyId.TENANT_EXPORT,
+                ),
+                Arguments.of("GET", "/api/v1/tenant/audit-events", RateLimitPolicyId.TENANT_READ),
+                Arguments.of(
+                    "GET",
+                    "/api/v1/tenant/audit-events/00000000-0000-7000-8000-000000000001",
+                    RateLimitPolicyId.TENANT_READ,
+                ),
+                Arguments.of(
+                    "POST",
+                    "/api/v1/tenant/audit-events/export",
+                    RateLimitPolicyId.TENANT_COMMAND,
+                ),
+            )
+
         @JvmStatic
         fun policyRoutes() =
             listOf(
@@ -301,4 +338,5 @@ private fun testPolicies(
         RateLimitPolicyId.PLATFORM_COMMAND to RateLimitPolicy(),
         RateLimitPolicyId.TENANT_READ to tenantRead,
         RateLimitPolicyId.TENANT_COMMAND to RateLimitPolicy(),
+        RateLimitPolicyId.TENANT_EXPORT to RateLimitPolicy(),
     )

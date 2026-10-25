@@ -110,6 +110,27 @@ curl -fsS \
   -H "X-Active-Organisation-Context: $BRANCH_CONTEXT_TOKEN"
 echo
 
+echo "== Exporting the last day of audit events as CSV (audit.export; the header row is checked) =="
+EXPORT_FROM="$(
+  python3 -c 'import datetime as d; \
+print((d.datetime.now(d.timezone.utc) - d.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))'
+)"
+EXPORT_CSV="$(
+  curl -fsS \
+    "$APP_URL/api/v1/tenant/audit-events/export?occurred_from=$EXPORT_FROM" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "X-Active-Organisation-Context: $BRANCH_CONTEXT_TOKEN"
+)"
+EXPORT_HEADER="$(head -n 1 <<<"$EXPORT_CSV" | tr -d '\r')"
+EXPECTED_EXPORT_HEADER="occurred_at,action,outcome,severity,actor_type,actor_user_id"
+EXPECTED_EXPORT_HEADER="$EXPECTED_EXPORT_HEADER,branch_id,subject_user_id,entity_type,entity_id"
+EXPECTED_EXPORT_HEADER="$EXPECTED_EXPORT_HEADER,request_id"
+if [[ "$EXPORT_HEADER" != "$EXPECTED_EXPORT_HEADER" ]]; then
+  echo "Unexpected audit export header: $EXPORT_HEADER" >&2
+  exit 1
+fi
+echo "$EXPORT_HEADER"
+
 echo "== Reading the tenant pending-approval counts (a key is omitted without its authority) =="
 curl -fsS \
   "$APP_URL/api/v1/tenant/approvals/pending-count" \

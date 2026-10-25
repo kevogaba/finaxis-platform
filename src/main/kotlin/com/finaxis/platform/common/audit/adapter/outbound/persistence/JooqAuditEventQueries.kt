@@ -4,15 +4,21 @@ import com.finaxis.platform.common.audit.AuditEventDetail
 import com.finaxis.platform.common.audit.AuditEventFilter
 import com.finaxis.platform.common.audit.AuditEventPage
 import com.finaxis.platform.common.audit.AuditEventQueries
+import com.finaxis.platform.common.audit.AuditExportBatch
+import com.finaxis.platform.common.audit.AuditExportCursor
+import com.finaxis.platform.common.audit.AuditExportRow
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditSeverity
 import com.finaxis.platform.common.web.api.boundedPageOffset
 import com.finaxis.platform.jooq.tables.references.AUDIT_EVENT
 import org.jooq.Condition
 import org.jooq.DSLContext
+import org.jooq.Record
+import org.jooq.Select
 import org.jooq.SortField
 import org.jooq.impl.DSL.inline
 import org.jooq.impl.DSL.noCondition
+import org.jooq.impl.DSL.row
 import org.springframework.stereotype.Component
 import java.time.ZoneOffset
 import java.util.UUID
@@ -47,6 +53,66 @@ class JooqAuditEventQueries(
                 .offset(offset)
                 .fetch(::toDetail)
         return AuditEventPage(items, total)
+    }
+
+    override fun countBounded(
+        filter: AuditEventFilter,
+        limit: Int,
+    ): Int = dsl.fetchCount(countQuery(filter, limit))
+
+    override fun exportBatch(
+        filter: AuditEventFilter,
+        after: AuditExportCursor?,
+        limit: Int,
+    ): AuditExportBatch {
+        val records = exportQuery(filter, after, limit).fetch()
+        val rows = records.map(::toExportRow)
+        val last = records.lastOrNull()
+        val next =
+            last?.let {
+                AuditExportCursor(
+                    requireNotNull(it.get(AUDIT_EVENT.EVENT_TIME)).toInstant(),
+                    requireNotNull(it.get(AUDIT_EVENT.ID)),
+                )
+            }
+        return AuditExportBatch(rows, next)
+    }
+
+    /**
+     * The statement behind [countBounded]: at most [limit] ids of the filter's rows, which jOOQ
+     * wraps in a count. Internal so `AuditQueryPlanTests` can plan the exact SQL.
+     */
+    internal fun countQuery(
+        filter: AuditEventFilter,
+        limit: Int,
+    ) = dsl
+        .selectOne()
+        .from(AUDIT_EVENT)
+        .where(searchCondition(filter))
+        .limit(limit)
+
+    /**
+     * The statement behind [exportBatch]: the export columns and the id (for the cursor only) of
+     * one batch, keyed on `(event_time, id)` in the filter's direction. Internal so
+     * `AuditQueryPlanTests` can plan the exact SQL.
+     */
+    internal fun exportQuery(
+        filter: AuditEventFilter,
+        after: AuditExportCursor?,
+        limit: Int,
+    ): Select<out Record> {
+        val position = row(AUDIT_EVENT.EVENT_TIME, AUDIT_EVENT.ID)
+        val condition =
+            after?.let {
+                val cursor = row(it.eventTime.atOffset(ZoneOffset.UTC), it.id)
+                if (filter.ascending) position.gt(cursor) else position.lt(cursor)
+            } ?: noCondition()
+        return dsl
+            .select(EXPORT_FIELDS)
+            .from(AUDIT_EVENT)
+            .where(searchCondition(filter).and(condition))
+            .orderBy(order(filter.ascending))
+            .limit(limit)
     }
 
     override fun findById(
@@ -149,6 +215,41 @@ class JooqAuditEventQueries(
                 AUDIT_EVENT.AFTER_JSONB,
                 AUDIT_EVENT.METADATA_JSONB,
                 AUDIT_EVENT.REASON,
+            )
+
+        /**
+         * The export's columns (ADR 0039, point 14) and the id the cursor needs. Selected by
+         * name, so a column added to [AuditEventDetail] later never reaches an export unasked.
+         */
+        val EXPORT_FIELDS =
+            listOf(
+                AUDIT_EVENT.ID,
+                AUDIT_EVENT.EVENT_TIME,
+                AUDIT_EVENT.ACTION,
+                AUDIT_EVENT.OUTCOME,
+                AUDIT_EVENT.SEVERITY,
+                AUDIT_EVENT.ACTOR_TYPE,
+                AUDIT_EVENT.ACTOR_USER_ID,
+                AUDIT_EVENT.BRANCH_ID,
+                AUDIT_EVENT.SUBJECT_USER_ID,
+                AUDIT_EVENT.ENTITY_TYPE,
+                AUDIT_EVENT.ENTITY_ID,
+                AUDIT_EVENT.REQUEST_ID,
+            )
+
+        fun toExportRow(record: Record): AuditExportRow =
+            AuditExportRow(
+                occurredAt = requireNotNull(record.get(AUDIT_EVENT.EVENT_TIME)).toInstant(),
+                action = requireNotNull(record.get(AUDIT_EVENT.ACTION)),
+                outcome = requireNotNull(record.get(AUDIT_EVENT.OUTCOME)),
+                severity = requireNotNull(record.get(AUDIT_EVENT.SEVERITY)),
+                actorType = requireNotNull(record.get(AUDIT_EVENT.ACTOR_TYPE)),
+                actorUserId = record.get(AUDIT_EVENT.ACTOR_USER_ID),
+                branchId = record.get(AUDIT_EVENT.BRANCH_ID),
+                subjectUserId = record.get(AUDIT_EVENT.SUBJECT_USER_ID),
+                entityType = requireNotNull(record.get(AUDIT_EVENT.ENTITY_TYPE)),
+                entityId = record.get(AUDIT_EVENT.ENTITY_ID),
+                requestId = record.get(AUDIT_EVENT.REQUEST_ID),
             )
 
         fun toDetail(record: org.jooq.Record): AuditEventDetail =

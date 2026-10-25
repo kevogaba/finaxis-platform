@@ -19,7 +19,11 @@ Audit these actions when they are implemented:
 - rate-limit policy changes;
 - critical configuration changes.
 
-Do not persist every normal successful `GET` request as an audit event.
+Do not persist every normal successful `GET` request as an audit event. The one read-like route
+that audits is the audit CSV export (`GET /api/v1/tenant/audit-events/export`, #167): it is a bulk
+extraction of the log itself, so each request writes one `audit.export` row (see
+[Audit export](#audit-export-167) and [ADR 0039](../adr/0039-global-search-and-audit-export.md)).
+The policy is unchanged for every other read: a search, a page or a single event writes nothing.
 
 ## Event Shape
 
@@ -321,6 +325,46 @@ organisation's log and any tenant's). A page item and a detail response have the
 under the same names. Both reuse `audit.view`; the platform routes require it in
 the PLATFORM organisation. See
 [audit logging](../security/audit-logging.md#rest-read-endpoints-and-the-platform-permission-model).
+
+### Audit export (#167)
+
+The export is the exception to "do not audit normal reads" because it is a bulk extraction, the
+one read whose purpose is to move data out of the system, and "who exported what, when" has no
+other answer ([ADR 0039](../adr/0039-global-search-and-audit-export.md), points 12 to 17). It reads
+through the same `AuditSearchParameters` and `JooqAuditEventQueries.searchCondition` as the search,
+adds `occurred_from` (required) and a 31-day window, refuses more than 10,000 matching rows with
+`400 audit.export_too_large`, and reads in keyset batches of 1,000 on `(event_time, id)` against
+`idx_audit_event_organisation_time` (`AuditQueryPlanTests`). The columns are fixed and exclude the
+address, user agent, actor subject, the JSON documents, the reason, the correlation id and the event
+id; they are not selected at all.
+
+**The audit row.** One per request, written through `AuditService` after the stream (so it is not in
+the file it describes): action `audit.export`, resource type `AUDIT_EVENT` (the row is about the
+export request, not the events in it, ADR 0031), no resource id, and metadata of exactly
+`{filters, row_count}` plus `error_class` for an aborted stream.
+
+- **`filters`** holds the filter parameters the caller sent, under their snake_case names and as
+  sent (a repeated parameter's values joined by commas; a value is cut at 256 characters); never
+  `page`, `size` or the pinned `occurred_to`. **`q` and `actor_subject` are stored as
+  `[redacted]`**: `q` may be an email address and `actor_subject`
+  is an identity subject, and audit metadata holds no sensitive personal data. The rest are kept,
+  so a reader can still tell what window and filters were exported.
+- **`row_count`** is always present: the rows of the batches written to the response.
+- **`SUCCESS`** (severity `MEDIUM`, passed explicitly: the policy would say `INFO` for this verb) is
+  written once the last row has been flushed. **`FAILURE`** (`HIGH`) is written for a stream that
+  failed after it began (a client disconnect, a read error), with `error_class` the exception's
+  simple class name, never its message (the V24 rule), and for the too-large refusal, which is
+  written with `recordIndependently` so the `400` cannot roll it back, with `row_count` 0.
+- **The audit write never changes the answer.** A failed write after the bytes were sent is one
+  message-free `WARN` (class names and frames) and the response completes; a failed write for the
+  refusal still answers `400`. Nothing is retried.
+- **Request thread capture.** The stream runs on the virtual-thread application executor. Everything
+  it needs (the organisation, the filter, the actor, and the request id, address, user agent and
+  context snapshot) is captured as plain values on the request thread first, and the row carries
+  them although it is written on the stream's thread.
+- **No export row** for a `403` (it writes `api.access_denied`, as every refusal does) or for a
+  `400` caused by a bad filter or a missing `occurred_from`. The HTTP access log redacts this
+  route's query string, as it does the global search's.
 
 ### Search filters (#183)
 

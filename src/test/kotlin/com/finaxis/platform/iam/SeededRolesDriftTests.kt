@@ -8,6 +8,7 @@ import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.iam.application.authorization.AuthorizationService
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.lifecycle.TenantAdminOrganisationFixture
+import com.finaxis.platform.lifecycle.adapter.outbound.persistence.OrganisationBootstrapDefaults
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
 import com.finaxis.platform.lifecycle.withRequestContext
 import org.jooq.DSLContext
@@ -130,13 +131,35 @@ class SeededRolesDriftTests(
             held.getValue("BRANCH_MANAGER").containsAll(setOf("user.revoke_branch", "user.view")),
         )
         assertTrue("branch.view" in held.getValue("BRANCH_OPERATOR"))
-        // The auditor is unchanged: it reads, and the export has no route yet.
+        // The auditor is unchanged: it reads, and the accounting export has no route yet.
         assertTrue("accounting_report.export" !in held.getValue("TENANT_AUDITOR"))
         assertTrue("accounting_report.view" in held.getValue("TENANT_AUDITOR"))
         // The break-glass codes stay out of every non-admin bundle.
         held.filterKeys { it != TENANT_ADMIN }.forEach { (role, codes) ->
             assertEquals(emptySet(), codes intersect BREAK_GLASS, role)
         }
+    }
+
+    @Test
+    fun `audit export reaches the administrators, derived, and no other seeded role`() {
+        val organisationId = fixture.createActiveOrganisation("drift-export", ACTOR_ID)
+        val held = (ROLE_CODES + TENANT_ADMIN).associateWith { heldByRole(organisationId, it) }
+
+        // The administrator is derived from the catalogue, so the new code arrives with no list.
+        assertTrue("audit.export" in held.getValue(TENANT_ADMIN))
+        assertTrue("audit.export" in heldBy(PLATFORM_SUPER_ADMIN_ROLE_ID))
+        assertTrue("audit.export" in heldBy(LOCAL_ADMIN_ROLE_ID))
+        // The auditor reads the log and cannot take it out, until an administrator grants it.
+        assertTrue("audit.view" in held.getValue("TENANT_AUDITOR"))
+        held.filterKeys { it != TENANT_ADMIN }.forEach { (role, codes) ->
+            assertTrue("audit.export" !in codes, "$role must not hold audit.export")
+        }
+        assertTrue("audit.export" !in heldBy(PLATFORM_SUPPORT_ROLE_ID))
+        // And no listed default bundle names it, so a new tenant's auditor never gets it.
+        assertTrue(
+            OrganisationBootstrapDefaults.EXPLICIT_ROLE_PERMISSIONS.values
+                .none { "audit.export" in it },
+        )
     }
 
     @Test

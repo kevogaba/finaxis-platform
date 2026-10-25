@@ -349,6 +349,18 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   pre- and post-conditions in-file, and is idempotent (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`).
   No trigger. The catalogue is now 84 codes, 83 `ACTIVE`. ADR 0035 supersedes ADR 0034 decisions 1
   and 2: see "Authorization" for the lock every assignment path must take.
+- `V34__audit_export_permission.sql` — **reference data only, no schema** (#167, ADR 0039):
+  `audit.export` (`MUTATION`, `TENANT` scope, `HIGH`, module `audit`, requires `audit.view`, id
+  `…068`) gates `GET /api/v1/tenant/audit-events/export`, the streamed CSV of the audit search
+  filters (`occurred_from` required, window at most 31 days, more than 10,000 rows refused with 400
+  `audit.export_too_large`, fixed columns without personal data). `PLATFORM_SUPER_ADMIN`, every
+  tenant's seeded `TENANT_ADMIN` and the bootstrap `local-admin` get it (V23's rule); **no other
+  role does: `TENANT_AUDITOR` holds `audit.view` and cannot export**, and no non-admin default
+  bundle may name it. It writes `kind`, `grant_scope` and the view requirement in the same file,
+  asserts its pre- and post-conditions in-file, and is idempotent. No trigger. The catalogue is now
+  85 codes, 84 `ACTIVE`. `AuditPermissionGuardAdapter` now uses `requirePermissionWithViews`; each
+  export request writes one `audit.export` audit row (`q` and `actor_subject` stored as
+  `[redacted]`), the one read-like route that audits — see `docs/architecture/audit-logging.md`.
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -382,8 +394,8 @@ seed (`branch.update`), `V20` a foundation CHECK pinning the platform organisati
 the permission catalogue's kind, grant scope and view requirements, `V23` the seeded
 administrator roles' grants, `V24` the closed bootstrap failure-code set, `V25`-`V28` the
 audit search indexes, `V29`-`V30` the audit subject user (column and index), and `V31` the
-retired legacy setting rows, `V32` the user and membership edit permissions, and `V33` the role
-transition log and `role.archive`; none is accounting.
+retired legacy setting rows, `V32` the user and membership edit permissions, `V33` the role
+transition log and `role.archive`, and `V34` the `audit.export` permission; none is accounting.
 Do not invent accounting tables or columns outside those documents.
 
 ## Authorization

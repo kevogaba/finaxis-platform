@@ -219,7 +219,8 @@ first. What exists today, checked against the code:
     - **The window, `occurred_from` to `occurred_to` (or now), is at most 31 days**, the bound
       `q` already has (`AUDIT_TEXT_SEARCH_MAX_WINDOW`; the implementer may give the constant a
       neutral name), and `occurred_from` must not be after the end. When `occurred_to` is absent
-      the service **fixes it at the request instant**, so the set being counted and the set being
+      the service **fixes it at the request instant**, and a later value is **clamped to the
+      request instant** too, so the set being counted and the set being
       streamed have the same upper edge.
 12. **Hard cap: 10,000 rows, refused, never truncated.** Before any byte is written the service
     counts the matches with a bounded count (stop at 10,001). When more than 10,000 rows match, the
@@ -228,9 +229,12 @@ first. What exists today, checked against the code:
     to 400; `InvalidOperationException` would answer 422). Its message tells the caller to narrow
     the window or add filters and includes no count. Because the check runs
     before the response is committed, the refusal is a real status code, not a broken stream. The
-    stream's own read is also limited to 10,000 rows. A row committed late with an event time inside
-    the window can make the streamed set differ from the counted one by that row; the limit means
-    the cap still holds, and the audit row (point 17) records the rows actually written.
+    stream writes at most 10,000 rows, plus the one-row probe described below. A row committed late
+    with an event time inside the window can make the streamed set differ from the counted one by
+    that row, and is missed only while the stream stays below the cap; the audit row (point 17)
+    records the rows actually written. When the stream reaches 10,000 rows it reads one more row,
+    and if one still matches it aborts the transfer (`AuditExportCapExceededException`) and audits
+    `FAILURE`, so a file is never ended cleanly at the cap with matching rows missing.
 13. **A bounded, tenant-filtered keyset read.** The stream reads in batches of 1,000 by keyset on
     `(event_time, id)` in the requested direction (the order the search already uses), each batch
     one short tenant-filtered statement through a new method on the `AuditEventQueries` port that
@@ -299,7 +303,13 @@ first. What exists today, checked against the code:
     - **Enforcement.** A mutation implies its view (ADR 0030): the check asks `audit.export` first
       and then `audit.view`, and a refusal is `MissingPermissionException` (403 `forbidden`,
       `Missing permission: <first missing code>.`) raised before the count, the read or any
-      write. To keep that central, as the lifecycle and accounting adapters do, 6d switches
+      write. **For this route the permission check (403) runs before the filter is validated
+      (400)**: the export method of `AuditQueryService` asks the guard first, then parses and
+      bounds the filter (`occurred_from`, the 31-day window, the closed sets), then counts. A caller
+      who may not export gets the `403` even for a request that is also invalid, and nothing is
+      parsed, counted or read for them. (This is the reverse of the global search, whose `q` is
+      checked first because no single code gates it, point 3.) To keep that central, as the
+      lifecycle and accounting adapters do, 6d switches
       `AuditPermissionGuardAdapter` to `AuthorizationService.requirePermissionWithViews`; for
       `audit.view`, a view with no requirements, nothing changes. The export method of
       `AuditQueryService` is `@GatedRead`, takes the actor and organisation, and asks the guard
@@ -318,9 +328,15 @@ first. What exists today, checked against the code:
     ```
 
     - **`filters`** holds only the parameters the caller sent, under their snake_case names
-      (`occurred_from`, `q`, `action_prefix`, ...), values as supplied (timestamps as sent, UUIDs
-      as text); it never holds `page` or `size` (not accepted), and a pinned `occurred_to` is not
-      added. It never holds a cell, an event id or any text of an exported row.
+      (`occurred_from`, `action_prefix`, ...), values as supplied (timestamps as sent, UUIDs as
+      text); it never holds `page` or `size` (not accepted), and a pinned `occurred_to` is not
+      added. It never holds a cell, an event id or any text of an exported row. **Two filters are
+      stored redacted:** `q` (free text that may be an email address) and `actor_subject` (an
+      external identity subject) are stored as the string `[redacted]`, because
+      `docs/architecture/audit-logging.md` forbids sensitive personal data in audit metadata and
+      point 14 already keeps the subject out of the file. The key is still present, so the row
+      shows that the filter was used; every other filter is kept as supplied (cut at 256
+      characters, so a long caller-chosen value cannot bloat the row).
     - **`row_count`** is always present: the rows written to the response.
     - **`SUCCESS`**: written when the last row has been flushed, severity `MEDIUM` (the policy
       would give `INFO` for this verb, and a bulk extraction is not informational),
@@ -381,7 +397,8 @@ The two implementing changes carry these tests; they collect what the points abo
 - A type the caller cannot view has no key; a caller with a viewable type and an empty match gets
   `[]` for it; a caller who may view none gets 403 `Missing permission: user.view.`.
 - A branch-scoped caller gets only the branches it holds `branch.view` on while `ACTIVE`; a
-  branch-scoped caller who holds it nowhere has no `branches` key, not a 403.
+  branch-scoped caller who holds it nowhere has no `branches` key, not a 403 (when another type
+  is viewable).
 - A non-refusal exception from a delegate propagates and is not swallowed.
 - A tenant's search never returns another tenant's rows; an `ARCHIVED` role is not a hit.
 - `PermissionFreeReadRuleTests`, Spring Modulith verification and ArchUnit stay green, with no
@@ -403,9 +420,15 @@ The two implementing changes carry these tests; they collect what the points abo
   `Missing permission: audit.export.`, before any count; a caller with `audit.export` but not
   `audit.view` gets `Missing permission: audit.view.`; each writes `api.access_denied` and no
   `audit.export` row.
-- One `audit.export` row per successful export holds the metadata shape of point 17 (filters, row
-  count) and no cell; an abort writes the `FAILURE` row with `error_class` and no message; a failing
-  audit write after the bytes were sent is a message-free `WARN` and does not change the response.
+- A bad request from a caller who may not export is a 403, not a 400 (point 16).
+- One `audit.export` row per successful export holds the metadata shape of point 17 (filters, with
+  `q` and `actor_subject` stored as `[redacted]`, and the row count) and no cell; an abort writes
+  the `FAILURE` row with `error_class` and no message; a failing audit write after the bytes were
+  sent is a message-free `WARN` and does not change the response.
+- A failure after the response started aborts the transfer: no problem document is appended to the
+  CSV, and on the embedded Tomcat a real client sees an incomplete transfer (an `IOException`
+  reading the chunked body), for a read failure, a lost database connection and the async timeout
+  alike.
 - The keyset statement is added to `AuditQueryPlanTests`; a batch is never larger than 1,000 rows
   in memory.
 - The rate limit applies: the export path resolves to `tenant-export` (first match, before
@@ -415,6 +438,62 @@ The two implementing changes carry these tests; they collect what the points abo
   catalogue-size tests move from 84 to 85, `PermissionCatalogueMetadataTests` and the `V23` drift
   test pass, and `TENANT_AUDITOR` is unchanged.
 - The OpenAPI `403` text names `audit.export` and `audit.view`, written by hand (point 9).
+
+## Implementation note (6d, the export)
+
+Written with the export change, recording where the code made a small decision the points above
+left to the implementer, and one addition. Nothing here contradicts a point.
+
+- **Shape.** `AuditQueryService.prepareExport` is the `@GatedRead` method: guard, filter and window,
+  bounded count, then it returns an `AuditExport` (a plain value, not a bean) that the controller
+  streams through `StreamingResponseBody`. `AuditExport.stream` reads the keyset batches, hands each
+  batch to the controller's CSV renderer (`AuditEventCsv`, in the web adapter) and writes the one
+  audit row; the CSV encoding is therefore a web concern and the application layer sees typed rows.
+  The `AuditEventQueries` port gained `countBounded` and `exportBatch`; the export's statement
+  selects the eleven columns and the id (for the cursor only).
+- **Constants, not properties.** The 10,000-row cap, the 1,000-row batch and the 31-day window are
+  constants, as the "Consequences" say ("a later ADR can change them"); only the rate limit and the
+  MVC async timeout (`spring.mvc.async.request-timeout`, 2 minutes by default,
+  `FINAXIS_MVC_ASYNC_REQUEST_TIMEOUT`) are configuration. The tests prove the edge with real 10,000
+  and 10,001-row logs, seeded in one statement each.
+- **`occurred_at`.** The controller renders it with the API's own `ApiJsonCodec` mapper, the
+  serializer the JSON search uses, and a test compares the two for whole-second, millisecond and
+  microsecond instants.
+- **What the row carries.** Besides the request id, address and user agent that `AuditCommand`
+  names, the captured request context snapshot is installed around the audit write, so the row also
+  holds the actor's external subject and the correlation id like every other row, though it is
+  written on the stream's thread. `row_count` counts the rows of the batches fully handed to the
+  renderer, so an aborted stream reports whole batches.
+- **Order of refusals.** A value Spring cannot bind at all (a malformed UUID or timestamp) is a 400
+  before the handler runs, as on every route; the 403-before-400 rule of point 16 is about what the
+  service validates (`occurred_from`, the window, the closed sets, the bounds).
+- **A failure after the response started.** `CommittedResponseExceptionResolver` (the first
+  exception resolver) writes nothing to a committed response: any failure after bytes were sent (a
+  read error, the 2-minute async timeout) is logged once at `WARN` by exception class names only
+  and rethrown as a message-free `ResponseAbortedException`, so Tomcat abandons the transfer. What
+  is proven (through an embedded Tomcat and `java.net.http.HttpClient`) is that the client sees an
+  incomplete transfer (a premature end), never a complete-looking file and never a problem
+  document appended to the CSV; an intermediary that buffers the response may behave differently,
+  and v1 has no trailer or checksum, so a client that needs integrity must check the transfer ended
+  cleanly (and may compare the rows with the audit row's `row_count`). The abort is unconditional:
+  the failure's class only picks the log level, `DEBUG` for a genuine client disconnect
+  (`ClientAbortException`, `AsyncRequestNotUsableException`, an `IOException` chain saying broken
+  pipe or connection reset) and `WARN` otherwise, so a lost database connection (a
+  `DataAccessException` over an `EOFException`) is never mistaken for a client that left. The
+  container's own follow-up error-page dispatch is handled quietly (`DEBUG`). It acts only on a
+  committed response, so every other answer is
+  `ApiExceptionHandler`'s as before. Because it never writes, the timeout dispatch cannot
+  interleave bytes with the stream thread. Spring interrupts the stream thread on that timeout, so
+  the audit write clears the interrupt flag for the write and restores it after.
+  `AuditExportAbortEndToEndTests` and `AuditExportTimeoutEndToEndTests` prove it through a real
+  Tomcat and `java.net.http.HttpClient`.
+- **Repeated parameters.** The audit row's `filters` holds all values of a repeated parameter,
+  joined by commas as the handler binds them (`action=a&action=b` is `a,b`), before redaction and
+  the 256-character cut.
+- **The access log.** `HttpAccessLogFilter` redacts this route's query string, with the same
+  decoded-path matching as the search's, because `q` and `actor_subject` are filters here and the
+  row stores them redacted (point 17). The ordinary `GET /api/v1/tenant/audit-events` search, whose
+  `q` is the same text, is unchanged by this decision and still logs its query string.
 
 ## Consequences
 

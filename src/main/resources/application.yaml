@@ -41,6 +41,11 @@ spring:
   mvc:
     problemdetails:
       enabled: true
+    async:
+      # Only the audit CSV export runs asynchronously (StreamingResponseBody, ADR 0039): up to
+      # 10,000 rows is a second or two of reads, so two minutes is generous for a slow client and
+      # still frees a stalled one.
+      request-timeout: ${FINAXIS_MVC_ASYNC_REQUEST_TIMEOUT:2m}
   lifecycle:
     timeout-per-shutdown-phase: ${FINAXIS_SHUTDOWN_PHASE_TIMEOUT:30s}
   devtools:
@@ -321,6 +326,10 @@ finaxis:
         capacity: ${FINAXIS_RATE_LIMIT_TENANT_COMMAND_CAPACITY:120}
         refill-tokens: ${FINAXIS_RATE_LIMIT_TENANT_COMMAND_REFILL_TOKENS:120}
         refill-period: ${FINAXIS_RATE_LIMIT_TENANT_COMMAND_REFILL_PERIOD:1m}
+      tenant-export:
+        capacity: ${FINAXIS_RATE_LIMIT_TENANT_EXPORT_CAPACITY:5}
+        refill-tokens: ${FINAXIS_RATE_LIMIT_TENANT_EXPORT_REFILL_TOKENS:5}
+        refill-period: ${FINAXIS_RATE_LIMIT_TENANT_EXPORT_REFILL_PERIOD:1m}
     paths:
       enabled: true
       excluded:
@@ -368,6 +377,10 @@ finaxis:
         - method: DELETE
           path: /api/v1/platform/**
           policy: platform-command
+        # First match wins: the audit export has its own, tighter policy (ADR 0039).
+        - method: GET
+          path: /api/v1/tenant/audit-events/export
+          policy: tenant-export
         - method: GET
           path: /api/v1/**
           policy: tenant-read
