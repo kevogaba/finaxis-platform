@@ -277,3 +277,10 @@ curl -fsS \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "X-Active-Organisation-Context: $PLATFORM_CONTEXT_TOKEN"
 echo
+
+echo "== Reading the platform audit log filtered to refused (DENIED) events =="
+curl -fsS \
+  "$APP_URL/api/v1/platform/audit-events?outcome=DENIED&page=0&size=5" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "X-Active-Organisation-Context: $PLATFORM_CONTEXT_TOKEN"
+echo
