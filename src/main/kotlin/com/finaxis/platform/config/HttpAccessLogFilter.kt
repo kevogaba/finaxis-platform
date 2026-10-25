@@ -1,6 +1,7 @@
 package com.finaxis.platform.config
 
 import com.finaxis.platform.common.web.api.ApiProblemFactory
+import com.finaxis.platform.common.web.versioning.ApiPaths
 import jakarta.servlet.FilterChain
 import jakarta.servlet.ServletException
 import jakarta.servlet.ServletOutputStream
@@ -11,9 +12,11 @@ import jakarta.servlet.http.HttpServletResponseWrapper
 import org.slf4j.LoggerFactory
 import org.slf4j.MDC
 import org.springframework.web.filter.OncePerRequestFilter
+import org.springframework.web.util.UriUtils
 import java.io.IOException
 import java.io.PrintWriter
 import java.io.Writer
+import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -59,7 +62,7 @@ class HttpAccessLogFilter : OncePerRequestFilter() {
             AccessLogFields(
                 method = request.method,
                 path = request.requestURI,
-                query = request.queryString,
+                query = request.loggableQueryString(),
                 status = status,
                 durationMs = durationMs,
                 responseBytes = response.bodyBytes,
@@ -239,12 +242,41 @@ class HttpAccessLogFilter : OncePerRequestFilter() {
         private const val BAD_REQUEST_STATUS = 400
         private const val SERVER_ERROR_STATUS = 500
         private const val SINGLE_BYTE = 1
+        private const val REDACTED_QUERY = "[redacted]"
         private val accessLogger = LoggerFactory.getLogger("com.finaxis.platform.http.access")
 
         private fun HttpServletRequest.requestId(): String =
             ApiProblemFactory.requestId(this).also { requestId ->
                 setAttribute(ApiProblemFactory.REQUEST_ID_ATTRIBUTE, requestId)
             }
+
+        /**
+         * The query string as logged. The global search carries free text in `q`, which may be an
+         * email address (ADR 0039, point 6), so its query string is replaced by a fixed marker;
+         * every other route logs it verbatim. The route is recognised on the **decoded** path,
+         * which is what Spring routes on (`/api/v1/tenant/%73earch` reaches the handler), so every
+         * spelling Spring routes to it is redacted. Context path, path parameters, trailing
+         * slashes and letter case are also ignored, which only ever over-redacts. A path that
+         * cannot be decoded is redacted to be safe.
+         */
+        private fun HttpServletRequest.loggableQueryString(): String? =
+            queryString?.let { if (isSearchRoute()) REDACTED_QUERY else it }
+
+        private fun HttpServletRequest.isSearchRoute(): Boolean {
+            val raw = requestURI.removePrefix(contextPath.orEmpty())
+            // Decoded once, as Spring's RequestPath does: a double-encoded `%2573earch` becomes
+            // the literal `%73earch`, which Spring does not route to the search, so it stays raw.
+            val decoded =
+                try {
+                    UriUtils.decode(raw, StandardCharsets.UTF_8)
+                } catch (_: IllegalArgumentException) {
+                    return true
+                }
+            return decoded
+                .substringBefore(';')
+                .trimEnd('/')
+                .equals(ApiPaths.SEARCH, ignoreCase = true)
+        }
 
         private fun token(value: String): String = value.replace(WHITESPACE_REGEX, "_")
 

@@ -167,7 +167,20 @@ first. What exists today, checked against the code:
      returned. If measurement ever shows a problem, a limit-only variant is a later change.
    - **No index, no trigram, no full-text.** At a 10-hit cap and over tenant-sized tables an
      unselective admin lookup does not justify one (see "Alternatives rejected").
-   - **`q` is never logged** or put in a metric or span: it may be an email address.
+   - **`q` is never logged** or put in a metric or span: it may be an email address. The search
+     service does not log it, and `HttpAccessLogFilter`, which would otherwise record
+     `request.queryString` verbatim, logs `query="[redacted]"` for every spelling of this route
+     that Spring routes to the handler (the decoded path is compared, so
+     `/api/v1/tenant/%73earch` is covered, as are context path, path parameters, trailing slashes
+     and letter case; an undecodable path is redacted too, and the redaction does not depend on
+     the request reaching the handler). Application logs, MDC and the Micrometer server
+     observation (`http.url` is the path only) carry no query
+     string; an error monitor such as Sentry may still attach the query string to the request
+     data of an event for a failed request, as it may attach headers (`ClientRequestIds`), and that
+     is not scrubbed here.
+   - **No control characters.** `q` is also rejected as a 400 on `q` if it holds a control
+     character (`Character.isISOControl`, e.g. NUL): PostgreSQL refuses a NUL in a text parameter,
+     which would otherwise be a 500.
 7. **Gating and the build rules.** The controller calls **one** aggregate entry method of the
    search service, which is itself `@GatedRead` and takes the caller. It validates `q`, then calls
    the four per-type fan-out methods, each `@GatedRead`, each taking the caller and delegating to

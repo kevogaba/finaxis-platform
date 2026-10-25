@@ -58,6 +58,9 @@ object ApiPaths {
     /** Tenant pending-approval count endpoint namespace (read-only badge counts). */
     const val TENANT_APPROVALS = "$TENANT/approvals"
 
+    /** Tenant global search endpoint (one bounded page per directory type, read-only). */
+    const val SEARCH = "$TENANT/search"
+
     /** Tenant audit event administration endpoint namespace. */
     const val AUDIT_EVENTS = "$TENANT/audit-events"
 }
