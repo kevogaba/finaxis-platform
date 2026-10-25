@@ -13,6 +13,11 @@ it after those three**, so the record never describes code the branch does not h
 
 Date: 2026-10-18
 
+**Decisions 1 and 2 are superseded by [ADR 0035](0035-role-archive-and-assignment-lock.md)**, which
+builds role archive: role status became a finite state machine with a transition log, and assigning
+a role (and inviting someone to it) now takes the role lock. Decision 3 stands. What follows is the
+record as it was written.
+
 ## Context
 
 The P2 bugs of #177 were fixed as small stacked changes. Automated review raised three findings

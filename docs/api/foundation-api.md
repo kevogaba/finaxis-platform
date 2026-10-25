@@ -1755,7 +1755,9 @@ Assign request and response:
 ### Roles
 
 Base path: `/api/v1/tenant/roles`. List filters: `q`, `status`, `system_role`,
-`sort_by`, `sort_dir`, `page`, `size`. Role permission list filters: `page`, `size`.
+`sort_by`, `sort_dir`, `page`, `size`. Role permission list filters: `page`, `size`. Without a
+`status` filter the list omits `ARCHIVED` roles; `status=ARCHIVED` lists them. A role's `status` is
+`ACTIVE`, `DISABLED` or `ARCHIVED` (terminal); every change is one `role_transition_log` row.
 
 Endpoints:
 
@@ -1767,6 +1769,18 @@ Endpoints:
   `role.view`. Shape: mutation. Any other status (including a repeat) is 409 `conflict`.
 - `POST /{role_id}/deactivate`: disable an `ACTIVE` role. Permission `role.deactivate` +
   `role.view`. Shape: mutation. Any other status (including a repeat) is 409 `conflict`.
+- `POST /{role_id}/archive`: archive a role, a **terminal** state (ADR 0035, #297). Permission
+  `role.archive` + `role.view`. Shape: mutation, no request body. Allowed from `ACTIVE` or
+  `DISABLED`; refused `409 conflict` while the role has any `ACTIVE` assignment (the `detail`
+  names how many: "The role has 2 active assignments; revoke them before archiving it"), for a
+  system role, and for a role that is already archived. Nothing leaves `ARCHIVED`: activate,
+  deactivate and archive are `409` after it, and the role's permissions, name and description are
+  not edited (`409`) and it cannot be assigned or invited to (`422`). An archived role is hidden
+  from the default list (`GET /` with no `status`), is listed by `status=ARCHIVED` and is still
+  read by `GET /{role_id}`. **Its `role_code` stays reserved:** creating a role with an archived
+  role's code is `409`, and the message says so. Assignments are not revoked on the caller's
+  behalf; revoke them first. Audit action `role.archive` (for both source states, with the source
+  in the row's `from` metadata), one row per call.
 - `GET /{role_id}/permissions`: list role permissions. Permission `role.view`.
   Shape: page.
 - `POST /{role_id}/permissions`: grant role permission. Permission `role.assign_permission` +
@@ -1890,7 +1904,9 @@ row's branch; `TENANT`-scope rows need the tenant-wide view.
   not `ACTIVE` (`DISABLED` or `ARCHIVED`) is `422 invalid_operation` when the assignment would be
   created: it grants nothing, but would start to once it was re-enabled. This matches the
   invitation path. Repeating an assignment that already exists returns it, whatever the role's
-  status, so the call stays idempotent.
+  status, so the call stays idempotent. The role row is locked before its status is read (the
+  invitation's role check does the same), so an archive that runs at the same time either counts
+  this assignment and is refused, or commits first and this call is refused (ADR 0035).
 
 **Revoke is an authorised combined lookup.** `DELETE /{assignment_id}` takes only the assignment
 id, and the permission check depends on the assignment's scope, so the service resolves that scope

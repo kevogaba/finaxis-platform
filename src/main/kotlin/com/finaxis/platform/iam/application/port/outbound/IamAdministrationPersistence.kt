@@ -29,7 +29,9 @@ interface RolePersistence {
     /**
      * Finds a role like [findRole] and takes a row lock on it (`FOR NO KEY UPDATE`) that the
      * caller's transaction holds until it ends, so a concurrent composition of the same role
-     * waits and then validates against what this one committed (ADR 0030 point 2).
+     * waits and then validates against what this one committed (ADR 0030 point 2). Every path
+     * that changes the role's status, or creates an assignment to it, takes this lock before it
+     * reads the status (ADR 0035), so an archive and an assignment serialise.
      * Must run inside a transaction.
      */
     fun lockRole(
@@ -55,6 +57,16 @@ interface RolePersistence {
         rowVersion: Long,
         actorId: UUID,
     )
+
+    /**
+     * How many ACTIVE assignments [roleId] has in [organisationId], whatever the member or scope.
+     * Archiving a role is refused while this is above zero, so the caller must hold the role's
+     * lock ([lockRole]) for the answer to stay true until it commits.
+     */
+    fun countActiveAssignmentsForRole(
+        organisationId: UUID,
+        roleId: UUID,
+    ): Long
 
     /** Changes the role status using [rowVersion] for optimistic locking. */
     fun setRoleStatus(

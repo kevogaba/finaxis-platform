@@ -202,3 +202,33 @@ tenant detail and the tenant's own `GET /tenant` expose it as an always-present,
 [authorization model](../security/authorization-model.md#tenant-return-for-changes).
 
 See [ADR 0029](../adr/0029-approval-model-per-resource-extensions.md).
+
+## Role status (ADR 0035, #297)
+
+Role status is a finite state machine owned by the IAM module, not a lifecycle aggregate: the graph
+is `iam.domain.RoleLifecycle`, it runs through the same `TransitionExecutor`, and every change
+writes a row to `role_transition_log` (`V33`, written by `JooqRoleTransitionLogWriter`) in the same
+transaction as the status. It replaced the status guard of ADR 0034 decision 1, as that record said
+it would when archive was built.
+
+```mermaid
+stateDiagram-v2
+    ACTIVE --> DISABLED: DEACTIVATE
+    DISABLED --> ACTIVE: ACTIVATE
+    ACTIVE --> ARCHIVED: ARCHIVE
+    DISABLED --> ARCHIVED: ARCHIVE_DISABLED
+```
+
+- A transition name has one source state, so archive, legal from two, has two names. Both audit as
+  `role.archive`; the log keeps the exact edge. `role.activate` and `role.deactivate` are the audit
+  actions they always were.
+- **`ARCHIVED` is terminal**: no edge leaves it, so a retired role is never revived by accident and
+  its code stays reserved (`uq_role_organisation_code` ignores status).
+- Both archive edges carry one guard: the role has no `ACTIVE` assignment. A count above zero is a
+  `TransitionGuardException`, mapped to `409` with the count in the safe detail. The guard is sound
+  because `RoleManagementService` holds the role's row lock (`lockRole`) while it runs, and the two
+  paths that create an assignment (`assignRoleToUser` and the invitation) take the same lock before
+  they read the status, so an assignment cannot slip in between the count and the write.
+- The graph declares no `eventFactories`: nothing consumes a role status change. System roles are
+  refused (`409`) before the graph is consulted, and a refused transition writes and audits nothing.
+- The audit row is the FSM row (ADR 0031) and no service row repeats it.

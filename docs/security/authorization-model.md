@@ -11,13 +11,14 @@ Read this with [active organisation context](active-organisation-context.md),
 
 ## Permission catalogue and roles
 
-The global catalogue in `permission` holds **83 permission codes**: 54 foundation codes seeded by
+The global catalogue in `permission` holds **84 permission codes**: 54 foundation codes seeded by
 `V2__platform_reference_data.sql`, 26 accounting codes seeded by
 `V5__accounting_permission_catalogue.sql`, `branch.update`, added to the `branch` module by
 `V19__branch_update_permission.sql` (#203), and `user.update` (platform scope) and
 `membership.update` (tenant scope), added by `V32__user_and_membership_update_permissions.sql`
-(#161, ADR 0033). One of the 83, `branch.activate`, is **DEPRECATED**
-(see "Branch approval"), so 82 are `ACTIVE`. Each has a stable `permission_code`, `module_code`,
+(#161, ADR 0033), and `role.archive` (tenant scope), added by `V33__role_archive.sql` (#297,
+ADR 0035). One of the 84, `branch.activate`, is **DEPRECATED**
+(see "Branch approval"), so 83 are `ACTIVE`. Each has a stable `permission_code`, `module_code`,
 `risk_level`, `system_permission`, status, and a `kind` and `grant_scope` (see "Catalogue
 metadata"). Module codes are `tenant`, `branch`, `iam`,
 `audit`, `settings`, and `accounting`; risk levels are `LOW`, `MEDIUM`, `HIGH`, and `CRITICAL`.
@@ -37,7 +38,7 @@ migration.
 Organisation approval creates these organisation-local system roles from the catalogue (in code,
 not in a migration):
 
-- `TENANT_ADMIN`: **every `ACTIVE` permission whose `grant_scope` is `TENANT`** (66 today): the
+- `TENANT_ADMIN`: **every `ACTIVE` permission whose `grant_scope` is `TENANT`** (68 today): the
   foundation, audit, settings and business-date codes and every accounting code, maker and checker
   alike, including the two break-glass codes `fiscal_period.reopen` and
   `journal.post_prior_period`. It is **derived from the catalogue, not listed**: approval reads the
@@ -140,16 +141,16 @@ migration, and are published by `GET /api/v1/tenant/permissions` (and `/{permiss
   `tenant_setting.manage_platform`. They gate the caller's own session context, or a platform-only
   setting that is read and written with the same code in the PLATFORM organisation (so no role
   could also hold the tenant `settings.view`). They require nothing and are not views.
-- `MUTATION` (60): everything else. Each requires the view of the resource it writes and returns.
+- `MUTATION` (63): everything else. Each requires the view of the resource it writes and returns.
 
 **`grant_scope`** says where a code is evaluated:
 
-- `PLATFORM` (14): only ever evaluated in the PLATFORM organisation, so a tenant role holding it
+- `PLATFORM` (15): only ever evaluated in the PLATFORM organisation, so a tenant role holding it
   gains nothing. They are the ten `tenant.*` lifecycle codes other than `tenant.view` (`create`,
   `update_draft`, `submit_for_approval`, `approve`, `reject`, `activate`, `suspend`, `reactivate`,
-  `deprovision`, `bootstrap_retry`), `user.activate`, `user.suspend`, `user.deactivate` and
-  `tenant_setting.manage_platform`.
-- `TENANT` (67): evaluated in a tenant organisation. Some of them are **also** evaluated in the
+  `deprovision`, `bootstrap_retry`), `user.activate`, `user.suspend`, `user.deactivate`,
+  `user.update` and `tenant_setting.manage_platform`.
+- `TENANT` (69): evaluated in a tenant organisation. Some of them are **also** evaluated in the
   PLATFORM organisation (at least `tenant.view`, `branch.view`, `user.view`, `membership.view`,
   `branch_assignment.view`, `role.view`, `role_assignment.view`, `permission.view`, `audit.view`,
   `business_date.view`, `branch.create`, `branch.approve`, `branch.activate` and `user.approve`),
@@ -179,7 +180,7 @@ enforces it for the seeded roles.
 | `user.activate`, `user.suspend`, `user.deactivate` | `user.view` |
 | `user.assign_branch`, `user.revoke_branch` | `branch_assignment.view` |
 | `user.assign_role`, `user.revoke_role` | `role_assignment.view` |
-| `role.create`, `update`, `activate`, `deactivate`, `assign_permission`, `remove_permission` | `role.view` |
+| `role.create`, `update`, `activate`, `deactivate`, `archive`, `assign_permission`, `remove_permission` | `role.view` |
 | `settings.update` | `settings.view` |
 | `business_date.advance`, `reopen`, `cob.start`, `cob.complete` | `business_date.view` |
 | `gl_account.create`, `update`, `submit`, `approve`, `deactivate` | `gl_account.view` |
@@ -403,19 +404,41 @@ the bootstrap `local-admin` holds every tenant code.
 
 `RoleManagementService` exposes application commands to:
 
-- create, update, activate, and deactivate tenant roles;
+- create, update, activate, deactivate and archive tenant roles;
 - assign and remove catalogue permissions on roles;
 - assign and revoke roles for users at `TENANT` or `BRANCH` scope.
 
 Implemented guards include:
 
 - role code must be unique per organisation;
-- system roles cannot be modified or deactivated;
+- system roles cannot be modified, deactivated or archived;
+- role status is a finite state machine (`ACTIVATE`, `DEACTIVATE`, `ARCHIVE`, `ARCHIVE_DISABLED`,
+  one `role_transition_log` row each), and `ARCHIVED` is terminal (see "Role archive");
 - role lookup is always by selected organisation and role id;
 - permission assignment requires a known catalogue permission code;
 - role assignment requires an active organisation and a non-revoked membership;
 - branch-scoped role assignment requires an active branch assignment for that branch;
 - tenant-scoped role assignment must not carry a branch id.
+
+### Role archive
+
+`POST /api/v1/tenant/roles/{role_id}/archive` (permission `role.archive`, a `HIGH` tenant-scope
+mutation that requires `role.view`; ADR 0035, #297) archives a role, a terminal state. It is held
+by `PLATFORM_SUPER_ADMIN`, every tenant's seeded `TENANT_ADMIN` and the bootstrap `local-admin`
+(`V33`), and by no other role. Rules:
+
+- Allowed from `ACTIVE` or `DISABLED`. No edge leaves `ARCHIVED`.
+- Refused with `409` naming the count while the role has any `ACTIVE` assignment, and for a system
+  role. Assignments are never revoked on the caller's behalf.
+- An archived role is not edited (permissions, name, description), not assigned and not invited
+  to, is hidden from the default role list and listed by `status=ARCHIVED`, and **keeps its
+  code**: `uq_role_organisation_code` ignores status, so the code cannot be reused.
+- **Invariant: no `ACTIVE` assignment points at an `ARCHIVED` role.** It holds because the archive,
+  `assignRoleToUser` and the invitation's role check all take the role's row lock (`FOR NO KEY
+  UPDATE`) before they read the status or count assignments; the foreign key alone does not
+  serialise them. A new path that creates a `user_role_assignment` must take it too.
+- The audit row is the FSM row (ADR 0031): action `role.archive` for both source states, with the
+  source state in `from`.
 
 Role and role-assignment mutations write audit events. Role permission changes and user-role
 assignment changes evict affected effective-permission cache entries and publish administration

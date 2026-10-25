@@ -54,7 +54,9 @@ class JooqIamAdministrationPersistence(
             "A role lock is held until the caller's transaction ends, so it needs one."
         }
         // NO KEY UPDATE conflicts with itself, which serialises compositions of one role, but not
-        // with the FOR KEY SHARE that foreign-key inserts (role_permission, assignments) take.
+        // with the FOR KEY SHARE that foreign-key inserts (role_permission, assignments) take. So
+        // the foreign key alone never serialises an assignment against an archive: the assigning
+        // paths must call this themselves (ADR 0035).
         return roleQuery(organisationId, roleId).forNoKeyUpdate().fetchOne(::roleSnapshot)
     }
 
@@ -278,6 +280,18 @@ class JooqIamAdministrationPersistence(
             .and(branchCondition(branchId))
             .and(USER_ROLE_ASSIGNMENT.STATUS.eq(ACTIVE))
             .execute() > 0
+
+    override fun countActiveAssignmentsForRole(
+        organisationId: UUID,
+        roleId: UUID,
+    ): Long =
+        dsl
+            .selectCount()
+            .from(USER_ROLE_ASSIGNMENT)
+            .where(USER_ROLE_ASSIGNMENT.ORGANISATION_ID.eq(organisationId))
+            .and(USER_ROLE_ASSIGNMENT.ROLE_ID.eq(roleId))
+            .and(USER_ROLE_ASSIGNMENT.STATUS.eq(ACTIVE))
+            .fetchOne(0, Long::class.java) ?: 0L
 
     override fun membershipIdsWithRole(
         organisationId: UUID,

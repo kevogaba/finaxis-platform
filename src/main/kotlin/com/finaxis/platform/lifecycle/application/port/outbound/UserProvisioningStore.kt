@@ -108,7 +108,12 @@ interface UserProvisioningAccessStore {
         branchId: UUID,
     ): BranchLifecycleState?
 
-    /** Returns whether an active role belongs to the selected organisation. */
+    /**
+     * Returns whether an active role belongs to the selected organisation, and takes the role's
+     * row lock (`FOR NO KEY UPDATE`) until the caller's transaction ends, so an archive of it
+     * cannot slip between this check and the assignment the invitation inserts later in the same
+     * transaction (ADR 0035). Must run inside a transaction.
+     */
     fun roleExists(
         organisationId: UUID,
         roleId: UUID,

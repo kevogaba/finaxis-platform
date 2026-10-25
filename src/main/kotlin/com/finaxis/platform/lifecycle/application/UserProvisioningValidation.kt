@@ -38,6 +38,12 @@ internal fun UserProvisioningStore.validateInvitation(command: InviteUserCommand
     command.branchAssignments.forEach { assignment ->
         requireActiveBranch(command.organisationId, assignment.branchId)
     }
+    // Lock every named role in id order before any check: two invitations naming the same roles
+    // in different orders would otherwise take the row locks in opposite orders and deadlock. The
+    // locks are held until commit, past the assignments the invitation inserts (ADR 0035).
+    command.roleAssignments.map { it.roleId }.distinct().sorted().forEach {
+        roleExists(command.organisationId, it)
+    }
     command.roleAssignments.forEach { assignment ->
         // One message for unknown, foreign-organisation and inactive alike: the request body
         // referenced a role this tenant cannot grant, and nothing else is disclosed.

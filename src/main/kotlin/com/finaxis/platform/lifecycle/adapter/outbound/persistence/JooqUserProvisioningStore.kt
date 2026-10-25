@@ -302,15 +302,24 @@ private class JooqUserProvisioningAccessStore(
     override fun roleExists(
         organisationId: UUID,
         roleId: UUID,
-    ): Boolean =
-        dsl.fetchExists(
-            dsl
-                .selectOne()
-                .from(ROLE)
-                .where(ROLE.ORGANISATION_ID.eq(organisationId))
-                .and(ROLE.ID.eq(roleId))
-                .and(ROLE.STATUS.eq(ACTIVE)),
-        )
+    ): Boolean {
+        check(TransactionSynchronizationManager.isActualTransactionActive()) {
+            "A role lock is held until the caller's transaction ends, so it needs one."
+        }
+        // Read FOR NO KEY UPDATE and held until commit: the invitation inserts its role
+        // assignments later in this same transaction, and an archive of the role (which takes
+        // the same lock, then counts assignments) must either commit first, so this finds the
+        // role ARCHIVED, or wait for the assignment and count it. The foreign key alone does
+        // not serialise the two (ADR 0035).
+        return dsl
+            .select(ROLE.ID)
+            .from(ROLE)
+            .where(ROLE.ORGANISATION_ID.eq(organisationId))
+            .and(ROLE.ID.eq(roleId))
+            .and(ROLE.STATUS.eq(ACTIVE))
+            .forNoKeyUpdate()
+            .fetchOne() != null
+    }
 
     override fun findRoleIdByCode(
         organisationId: UUID,

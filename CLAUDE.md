@@ -335,7 +335,20 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   `PLATFORM_SUPER_ADMIN`; `membership.update` also to every tenant's seeded `TENANT_ADMIN` and the
   bootstrap `local-admin` (the V23 rule). It writes `kind`, `grant_scope` and the view requirements
   in the same file, asserts its pre- and post-conditions in-file, and is idempotent. The catalogue
-  is now 83 codes, 82 `ACTIVE`.
+  was then 83 codes, 82 `ACTIVE`.
+- `V33__role_archive.sql` — **one table and one permission** (#297, ADR 0035):
+  `role_transition_log` (the role status FSM's log: `ACTIVATE`, `DEACTIVATE`, `ARCHIVE`,
+  `ARCHIVE_DISABLED`; composite foreign key `(organisation_id, entity_id)` to `role`) and
+  `role.archive` (`MUTATION`, `TENANT` scope, `HIGH`, requires `role.view`, id `…067`). `ARCHIVED`
+  (always allowed by `chk_role_status`) is now a **terminal** state, reachable from `ACTIVE` or
+  `DISABLED`, refused with a 409 naming the count while the role has an `ACTIVE` assignment, and
+  never for a system role; an archived role is hidden from the default role list, not edited, not
+  assigned and **keeps its code** (no partial unique index). `PLATFORM_SUPER_ADMIN`, every tenant's
+  seeded `TENANT_ADMIN` and the bootstrap `local-admin` get the code (V23's rule); no other role
+  does. It writes `kind`, `grant_scope` and the view requirement in the same file, asserts its
+  pre- and post-conditions in-file, and is idempotent (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`).
+  No trigger. The catalogue is now 84 codes, 83 `ACTIVE`. ADR 0035 supersedes ADR 0034 decisions 1
+  and 2: see "Authorization" for the lock every assignment path must take.
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -369,8 +382,8 @@ seed (`branch.update`), `V20` a foundation CHECK pinning the platform organisati
 the permission catalogue's kind, grant scope and view requirements, `V23` the seeded
 administrator roles' grants, `V24` the closed bootstrap failure-code set, `V25`-`V28` the
 audit search indexes, `V29`-`V30` the audit subject user (column and index), and `V31` the
-retired legacy setting rows, and `V32` the user and membership edit permissions; none is
-accounting.
+retired legacy setting rows, `V32` the user and membership edit permissions, and `V33` the role
+transition log and `role.archive`; none is accounting.
 Do not invent accounting tables or columns outside those documents.
 
 ## Authorization
@@ -403,6 +416,15 @@ Do not invent accounting tables or columns outside those documents.
   `OrganisationBootstrapDefaults`. No NON-admin default bundle may hold a break-glass code
   (`fiscal_period.reopen`, `journal.post_prior_period`); the administrators do, and use stays
   audited and lock-checked. `V23` applied this to existing tenants.
+- **Role status is an FSM and `ARCHIVED` is terminal** (ADR 0035). Activate, deactivate and archive
+  run through `RoleLifecycle` and the shared executor (one `role_transition_log` row and one audit
+  row, `role.archive` for both archive edges). The invariant is *no `ACTIVE` assignment to an
+  `ARCHIVED` role*, which holds only because the archive, `RoleManagementService.assignRoleToUser`
+  and the invitation's role check (`UserProvisioningStore.roleExists`) all take the role row lock
+  (`FOR NO KEY UPDATE`) before they read the status or count assignments: the foreign key's
+  `FOR KEY SHARE` does not conflict with it. **A new path that creates a `user_role_assignment`
+  must take that lock first** and read the status after it; `RoleArchiveRaceIntegrationTests`
+  proves the two existing paths.
 - **A mutation implies its view** (ADR 0030, decision 4): every check through the lifecycle or
   accounting `PermissionGuard` adapter requires the mutation code **and every view code the
   catalogue pairs with it** (`permission_view_requirement`), at the same scope (tenant, target

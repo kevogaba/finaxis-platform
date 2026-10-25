@@ -294,6 +294,11 @@ class FoundationIamControllerTests
             ),
             Triple(
                 org.springframework.http.HttpMethod.POST,
+                "${ApiPaths.ROLES}/$roleId/archive",
+                "role.archive",
+            ),
+            Triple(
+                org.springframework.http.HttpMethod.POST,
                 "${ApiPaths.ROLES}/$roleId/permissions",
                 "role.assign_permission",
             ),
