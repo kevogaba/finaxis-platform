@@ -110,6 +110,9 @@ enum class MembershipLifecycleTransition {
     REVOKE,
     REVOKE_PENDING,
     REVOKE_SUSPENDED,
+
+    /** A revoked member invited again: the membership row is reused and awaits a new checker. */
+    REINVITE,
 }
 
 /** Mutable transition target owned by the lifecycle application service. */
@@ -519,6 +522,15 @@ object FoundationLifecycleDefinitions {
                     MembershipLifecycleTransition.REVOKE_SUSPENDED,
                     MembershipLifecycleState.SUSPENDED,
                     MembershipLifecycleState.REVOKED,
+                ),
+                // The one way out of REVOKED (ADR 0037): the invite route reuses the revoked row
+                // instead of refusing the returning person, and a checker must approve it again.
+                // An in-process signal only: nothing is announced until the approval.
+                definition(
+                    MembershipLifecycleTransition.REINVITE,
+                    MembershipLifecycleState.REVOKED,
+                    MembershipLifecycleState.PENDING_APPROVAL,
+                    internalEventFactories(),
                 ),
             ),
         )

@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.application
 
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
+import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import org.springframework.dao.DuplicateKeyException
 import java.util.UUID
 
@@ -12,16 +13,39 @@ private const val USER_RACE_DETAIL =
     "A user with this email or username already exists; retry the invitation."
 
 /**
- * Resolves the invitee by email, creating the account only for an unknown email. The refusals (a
- * membership already held here, a username already taken) come before the first write.
+ * The invitee of an invitation: the account, and the `REVOKED` membership of it in the
+ * organisation that the invitation re-invites (ADR 0037), or null for a first invitation.
  */
-internal fun UserProvisioningStore.findOrCreateInvitee(command: InviteUserCommand): UUID {
+internal data class InviteeResolution(
+    val userId: UUID,
+    val revokedMembershipId: UUID? = null,
+)
+
+/**
+ * Resolves the invitee by email, creating the account only for an unknown email. The refusals (a
+ * membership already held here, a username already taken) come before the first write. A
+ * membership that was revoked is not a refusal: it is the one state that is invited again, on the
+ * same row; every other state keeps the 409.
+ */
+internal fun UserProvisioningStore.findOrCreateInvitee(
+    command: InviteUserCommand,
+): InviteeResolution {
     val existing = findUserIdByEmail(command.email)
-    if (existing == null) return createRefusingDuplicates(command)
-    if (membershipExists(command.organisationId, existing)) {
-        throw ConflictException(safeDetail = MEMBERSHIP_EXISTS_DETAIL)
+    if (existing == null) return InviteeResolution(createRefusingDuplicates(command))
+    val membership = existingMembership(command.organisationId, existing)
+    return when (membership?.status) {
+        null -> {
+            InviteeResolution(existing)
+        }
+
+        MembershipLifecycleState.REVOKED -> {
+            InviteeResolution(existing, membership.id)
+        }
+
+        else -> {
+            throw ConflictException(safeDetail = MEMBERSHIP_EXISTS_DETAIL)
+        }
     }
-    return existing
 }
 
 /**

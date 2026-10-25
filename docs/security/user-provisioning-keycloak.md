@@ -69,6 +69,10 @@ Idempotency is implemented at several layers:
 - `identity_dispatch_log.dispatch_key` is unique;
 - Keycloak dispatch key is `<organisation>:<user>:KEYCLOAK_PROVISIONING`;
 - application-invite dispatch key is `${userId}:${organisationId}:APPLICATION_INVITE`;
+- each key ends `:G<n>` for the nth re-invitation of a revoked member (the membership's
+  generation, the count of its `REINVITE` rows) and has nothing added before the first, so a
+  re-approved member gets a new dispatch row and a new job and a job of an earlier generation is
+  refused by both handlers (ADR 0037);
 - JobRunr job id is deterministic from the dispatch key;
 - the worker returns immediately when the dispatch status is already `SUCCEEDED`;
 - `KeycloakAdminGateway` searches by email and username before creating a user;

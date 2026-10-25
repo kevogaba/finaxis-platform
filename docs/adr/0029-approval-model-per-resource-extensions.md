@@ -393,6 +393,11 @@ since #208) in 3b are unchanged.
 - **Out of scope.** Recovering a `REJECTED` tenant, and the tenant code it keeps taken, is **not**
   decided here. It belongs to #172 (P2). Returning is the recoverable path this ADR adds; a
   checker who wants the tenant to start over still rejects.
+  **Update ([ADR 0037](0037-member-reinvite-and-dispatch-generation.md), #172):** the tenant half is
+  resolved as documented behaviour, with no code change: `REJECTED` stays terminal, `REJECT` is the
+  deliberate "start over" and `RETURN_FOR_CHANGES` the recoverable path, and the tenant code stays
+  reserved on the rejected row. The member half (a `REVOKED` membership could not be invited again)
+  is resolved by ADR 0037 with a `REINVITE` edge.
 
 #### Events: the new transitions are internal
 

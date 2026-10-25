@@ -16,6 +16,7 @@ import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.common.transitions.TransitionExecutor
 import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogRepository
+import com.finaxis.platform.lifecycle.application.port.outbound.ExistingMembership
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityDispatchType
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningException
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningGateway
@@ -181,6 +182,7 @@ class KeycloakUserProvisioningHandlerTests {
             clock,
             failedJobRequeuer,
         )
+    private val activation = ProvisionedMembershipActivation(store, lifecycle)
     private val handler =
         KeycloakUserProvisioningJobRequestHandler(
             gateway,
@@ -189,6 +191,7 @@ class KeycloakUserProvisioningHandlerTests {
             dispatchOutcomeAuditor,
             bootstrapService,
             failureRecorder,
+            activation,
         )
 
     @Test
@@ -258,6 +261,109 @@ class KeycloakUserProvisioningHandlerTests {
         val dispatch = store.dispatches.getValue(context.dispatchKey)
         assertEquals("SUCCEEDED", dispatch.status)
         assertEquals(null, dispatch.lastError)
+    }
+
+    @Test
+    fun `a job of an earlier generation is cancelled and neither provisions nor activates`() {
+        val context = store.activePendingProvisioningContext()
+        // The member was revoked and invited again: the row is PENDING_APPROVAL once more, with a
+        // new maker and a new checker to come, and this first-life job is still queued or retried.
+        store.generations[context.organisationId to context.membershipId] = 1
+
+        handler.run(keycloakRequest(context, "member@example.test", "member"))
+
+        assertEquals(0, gateway.findOrCreateCalls)
+        assertEquals(0, gateway.requiredActionsCalls)
+        assertFalse(store.linkedSubjects.containsKey(context.userId))
+        assertEquals(
+            MembershipLifecycleState.PENDING_APPROVAL,
+            store.memberships.getValue(context.organisationId to context.membershipId).state,
+        )
+        assertEquals(
+            UserLifecycleState.PROVISIONING_IDP,
+            store.users.getValue(context.userId).state,
+        )
+        val dispatch = store.dispatches.getValue(context.dispatchKey)
+        assertEquals("FAILED", dispatch.status)
+        assertEquals("CANCELLED:MembershipReinvited", dispatch.lastError)
+        val audit = audits.items.single { it.action == "user.keycloak_provisioning" }
+        assertEquals(com.finaxis.platform.common.audit.AuditOutcome.FAILURE, audit.outcome)
+        assertEquals("MembershipReinvited", audit.reason)
+    }
+
+    @Test
+    fun `a stale job leaves a dispatch that already succeeded and completes no bootstrap`() {
+        val context = store.activePendingProvisioningContext()
+        store.generations[context.organisationId to context.membershipId] = 3
+        store.dispatches[context.dispatchKey] =
+            DispatchState("SUCCEEDED", attempts = 1, externalRef = context.subject)
+        val untouchedBootstrap = mock(InitialAdministratorBootstrapService::class.java)
+        val sameHandler =
+            KeycloakUserProvisioningJobRequestHandler(
+                gateway,
+                store,
+                lifecycle,
+                dispatchOutcomeAuditor,
+                untouchedBootstrap,
+                failureRecorder,
+                activation,
+            )
+
+        sameHandler.run(keycloakRequest(context, "member@example.test", "member"))
+
+        assertEquals(0, gateway.findOrCreateCalls)
+        assertEquals(
+            DispatchState("SUCCEEDED", 1, null, context.subject),
+            store.dispatches[context.dispatchKey],
+        )
+        assertTrue(audits.items.isEmpty())
+        org.mockito.Mockito.verifyNoInteractions(untouchedBootstrap)
+    }
+
+    @Test
+    fun `a job that becomes stale while it calls Keycloak does not activate the member`() {
+        val context = store.activePendingProvisioningContext()
+        val key = context.organisationId to context.membershipId
+        // Revoke and re-invite land while this first-life job is inside the Keycloak call: when it
+        // gets to the activation the row is PENDING_APPROVAL again, as the new life's.
+        gateway.whileCalling = { store.generations[key] = 1 }
+
+        handler.run(keycloakRequest(context, "member@example.test", "member"))
+
+        assertEquals(1, gateway.findOrCreateCalls)
+        assertEquals(
+            MembershipLifecycleState.PENDING_APPROVAL,
+            store.memberships.getValue(key).state,
+        )
+        val dispatch = store.dispatches.getValue(context.dispatchKey)
+        assertEquals("FAILED", dispatch.status)
+        assertEquals("CANCELLED:MembershipReinvited", dispatch.lastError)
+        // The dispatch is not recorded as a success, and no membership transition was made.
+        assertTrue(
+            audits.items.none {
+                it.action == "user.keycloak_provisioning" &&
+                    it.outcome == com.finaxis.platform.common.audit.AuditOutcome.SUCCESS
+            },
+        )
+        assertTrue(audits.items.none { it.action == "membership.activate" })
+    }
+
+    @Test
+    fun `a job of the membership's current generation provisions and activates it`() {
+        val context = store.activePendingProvisioningContext()
+        val key = context.organisationId to context.membershipId
+        store.generations[key] = 1
+
+        handler.run(keycloakRequest(context, "member@example.test", "member", generation = 1))
+
+        assertEquals(1, gateway.findOrCreateCalls)
+        assertEquals(MembershipLifecycleState.ACTIVE, store.memberships.getValue(key).state)
+        assertEquals("SUCCEEDED", store.dispatches.getValue(context.dispatchKey).status)
+    }
+
+    @Test
+    fun `a stored job without a generation is generation zero`() {
+        assertEquals(0, KeycloakUserProvisioningJobRequest().generation)
     }
 
     @Test
@@ -529,6 +635,7 @@ class KeycloakUserProvisioningHandlerTests {
                 dispatchOutcomeAuditor,
                 throwingBootstrap,
                 failureRecorder,
+                activation,
             )
         val appender = captureSanitisedLog()
 
@@ -592,6 +699,7 @@ class KeycloakUserProvisioningHandlerTests {
         email: String,
         username: String,
         sendKeycloakInvite: Boolean = false,
+        generation: Int = 0,
     ): KeycloakUserProvisioningJobRequest =
         KeycloakUserProvisioningJobRequest(
             organisationId = context.organisationId,
@@ -602,6 +710,7 @@ class KeycloakUserProvisioningHandlerTests {
             displayName = "Member One",
             sendKeycloakInvite = sendKeycloakInvite,
             dispatchKey = context.dispatchKey,
+            generation = generation,
         )
 
     private fun bootstrapRecord(
@@ -639,9 +748,13 @@ private class IdentityProvisioningGatewayFake : IdentityProvisioningGateway {
     var requiredActionsCalls = 0
     var subject = "keycloak-subject-1"
 
+    /** Runs while Keycloak is being called, to change the world under a job that is mid-flight. */
+    var whileCalling: (() -> Unit)? = null
+
     override fun findOrCreateUser(request: KeycloakUserProvisioningRequest): KeycloakUserRef {
         failure?.let { throw it }
         findOrCreateCalls += 1
+        whileCalling?.invoke()
         return KeycloakUserRef(subject, created = true)
     }
 
@@ -664,6 +777,7 @@ private class ProvisioningWorkerStoreFake :
     val roleAssignments = mutableSetOf<Pair<UUID, UUID>>()
     val linkedSubjects = mutableMapOf<UUID, String>()
     val dispatches = mutableMapOf<String, DispatchState>()
+    val generations = mutableMapOf<Pair<UUID, UUID>, Int>()
 
     fun activePendingProvisioningContext(): ProvisioningWorkerContext {
         val organisationId = uuidV7()
@@ -780,13 +894,22 @@ private class ProvisioningWorkerStoreFake :
             userStatus = requireNotNull(userStatus(userId)),
             sendKeycloakInvite = true,
             sendApplicationInvite = true,
+            generation = generations[key] ?: 0,
         )
     }
 
-    override fun membershipExists(
+    override fun existingMembership(
         organisationId: UUID,
         userId: UUID,
-    ): Boolean = false
+    ): ExistingMembership? = null
+
+    override fun resetMembershipForReinvite(
+        organisationId: UUID,
+        membershipId: UUID,
+        membershipType: MembershipType,
+        primaryBranchId: UUID?,
+        actorId: UUID,
+    ) = Unit
 
     override fun hasActiveMembershipBeyondBootstrap(organisationId: UUID): Boolean = false
 

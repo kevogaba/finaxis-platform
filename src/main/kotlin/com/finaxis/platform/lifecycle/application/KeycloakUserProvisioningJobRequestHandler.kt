@@ -6,9 +6,9 @@ import com.finaxis.platform.common.audit.toAuditFailureReason
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningException
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityProvisioningGateway
 import com.finaxis.platform.lifecycle.application.port.outbound.KeycloakUserProvisioningRequest
+import com.finaxis.platform.lifecycle.application.port.outbound.KeycloakUserRef
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
-import com.finaxis.platform.lifecycle.domain.MembershipLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleTransition
 import org.jobrunr.JobRunrException
@@ -26,10 +26,14 @@ class KeycloakUserProvisioningJobRequestHandler(
     private val dispatchOutcomeAuditor: DispatchOutcomeAuditor,
     private val bootstrapService: InitialAdministratorBootstrapService,
     private val failureRecorder: InitialAdministratorBootstrapFailureRecorder,
+    private val membershipActivation: ProvisionedMembershipActivation,
     @Value($$"""${finaxis.keycloak.admin.realm:finaxis}""") private val realm: String = "finaxis",
 ) : JobRequestHandler<KeycloakUserProvisioningJobRequest> {
     /**
      * Runs Keycloak provisioning idempotently and advances the local user and membership FSMs.
+     * A job of an earlier life of a re-invited membership (its generation is not the membership's
+     * current one) is cancelled without provisioning or activating anything, wherever it is found:
+     * on entry, or after the Keycloak call if the re-invitation landed while it ran (ADR 0037).
      * A failure the handler records leaves as a [SanitisedJobFailureException] carrying the closed
      * code; any other failure (a type not caught below, or one on the already-succeeded branch) is
      * logged without its message and sanitised the same way, without being recorded, so JobRunr
@@ -58,50 +62,43 @@ class KeycloakUserProvisioningJobRequestHandler(
     }
 
     private fun provision(jobRequest: KeycloakUserProvisioningJobRequest) {
-        if (cancelIfRevoked(jobRequest)) return
-        if (store.dispatchStatus(jobRequest.dispatchKey) == SUCCEEDED) {
-            bootstrapService.completeBootstrapIfCorrelated(
-                jobRequest.organisationId,
-                jobRequest.userId,
-            )
-            return
-        }
-        try {
-            val keycloakUser =
-                gateway.findOrCreateUser(
-                    KeycloakUserProvisioningRequest(
-                        email = jobRequest.email,
-                        username = jobRequest.username,
-                        displayName = jobRequest.displayName,
-                    ),
-                )
-            store.linkKeycloakIdentity(
-                userId = jobRequest.userId,
-                subject = keycloakUser.subject,
-                realm = realm,
-                actorId = jobRequest.actorId,
-            )
-            if (jobRequest.sendKeycloakInvite) {
-                gateway.sendRequiredActionsEmail(keycloakUser.subject)
+        val membership =
+            store.membershipSnapshot(jobRequest.organisationId, jobRequest.membershipId)
+        when {
+            membership != null && membership.generation != jobRequest.generation -> {
+                cancelStale(jobRequest)
             }
-            inviteUserIfNeeded(jobRequest)
-            activateMembershipIfNeeded(jobRequest)
-            bootstrapService.completeBootstrapIfCorrelated(
-                jobRequest.organisationId,
-                jobRequest.userId,
-            )
 
-            dispatchOutcomeAuditor.recordSuccess(
-                dispatchKey = jobRequest.dispatchKey,
-                dispatchRef = keycloakUser.subject,
-                externalSystemRef = KEYCLOAK,
-                actorId = jobRequest.actorId,
-                tenantId = jobRequest.organisationId,
-                action = KEYCLOAK_PROVISIONING_ACTION,
-                resourceId = jobRequest.userId.toString(),
-                subjectUserId = jobRequest.userId,
-                metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
-            )
+            cancelIfRevoked(jobRequest, membership?.status) -> {}
+
+            store.dispatchStatus(jobRequest.dispatchKey) == SUCCEEDED -> {
+                bootstrapService.completeBootstrapIfCorrelated(
+                    jobRequest.organisationId,
+                    jobRequest.userId,
+                )
+            }
+
+            else -> {
+                provisionIdentity(jobRequest)
+            }
+        }
+    }
+
+    private fun provisionIdentity(jobRequest: KeycloakUserProvisioningJobRequest) {
+        try {
+            val keycloakUser = linkKeycloakUser(jobRequest)
+            inviteUserIfNeeded(jobRequest)
+            val activated =
+                membershipActivation.activate(
+                    jobRequest.organisationId,
+                    jobRequest.membershipId,
+                    jobRequest.generation,
+                )
+            if (activated == ProvisionedActivation.STALE) {
+                cancelStale(jobRequest)
+            } else {
+                completeProvisioning(jobRequest, keycloakUser.subject)
+            }
         } catch (ex: IdentityProvisioningException) {
             recordFailure(jobRequest, ex)
         } catch (ex: ConflictException) {
@@ -115,6 +112,48 @@ class KeycloakUserProvisioningJobRequestHandler(
         } catch (ex: DataAccessException) {
             recordFailure(jobRequest, ex)
         }
+    }
+
+    private fun linkKeycloakUser(jobRequest: KeycloakUserProvisioningJobRequest): KeycloakUserRef {
+        val keycloakUser =
+            gateway.findOrCreateUser(
+                KeycloakUserProvisioningRequest(
+                    email = jobRequest.email,
+                    username = jobRequest.username,
+                    displayName = jobRequest.displayName,
+                ),
+            )
+        store.linkKeycloakIdentity(
+            userId = jobRequest.userId,
+            subject = keycloakUser.subject,
+            realm = realm,
+            actorId = jobRequest.actorId,
+        )
+        if (jobRequest.sendKeycloakInvite) {
+            gateway.sendRequiredActionsEmail(keycloakUser.subject)
+        }
+        return keycloakUser
+    }
+
+    private fun completeProvisioning(
+        jobRequest: KeycloakUserProvisioningJobRequest,
+        subject: String,
+    ) {
+        bootstrapService.completeBootstrapIfCorrelated(
+            jobRequest.organisationId,
+            jobRequest.userId,
+        )
+        dispatchOutcomeAuditor.recordSuccess(
+            dispatchKey = jobRequest.dispatchKey,
+            dispatchRef = subject,
+            externalSystemRef = KEYCLOAK,
+            actorId = jobRequest.actorId,
+            tenantId = jobRequest.organisationId,
+            action = KEYCLOAK_PROVISIONING_ACTION,
+            resourceId = jobRequest.userId.toString(),
+            subjectUserId = jobRequest.userId,
+            metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
+        )
     }
 
     private fun recordFailure(
@@ -156,9 +195,10 @@ class KeycloakUserProvisioningJobRequestHandler(
      * is left FAILED with its reason, so the invitation status shows what happened, unless it had
      * already succeeded.
      */
-    private fun cancelIfRevoked(jobRequest: KeycloakUserProvisioningJobRequest): Boolean {
-        val status =
-            store.membershipSnapshot(jobRequest.organisationId, jobRequest.membershipId)?.status
+    private fun cancelIfRevoked(
+        jobRequest: KeycloakUserProvisioningJobRequest,
+        status: MembershipLifecycleState?,
+    ): Boolean {
         if (status != MembershipLifecycleState.REVOKED) return false
         // A dispatch that already succeeded stays so: the invitation did go out, and a redelivered
         // job must not rewrite that as a failure. The cancellation is audited with the state
@@ -178,6 +218,29 @@ class KeycloakUserProvisioningJobRequestHandler(
             )
         }
         return true
+    }
+
+    /**
+     * Ends a job whose membership was revoked and invited again since it was queued. A job from
+     * the first life must neither provision for the second nor activate its row (that would bypass
+     * the new checker), and failing would have JobRunr retry a job that can never be right. The
+     * new invitation has its own dispatch and job. A dispatch still PENDING is left FAILED with its
+     * reason, audited with the state change; one that already succeeded or failed is left as is.
+     */
+    private fun cancelStale(jobRequest: KeycloakUserProvisioningJobRequest) {
+        if (store.dispatchStatus(jobRequest.dispatchKey) != PENDING) return
+        dispatchOutcomeAuditor.recordFailure(
+            dispatchKey = jobRequest.dispatchKey,
+            externalSystemRef = KEYCLOAK,
+            actorId = jobRequest.actorId,
+            tenantId = jobRequest.organisationId,
+            action = KEYCLOAK_PROVISIONING_ACTION,
+            resourceId = jobRequest.userId.toString(),
+            subjectUserId = jobRequest.userId,
+            reason = "MembershipReinvited",
+            detail = "CANCELLED:MembershipReinvited",
+            metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
+        )
     }
 
     private fun inviteUserIfNeeded(jobRequest: KeycloakUserProvisioningJobRequest) {
@@ -202,32 +265,9 @@ class KeycloakUserProvisioningJobRequestHandler(
         }
     }
 
-    private fun activateMembershipIfNeeded(jobRequest: KeycloakUserProvisioningJobRequest) {
-        when (
-            store.membershipSnapshot(jobRequest.organisationId, jobRequest.membershipId)?.status
-        ) {
-            MembershipLifecycleState.PENDING_APPROVAL -> {
-                lifecycleService.transition(
-                    MembershipTransitionCommand(
-                        organisationId = jobRequest.organisationId,
-                        membershipId = jobRequest.membershipId,
-                        transition = MembershipLifecycleTransition.ACTIVATE,
-                    ),
-                )
-            }
-
-            MembershipLifecycleState.ACTIVE,
-            MembershipLifecycleState.REVOKED,
-            -> {}
-
-            else -> {
-                error("Membership is not waiting for activation.")
-            }
-        }
-    }
-
     private companion object {
         const val SUCCEEDED = "SUCCEEDED"
+        const val PENDING = "PENDING"
         const val KEYCLOAK = "KEYCLOAK"
         const val KEYCLOAK_PROVISIONING_ACTION = "user.keycloak_provisioning"
     }

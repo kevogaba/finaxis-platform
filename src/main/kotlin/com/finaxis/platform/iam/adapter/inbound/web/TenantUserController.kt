@@ -133,7 +133,9 @@ class TenantUserController(
     @Operation(
         summary = "Invite tenant user",
         description =
-            "Records a tenant user invitation and its requested access assignments. Refusals " +
+            "Records a tenant user invitation and its requested access assignments. A user " +
+                "whose membership here was revoked is invited again on the same membership (a " +
+                "new approval is required, by someone other than the re-inviter). Refusals " +
                 "are atomic, so a refused invitation leaves no row: 409 for a state conflict " +
                 "(including a concurrent duplicate), 422 for a bad role or branch reference in " +
                 "the body.",
@@ -193,8 +195,9 @@ class TenantUserController(
         ApiResponse(
             responseCode = "409",
             description =
-                "Conflict: the user already has a membership in the organisation, the username " +
-                    "is taken, or the organisation is not active (`conflict`)",
+                "Conflict: the user already has a membership in the organisation in any state " +
+                    "but revoked, the username is taken, or the organisation is not active " +
+                    "(`conflict`)",
             content = [
                 Content(
                     mediaType = "application/problem+json",
