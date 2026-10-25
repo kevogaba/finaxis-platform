@@ -43,7 +43,9 @@ Implemented transitions and effects:
 - `PROVISIONING` to `ACTIVE`: `ACTIVATE` requires complete local setup and emits
   `finaxis.lifecycle.organisation.activated`.
 - `PENDING_APPROVAL` to `REJECTED`: `REJECT` preserves the draft and emits
-  `finaxis.lifecycle.organisation.rejected`.
+  `finaxis.lifecycle.organisation.rejected`. `REJECTED` is terminal and the tenant code stays
+  reserved (#172, [ADR 0037](../adr/0037-member-reinvite-and-dispatch-generation.md)): to onboard
+  the organisation again, create a new draft under a new code.
 - `PENDING_APPROVAL` to `DRAFT`: `RETURN_FOR_CHANGES` is the checker's recoverable decision
   (`POST /api/v1/platform/tenants/{tenant_id}/return`, `tenant.reject`, reason required, caller
   neither the requester nor the submitter; since #221 the maker is also refused on approve and
@@ -226,7 +228,11 @@ on the first approval, and the repeat writes its own `user.approve` audit row. I
 application invitation.
 
 No attempt creates a new job id. Two jobs for one dispatch could create the same Keycloak user, so
-a retry always runs the one job the first approval enqueued.
+a retry always runs the one job the first approval enqueued. The one exception is a revoked member
+invited again (ADR 0037): the key then ends `:G<n>` (the membership's generation), the approval
+queues a job under that new key, and a job of an earlier generation that runs or retries
+afterwards ends without provisioning or activating anything, leaving its dispatch `FAILED` with
+`CANCELLED:MembershipReinvited` if it was still `PENDING`.
 
 **Checking a stuck user.** `identity_dispatch_log` for the user's `KEYCLOAK_PROVISIONING` key shows
 `FAILED` with the closed code in `last_error`. JobRunr's `jobrunr_jobs` row for the job id (the

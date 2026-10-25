@@ -17,6 +17,8 @@ import com.finaxis.platform.lifecycle.application.CreateBranchCommand
 import com.finaxis.platform.lifecycle.application.InviteUserCommand
 import com.finaxis.platform.lifecycle.application.MembershipType
 import com.finaxis.platform.lifecycle.application.OrganisationProvisioningService
+import com.finaxis.platform.lifecycle.application.Reason
+import com.finaxis.platform.lifecycle.application.RevokeTenantMembershipCommand
 import com.finaxis.platform.lifecycle.application.RoleAssignmentRequest
 import com.finaxis.platform.lifecycle.application.RoleAssignmentScopeType
 import com.finaxis.platform.lifecycle.application.SubmitBranchForApprovalCommand
@@ -167,6 +169,60 @@ class ApplicationInvitePipelineIntegrationTests(
     }
 
     @Test
+    fun `a revoked member invited and approved again is sent a second invitation email`() {
+        val invitedEmail = "invitee-reinvite-${uuidV7()}@example.test"
+        val invite = triggerInvite(invitedEmail)
+        awaitInboxCount(invitedEmail, 1)
+        awaitJobSucceeded(invite.jobId)
+
+        // The first life's dispatch SUCCEEDED under a key of the user and the organisation alone,
+        // so before generations the second approval's invite was a silent no-op: the dispatch
+        // insert did nothing, the job id was the finished job's and the handler returned early.
+        withRequestContext {
+            userProvisioningService.revokeTenantMembership(
+                RevokeTenantMembershipCommand(
+                    invite.organisationId,
+                    invite.membershipId,
+                    ACTOR_ID,
+                    Reason.required("Offboarding."),
+                ),
+            )
+        }
+        val reinvitation = userProvisioningService.inviteAsSystem(invite.command)
+        assertEquals(invite.membershipId, reinvitation.membershipId)
+        userProvisioningService.approveAsSystem(
+            ApproveUserCommand(invite.organisationId, invite.membershipId, CHECKER_ID),
+        )
+
+        val secondKey = "${invite.dispatchKey}:G1"
+        awaitInboxCount(invitedEmail, 2)
+        awaitJobSucceeded(UUID.nameUUIDFromBytes(secondKey.toByteArray()))
+        val status =
+            dsl.fetchOne(
+                "SELECT status FROM identity_dispatch_log WHERE dispatch_key = ?",
+                secondKey,
+            )
+        assertEquals("SUCCEEDED", status!!.get(0, String::class.java))
+    }
+
+    private fun awaitInboxCount(
+        recipientEmail: String,
+        expected: Int,
+    ) = await()
+        .atMost(60, TimeUnit.SECONDS)
+        .pollInterval(500, TimeUnit.MILLISECONDS)
+        .untilAsserted { assertEquals(expected, fetchInboxMessageCount(recipientEmail)) }
+
+    private fun awaitJobSucceeded(jobId: UUID) =
+        await()
+            .ignoreException(JobNotFoundException::class.java)
+            .atMost(60, TimeUnit.SECONDS)
+            .pollInterval(500, TimeUnit.MILLISECONDS)
+            .untilAsserted {
+                assertEquals(StateName.SUCCEEDED, storageProvider.getJobById(jobId).state)
+            }
+
+    @Test
     fun `a failed invite dispatch records the closed code and class name, not the message`() {
         val invitedEmail = "invitee-detail-${uuidV7()}@example.test"
         val invite = triggerInvite(invitedEmail, failDispatchSuccessOnce = true)
@@ -197,24 +253,23 @@ class ApplicationInvitePipelineIntegrationTests(
         val branchId = createActiveBranch(organisationId)
         val roleId = tenantAdminRoleId(organisationId)
 
-        val invitation =
-            userProvisioningService.inviteAsSystem(
-                InviteUserCommand(
-                    organisationId = organisationId,
-                    email = email,
-                    username = "invitee-${uuidV7()}",
-                    displayName = "Pipeline Invitee",
-                    membershipType = MembershipType.STAFF,
-                    primaryBranchId = branchId,
-                    branchAssignments =
-                        listOf(BranchAssignmentRequest(branchId, BranchAssignmentType.HOME)),
-                    roleAssignments =
-                        listOf(RoleAssignmentRequest(roleId, RoleAssignmentScopeType.TENANT)),
-                    invitedBy = SystemActor.ID,
-                    sendKeycloakInvite = false,
-                    sendApplicationInvite = true,
-                ),
+        val command =
+            InviteUserCommand(
+                organisationId = organisationId,
+                email = email,
+                username = "invitee-${uuidV7()}",
+                displayName = "Pipeline Invitee",
+                membershipType = MembershipType.STAFF,
+                primaryBranchId = branchId,
+                branchAssignments =
+                    listOf(BranchAssignmentRequest(branchId, BranchAssignmentType.HOME)),
+                roleAssignments =
+                    listOf(RoleAssignmentRequest(roleId, RoleAssignmentScopeType.TENANT)),
+                invitedBy = SystemActor.ID,
+                sendKeycloakInvite = false,
+                sendApplicationInvite = true,
             )
+        val invitation = userProvisioningService.inviteAsSystem(command)
         val dispatchKey = "${invitation.userId}:$organisationId:APPLICATION_INVITE"
         if (failDispatchSuccessOnce) {
             flakyDispatchStore.dispatchKeyToFailOnce.set(dispatchKey)
@@ -231,6 +286,7 @@ class ApplicationInvitePipelineIntegrationTests(
             email = email,
             dispatchKey = dispatchKey,
             jobId = UUID.nameUUIDFromBytes(dispatchKey.toByteArray()),
+            command = command,
         )
     }
 
@@ -370,6 +426,7 @@ class ApplicationInvitePipelineIntegrationTests(
         val email: String,
         val dispatchKey: String,
         val jobId: UUID,
+        val command: InviteUserCommand,
     )
 
     /**

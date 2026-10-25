@@ -84,15 +84,23 @@ class UserProvisioningService(
 
     private fun invite(command: InviteUserCommand): UserInvitationResult {
         store.validateInvitation(command)
-        val userId = store.findOrCreateInvitee(command)
+        val invitee = store.findOrCreateInvitee(command)
+        val userId = invitee.userId
+        // The one new branch of the flow (ADR 0037): a revoked member's row is reused and reset;
+        // everything after it is the first invitation's own path.
+        val reinvitedId = invitee.revokedMembershipId
         val membershipId =
-            store.createMembership(
-                command.organisationId,
-                userId,
-                command.membershipType,
-                command.primaryBranchId,
-                command.invitedBy,
-            )
+            if (reinvitedId != null) {
+                reinviteMembership(lifecycleService, store, command, reinvitedId)
+            } else {
+                store.createMembership(
+                    command.organisationId,
+                    userId,
+                    command.membershipType,
+                    command.primaryBranchId,
+                    command.invitedBy,
+                )
+            }
         store.saveInvitationPreferences(
             command.organisationId,
             membershipId,
@@ -102,16 +110,20 @@ class UserProvisioningService(
         )
         createInvitationAssignments(command, userId)
         val snapshot = store.requireMembership(command.organisationId, membershipId)
-        audit(
-            organisationId = command.organisationId,
-            action = "user.invite",
-            actorId = command.invitedBy,
-            resourceType = USER,
-            resourceId = userId,
-            requestId = command.requestId,
-            metadata = mapOf(MEMBERSHIP_ID to membershipId.toString()),
-            subjectUserId = userId,
-        )
+        // A re-invitation is a transition, so its one audit row is the FSM's `membership.reinvite`
+        // and no `user.invite` row repeats it (ADR 0031).
+        if (reinvitedId == null) {
+            audit(
+                organisationId = command.organisationId,
+                action = "user.invite",
+                actorId = command.invitedBy,
+                resourceType = USER,
+                resourceId = userId,
+                requestId = command.requestId,
+                metadata = mapOf(MEMBERSHIP_ID to membershipId.toString()),
+                subjectUserId = userId,
+            )
+        }
         return UserInvitationResult(userId, membershipId, snapshot.userStatus, snapshot.status)
     }
 
@@ -150,16 +162,21 @@ class UserProvisioningService(
      * against the platform organisation (then never the platform organisation itself, a 404), a
      * tenant-scope approval against the tenant, each with `membership.view` (ADR 0030).
      *
-     * Either scope then takes the tenant's organisation row lock before it activates anything:
-     * a platform checker before it counts the tenant's own members, and the tenant's own approver
-     * first, before it reads the membership, so the two are serialised and a platform checker
-     * that follows a tenant approval counts what it committed (#250, ADR 0028 point 8).
+     * Either scope then takes the tenant's organisation row lock before it activates anything,
+     * and before it reads the membership (which `approve` then locks too, ADR 0037): the platform
+     * checker right after its permission check, the tenant's own approver likewise, so the two are
+     * serialised and a platform checker that follows a tenant approval counts the tenant's own
+     * members as that approval committed them (#250, ADR 0028 point 8).
      */
     @Transactional
     fun approveUser(command: ApproveUserCommand): UserApprovalResult {
         when (command.scope) {
             ActingScope.PLATFORM -> {
                 permissionGuard.requirePlatformChecker(command)
+                // The organisation row before the membership row, as the tenant approver takes
+                // them: `approve` locks the membership next, and two paths taking the two locks
+                // in opposite orders could deadlock. It is also the lock the window check needs.
+                store.lockOrganisation(command.organisationId)
             }
 
             ActingScope.TENANT -> {
@@ -199,7 +216,14 @@ class UserProvisioningService(
     }
 
     private fun approve(command: ApproveUserCommand): UserApprovalResult {
-        val snapshot = store.requireMembership(command.organisationId, command.membershipId)
+        // The membership row is locked first and read after, in a second statement, and held to the
+        // end of the transaction: a revoke and a re-invitation cannot commit between this read, the
+        // maker-checker check made on it and the activation, which would otherwise land on the next
+        // life of the membership and never be checked against its new maker (ADR 0037). The
+        // organisation lock the callers take comes first; no path takes them the other way round.
+        val snapshot =
+            store.lockedMembershipSnapshot(command.organisationId, command.membershipId)
+                ?: throw ResourceNotFoundException()
         val selfApproved =
             membershipCheckerRule.requireApproverIsNotMakerOrBeneficiary(command, snapshot)
         if (command.scope == ActingScope.PLATFORM) store.requirePlatformCheckerOpen(command)
@@ -207,9 +231,14 @@ class UserProvisioningService(
         store.requireActiveAccessPrerequisites(command.organisationId, snapshot)
 
         // An earlier approval already queued this user's provisioning and any application invite,
-        // so a repeat resumes the queued job and requests no second invite.
-        val resumed = snapshot.userStatus == UserLifecycleState.PROVISIONING_IDP
-        val keycloakRequested = requestKeycloakProvisioningIfNeeded(command, snapshot)
+        // so a repeat resumes the queued job and requests no second invite. A re-invited member
+        // whose user is still waiting on provisioning from the first life has had no approval of
+        // this life, so the first approval of a generation is not a repeat (ADR 0037).
+        val firstOfGeneration = store.isFirstApprovalOfGeneration(command.organisationId, snapshot)
+        val resumed =
+            snapshot.userStatus == UserLifecycleState.PROVISIONING_IDP && !firstOfGeneration
+        val keycloakRequested =
+            requestKeycloakProvisioningIfNeeded(command, snapshot, firstOfGeneration)
         val membershipActivated =
             if (keycloakRequested) {
                 false
@@ -413,15 +442,19 @@ class UserProvisioningService(
     /**
      * Gets the job an earlier approval queued (#162) running again. It runs again under its own id
      * when FAILED; a job still scheduled, enqueued or processing is left alone; a job that is
-     * gone is queued again under the same key. A new job id is never made, since two jobs could
-     * create the same Keycloak user. A dispatch never recorded, or one that SUCCEEDED, is refused
-     * with the 409 of a first approval.
+     * gone is queued again under the same key. Within one generation of the membership a new
+     * job id is never made, since two jobs could create the same Keycloak user. A re-invited
+     * member's next generation has its own key and so its own job (ADR 0037), which can overlap
+     * a first-life job still inside its Keycloak call: a race that the gateway's lookup before
+     * create, the idempotent identity link and JobRunr's retry already absorb. A dispatch never
+     * recorded, or one that SUCCEEDED, is refused with the 409 of a first approval.
      */
     internal fun requeueFailedProvisioning(
         command: ApproveUserCommand,
         snapshot: MembershipProvisioningSnapshot,
     ): JobRequeueOutcome {
-        val dispatchKey = keycloakDispatchKey(command.organisationId, snapshot.userId)
+        val dispatchKey =
+            keycloakDispatchKey(command.organisationId, snapshot.userId, snapshot.generation)
         val status = store.dispatchStatus(dispatchKey)
         if (status == null || status == DISPATCH_SUCCEEDED) {
             throw ConflictException(safeDetail = IDENTITY_PROVISIONING_REFUSED)
@@ -451,9 +484,14 @@ class UserProvisioningService(
     private fun requestKeycloakProvisioningIfNeeded(
         command: ApproveUserCommand,
         snapshot: MembershipProvisioningSnapshot,
+        firstOfGeneration: Boolean,
     ): Boolean {
         if (snapshot.userStatus == UserLifecycleState.PROVISIONING_IDP) {
-            requeueFailedProvisioning(command, snapshot)
+            if (firstOfGeneration) {
+                publishKeycloakProvisioning(command, snapshot)
+            } else {
+                requeueFailedProvisioning(command, snapshot)
+            }
             return true
         }
         if (store.hasKeycloakIdentity(snapshot.userId)) return false
@@ -510,7 +548,8 @@ class UserProvisioningService(
         command: ApproveUserCommand,
         snapshot: MembershipProvisioningSnapshot,
     ) {
-        val dispatchKey = keycloakDispatchKey(command.organisationId, snapshot.userId)
+        val dispatchKey =
+            keycloakDispatchKey(command.organisationId, snapshot.userId, snapshot.generation)
         store.recordDispatch(
             command.organisationId,
             snapshot.userId,
@@ -530,6 +569,7 @@ class UserProvisioningService(
                     DISPLAY_NAME to snapshot.displayName,
                     "sendKeycloakInvite" to snapshot.sendKeycloakInvite,
                     DISPATCH_KEY to dispatchKey,
+                    GENERATION to snapshot.generation,
                 ),
         )
     }
@@ -538,7 +578,12 @@ class UserProvisioningService(
         command: ApproveUserCommand,
         snapshot: MembershipProvisioningSnapshot,
     ) {
-        val dispatchKey = "${snapshot.userId}:${command.organisationId}:APPLICATION_INVITE"
+        val dispatchKey =
+            applicationInviteDispatchKey(
+                command.organisationId,
+                snapshot.userId,
+                snapshot.generation,
+            )
         store.recordDispatch(
             command.organisationId,
             snapshot.userId,
@@ -551,7 +596,12 @@ class UserProvisioningService(
             transition = "APPLICATION_INVITE_REQUESTED",
             command = command,
             snapshot = snapshot,
-            metadata = mapOf(EMAIL to snapshot.email, DISPATCH_KEY to dispatchKey),
+            metadata =
+                mapOf(
+                    EMAIL to snapshot.email,
+                    DISPATCH_KEY to dispatchKey,
+                    GENERATION to snapshot.generation,
+                ),
         )
     }
 
@@ -635,17 +685,57 @@ class UserProvisioningService(
         const val USERNAME = "username"
         const val DISPLAY_NAME = "displayName"
         const val DISPATCH_KEY = "dispatchKey"
+        const val GENERATION = "generation"
     }
 }
 
 /**
- * The identity dispatch key of a user's Keycloak provisioning in one organisation. Every writer and
- * reader of that dispatch uses it, so the approval and the bootstrap retry name one job.
+ * Takes a revoked membership back to `PENDING_APPROVAL` through the FSM, then resets what the new
+ * invitation decides on the same row. Both run in the invitation's transaction, so the state, its
+ * transition log and audit row, the reset and the cleared overrides commit or roll back together.
+ * The transition comes first: it is the check that the row is still revoked, and the branch
+ * assignments the invitation creates next refuse a revoked membership.
  */
-internal fun keycloakDispatchKey(
+private fun reinviteMembership(
+    lifecycleService: FoundationLifecycleService,
+    store: UserProvisioningStore,
+    command: InviteUserCommand,
+    membershipId: UUID,
+): UUID {
+    lifecycleService.transition(
+        MembershipTransitionCommand(
+            command.organisationId,
+            membershipId,
+            transition = MembershipLifecycleTransition.REINVITE,
+            command = transitionCommand(requestId = command.requestId),
+        ),
+    )
+    store.resetMembershipForReinvite(
+        command.organisationId,
+        membershipId,
+        command.membershipType,
+        command.primaryBranchId,
+        command.invitedBy,
+    )
+    return membershipId
+}
+
+/**
+ * Whether no approval of this life of the membership has queued its provisioning yet although the
+ * user is already waiting on it: a re-invited member (generation above 0) whose user was left in
+ * `PROVISIONING_IDP` by the first life's job, which the revoke cancelled. The new generation's
+ * dispatch key has no row, which for generation 0 would be a refusal and here is the first
+ * approval.
+ */
+private fun UserProvisioningStore.isFirstApprovalOfGeneration(
     organisationId: UUID,
-    userId: UUID,
-): String = "$organisationId:$userId:KEYCLOAK_PROVISIONING"
+    snapshot: MembershipProvisioningSnapshot,
+): Boolean =
+    snapshot.generation > 0 &&
+        snapshot.userStatus == UserLifecycleState.PROVISIONING_IDP &&
+        dispatchStatus(
+            keycloakDispatchKey(organisationId, snapshot.userId, snapshot.generation),
+        ) == null
 
 private fun membershipRevocationTransition(
     status: MembershipLifecycleState,
@@ -671,12 +761,12 @@ private fun membershipRevocationTransition(
 /**
  * A platform checker acts only on an ACTIVE tenant that has no ACTIVE member beyond its bootstrap
  * administrator, so it is the way out of the first-approval deadlock and not a standing approver.
- * The tenant's organisation row is locked before the count, so two platform checkers approving
+ * The tenant's organisation row is locked before the count (by `approveUser`, ahead of the
+ * membership lock `approve` takes), so two platform checkers approving
  * two memberships of one tenant at once are serialised and the second counts the first's commit,
  * and so is a tenant approval, which takes the same lock (ADR 0028 point 8, #250).
  */
 private fun UserProvisioningStore.requirePlatformCheckerOpen(command: ApproveUserCommand) {
-    lockOrganisation(command.organisationId)
     if (organisationState(command.organisationId) != OrganisationLifecycleState.ACTIVE) {
         throw ConflictException()
     }

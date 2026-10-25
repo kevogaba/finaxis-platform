@@ -93,12 +93,47 @@ interface UserProvisioningMembershipStore {
      */
     fun hasActiveMembershipBeyondBootstrap(organisationId: UUID): Boolean
 
-    /** Returns whether the user already has a membership row (any status) in the organisation. */
-    fun membershipExists(
+    /** The user's membership row (any status) in the organisation, or null when there is none. */
+    fun existingMembership(
         organisationId: UUID,
         userId: UUID,
-    ): Boolean
+    ): ExistingMembership?
+
+    /**
+     * Puts a membership that has just left `REVOKED` back to the state of a fresh invitation, on
+     * the same row (`uq_membership_organisation_user` allows no second one): the membership type
+     * and primary branch of the new invitation, [actorId] as its maker (`created_by`, which the
+     * maker-checker rule reads), the lifecycle dates `joined_at`, `suspended_at` and `revoked_at`
+     * and the `status_reason` cleared, and every direct `membership_permission` override of it
+     * deleted, so nothing the member held before survives to the new life (ADR 0037). It runs
+     * after the FSM's `REINVITE` transition, in the same transaction.
+     */
+    fun resetMembershipForReinvite(
+        organisationId: UUID,
+        membershipId: UUID,
+        membershipType: MembershipType,
+        primaryBranchId: UUID?,
+        actorId: UUID,
+    )
+
+    /**
+     * [membershipSnapshot] read after taking the membership row's `FOR NO KEY UPDATE` lock, held to
+     * the end of the caller's transaction. The lock is one statement and the read another, so the
+     * read (and the generation in it) sees whatever a rival that held the lock committed: a
+     * `REINVITE` cannot commit between the check and the transition it guards. Must run inside a
+     * transaction. The default does not lock.
+     */
+    fun lockedMembershipSnapshot(
+        organisationId: UUID,
+        membershipId: UUID,
+    ): MembershipProvisioningSnapshot? = membershipSnapshot(organisationId, membershipId)
 }
+
+/** A membership row found for an invitee: its id and where it stands in its lifecycle. */
+data class ExistingMembership(
+    val id: UUID,
+    val status: MembershipLifecycleState,
+)
 
 /** Persistence contract for branch, role, and assignment grants. */
 interface UserProvisioningAccessStore {
@@ -247,6 +282,12 @@ data class MembershipProvisioningSnapshot(
     val userStatus: UserLifecycleState,
     val sendKeycloakInvite: Boolean,
     val sendApplicationInvite: Boolean,
+    /**
+     * How many times the membership has been re-invited (the count of its `REINVITE` transition
+     * log rows): 0 for a membership never revoked and invited again. It is part of the invite
+     * dispatch keys, so each life of a membership has its own jobs (ADR 0037).
+     */
+    val generation: Int = 0,
 )
 
 /** Dispatch categories persisted for downstream identity and invitation workers. */

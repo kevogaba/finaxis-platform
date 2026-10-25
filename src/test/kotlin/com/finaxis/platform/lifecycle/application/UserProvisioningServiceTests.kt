@@ -24,6 +24,7 @@ import com.finaxis.platform.common.transitions.TransitionExecutor
 import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogRepository
 import com.finaxis.platform.lifecycle.PermissionGuard
+import com.finaxis.platform.lifecycle.application.port.outbound.ExistingMembership
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityDispatchType
 import com.finaxis.platform.lifecycle.application.port.outbound.MembershipProvisioningSnapshot
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
@@ -52,6 +53,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 // One class per service keeps the private in-memory fakes it shares in a single file.
@@ -287,15 +289,240 @@ class UserProvisioningServiceTests {
     }
 
     @Test
-    fun `invitation of a revoked member is the same 409 and creates no second membership`() {
+    fun `invitation of a member in any state but revoked is the 409 and changes nothing`() {
+        listOf(
+            MembershipLifecycleState.PENDING_APPROVAL,
+            MembershipLifecycleState.ACTIVE,
+            MembershipLifecycleState.SUSPENDED,
+        ).forEach { state ->
+            val context = activeInvitationContext()
+            val userId =
+                fake.addUser(
+                    "member-$state@example.test",
+                    "member-$state",
+                    UserLifecycleState.ACTIVE,
+                )
+            val membershipId = fake.addMembership(context.org, userId, state)
+            val before = logs.logs.size
+
+            val failure =
+                assertFailsWith<ConflictException> {
+                    service.inviteUser(
+                        inviteCommand(context).copy(
+                            email = "member-$state@example.test",
+                            username = "member-$state",
+                        ),
+                    )
+                }
+
+            assertEquals(
+                "This user already has a membership in the selected organisation.",
+                failure.safeDetail,
+            )
+            assertEquals(state, fake.memberships.getValue(context.org to membershipId).state)
+            assertTrue(fake.membershipResets.isEmpty())
+            assertEquals(before, logs.logs.size)
+        }
+    }
+
+    @Test
+    fun `a revoked member is re-invited on the same membership row and awaits approval`() {
         val context = activeInvitationContext()
-        val userId = fake.addUser("member@example.test", "member", UserLifecycleState.ACTIVE)
-        fake.addMembership(context.org, userId, MembershipLifecycleState.REVOKED)
+        val (membershipId, userId) = revokedMembership(context)
+        val inviterBefore = fake.membershipInviters.getValue(context.org to membershipId)
+        val reinviter = uuidV7()
 
-        assertFailsWith<ConflictException> { service.inviteUser(inviteCommand(context)) }
+        val result =
+            service.inviteUser(
+                inviteCommand(context).copy(
+                    membershipType = MembershipType.AUDITOR,
+                    invitedBy = reinviter,
+                    sendKeycloakInvite = false,
+                    sendApplicationInvite = true,
+                ),
+            )
 
+        // The one membership row is reused: same id, no second row, the user is not duplicated.
+        assertEquals(membershipId, result.membershipId)
+        assertEquals(userId, result.userId)
         assertEquals(1, fake.memberships.size)
-        assertTrue(audits.events.isEmpty())
+        assertEquals(MembershipLifecycleState.PENDING_APPROVAL, result.membershipStatus)
+        assertEquals(
+            MembershipLifecycleState.PENDING_APPROVAL,
+            fake.memberships.getValue(context.org to membershipId).state,
+        )
+        // Reset on the row: type, primary branch and maker, then the preferences.
+        assertEquals(
+            listOf(
+                MembershipReset(membershipId, MembershipType.AUDITOR, context.branch, reinviter),
+            ),
+            fake.membershipResets,
+        )
+        assertEquals(reinviter, fake.membershipInviters.getValue(context.org to membershipId))
+        assertNotEquals(inviterBefore, reinviter)
+        assertEquals(false to true, fake.preferences.getValue(context.org to membershipId))
+        // Fresh assignments, as a first invite creates them.
+        assertTrue(fake.branchAssignments.contains(BranchAssignmentKey(context.org, userId)))
+        assertEquals(1, fake.roleAssignments.size)
+        // The transition is the FSM's one row (ADR 0031): no second `user.invite` row repeats it
+        // (the one that is there is the first invitation's).
+        assertEquals(MembershipLifecycleTransition.REINVITE.name, logs.logs.last().transition)
+        assertEquals(1, audits.events.count { it.action == "membership.reinvite" })
+        assertEquals(1, audits.events.count { it.action == "user.invite" })
+    }
+
+    @Test
+    fun `the maker of a re-invite cannot approve it and another checker can`() {
+        val context = activeInvitationContext()
+        revokedMembership(context)
+        val reinvitation =
+            service.inviteUser(
+                inviteCommand(context).copy(invitedBy = context.checker),
+            )
+
+        // The original maker is not the maker now; the re-inviter is.
+        val refusal =
+            assertFailsWith<ForbiddenOperationException> {
+                service.approveUser(
+                    ApproveUserCommand(context.org, reinvitation.membershipId, context.checker),
+                )
+            }
+        assertEquals(LifecycleErrorCodes.APPROVER_IS_MEMBERSHIP_MAKER, refusal.code)
+
+        val approval =
+            service.approveUser(
+                ApproveUserCommand(context.org, reinvitation.membershipId, context.actor),
+            )
+
+        assertTrue(approval.keycloakProvisioningRequested)
+    }
+
+    @Test
+    fun `a re-approved member gets a fresh dispatch key and job id for each provisioning`() {
+        val context = activeInvitationContext()
+        val first = service.inviteUser(inviteCommand(context, sendApplicationInvite = true))
+        val firstApproval = approve(context, first)
+        assertTrue(firstApproval.applicationInviteRequested)
+        val firstKeys = fake.dispatches.map { it.key }.toSet()
+        // The identity exists and the first life is over: revoked, then invited again.
+        fake.identityLinks += first.userId
+        fake.users.getValue(first.userId).state = UserLifecycleState.ACTIVE
+        revoke(context, first.membershipId)
+        val second = service.inviteUser(inviteCommand(context, sendApplicationInvite = true))
+
+        val approval = approve(context, second)
+
+        assertTrue(approval.applicationInviteRequested)
+        assertEquals(MembershipLifecycleState.ACTIVE, approval.membershipStatus)
+        val inviteKey = "${first.userId}:${context.org}:APPLICATION_INVITE:G1"
+        // Generation 0 is untouched; generation 1 is a second row, so a second job id.
+        assertTrue(firstKeys.contains("${first.userId}:${context.org}:APPLICATION_INVITE"))
+        assertEquals(
+            setOf(inviteKey),
+            fake.dispatches.map { it.key }.toSet() - firstKeys,
+        )
+        assertNotEquals(
+            deterministicJobId("${first.userId}:${context.org}:APPLICATION_INVITE"),
+            deterministicJobId(inviteKey),
+        )
+        val published =
+            events.events.filterIsInstance<ExternalizedTransitionEvent>().last {
+                it.target == "finaxis.lifecycle.user.application-invite-requested"
+            }
+        assertEquals(inviteKey, published.metadata["dispatchKey"])
+        assertEquals("1", published.metadata["generation"].toString())
+    }
+
+    @Test
+    fun `a re-invited user still waiting on provisioning is provisioned under the new key`() {
+        val context = activeInvitationContext()
+        val first = service.inviteUser(inviteCommand(context, sendApplicationInvite = true))
+        approve(context, first)
+        val firstKey = keycloakDispatchKey(context, first.userId)
+        // The first life's job was cancelled by the revoke and the user is still PROVISIONING_IDP.
+        fake.dispatchStatuses[firstKey] = "FAILED"
+        revoke(context, first.membershipId)
+        val second = service.inviteUser(inviteCommand(context, sendApplicationInvite = true))
+
+        val approval = approve(context, second)
+
+        // Not the 409 a repeat approval of a dispatch never recorded is: this is the first
+        // approval of the new generation, so it queues provisioning and the invitation email.
+        assertTrue(approval.keycloakProvisioningRequested)
+        assertTrue(approval.applicationInviteRequested)
+        assertEquals(MembershipLifecycleState.PENDING_APPROVAL, approval.membershipStatus)
+        assertEquals("FAILED", fake.dispatchStatuses[firstKey])
+        assertEquals("PENDING", fake.dispatchStatuses["$firstKey:G1"])
+        assertTrue(requeuer.requested.isEmpty())
+        val published =
+            events.events.filterIsInstance<ExternalizedTransitionEvent>().filter {
+                it.target == "finaxis.lifecycle.user.keycloak-provisioning-requested"
+            }
+        assertEquals("$firstKey:G1", published.last().metadata["dispatchKey"])
+        assertEquals("1", published.last().metadata["generation"].toString())
+    }
+
+    @Test
+    fun `a repeat approval of a re-invited member resumes the new generation's job`() {
+        val context = activeInvitationContext()
+        val first = service.inviteUser(inviteCommand(context))
+        approve(context, first)
+        val firstKey = keycloakDispatchKey(context, first.userId)
+        fake.dispatchStatuses[firstKey] = "FAILED"
+        revoke(context, first.membershipId)
+        val second = service.inviteUser(inviteCommand(context))
+        approve(context, second)
+        fake.dispatchStatuses["$firstKey:G1"] = "FAILED"
+        requeuer.outcome = JobRequeueOutcome.REQUEUED
+
+        val repeat = approve(context, second)
+
+        assertTrue(repeat.keycloakProvisioningRequested)
+        assertEquals(listOf(deterministicJobId("$firstKey:G1")), requeuer.requested)
+        assertEquals("PENDING", fake.dispatchStatuses["$firstKey:G1"])
+    }
+
+    @Test
+    fun `a membership never re-invited keeps the generation zero keys and no generation`() {
+        val context = activeInvitationContext()
+        val invitation = service.inviteUser(inviteCommand(context, sendApplicationInvite = true))
+
+        approve(context, invitation)
+
+        assertEquals(
+            setOf(
+                "${context.org}:${invitation.userId}:KEYCLOAK_PROVISIONING",
+                "${invitation.userId}:${context.org}:APPLICATION_INVITE",
+            ),
+            fake.dispatches.map { it.key }.toSet(),
+        )
+        assertTrue(
+            events.events.filterIsInstance<ExternalizedTransitionEvent>().all {
+                (it.metadata["generation"] ?: 0).toString() == "0"
+            },
+        )
+    }
+
+    @Test
+    fun `a refused re-invite writes no reset no log and no assignment`() {
+        val context = activeInvitationContext()
+        revokedMembership(context)
+        val logsBefore = logs.logs.size
+        val branchesBefore = fake.branchAssignments.toSet()
+
+        assertFailsWith<InvalidOperationException> {
+            service.inviteUser(inviteCommand(context).copy(primaryBranchId = uuidV7()))
+        }
+
+        assertTrue(fake.membershipResets.isEmpty())
+        assertEquals(logsBefore, logs.logs.size)
+        assertEquals(branchesBefore, fake.branchAssignments)
+        assertEquals(
+            MembershipLifecycleState.REVOKED,
+            fake.memberships.values
+                .single()
+                .state,
+        )
     }
 
     @Test
@@ -1631,6 +1858,24 @@ class UserProvisioningServiceTests {
         ApproveUserCommand(context.org, invitation.membershipId, context.checker, "req-1"),
     )
 
+    private fun revokedMembership(context: InvitationContext): Pair<UUID, UUID> {
+        val invitation = service.inviteUser(inviteCommand(context))
+        revoke(context, invitation.membershipId)
+        return invitation.membershipId to invitation.userId
+    }
+
+    private fun revoke(
+        context: InvitationContext,
+        membershipId: UUID,
+    ) = service.revokeTenantMembership(
+        RevokeTenantMembershipCommand(
+            context.org,
+            membershipId,
+            context.actor,
+            Reason.required("offboard"),
+        ),
+    )
+
     private fun assertNothingWritten() {
         assertTrue(fake.users.isEmpty())
         assertTrue(fake.memberships.isEmpty())
@@ -1724,6 +1969,8 @@ private class UserProvisioningFake :
     val roleAssignments = mutableSetOf<RoleAssignmentKey>()
     val dispatches = mutableSetOf<DispatchRecord>()
     val dispatchStatuses = mutableMapOf<String, String>()
+    val membershipResets = mutableListOf<MembershipReset>()
+    val generations = mutableMapOf<Pair<UUID, UUID>, Int>()
     var duplicateOnCreateUser = false
 
     /** The lock, the window count and membership reads in call order (lock comes first). */
@@ -1827,6 +2074,7 @@ private class UserProvisioningFake :
             requireNotNull(userStatus(userId)),
             preference.first,
             preference.second,
+            generations[key] ?: 0,
         )
     }
 
@@ -1839,13 +2087,28 @@ private class UserProvisioningFake :
         }
     }
 
-    override fun membershipExists(
+    override fun existingMembership(
         organisationId: UUID,
         userId: UUID,
-    ): Boolean =
-        memberships.any { (key, _) ->
-            key.first == organisationId && membershipUsers[key] == userId
-        }
+    ): ExistingMembership? =
+        memberships.entries
+            .firstOrNull { (key, _) ->
+                key.first == organisationId && membershipUsers[key] == userId
+            }?.let { (key, aggregate) -> ExistingMembership(key.second, aggregate.state) }
+
+    override fun resetMembershipForReinvite(
+        organisationId: UUID,
+        membershipId: UUID,
+        membershipType: MembershipType,
+        primaryBranchId: UUID?,
+        actorId: UUID,
+    ) {
+        val key = organisationId to membershipId
+        membershipResets += MembershipReset(membershipId, membershipType, primaryBranchId, actorId)
+        membershipTypes[key] = membershipType
+        membershipInviters[key] = actorId
+        generations[key] = (generations[key] ?: 0) + 1
+    }
 
     override fun membershipInvitedBy(
         organisationId: UUID,
@@ -2210,6 +2473,13 @@ private data class RoleAssignmentKey(
     val userId: UUID,
     val roleId: UUID,
     val branchId: UUID?,
+)
+
+private data class MembershipReset(
+    val membershipId: UUID,
+    val type: MembershipType,
+    val primaryBranchId: UUID?,
+    val actorId: UUID,
 )
 
 private data class DispatchRecord(

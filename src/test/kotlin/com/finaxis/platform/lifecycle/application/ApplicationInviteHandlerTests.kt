@@ -6,6 +6,7 @@ import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
+import com.finaxis.platform.lifecycle.application.port.outbound.ExistingMembership
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityDispatchType
 import com.finaxis.platform.lifecycle.application.port.outbound.MembershipProvisioningSnapshot
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
@@ -244,9 +245,90 @@ class ApplicationInviteHandlerTests {
         assertEquals(1, sentMessages.size)
     }
 
+    @Test
+    fun `a job of an earlier generation sends no email and is cancelled`() {
+        val dispatchKey = "user-1:org-1:APPLICATION_INVITE"
+        store.dispatches[dispatchKey] = InviteDispatchState("PENDING")
+        store.snapshot = store.snapshot?.copy(generation = 1)
+        val sent = mutableListOf<EmailMessage>()
+        val handler = handlerSending(sent)
+
+        // Returns normally, so JobRunr marks the job done and never retries it.
+        handler.run(applicationInviteRequest(dispatchKey))
+
+        assertTrue(sent.isEmpty())
+        assertEquals(0, store.succeededCalls)
+        val dispatch = store.dispatches.getValue(dispatchKey)
+        assertEquals("FAILED", dispatch.status)
+        assertEquals("CANCELLED:MembershipReinvited", dispatch.lastError)
+        val cancelled = audits.items.single { it.action == "user.application_invite" }
+        assertEquals(AuditOutcome.FAILURE, cancelled.outcome)
+        assertEquals("MembershipReinvited", cancelled.reason)
+    }
+
+    @Test
+    fun `a stale job leaves a dispatch that already settled alone`() {
+        val sent = mutableListOf<EmailMessage>()
+        val handler = handlerSending(sent)
+        store.snapshot = store.snapshot?.copy(generation = 2)
+        val succeeded = "user-1:org-1:APPLICATION_INVITE"
+        val failed = "user-2:org-1:APPLICATION_INVITE"
+        store.dispatches[succeeded] = InviteDispatchState("SUCCEEDED", attempts = 1)
+        store.dispatches[failed] = InviteDispatchState("FAILED", attempts = 1, lastError = "X")
+
+        handler.run(applicationInviteRequest(succeeded))
+        handler.run(applicationInviteRequest(failed))
+
+        assertTrue(sent.isEmpty())
+        assertEquals(InviteDispatchState("SUCCEEDED", attempts = 1), store.dispatches[succeeded])
+        assertEquals(
+            InviteDispatchState("FAILED", attempts = 1, lastError = "X"),
+            store.dispatches[failed],
+        )
+        assertTrue(audits.items.isEmpty())
+    }
+
+    @Test
+    fun `a job of the membership's current generation is processed`() {
+        val dispatchKey = "user-1:org-1:APPLICATION_INVITE:G1"
+        store.dispatches[dispatchKey] = InviteDispatchState("PENDING")
+        store.snapshot = store.snapshot?.copy(generation = 1)
+        val sent = mutableListOf<EmailMessage>()
+
+        handlerSending(sent).run(applicationInviteRequest(dispatchKey, generation = 1))
+
+        assertEquals(1, sent.size)
+        assertEquals("SUCCEEDED", store.dispatches.getValue(dispatchKey).status)
+    }
+
+    @Test
+    fun `a stored job without a generation is generation zero`() {
+        // Jobs queued before the field existed deserialise with the default, 0.
+        assertEquals(0, ApplicationInviteJobRequest().generation)
+        val dispatchKey = "user-1:org-1:APPLICATION_INVITE"
+        store.dispatches[dispatchKey] = InviteDispatchState("PENDING")
+        val sent = mutableListOf<EmailMessage>()
+
+        handlerSending(sent).run(applicationInviteRequest(dispatchKey))
+
+        assertEquals(1, sent.size)
+    }
+
+    private fun handlerSending(sent: MutableList<EmailMessage>) =
+        ApplicationInviteJobRequestHandler(
+            store,
+            EmailGateway { message ->
+                sent.add(message)
+                EmailDeliveryReceipt("msg-1")
+            },
+            InMemoryJobStepGuard(),
+            DispatchOutcomeAuditor(store, auditService),
+        )
+
     private fun applicationInviteRequest(
         dispatchKey: String,
         userId: UUID = uuidV7(),
+        generation: Int = 0,
     ): ApplicationInviteJobRequest =
         ApplicationInviteJobRequest(
             organisationId = uuidV7(),
@@ -254,6 +336,7 @@ class ApplicationInviteHandlerTests {
             userId = userId,
             email = "member@example.test",
             dispatchKey = dispatchKey,
+            generation = generation,
         )
 }
 
@@ -358,10 +441,18 @@ private class ApplicationInviteStoreFake : UserProvisioningStore {
 
     override fun organisationDisplayName(organisationId: UUID): String? = organisationName
 
-    override fun membershipExists(
+    override fun existingMembership(
         organisationId: UUID,
         userId: UUID,
-    ): Boolean = false
+    ): ExistingMembership? = null
+
+    override fun resetMembershipForReinvite(
+        organisationId: UUID,
+        membershipId: UUID,
+        membershipType: MembershipType,
+        primaryBranchId: UUID?,
+        actorId: UUID,
+    ) = Unit
 
     override fun hasActiveMembershipBeyondBootstrap(organisationId: UUID): Boolean = false
 

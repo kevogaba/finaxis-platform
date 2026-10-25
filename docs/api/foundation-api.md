@@ -1232,8 +1232,10 @@ is no `422`. Validation runs when the body is bound, before any permission or ex
   for an unknown id); the maker-checker rule (`403 lifecycle.approver_is_tenant_maker`); the state
   (`409`).
 - **State.** Only `PENDING_APPROVAL` can be returned; any other state, including `REJECTED`, answers
-  `409 conflict` and changes nothing. `reject` is unchanged and stays terminal (recovering a
-  rejected tenant is a separate piece of work).
+  `409 conflict` and changes nothing. `reject` is unchanged and stays terminal, and the tenant
+  code of a rejected tenant stays reserved (#172, ADR 0037): `reject` is the deliberate "start
+  over" and `return` the recoverable path, so a rejected tenant's name is reused only under a new
+  code.
 - **Bootstrap record.** The initial-administrator record becomes a draft again, as `reject` leaves
   it: status `DRAFT`, `submitted_by`/`submitted_at` and `approved_by`/`approved_at` cleared,
   `requested_by` and the administrator block untouched, in the same transaction.
@@ -1504,7 +1506,9 @@ still run first, so a caller without `user.invite` gets `403` for a well-formed 
 fails Bean Validation is a `400` before any permission check, as on every route).
 
 - **`409 conflict`**: the user (matched by email, ignoring case) already has a membership in the
-  organisation, in any state including `REVOKED`; the `username` is already held by another user
+  organisation in any state but `REVOKED` ("This user already has a membership in the selected
+  organisation."; a revoked member is re-invited, below); the `username` is already held by another
+  user
   (usernames are global and case-insensitive); or the organisation is not `ACTIVE`. The email and
   username lookups are courtesies that give the specific message; two concurrent invitations for
   one new email or username can both pass them, and the loser, refused by the database's unique
@@ -1516,6 +1520,19 @@ fails Bean Validation is a `400` before any permission check, as on every route)
   The detail never echoes the offending value.
 - **`400 validation_failed`**: an email the service refuses though the DTO accepts it (for example
   `user@localhost`), no branch assignment for a member type that needs one, or no role assignment.
+
+**Re-inviting a revoked member (ADR 0037, #172).** The same route and permission invite a user whose
+membership in the organisation is `REVOKED`: the response is the same `201`, `membership_id` is the
+revoked membership's id (no second membership is made), and `membership_status` is
+`PENDING_APPROVAL` again. The membership type, primary branch, preferences and assignments come from
+the new request, the caller becomes the maker (`created_by`), the membership's dates and
+`status_reason` are cleared and its direct permission overrides are deleted; the first life's
+assignments stay as ended history. A checker other than the re-inviter approves it again
+(`lifecycle.approver_is_membership_maker` for the re-inviter, as for any invitation), and the
+approval sends a fresh invitation: the dispatch keys, and so the background job ids, carry the
+membership's generation (`:G<n>` from the first re-invitation; a membership never re-invited keeps
+the keys it always had). The audit row is the transition's own, `membership.reinvite`, not
+`user.invite`. A membership in any other state is still the `409` above.
 
 ### Memberships
 
@@ -1617,9 +1634,10 @@ permission check (`403`) and the unknown-membership check (`404`) still come fir
 
 Revoking a membership that is already `REVOKED` is `409 conflict` with the detail
 `This membership has already been revoked.`, and changes nothing: no state change, no transition
-row, no audit row (#207; it used to be a `500`). Revoke is terminal, so a retry under a new
-`Idempotency-Key` is refused rather than repeated; replaying the original key still returns the
-original response.
+row, no audit row (#207; it used to be a `500`). A second revoke under a new `Idempotency-Key` is
+refused rather than repeated; replaying the original key still returns the original response. A
+revoked member is not lost for good: the invite route re-invites them on the same membership (ADR
+0037, see [Re-inviting a revoked member](#tenant-users)).
 
 #### Decision remarks
 
@@ -2356,7 +2374,8 @@ Tenant onboarding is a platform workflow:
 3. A different checker approves, rejects, or returns it for changes. A returned tenant is a draft
    again: the maker amends it with `PATCH` and resubmits it, and the checker's reason is readable
    as `status_reason` on the tenant detail (see
-   [Return tenant for changes](#return-tenant-for-changes)). A rejected tenant stays rejected.
+   [Return tenant for changes](#return-tenant-for-changes)). A rejected tenant stays rejected:
+   `REJECTED` is terminal and its tenant code stays reserved (#172, ADR 0037).
 4. Approval returns 202 and queues asynchronous initial-administrator bootstrap.
 5. Failed bootstrap can be retried with
    `POST /api/v1/platform/tenants/{tenant_id}/bootstrap/retry`.

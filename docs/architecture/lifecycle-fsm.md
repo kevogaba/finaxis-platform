@@ -105,7 +105,17 @@ stateDiagram-v2
     SUSPENDED --> ACTIVE: REACTIVATE
     ACTIVE --> REVOKED: REVOKE
     SUSPENDED --> REVOKED: REVOKE
+    REVOKED --> PENDING_APPROVAL: REINVITE
 ```
+
+`REINVITE` is the only edge out of `REVOKED` and `REVOKED` is its only source (ADR 0037, #172): a
+revoked member is invited again through the invite route, the same membership row is reused and
+reset (type, primary branch, `created_by`, preferences, lifecycle dates, direct overrides), and a
+checker who is not the re-inviter approves it again. The invite dispatch keys and job ids carry the
+membership's generation (the count of its `REINVITE` rows; generation 0 adds nothing), and the
+provisioning and invitation jobs refuse a job of an earlier generation, so a first-life job can
+neither activate the member nor suppress the new invitation. Any other existing membership stays
+a `409` on the invite route. See [ADR 0037](../adr/0037-member-reinvite-and-dispatch-generation.md).
 
 Maker-checker is enforced around the `ACTIVATE` transitions, not inside the graph: a membership
 is not approved by its inviter or by the invited user, and a branch is not activated by its
@@ -178,10 +188,12 @@ path still announces `finaxis.lifecycle.branch.closed`, which `DISCARD` does not
 The organisation graph has one edge out of `PENDING_APPROVAL` back to `DRAFT`,
 `OrganisationLifecycleTransition.RETURN_FOR_CHANGES`, with a required reason (3 to 500 characters)
 persisted as `status_reason`, in the transition log and on the `organisation.return_for_changes`
-audit row. `REJECT` is unchanged and stays terminal; recovering a rejected tenant is #172, not this
-edge. The edge has no guard of its own and uses `internalEventFactories()`, so it publishes no
-externalized event: consumers of `organisation.approval-requested` see a repeat on each
-resubmission with no exit event in between
+audit row. `REJECT` is unchanged and stays terminal, and its tenant code stays reserved: #172
+decided that no edge leaves `REJECTED` (`RETURN_FOR_CHANGES` is the recoverable path and `REJECT`
+the deliberate "start over"), so a rejected tenant's name is reused only under a new code
+([ADR 0037](../adr/0037-member-reinvite-and-dispatch-generation.md)). The edge has no guard of its
+own and uses `internalEventFactories()`, so it publishes no externalized event: consumers of
+`organisation.approval-requested` see a repeat on each resubmission with no exit event in between
 ([transactional outbox](transactional-outbox-amqp.md)).
 
 `OrganisationProvisioningService.returnForChanges` is **checker only**, behind `tenant.reject`: the

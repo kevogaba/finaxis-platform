@@ -4,14 +4,17 @@ import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.IDENTITY_DISPATCH_LOG
 import com.finaxis.platform.jooq.tables.references.KEYCLOAK_IDENTITY_LINK
+import com.finaxis.platform.jooq.tables.references.MEMBERSHIP_PERMISSION
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
 import com.finaxis.platform.jooq.tables.references.ROLE
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
+import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP_TRANSITION_LOG
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
 import com.finaxis.platform.lifecycle.application.MembershipType
 import com.finaxis.platform.lifecycle.application.RoleAssignmentScopeType
+import com.finaxis.platform.lifecycle.application.port.outbound.ExistingMembership
 import com.finaxis.platform.lifecycle.application.port.outbound.IdentityDispatchType
 import com.finaxis.platform.lifecycle.application.port.outbound.MembershipProvisioningSnapshot
 import com.finaxis.platform.lifecycle.application.port.outbound.ResendTouch
@@ -22,9 +25,11 @@ import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioning
 import com.finaxis.platform.lifecycle.application.port.outbound.UserProvisioningStore
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
+import com.finaxis.platform.lifecycle.domain.MembershipLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import org.jooq.DSLContext
+import org.jooq.Field
 import org.jooq.impl.DSL
 import org.springframework.stereotype.Component
 import org.springframework.transaction.support.TransactionSynchronizationManager
@@ -202,8 +207,37 @@ private class JooqUserProvisioningMembershipStore(
     override fun membershipSnapshot(
         organisationId: UUID,
         membershipId: UUID,
-    ): MembershipProvisioningSnapshot? =
+    ): MembershipProvisioningSnapshot? = readSnapshot(organisationId, membershipId)
+
+    override fun lockedMembershipSnapshot(
+        organisationId: UUID,
+        membershipId: UUID,
+    ): MembershipProvisioningSnapshot? {
+        check(TransactionSynchronizationManager.isActualTransactionActive()) {
+            "A membership lock is held until the caller's transaction ends, so it needs one."
+        }
+        // The lock is its own statement and the snapshot, with its generation, a second one. In
+        // one statement the generation subquery would run on the statement's original snapshot
+        // while the row lock waited for a re-invitation to commit, and read the count from before
+        // it: a stale generation beside the row's new status. Under READ COMMITTED the second
+        // statement takes a fresh snapshot once the lock is granted, so it sees what the holder
+        // committed.
         dsl
+            .select(USER_ORGANISATION_MEMBERSHIP.ID)
+            .from(USER_ORGANISATION_MEMBERSHIP)
+            .where(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId))
+            .and(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
+            .forNoKeyUpdate()
+            .fetch()
+        return readSnapshot(organisationId, membershipId)
+    }
+
+    private fun readSnapshot(
+        organisationId: UUID,
+        membershipId: UUID,
+    ): MembershipProvisioningSnapshot? {
+        val generation = reinviteCount()
+        return dsl
             .select(
                 USER_ORGANISATION_MEMBERSHIP.ID,
                 USER_ORGANISATION_MEMBERSHIP.USER_ID,
@@ -215,6 +249,7 @@ private class JooqUserProvisioningMembershipStore(
                 USER_ACCOUNT.USERNAME,
                 USER_ACCOUNT.DISPLAY_NAME,
                 USER_ACCOUNT.STATUS,
+                generation,
             ).from(USER_ORGANISATION_MEMBERSHIP)
             .join(USER_ACCOUNT)
             .on(USER_ACCOUNT.ID.eq(USER_ORGANISATION_MEMBERSHIP.USER_ID))
@@ -234,19 +269,98 @@ private class JooqUserProvisioningMembershipStore(
                     requireNotNull(record[USER_ACCOUNT.USERNAME]),
                     requireNotNull(record[USER_ACCOUNT.DISPLAY_NAME]),
                     UserLifecycleState.valueOf(requireNotNull(record[USER_ACCOUNT.STATUS])),
-                    requireNotNull(
-                        record[USER_ORGANISATION_MEMBERSHIP.PENDING_KEYCLOAK_INVITE],
+                    requireNotNull(record[USER_ORGANISATION_MEMBERSHIP.PENDING_KEYCLOAK_INVITE]),
+                    requireNotNull(record[USER_ORGANISATION_MEMBERSHIP.PENDING_APPLICATION_INVITE]),
+                    requireNotNull(record[generation]),
+                )
+            }
+    }
+
+    /**
+     * The membership's generation: how many `REINVITE` rows its transition log holds. The log is
+     * append-only and the row is written in the transaction that changes the membership, so the
+     * generation moves exactly when the reset commits and needs no column of its own (ADR 0037).
+     */
+    private fun reinviteCount(): Field<Int> =
+        DSL
+            .field(
+                dsl
+                    .selectCount()
+                    .from(USER_ORGANISATION_MEMBERSHIP_TRANSITION_LOG)
+                    .where(
+                        USER_ORGANISATION_MEMBERSHIP_TRANSITION_LOG.ORGANISATION_ID.eq(
+                            USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID,
+                        ),
+                    ).and(
+                        USER_ORGANISATION_MEMBERSHIP_TRANSITION_LOG.ENTITY_ID.eq(
+                            USER_ORGANISATION_MEMBERSHIP.ID,
+                        ),
+                    ).and(
+                        USER_ORGANISATION_MEMBERSHIP_TRANSITION_LOG.TRANSITION_NAME.eq(
+                            MembershipLifecycleTransition.REINVITE.name,
+                        ),
                     ),
-                    requireNotNull(
-                        record[USER_ORGANISATION_MEMBERSHIP.PENDING_APPLICATION_INVITE],
+            ).`as`("generation")
+
+    override fun existingMembership(
+        organisationId: UUID,
+        userId: UUID,
+    ): ExistingMembership? =
+        dsl
+            .select(
+                USER_ORGANISATION_MEMBERSHIP.ID,
+                USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS,
+            ).from(USER_ORGANISATION_MEMBERSHIP)
+            .where(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId))
+            .and(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(userId))
+            .fetchOne { record ->
+                ExistingMembership(
+                    requireNotNull(record[USER_ORGANISATION_MEMBERSHIP.ID]),
+                    MembershipLifecycleState.valueOf(
+                        requireNotNull(record[USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS]),
                     ),
                 )
             }
 
-    override fun membershipExists(
+    override fun resetMembershipForReinvite(
         organisationId: UUID,
-        userId: UUID,
-    ): Boolean = existingMembershipId(organisationId, userId) != null
+        membershipId: UUID,
+        membershipType: MembershipType,
+        primaryBranchId: UUID?,
+        actorId: UUID,
+    ) {
+        val now = now(clock)
+        // The overrides go first: they are rows of this membership and none may outlive the life
+        // they were granted in.
+        dsl
+            .deleteFrom(MEMBERSHIP_PERMISSION)
+            .where(MEMBERSHIP_PERMISSION.ORGANISATION_ID.eq(organisationId))
+            .and(MEMBERSHIP_PERMISSION.MEMBERSHIP_ID.eq(membershipId))
+            .execute()
+        val reset =
+            dsl
+                .update(USER_ORGANISATION_MEMBERSHIP)
+                .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, membershipType.name)
+                .set(USER_ORGANISATION_MEMBERSHIP.PRIMARY_BRANCH_ID, primaryBranchId)
+                .set(USER_ORGANISATION_MEMBERSHIP.CREATED_BY, actorId)
+                .set(USER_ORGANISATION_MEMBERSHIP.JOINED_AT, null as OffsetDateTime?)
+                .set(USER_ORGANISATION_MEMBERSHIP.SUSPENDED_AT, null as OffsetDateTime?)
+                .set(USER_ORGANISATION_MEMBERSHIP.REVOKED_AT, null as OffsetDateTime?)
+                .set(USER_ORGANISATION_MEMBERSHIP.STATUS_REASON, null as String?)
+                .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT, now)
+                .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_BY, actorId)
+                .set(
+                    USER_ORGANISATION_MEMBERSHIP.ROW_VERSION,
+                    USER_ORGANISATION_MEMBERSHIP.ROW_VERSION.plus(1),
+                ).where(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId))
+                .and(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
+                .and(
+                    USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS.eq(
+                        MembershipLifecycleState.PENDING_APPROVAL.name,
+                    ),
+                ).execute()
+        check(reset == 1) { "Membership could not be reset for a re-invitation." }
+    }
 
     override fun hasActiveMembershipBeyondBootstrap(organisationId: UUID): Boolean =
         dsl.fetchExists(

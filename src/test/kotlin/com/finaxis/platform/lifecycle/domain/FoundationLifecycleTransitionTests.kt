@@ -301,6 +301,46 @@ class FoundationLifecycleTransitionTests {
         )
     }
 
+    @Test
+    fun `membership REINVITE leaves only REVOKED and re-enters PENDING_APPROVAL`() {
+        val graph =
+            FoundationLifecycleDefinitions.membershipGraph(
+                prerequisites = allowingPrerequisites,
+                organisationId = ORGANISATION_ID,
+                userId = USER_ID,
+            )
+
+        val reinvite =
+            graph.requireDefinition(
+                MembershipLifecycleState.REVOKED,
+                MembershipLifecycleTransition.REINVITE,
+            )
+
+        assertEquals(MembershipLifecycleState.PENDING_APPROVAL, reinvite.to)
+        // REVOKED has this one way out, and REINVITE has this one way in.
+        assertEquals(
+            listOf(MembershipLifecycleTransition.REINVITE),
+            graph
+                .definitions()
+                .filter { it.from == MembershipLifecycleState.REVOKED }
+                .map { it.transition },
+        )
+        assertEquals(
+            listOf(MembershipLifecycleState.REVOKED),
+            graph
+                .definitions()
+                .filter { it.transition == MembershipLifecycleTransition.REINVITE }
+                .map { it.from },
+        )
+        MembershipLifecycleState.entries
+            .filter { it != MembershipLifecycleState.REVOKED }
+            .forEach { state ->
+                assertFailsWith<TransitionException> {
+                    graph.requireDefinition(state, MembershipLifecycleTransition.REINVITE)
+                }
+            }
+    }
+
     private fun <S, T, A> assertMatrix(
         graph: TransitionGraph<S, T, A>,
         states: Iterable<S>,

@@ -13,6 +13,11 @@ data class ApplicationInviteJobRequest
         val userId: UUID = UUID(0, 0),
         val email: String = "",
         val dispatchKey: String = "",
+        /**
+         * The life of the membership this invite belongs to (ADR 0037). A job stored before the
+         * field existed reads as 0, the generation of every membership never re-invited.
+         */
+        val generation: Int = 0,
     ) : JobRequest {
         /** Identifies the Spring-managed handler that processes this background job. */
         override fun getJobRequestHandler(): Class<out JobRequestHandler<*>> =

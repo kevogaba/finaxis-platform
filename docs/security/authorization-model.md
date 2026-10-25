@@ -762,7 +762,9 @@ name but no code.
 ## Maker-checker and the platform checker
 
 Approvals are maker-checker: the actor that created a thing cannot approve it, whatever its
-permissions. `UserProvisioningService.approveUser` refuses the actor that invited the membership (403
+permissions. `UserProvisioningService.approveUser` refuses the actor that invited the membership (for
+a revoked member invited again, the actor of the latest invitation: the re-invite resets
+`created_by`, so the first life's maker is a candidate checker again, ADR 0037) (403
 `lifecycle.approver_is_membership_maker`) **and the invited user themselves** (403
 `lifecycle.approver_is_membership_beneficiary`; the checker is neither the maker nor the
 beneficiary), each with an independent `DENIED`/`HIGH` audit row, and
@@ -876,7 +878,9 @@ request and selected `(membershipId, branchId)`.
 The cache key includes membership id and selected branch id, so branch switches do not reuse
 another branch's permissions.
 
-`PermissionCacheInvalidator` evicts cached selections when role grants or role assignments change.
+`PermissionCacheInvalidator` evicts cached selections when role grants or role assignments change,
+and, after commit, when a membership is invited again or activated (a re-invited member keeps the
+membership id, ADR 0037).
 It can also clear the entire effective-permission cache (with `invalidate()`, which deletes in one
 synchronous pass). On Redis both act on the running instance's own schema-version namespace (below)
 through the Spring cache API.

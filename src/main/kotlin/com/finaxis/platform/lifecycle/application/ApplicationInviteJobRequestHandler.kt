@@ -26,7 +26,8 @@ class ApplicationInviteJobRequestHandler(
      * Resolves the membership and organisation, sends the organisation-invite email at most once
      * per job, and audits the outcome. Permanent delivery failures stop further JobRunr retries;
      * a missing membership/organisation, a persistence failure, or a retryable delivery failure
-     * all rethrow so JobRunr retries the job.
+     * all rethrow so JobRunr retries the job. A job of an earlier life of a re-invited membership
+     * (its generation is not the membership's current one) sends nothing and ends (ADR 0037).
      *
      * @param jobRequest the application-invite job details
      */
@@ -37,6 +38,10 @@ class ApplicationInviteJobRequestHandler(
                 checkNotNull(
                     store.membershipSnapshot(jobRequest.organisationId, jobRequest.membershipId),
                 ) { "Membership not found for application invite." }
+            if (snapshot.generation != jobRequest.generation) {
+                cancelStale(jobRequest)
+                return
+            }
             val organisationName =
                 checkNotNull(store.organisationDisplayName(jobRequest.organisationId)) {
                     "Organisation not found for application invite."
@@ -71,6 +76,28 @@ class ApplicationInviteJobRequestHandler(
         } catch (ex: RetryableEmailDeliveryException) {
             recordFailure(jobRequest, ex)
         }
+    }
+
+    /**
+     * Ends a job whose membership was revoked and invited again since it was queued. The new
+     * invitation has its own dispatch and job, so this one has nothing to send. A dispatch still
+     * PENDING is left FAILED with its reason, audited with the state change; one that already
+     * succeeded or failed is left as it is.
+     */
+    private fun cancelStale(jobRequest: ApplicationInviteJobRequest) {
+        if (store.dispatchStatus(jobRequest.dispatchKey) != PENDING) return
+        dispatchOutcomeAuditor.recordFailure(
+            dispatchKey = jobRequest.dispatchKey,
+            externalSystemRef = APPLICATION_INVITE,
+            actorId = SystemActor.ID,
+            tenantId = jobRequest.organisationId,
+            action = APPLICATION_INVITE_ACTION,
+            resourceId = jobRequest.userId.toString(),
+            subjectUserId = jobRequest.userId,
+            reason = "MembershipReinvited",
+            detail = "CANCELLED:MembershipReinvited",
+            metadata = mapOf("dispatchKey" to jobRequest.dispatchKey),
+        )
     }
 
     private fun recordFailure(
@@ -117,6 +144,7 @@ class ApplicationInviteJobRequestHandler(
 
     private companion object {
         const val SUCCEEDED = "SUCCEEDED"
+        const val PENDING = "PENDING"
         const val APPLICATION_INVITE = "APPLICATION_INVITE"
         const val APPLICATION_INVITE_ACTION = "user.application_invite"
     }

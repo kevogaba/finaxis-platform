@@ -57,6 +57,7 @@ class IdentityProvisioningListener(
                 actorId = UUID.fromString(event.actor.id),
                 bootstrapRequestId = bootstrapRequestId,
                 bootstrapAttempt = bootstrapAttempt,
+                generation = event.generation(),
             ),
         )
     }
@@ -88,6 +89,7 @@ class IdentityProvisioningListener(
                 userId = event.requiredMetadataUuid(USER_ID),
                 email = event.requiredMetadata(EMAIL),
                 dispatchKey = dispatchKey,
+                generation = event.generation(),
             ),
         )
     }
@@ -122,6 +124,13 @@ class IdentityProvisioningListener(
             setOf(ORGANISATION_ID, MEMBERSHIP_ID, USER_ID, EMAIL, DISPATCH_KEY)
     }
 }
+
+/**
+ * The membership generation the event was published for. An event published before the field
+ * existed (still in the outbox or on the queue across a deploy) names none: generation 0.
+ */
+private fun ExternalizedTransitionEvent.generation(): Int =
+    metadata["generation"]?.toString()?.toIntOrNull() ?: 0
 
 private fun ExternalizedTransitionEvent.requireMetadata(fields: Set<String>) {
     fields.forEach { field -> requiredMetadata(field) }
