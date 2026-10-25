@@ -55,6 +55,7 @@ Only active organisations can be mutated.
 | `CompleteCob` | `cob.complete` | `CLOSING` | `CLOSED` |
 | `ReopenBusinessDate` | `business_date.reopen` | `CLOSED` | `OPEN` |
 | `GetBusinessDate` | `business_date.view` | row exists | current view |
+| `GetCobReadiness` | `cob.start` (+ `business_date.view`) | row exists | readiness view |
 | `ListBusinessDateHistory` | `business_date.view` | row may have history | page |
 
 `business_date.reopen` is the only permission that authorizes reopen. There is no fallback to
@@ -74,6 +75,34 @@ status flip may now see a short wait. It is bounded by
 `finaxis.lifecycle.business-date-lock-timeout` (ten seconds by default); an expiry is a `409`
 carrying `lifecycle.business_date_lock_timeout` and is safe to retry. `Initialize` is unaffected:
 it inserts a row nothing can be holding.
+
+## Close-of-business readiness
+
+`GET /api/v1/tenant/business-date/cob/readiness` (#168) answers *"is this tenant ready to start
+close-of-business?"* before an operator calls `cob/start`. It is **advice only**: a snapshot read
+without a lock, which `StartCob` and `CompleteCob` do not consult, so a tenant that is not ready can
+still start and complete its close. A posting, a submission or an approval can land between the
+read and the start; the real guarantees are unchanged (posting is refused while the date is
+`CLOSING`, and `StartCob` queues behind in-flight postings). See
+`docs/adr/0038-cob-readiness-and-approval-counts.md`.
+
+| Check | Severity | Result when open |
+|---|---|---|
+| `business_date_open` | `BLOCKING` | `FAIL` unless the row is `OPEN` |
+| `organisation_active` | `BLOCKING` | `FAIL` unless the organisation is `ACTIVE` |
+| `manual_journals_pending_approval` | `BLOCKING` | `FAIL` with the count of `PENDING_APPROVAL` journals |
+| `manual_journals_draft` | `ADVISORY` | `WARN` with the count of `DRAFT` journals |
+| `reconciliation_breaks` | `ADVISORY` | `WARN` with the control accounts whose latest run is a `BREAK` |
+
+`ready` is true when no `BLOCKING` check failed. The three accounting checks come from the
+accounting-owned `AccountingCloseReadiness` port, implemented by accounting's own jOOQ adapter, so
+this module reads no accounting table. A tenant with no accounting data is `ready` with every check
+`PASS`. There is no check for pending posting requests (none is ever committed `PENDING`), nor for
+background jobs or the audit stream (no signal exists).
+
+Making `StartCob` refuse a not-ready tenant is a separate decision (ADR 0038, "Later:
+enforcement"): it would need the count read under the same lock, an audited override and a rule for
+`CompleteCob`.
 
 ## History
 
@@ -128,6 +157,7 @@ status-oriented event state.
 - `ReopenBusinessDate`
 - `GetBusinessDate`
 - `ListBusinessDateHistory`
+- `GetCobReadiness`
 
 These are exposed by `BusinessDateController` under `/api/v1/tenant/business-date`:
 
@@ -135,6 +165,7 @@ These are exposed by `BusinessDateController` under `/api/v1/tenant/business-dat
 | --- | --- | --- |
 | GET | `/` | `business_date.view` |
 | GET | `/history` | `business_date.view` |
+| GET | `/cob/readiness` | `cob.start` |
 | POST | `/advance` | `business_date.advance` |
 | POST | `/cob/start` | `cob.start` |
 | POST | `/cob/complete` | `cob.complete` |

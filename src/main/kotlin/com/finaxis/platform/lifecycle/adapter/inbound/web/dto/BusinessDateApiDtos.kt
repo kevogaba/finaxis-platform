@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web.dto
 
 import com.fasterxml.jackson.annotation.JsonFormat
+import com.fasterxml.jackson.annotation.JsonInclude
 import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.constraints.NotNull
 import java.time.Instant
@@ -55,4 +56,30 @@ data class BusinessDateHistoryEntryResponse(
     val actorId: UUID?,
     val reason: String?,
     val occurredAt: Instant,
+)
+
+/** One close-of-business readiness check; `count` is omitted by checks that count nothing. */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+data class CobReadinessCheckResponse(
+    @field:Schema(example = "manual_journals_pending_approval")
+    val code: String,
+    @field:Schema(allowableValues = ["BLOCKING", "ADVISORY"])
+    val severity: String,
+    @field:Schema(allowableValues = ["PASS", "FAIL", "WARN"])
+    val status: String,
+    val detail: String,
+    val count: Long? = null,
+)
+
+/**
+ * Point-in-time close-of-business readiness: advice, not a gate. `ready` is false only when a
+ * `BLOCKING` check failed, and `cob/start` does not consult it.
+ */
+data class CobReadinessResponse(
+    @field:JsonFormat(pattern = "dd-MM-yyyy")
+    @field:Schema(example = "18-07-2026", type = "string")
+    val businessDate: LocalDate,
+    val status: String,
+    val ready: Boolean,
+    val checks: List<CobReadinessCheckResponse>,
 )

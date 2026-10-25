@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.accounting.AccountingCloseReadiness
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.application.InvalidOperationException
@@ -46,6 +47,7 @@ class BusinessDateService(
     private val auditService: AuditService,
     private val eventPublisher: TransitionEventPublisher,
     private val dailyBalanceBuilds: DailyBalanceBuildScheduler,
+    private val closeReadiness: AccountingCloseReadiness,
     private val lockTimeout: TransactionLockBound,
     private val properties: BusinessDateProperties,
     private val clock: Clock,
@@ -266,6 +268,28 @@ class BusinessDateService(
         requireValidPage(query.page, query.size)
         requirePermission(query.actorId, query.organisationId, BUSINESS_DATE_VIEW_PERMISSION)
         return historyStore.list(query.organisationId, query.page, query.size)
+    }
+
+    /**
+     * Reports whether the tenant is ready to start close-of-business (#168), as advice only.
+     *
+     * Needs `cob.start` and, centrally, the `business_date.view` it is paired with: whoever may
+     * start the close may ask whether to. The answer is a snapshot read without a lock, so a
+     * posting or an approval can land after it, and `startCob` and `completeCob` deliberately do
+     * not consult it (ADR 0038). The accounting facts come through [AccountingCloseReadiness], so
+     * lifecycle reads no accounting table.
+     */
+    @Transactional(readOnly = true)
+    @GatedRead
+    fun cobReadiness(query: GetBusinessDateQuery): CobReadinessView {
+        requirePermission(query.actorId, query.organisationId, COB_START_PERMISSION)
+        val current = requireCurrent(query.organisationId)
+        return CobReadinessChecks.evaluate(
+            current.currentBusinessDate,
+            current.status,
+            lifecycleStore.lifecycleState(query.organisationId),
+            closeReadiness.snapshot(query.organisationId),
+        )
     }
 
     /**

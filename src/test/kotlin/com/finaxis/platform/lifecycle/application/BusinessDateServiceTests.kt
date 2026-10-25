@@ -1,5 +1,7 @@
 package com.finaxis.platform.lifecycle.application
 
+import com.finaxis.platform.accounting.AccountingCloseReadiness
+import com.finaxis.platform.accounting.CloseReadinessSnapshot
 import com.finaxis.platform.common.application.ConflictException
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.audit.AuditEvent
@@ -41,6 +43,7 @@ class BusinessDateServiceTests {
     private val clock = Clock.fixed(Instant.parse("2026-07-17T10:15:30Z"), ZoneOffset.UTC)
     private val lockBound = RecordingLockBound()
     private val dailyBalanceBuilds = RecordingDailyBalanceBuilds()
+    private val closeReadiness = FakeCloseReadiness()
     private val service =
         BusinessDateService(
             lifecycleStore,
@@ -50,6 +53,7 @@ class BusinessDateServiceTests {
             AuditService(auditEvents, clock),
             events,
             dailyBalanceBuilds,
+            closeReadiness,
             lockBound,
             BusinessDateProperties(CONFIGURED_LOCK_TIMEOUT),
             clock,
@@ -340,6 +344,106 @@ class BusinessDateServiceTests {
     }
 
     @Test
+    fun `readiness needs cob start and reads nothing before it is held`() {
+        val organisationId = activeOrganisation()
+        guard.deny(organisationId, "cob.start")
+
+        assertFailsWith<SecurityException> {
+            service.cobReadiness(GetBusinessDateQuery(organisationId, uuidV7()))
+        }
+        assertEquals(0, closeReadiness.calls)
+    }
+
+    @Test
+    fun `readiness of a clean open tenant passes every check`() {
+        val organisationId = openTenant()
+
+        val view = service.cobReadiness(GetBusinessDateQuery(organisationId, uuidV7()))
+
+        assertEquals(true, view.ready)
+        assertEquals("OPEN", view.status)
+        assertEquals(
+            listOf(
+                "business_date_open",
+                "organisation_active",
+                "manual_journals_pending_approval",
+                "manual_journals_draft",
+                "reconciliation_breaks",
+            ),
+            view.checks.map { it.code },
+        )
+        assertEquals(setOf(CobCheckStatus.PASS), view.checks.map { it.status }.toSet())
+        assertEquals(
+            listOf(
+                CobCheckSeverity.BLOCKING,
+                CobCheckSeverity.BLOCKING,
+                CobCheckSeverity.BLOCKING,
+                CobCheckSeverity.ADVISORY,
+                CobCheckSeverity.ADVISORY,
+            ),
+            view.checks.map { it.severity },
+        )
+    }
+
+    @Test
+    fun `a pending approval manual journal blocks readiness with its count`() {
+        val organisationId = openTenant()
+        closeReadiness.snapshot = CloseReadinessSnapshot(2, 0, 0)
+
+        val view = service.cobReadiness(GetBusinessDateQuery(organisationId, uuidV7()))
+
+        assertEquals(false, view.ready)
+        val check = view.checks.single { it.code == "manual_journals_pending_approval" }
+        assertEquals(CobCheckStatus.FAIL, check.status)
+        assertEquals(2L, check.count)
+    }
+
+    @Test
+    fun `draft journals and reconciliation breaks only warn`() {
+        val organisationId = openTenant()
+        closeReadiness.snapshot = CloseReadinessSnapshot(0, 3, 1)
+
+        val view = service.cobReadiness(GetBusinessDateQuery(organisationId, uuidV7()))
+
+        assertEquals(true, view.ready)
+        val draft = view.checks.single { it.code == "manual_journals_draft" }
+        assertEquals(CobCheckStatus.WARN, draft.status)
+        assertEquals(3L, draft.count)
+        val breaks = view.checks.single { it.code == "reconciliation_breaks" }
+        assertEquals(CobCheckStatus.WARN, breaks.status)
+        assertEquals(1L, breaks.count)
+    }
+
+    @Test
+    fun `a business date that is not open blocks readiness`() {
+        val organisationId = openTenant()
+        businessDateStore.snapshots[organisationId] =
+            BusinessDateSnapshot(LocalDate.parse("2026-07-15"), "CLOSING", 4)
+
+        val view = service.cobReadiness(GetBusinessDateQuery(organisationId, uuidV7()))
+
+        assertEquals(false, view.ready)
+        assertEquals(
+            CobCheckStatus.FAIL,
+            view.checks.single { it.code == "business_date_open" }.status,
+        )
+    }
+
+    @Test
+    fun `an organisation that is not active blocks readiness`() {
+        val organisationId = openTenant()
+        lifecycleStore.states[organisationId] = OrganisationLifecycleState.SUSPENDED
+
+        val view = service.cobReadiness(GetBusinessDateQuery(organisationId, uuidV7()))
+
+        assertEquals(false, view.ready)
+        assertEquals(
+            CobCheckStatus.FAIL,
+            view.checks.single { it.code == "organisation_active" }.status,
+        )
+    }
+
+    @Test
     fun `every mutation appends one history entry with its event type`() {
         val organisationId = activeOrganisation()
         val actorId = uuidV7()
@@ -429,6 +533,12 @@ class BusinessDateServiceTests {
         )
     }
 
+    private fun openTenant(): UUID =
+        activeOrganisation().also {
+            businessDateStore.snapshots[it] =
+                BusinessDateSnapshot(LocalDate.parse("2026-07-15"), "OPEN", 4)
+        }
+
     private fun activeOrganisation(): UUID =
         uuidV7().also {
             lifecycleStore.states[it] = OrganisationLifecycleState.ACTIVE
@@ -478,6 +588,16 @@ private class RecordingDailyBalanceBuilds : DailyBalanceBuildScheduler {
         businessDateLeft: LocalDate,
     ) {
         scheduled += organisationId to businessDateLeft
+    }
+}
+
+private class FakeCloseReadiness : AccountingCloseReadiness {
+    var snapshot = CloseReadinessSnapshot(0, 0, 0)
+    var calls = 0
+
+    override fun snapshot(organisationId: UUID): CloseReadinessSnapshot {
+        calls++
+        return snapshot
     }
 }
 

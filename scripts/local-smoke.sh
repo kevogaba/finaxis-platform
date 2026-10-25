@@ -96,6 +96,20 @@ curl -fsS \
   -H "X-Active-Organisation-Context: $BRANCH_CONTEXT_TOKEN"
 echo
 
+echo "== Reading close-of-business readiness (advice only; cob.start) =="
+curl -fsS \
+  "$APP_URL/api/v1/tenant/business-date/cob/readiness" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "X-Active-Organisation-Context: $BRANCH_CONTEXT_TOKEN"
+echo
+
+echo "== Reading the tenant pending-approval counts (a key is omitted without its authority) =="
+curl -fsS \
+  "$APP_URL/api/v1/tenant/approvals/pending-count" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "X-Active-Organisation-Context: $BRANCH_CONTEXT_TOKEN"
+echo
+
 echo "== Selecting platform organisation context for tenant onboarding =="
 
 PLATFORM_SELECTION_RESPONSE_FILE="$(mktemp)"
@@ -239,6 +253,13 @@ echo
 echo "== Calling a representative paginated platform endpoint (tenants) =="
 curl -fsS \
   "$APP_URL/api/v1/platform/tenants?page=0&size=5" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "X-Active-Organisation-Context: $PLATFORM_CONTEXT_TOKEN"
+echo
+
+echo "== Reading the platform pending-tenant count (excludes tenants this actor made) =="
+curl -fsS \
+  "$APP_URL/api/v1/platform/approvals/pending-count" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "X-Active-Organisation-Context: $PLATFORM_CONTEXT_TOKEN"
 echo

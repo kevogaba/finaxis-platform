@@ -69,8 +69,8 @@ only report or resolve against the currency, and `functionalCurrencyForPosting` 
 the same column - the only one a posting may decide its currency from once it holds the
 tenant-currency lock. The paragraph below says why the distinction exists.
 
-Two ports run the other way, both declared in the accounting root package and implemented inside
-accounting. Lifecycle already depends on `accounting` for the ports above, so neither creates a
+Three ports run the other way, all declared in the accounting root package and implemented inside
+accounting. Lifecycle already depends on `accounting` for the ports above, so none creates a
 module edge.
 
 `AccountingDayRollover` is the one of them that lifecycle calls. It lets lifecycle tell accounting
@@ -83,6 +83,13 @@ transaction and calls this port from it after that transaction commits, outside 
 `business_date` row lock every current-dated posting queues behind. The ban stays absolute rather
 than being narrowed for a special case. See
 [ADR 0027](../adr/0027-derived-balance-projection-and-its-build-trigger.md).
+
+`AccountingCloseReadiness` is the read lifecycle makes before an operator starts close-of-business
+(#168): `snapshot(organisationId)` returns three counts (manual journals pending approval, manual
+journals in draft, and control accounts whose latest reconciliation run is a break), read by an
+accounting jOOQ adapter, so lifecycle reads no accounting table and accounting reads nothing of
+lifecycle's. It is advice and takes no lock; `startCob` does not consult it. See
+[ADR 0038](../adr/0038-cob-readiness-and-approval-counts.md).
 
 `AccountingLedgerActivity` is kept with no production caller: lifecycle no longer asks whether a
 tenant has posted, because the `base_currency` setting is a read-only mirror of the organisation

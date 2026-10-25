@@ -19,6 +19,9 @@ object ApiPaths {
     /** Platform-organisation audit log endpoint namespace (read-only). */
     const val PLATFORM_AUDIT_EVENTS = "$PLATFORM/audit-events"
 
+    /** Platform pending-approval count endpoint namespace (read-only badge counts). */
+    const val PLATFORM_APPROVALS = "$PLATFORM/approvals"
+
     /** Active tenant endpoint namespace. */
     const val TENANT = "$API_V1/tenant"
 
@@ -51,6 +54,9 @@ object ApiPaths {
 
     /** Tenant controlled business date endpoint namespace (singleton resource). */
     const val BUSINESS_DATE = "$TENANT/business-date"
+
+    /** Tenant pending-approval count endpoint namespace (read-only badge counts). */
+    const val TENANT_APPROVALS = "$TENANT/approvals"
 
     /** Tenant audit event administration endpoint namespace. */
     const val AUDIT_EVENTS = "$TENANT/audit-events"
