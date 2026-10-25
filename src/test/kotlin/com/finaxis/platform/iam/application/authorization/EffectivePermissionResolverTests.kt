@@ -3,6 +3,7 @@ package com.finaxis.platform.iam.application.authorization
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
+import com.finaxis.platform.iam.application.port.outbound.PermissionScope
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.PermissionEffect
 import org.springframework.cache.concurrent.ConcurrentMapCacheManager
@@ -196,6 +197,8 @@ private class FakePermissionQueries(
         membershipId: UUID,
         permissionCode: String,
     ): Set<UUID> = emptySet()
+
+    override fun grantsByScope(membershipId: UUID): List<PermissionScope> = emptyList()
 
     /** Unused here: the resolver under test is the cached one, which never takes a lock. */
     override fun lockedBreakGlassGrant(

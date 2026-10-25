@@ -648,6 +648,17 @@ Profile response example:
   "roles": [],
   "permissions": [
     "iam.profile.read"
+  ],
+  "permission_scopes": [
+    {
+      "code": "branch.suspend",
+      "scope": "BRANCH",
+      "branch_ids": ["33333333-3333-7333-8333-333333333333"]
+    },
+    {
+      "code": "iam.profile.read",
+      "scope": "TENANT"
+    }
   ]
 }
 ```
@@ -658,6 +669,24 @@ lists), and a role only while it is `ACTIVE` (a `DISABLED` or `ARCHIVED` role is
 many assignment rows (several branch assignment types, or the same role at tenant and branch
 scope) connect them to the membership. `permissions` is unchanged: it is the effective set
 the runtime authorises with, which already counts only ACTIVE roles and permissions.
+
+`permission_scopes` (issue #175) says **where** each permission is held, which the flat list cannot:
+`permissions` is narrowed to the selected branch (tenant-wide grants plus that branch's), so a
+caller pinned to one branch never sees a grant that exists only on another. Each entry is
+`{code, scope, branch_ids?}`:
+
+- `scope: "TENANT"`: held across the tenant (a tenant-scope role assignment, or a direct `ALLOW`
+  override, which is always tenant-wide). `branch_ids` is absent.
+- `scope: "BRANCH"`: held only on the branches in `branch_ids` (ascending), through branch-scope
+  role assignments. `branch_ids` is present only for this scope.
+
+A code held both tenant-wide and on a branch is reported once, as `TENANT`. Only `ACTIVE` branches
+count, the rule of #242: a grant held only on a suspended or closed branch is absent, and a
+branch drops out of `branch_ids` as it leaves `ACTIVE`. A direct `DENY` override removes the code
+altogether, as it does from `permissions`. A membership that is not `ACTIVE` reports none. The
+list is sorted by `code`, covers every `ACTIVE` branch whatever branch is selected, and is read
+fresh on each request (never from the effective-permission cache). It is informational, like the
+rest of the profile: authorisation still happens on the server per request and never trusts it.
 
 ### Branches
 

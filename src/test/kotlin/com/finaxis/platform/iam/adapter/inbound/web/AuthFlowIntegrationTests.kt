@@ -11,8 +11,10 @@ import com.finaxis.platform.jooq.tables.references.ORGANISATION
 import com.finaxis.platform.jooq.tables.references.ROLE_PERMISSION
 import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_BRANCH_ASSIGNMENT
+import org.hamcrest.Matchers.contains
 import org.hamcrest.Matchers.containsInAnyOrder
 import org.hamcrest.Matchers.containsString
+import org.hamcrest.Matchers.empty
 import org.hamcrest.Matchers.hasItem
 import org.hamcrest.Matchers.hasItems
 import org.jooq.DSLContext
@@ -376,6 +378,12 @@ class AuthFlowIntegrationTests {
                             "iam.profile.read",
                         ),
                     )
+                }
+                jsonPath("$.permission_scopes[?(@.code=='iam.profile.read')].scope") {
+                    value(contains("TENANT"))
+                }
+                jsonPath("$.permission_scopes[?(@.code=='iam.profile.read')].branch_ids") {
+                    value(empty<Any>())
                 }
             }
     }

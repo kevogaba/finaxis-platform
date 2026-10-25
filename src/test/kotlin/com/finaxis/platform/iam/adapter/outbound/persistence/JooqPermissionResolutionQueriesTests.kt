@@ -3,6 +3,7 @@ package com.finaxis.platform.iam.adapter.outbound.persistence
 import com.finaxis.platform.PostgresTestConfiguration
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
+import com.finaxis.platform.iam.application.port.outbound.PermissionScope
 import com.finaxis.platform.iam.domain.PermissionEffect
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.MEMBERSHIP_PERMISSION
@@ -176,6 +177,92 @@ class JooqPermissionResolutionQueriesTests(
             .where(BRANCH.ID.eq(suspended))
             .execute()
         assertEquals(setOf(active, suspended), queries.branchIdsGranting(membershipId, code))
+    }
+
+    @Test
+    fun `grantsByScope reports tenant grants and the active branches of branch grants`() {
+        val organisationId = insertOrganisation()
+        val userId = insertUser()
+        val membershipId = insertMembership(organisationId, userId)
+        val branchA = insertBranch(organisationId)
+        val branchB = insertBranch(organisationId)
+        val suspended = insertBranch(organisationId, "SUSPENDED")
+        val tenantRole = insertRole(organisationId)
+        insertRolePermission(organisationId, tenantRole, insertPermission("scope.tenant"))
+        insertRolePermission(organisationId, tenantRole, insertPermission("scope.both"))
+        insertUserRoleAssignment(organisationId, userId, tenantRole, branchId = null)
+        val branchRole = insertRole(organisationId)
+        insertRolePermission(organisationId, branchRole, findOrInsertPermission("scope.both"))
+        insertRolePermission(organisationId, branchRole, insertPermission("scope.branch"))
+        insertUserRoleAssignment(organisationId, userId, branchRole, branchA)
+        insertUserRoleAssignment(organisationId, userId, branchRole, branchB)
+        // A grant held only on a suspended branch is absent altogether (issue #242).
+        val suspendedRole = insertRole(organisationId)
+        insertRolePermission(organisationId, suspendedRole, insertPermission("scope.suspended"))
+        insertUserRoleAssignment(organisationId, userId, suspendedRole, suspended)
+
+        val grants = queries.grantsByScope(membershipId)
+
+        assertEquals(
+            listOf(
+                PermissionScope("scope.both", PermissionScope.Scope.TENANT),
+                PermissionScope(
+                    "scope.both",
+                    PermissionScope.Scope.BRANCH,
+                    listOf(branchA, branchB).sortedBy { it.toString() },
+                ),
+                PermissionScope(
+                    "scope.branch",
+                    PermissionScope.Scope.BRANCH,
+                    listOf(branchA, branchB).sortedBy { it.toString() },
+                ),
+                PermissionScope("scope.tenant", PermissionScope.Scope.TENANT),
+            ),
+            grants,
+        )
+    }
+
+    @Test
+    fun `grantsByScope ignores inactive assignments roles permissions and other members`() {
+        val organisationId = insertOrganisation()
+        val userId = insertUser()
+        val membershipId = insertMembership(organisationId, userId)
+        val otherUserId = insertUser()
+        insertMembership(organisationId, otherUserId)
+        val branchId = insertBranch(organisationId)
+        val activePermissionId = insertPermission("scope.active")
+        val inactiveAssignment = insertRole(organisationId)
+        insertRolePermission(organisationId, inactiveAssignment, activePermissionId)
+        insertUserRoleAssignment(organisationId, userId, inactiveAssignment, null, "INACTIVE")
+        val disabledRole = insertRole(organisationId, status = "DISABLED")
+        insertRolePermission(organisationId, disabledRole, activePermissionId)
+        insertUserRoleAssignment(organisationId, userId, disabledRole, branchId)
+        val deprecatedCode = insertRole(organisationId)
+        insertRolePermission(
+            organisationId,
+            deprecatedCode,
+            insertPermission("scope.dormant", status = "DEPRECATED"),
+        )
+        insertUserRoleAssignment(organisationId, userId, deprecatedCode, null)
+        val othersRole = insertRole(organisationId)
+        insertRolePermission(organisationId, othersRole, activePermissionId)
+        insertUserRoleAssignment(organisationId, otherUserId, othersRole, null)
+
+        assertEquals(emptyList(), queries.grantsByScope(membershipId))
+    }
+
+    @Test
+    fun `grantsByScope is bound to the membership's organisation`() {
+        val organisationId = insertOrganisation()
+        val otherOrganisationId = insertOrganisation()
+        val userId = insertUser()
+        val membershipId = insertMembership(organisationId, userId)
+        insertMembership(otherOrganisationId, userId)
+        val otherRole = insertRole(otherOrganisationId)
+        insertRolePermission(otherOrganisationId, otherRole, insertPermission("scope.elsewhere"))
+        insertUserRoleAssignment(otherOrganisationId, userId, otherRole, null)
+
+        assertEquals(emptyList(), queries.grantsByScope(membershipId))
     }
 
     @Test

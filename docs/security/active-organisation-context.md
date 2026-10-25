@@ -95,6 +95,12 @@ The selected branch **narrows operational authority; it does not scope tenant ad
   always apply, and branch-scope role assignments apply only for the selected branch. With no
   branch selected only tenant-scope assignments apply. This is what `@PreAuthorize` and the
   `/auth/me` permission list read, so operational work stays narrowed to the working branch.
+- *`/auth/me` also reports where each grant applies.* Beside the flat `permissions` (narrowed as
+  above), `permission_scopes` lists every code with `TENANT` or `BRANCH` scope and, for `BRANCH`,
+  the `ACTIVE` branches it is held on, whichever branch is selected, so a pinned client can see
+  that a grant exists elsewhere (for example to offer a branch switch). It is read fresh, not
+  from the narrowed cache, and does not change what is authorised (issue #175; see
+  `docs/security/authorization-model.md`).
 - *Administration of branches, branch assignments and BRANCH-scope role assignments* is **not**
   hidden by the selected branch. A pinned caller can `GET`/update (`PATCH`)/submit/activate/
   suspend/reactivate/close any branch of the tenant, and use `/tenant/branch-assignments` and

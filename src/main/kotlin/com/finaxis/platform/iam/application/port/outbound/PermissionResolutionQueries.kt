@@ -13,6 +13,28 @@ data class PermissionEffectAssignment(
 )
 
 /**
+ * One permission code and where a membership holds it: [Scope.TENANT] (every branch) or
+ * [Scope.BRANCH] (only the ACTIVE branches in [branchIds]).
+ *
+ * [branchIds] is non-null, sorted and non-empty exactly for [Scope.BRANCH], and `null` for
+ * [Scope.TENANT].
+ */
+data class PermissionScope(
+    val code: String,
+    val scope: Scope,
+    val branchIds: List<UUID>? = null,
+) {
+    /** Reach of a grant. */
+    enum class Scope {
+        /** Held across the whole tenant. */
+        TENANT,
+
+        /** Held only on specific branches. */
+        BRANCH,
+    }
+}
+
+/**
  * Outbound application port for resolving membership-scoped permissions.
  */
 interface PermissionResolutionQueries {
@@ -53,6 +75,25 @@ interface PermissionResolutionQueries {
         membershipId: UUID,
         permissionCode: String,
     ): Set<UUID>
+
+    /**
+     * Reads every code [membershipId] holds through an ACTIVE role assignment, an ACTIVE role and
+     * an ACTIVE catalogue entry, with the reach of each grant: one [PermissionScope.Scope.TENANT]
+     * entry per code held through a tenant-scope assignment, and one
+     * [PermissionScope.Scope.BRANCH] entry per code held through branch-scope assignments, listing
+     * the branches in ascending order. A code held both ways has both entries; the caller decides
+     * which wins.
+     *
+     * The branch half is [branchIdsGranting] over every code, with the same rule: a branch that is
+     * not ACTIVE is never listed, so a code granted only on a suspended branch is absent (issue
+     * #242). Direct `membership_permission` overrides are not applied here ([directPermissionEffects]
+     * reads them). The result is bounded by the catalogue size times the membership's branches,
+     * it is tenant-filtered through the membership, and it is always read fresh: it is never
+     * stored under the effective-permission cache key.
+     *
+     * Entries are ordered by code, then tenant before branch.
+     */
+    fun grantsByScope(membershipId: UUID): List<PermissionScope>
 
     /**
      * Decides whether [membershipId] holds [permissionCode] **under a shared lock on every row the

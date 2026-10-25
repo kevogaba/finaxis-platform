@@ -6,6 +6,7 @@ import com.finaxis.platform.iam.application.authorization.EffectivePermissionRes
 import com.finaxis.platform.iam.application.authorization.PermissionCacheInvalidator
 import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
+import com.finaxis.platform.iam.application.port.outbound.PermissionScope
 import com.finaxis.platform.iam.domain.MembershipStatus
 import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.mock
@@ -112,6 +113,8 @@ class EffectivePermissionCacheStartupClearerTests {
             membershipId: UUID,
             permissionCode: String,
         ): Set<UUID> = emptySet()
+
+        override fun grantsByScope(membershipId: UUID): List<PermissionScope> = emptyList()
 
         override fun lockedBreakGlassGrant(
             membershipId: UUID,

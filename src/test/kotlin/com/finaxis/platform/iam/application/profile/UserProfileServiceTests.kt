@@ -3,6 +3,9 @@ package com.finaxis.platform.iam.application.profile
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.authorization.AccessDeniedException
 import com.finaxis.platform.iam.application.context.AppPrincipal
+import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
+import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
+import com.finaxis.platform.iam.application.port.outbound.PermissionScope
 import com.finaxis.platform.iam.application.port.outbound.ProfileBranch
 import com.finaxis.platform.iam.application.port.outbound.ProfileMembership
 import com.finaxis.platform.iam.application.port.outbound.ProfileOrganisation
@@ -10,6 +13,7 @@ import com.finaxis.platform.iam.application.port.outbound.ProfileRole
 import com.finaxis.platform.iam.application.port.outbound.UserProfileLookup
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
+import com.finaxis.platform.iam.domain.PermissionEffect
 import com.finaxis.platform.iam.domain.RoleStatus
 import org.junit.jupiter.api.assertThrows
 import java.util.UUID
@@ -56,7 +60,7 @@ class UserProfileServiceTests {
                     ),
             )
 
-        val profile = UserProfileService(lookup).profile(principal)
+        val profile = UserProfileService(lookup, FakeProfilePermissionQueries()).profile(principal)
 
         assertEquals(organisationId, profile.organisation.id)
         assertEquals(membershipId, profile.membership.id)
@@ -89,7 +93,7 @@ class UserProfileServiceTests {
                 roles = listOf(admin, disabled, admin),
             )
 
-        val profile = UserProfileService(lookup).profile(principal)
+        val profile = UserProfileService(lookup, FakeProfilePermissionQueries()).profile(principal)
 
         assertEquals(listOf(hq), profile.branches)
         assertEquals(hq, profile.selectedBranch)
@@ -108,7 +112,7 @@ class UserProfileServiceTests {
             )
 
         assertThrows<AccessDeniedException> {
-            UserProfileService(lookup).profile(principal)
+            UserProfileService(lookup, FakeProfilePermissionQueries()).profile(principal)
         }
     }
 
@@ -118,7 +122,7 @@ class UserProfileServiceTests {
         val lookup = FakeUserProfileLookup(membership = ProfileMembership(principal.membershipId))
 
         assertThrows<AccessDeniedException> {
-            UserProfileService(lookup).profile(principal)
+            UserProfileService(lookup, FakeProfilePermissionQueries()).profile(principal)
         }
     }
 
@@ -131,7 +135,7 @@ class UserProfileServiceTests {
             )
 
         assertThrows<AccessDeniedException> {
-            UserProfileService(lookup).profile(principal)
+            UserProfileService(lookup, FakeProfilePermissionQueries()).profile(principal)
         }
     }
 
@@ -146,8 +150,97 @@ class UserProfileServiceTests {
             )
 
         assertThrows<AccessDeniedException> {
-            UserProfileService(lookup).profile(principal)
+            UserProfileService(lookup, FakeProfilePermissionQueries()).profile(principal)
         }
+    }
+
+    @Test
+    fun `a tenant grant is reported once as TENANT and a branch-only grant as BRANCH`() {
+        val branchA = uuidV7()
+        val branchB = uuidV7()
+        val queries =
+            FakeProfilePermissionQueries(
+                grants =
+                    listOf(
+                        PermissionScope(
+                            "b.view",
+                            PermissionScope.Scope.BRANCH,
+                            listOf(branchA, branchB),
+                        ),
+                        PermissionScope("a.view", PermissionScope.Scope.TENANT),
+                        PermissionScope("a.view", PermissionScope.Scope.BRANCH, listOf(branchA)),
+                    ),
+            )
+
+        val scopes = scopesOf(queries)
+
+        assertEquals(
+            listOf(
+                PermissionScope("a.view", PermissionScope.Scope.TENANT),
+                PermissionScope("b.view", PermissionScope.Scope.BRANCH, listOf(branchA, branchB)),
+            ),
+            scopes,
+        )
+    }
+
+    @Test
+    fun `a direct DENY removes the code from every scope and a direct ALLOW is tenant wide`() {
+        val branch = uuidV7()
+        val queries =
+            FakeProfilePermissionQueries(
+                grants =
+                    listOf(
+                        PermissionScope("denied.tenant", PermissionScope.Scope.TENANT),
+                        PermissionScope(
+                            "denied.branch",
+                            PermissionScope.Scope.BRANCH,
+                            listOf(branch),
+                        ),
+                        PermissionScope("widened", PermissionScope.Scope.BRANCH, listOf(branch)),
+                    ),
+                effects =
+                    listOf(
+                        PermissionEffectAssignment("denied.tenant", PermissionEffect.DENY),
+                        PermissionEffectAssignment("denied.branch", PermissionEffect.DENY),
+                        PermissionEffectAssignment("widened", PermissionEffect.ALLOW),
+                        PermissionEffectAssignment("direct.only", PermissionEffect.ALLOW),
+                        PermissionEffectAssignment("both", PermissionEffect.ALLOW),
+                        PermissionEffectAssignment("both", PermissionEffect.DENY),
+                    ),
+            )
+
+        assertEquals(
+            listOf(
+                PermissionScope("direct.only", PermissionScope.Scope.TENANT),
+                PermissionScope("widened", PermissionScope.Scope.TENANT),
+            ),
+            scopesOf(queries),
+        )
+    }
+
+    @Test
+    fun `a membership that is not active reports no scopes`() {
+        val queries =
+            FakeProfilePermissionQueries(
+                grants = listOf(PermissionScope("a.view", PermissionScope.Scope.TENANT)),
+            )
+
+        assertEquals(emptyList(), scopesOf(queries, MembershipStatus.SUSPENDED))
+    }
+
+    private fun scopesOf(
+        queries: PermissionResolutionQueries,
+        status: MembershipStatus = MembershipStatus.ACTIVE,
+    ): List<PermissionScope> {
+        val principal = principal(permissions = setOf("z.flat"))
+        val lookup =
+            FakeUserProfileLookup(
+                organisation = ProfileOrganisation(principal.organisationId),
+                membership = ProfileMembership(principal.membershipId, status),
+            )
+        val profile = UserProfileService(lookup, queries).profile(principal)
+        assertEquals(listOf("z.flat"), profile.permissions)
+        return profile.permissionScopes
     }
 
     private fun principal(

@@ -12,6 +12,7 @@ import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLoo
 import com.finaxis.platform.iam.application.port.outbound.OrganisationSelection
 import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
+import com.finaxis.platform.iam.application.port.outbound.PermissionScope
 import com.finaxis.platform.iam.application.security.RequestPermissionCache
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
@@ -666,6 +667,8 @@ internal fun serviceWith(
                     permissionCode: String,
                 ): Set<UUID> = emptySet()
 
+                override fun grantsByScope(membershipId: UUID): List<PermissionScope> = emptyList()
+
                 override fun lockedBreakGlassGrant(
                     membershipId: UUID,
                     permissionCode: String,
@@ -687,6 +690,8 @@ internal fun serviceWith(
                     membershipId: UUID,
                     permissionCode: String,
                 ): Set<UUID> = emptySet()
+
+                override fun grantsByScope(membershipId: UUID): List<PermissionScope> = emptyList()
 
                 override fun lockedBreakGlassGrant(
                     membershipId: UUID,

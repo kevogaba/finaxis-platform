@@ -8,6 +8,7 @@ import com.finaxis.platform.iam.application.context.AppPrincipal
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelection
 import com.finaxis.platform.iam.application.port.outbound.MembershipSelectionLookup
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
+import com.finaxis.platform.iam.application.port.outbound.PermissionScope
 import com.finaxis.platform.iam.application.security.RequestPermissionCache
 import com.finaxis.platform.iam.domain.MembershipStatus
 import com.finaxis.platform.iam.domain.OrganisationStatus
@@ -367,6 +368,8 @@ private class FakePermissionResolutionQueries(
             .keys
             .mapNotNull(PermissionKey::branchId)
             .toSet()
+
+    override fun grantsByScope(membershipId: UUID): List<PermissionScope> = emptyList()
 
     /**
      * The locking break-glass read, answered from the same map the cached resolver reads.

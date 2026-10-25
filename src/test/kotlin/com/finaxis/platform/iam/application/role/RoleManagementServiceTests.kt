@@ -18,6 +18,7 @@ import com.finaxis.platform.iam.application.port.outbound.IamAdministrationPersi
 import com.finaxis.platform.iam.application.port.outbound.MembershipSnapshot
 import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
 import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
+import com.finaxis.platform.iam.application.port.outbound.PermissionScope
 import com.finaxis.platform.iam.application.port.outbound.RoleAssignmentTarget
 import com.finaxis.platform.iam.application.port.outbound.RoleSnapshot
 import com.finaxis.platform.iam.domain.MembershipStatus
@@ -1071,6 +1072,8 @@ class RoleManagementServiceTests {
             membershipId: UUID,
             permissionCode: String,
         ): Set<UUID> = emptySet()
+
+        override fun grantsByScope(membershipId: UUID): List<PermissionScope> = emptyList()
 
         override fun lockedBreakGlassGrant(
             membershipId: UUID,

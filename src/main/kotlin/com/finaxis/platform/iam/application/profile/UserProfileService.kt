@@ -2,11 +2,16 @@ package com.finaxis.platform.iam.application.profile
 
 import com.finaxis.platform.iam.application.authorization.AccessDeniedException
 import com.finaxis.platform.iam.application.context.AppPrincipal
+import com.finaxis.platform.iam.application.port.outbound.PermissionEffectAssignment
+import com.finaxis.platform.iam.application.port.outbound.PermissionResolutionQueries
+import com.finaxis.platform.iam.application.port.outbound.PermissionScope
 import com.finaxis.platform.iam.application.port.outbound.ProfileBranch
 import com.finaxis.platform.iam.application.port.outbound.ProfileMembership
 import com.finaxis.platform.iam.application.port.outbound.ProfileOrganisation
 import com.finaxis.platform.iam.application.port.outbound.ProfileRole
 import com.finaxis.platform.iam.application.port.outbound.UserProfileLookup
+import com.finaxis.platform.iam.domain.MembershipStatus
+import com.finaxis.platform.iam.domain.PermissionEffect
 import com.finaxis.platform.iam.domain.RoleStatus
 import org.springframework.stereotype.Service
 import java.util.UUID
@@ -27,6 +32,7 @@ data class UserProfile(
     val branches: List<ProfileBranch>,
     val roles: List<ProfileRole>,
     val permissions: List<String>,
+    val permissionScopes: List<PermissionScope>,
 )
 
 /**
@@ -36,6 +42,7 @@ data class UserProfile(
 @Service
 class UserProfileService(
     private val lookup: UserProfileLookup,
+    private val permissionQueries: PermissionResolutionQueries,
 ) {
     /**
      * Returns profile details for the active organisation and optional selected branch.
@@ -43,7 +50,8 @@ class UserProfileService(
      * Branches and roles are each listed once and only while ACTIVE: a suspended or closed branch
      * and a disabled role are not part of the caller's current access, the same rule the runtime
      * applies when it resolves permissions. The permission list is the principal's own and is not
-     * recomputed here.
+     * recomputed here; [UserProfile.permissionScopes] is read fresh from the grants of every
+     * ACTIVE branch.
      */
     fun profile(principal: AppPrincipal): UserProfile {
         val organisation =
@@ -74,8 +82,38 @@ class UserProfileService(
                     .filter { it.status == RoleStatus.ACTIVE }
                     .distinctBy { it.id },
             permissions = principal.permissions.sorted(),
+            permissionScopes = permissionScopes(membership),
         )
     }
+
+    /**
+     * Where each permission is held, from the grants of every ACTIVE branch rather than the
+     * selected one, read fresh (never from the effective-permission cache) and sorted by code.
+     *
+     * The same composition as `EffectivePermissionResolver`: a direct `DENY` removes the code
+     * outright, a direct `ALLOW` is tenant-wide, and a code held tenant-wide and on branches is
+     * reported once, as [PermissionScope.Scope.TENANT]. A membership that is not ACTIVE holds
+     * nothing.
+     */
+    private fun permissionScopes(membership: ProfileMembership): List<PermissionScope> {
+        if (membership.status != MembershipStatus.ACTIVE) return emptyList()
+        val effects = permissionQueries.directPermissionEffects(membership.id)
+        val denied = effects.codesWith(PermissionEffect.DENY)
+        val grants = permissionQueries.grantsByScope(membership.id)
+        val tenantWide =
+            grants
+                .filter { it.scope == PermissionScope.Scope.TENANT }
+                .map { it.code }
+                .toSet() + effects.codesWith(PermissionEffect.ALLOW)
+        val onBranches =
+            grants.filter { it.scope == PermissionScope.Scope.BRANCH && it.code !in tenantWide }
+        return (tenantWide.map { PermissionScope(it, PermissionScope.Scope.TENANT) } + onBranches)
+            .filter { it.code !in denied }
+            .sortedBy { it.code }
+    }
+
+    private fun List<PermissionEffectAssignment>.codesWith(effect: PermissionEffect): Set<String> =
+        filter { it.effect == effect }.map { it.code }.toSet()
 
     private fun selectedBranch(
         branchId: UUID,
