@@ -408,6 +408,19 @@ class JooqOrganisationBranchProvisioningStore(
                 .and(BRANCH.ID.eq(parentBranchId)),
         )
 
+    override fun isHeadOffice(
+        organisationId: UUID,
+        branchId: UUID,
+    ): Boolean =
+        dsl.fetchExists(
+            dsl
+                .selectOne()
+                .from(BRANCH)
+                .where(BRANCH.ORGANISATION_ID.eq(organisationId))
+                .and(BRANCH.ID.eq(branchId))
+                .and(BRANCH.BRANCH_CODE.eq(OrganisationBootstrapDefaults.HEAD_OFFICE_CODE)),
+        )
+
     override fun branchState(
         organisationId: UUID,
         branchId: UUID,

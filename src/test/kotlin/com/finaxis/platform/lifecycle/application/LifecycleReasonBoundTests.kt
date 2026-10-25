@@ -73,6 +73,7 @@ class LifecycleReasonBoundTests {
                 "ReturnBranchCommand",
                 "SuspendBranchCommand",
                 "CloseBranchCommand",
+                "DiscardBranchCommand",
                 "SuspendUserCommand",
                 "DeactivateUserCommand",
                 "RevokeTenantMembershipCommand",

@@ -646,6 +646,22 @@ know the class. A platform actor who returns as a checker is held to the ADR 002
 audited with `checkerScope = PLATFORM`; a platform withdrawal is not windowed and carries no
 marker.
 
+## Branch discard
+
+`POST /branches/{branch_id}/discard` (ADR 0036, #222) moves a `DRAFT` branch to `CLOSED` and needs
+**`branch.create`** with its view `branch.view`: discarding is the undoing of creating, the same
+maker-side act as submit and withdraw, so no new permission code and no migration. It is checked in
+the application service (`BranchProvisioningService.discard`) against the **target branch**, before
+any existence signal, so a caller without it gets the same named `403` for a real draft, another
+tenant's branch and an unknown id; a caller who holds it gets `404` for the last two. The paired
+view is added centrally (ADR 0030), and the endpoint carries only the mutation code in its coarse
+`@PreAuthorize`, as its siblings do.
+
+A grant scoped to a branch counts only while that branch is `ACTIVE` (#242), so it confers nothing
+on a draft: a draft is discarded by a **tenant-wide** `branch.create` holder. There is no platform
+route, so no platform-checker rule applies. The head office is refused for everyone
+(`409 lifecycle.head_office_branch_protected`), since tenant approval activates it.
+
 ## Tenant return for changes
 
 `POST /platform/tenants/{tenant_id}/return` sends a `PENDING_APPROVAL` tenant back to `DRAFT`

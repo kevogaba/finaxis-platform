@@ -271,6 +271,14 @@ data class CloseBranchCommand(
     val actorId: UUID,
 )
 
+/** Discards a draft branch: abandons it to `CLOSED` without it ever having opened (ADR 0036). */
+data class DiscardBranchCommand(
+    val organisationId: UUID,
+    val branchId: UUID,
+    val reason: Reason,
+    val actorId: UUID,
+)
+
 /** Types of active operational access a user may have at a branch. */
 enum class BranchAssignmentType {
     HOME,

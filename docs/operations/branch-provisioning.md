@@ -23,6 +23,7 @@ stateDiagram-v2
     SUSPENDED --> ACTIVE: REACTIVATE
     ACTIVE --> CLOSED: CLOSE
     SUSPENDED --> CLOSED: CLOSE_SUSPENDED
+    DRAFT --> CLOSED: DISCARD
     CLOSED --> ARCHIVED: ARCHIVE
 ```
 
@@ -44,6 +45,11 @@ Implemented transitions and effects:
   the FSM guard and emits `finaxis.lifecycle.branch.reactivated`.
 - `ACTIVE` or `SUSPENDED` to `CLOSED`: close rejects active assignments unless the caller marks
   assignments handled, rejects active child branches, and emits `finaxis.lifecycle.branch.closed`.
+- `DRAFT` to `CLOSED`: `DISCARD` (`POST /branches/{branch_id}/discard`, reason required,
+  `branch.create`) abandons a draft that will never open. It refuses the head office, a draft with
+  an active child and an organisation that is not `ACTIVE` or `PROVISIONING`, publishes an internal
+  event only (no `finaxis.lifecycle.branch.closed`), leaves `opened_on` null, and **keeps the
+  branch code taken** ([ADR 0036](../adr/0036-discard-a-draft-branch.md)).
 - `CLOSED` to `ARCHIVED`: `ARCHIVE` is declared in the FSM graph and has no configured external
   event.
 

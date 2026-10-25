@@ -414,6 +414,16 @@ interface BranchLifecycleStore {
         branchId: UUID,
     ): BranchLifecycleState?
 
+    /**
+     * Whether [branchId] is the organisation's head office: the branch the bootstrap seeds under
+     * the reserved head-office code, which tenant approval and the initial administrator rely on.
+     * False for any other branch and for one outside [organisationId].
+     */
+    fun isHeadOffice(
+        organisationId: UUID,
+        branchId: UUID,
+    ): Boolean
+
     /** Resolves an existing branch parent only inside its organisation. */
     fun parentBranchId(
         organisationId: UUID,

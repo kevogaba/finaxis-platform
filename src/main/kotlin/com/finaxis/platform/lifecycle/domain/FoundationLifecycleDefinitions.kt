@@ -61,6 +61,7 @@ enum class BranchLifecycleTransition {
     REACTIVATE,
     CLOSE,
     CLOSE_SUSPENDED,
+    DISCARD,
     ARCHIVE,
 }
 
@@ -295,7 +296,8 @@ object FoundationLifecycleDefinitions {
     ): BranchGraph =
         TransitionGraph(
             BranchDefinitions.approval(prerequisites, organisationId) +
-                BranchDefinitions.operational(prerequisites, organisationId, branchId),
+                BranchDefinitions.operational(prerequisites, organisationId) +
+                BranchDefinitions.closing(prerequisites, organisationId, branchId),
         )
 
     private object BranchDefinitions {
@@ -340,7 +342,6 @@ object FoundationLifecycleDefinitions {
         fun operational(
             prerequisites: LifecyclePrerequisites,
             organisationId: UUID,
-            branchId: UUID,
         ): List<
             TransitionDefinition<
                 BranchLifecycleState,
@@ -383,6 +384,21 @@ object FoundationLifecycleDefinitions {
                             branchActivationGuard(prerequisites, organisationId, "reactivated"),
                         ),
                 ),
+            )
+
+        /** The ways out of a branch's life: closing, discarding a draft, and archiving. */
+        fun closing(
+            prerequisites: LifecyclePrerequisites,
+            organisationId: UUID,
+            branchId: UUID,
+        ): List<
+            TransitionDefinition<
+                BranchLifecycleState,
+                BranchLifecycleTransition,
+                LifecycleAggregate<BranchLifecycleState>,
+            >,
+        > =
+            listOf(
                 definition(
                     BranchLifecycleTransition.CLOSE,
                     BranchLifecycleState.ACTIVE,
@@ -399,6 +415,25 @@ object FoundationLifecycleDefinitions {
                     BranchLifecycleState.CLOSED,
                     guards = listOf(branchClosureGuard(prerequisites, organisationId, branchId)),
                     eventFactories = externalizedEventFactories(BRANCH_CLOSED_TARGET),
+                ),
+                // A draft that is abandoned (ADR 0036): the direct way to the CLOSED state that
+                // SUSPEND_DRAFT then CLOSE_SUSPENDED reaches by way of a tenant suspension. A
+                // branch that never opened has nothing to announce, so it carries an internal
+                // event only and never BRANCH_CLOSED_TARGET.
+                definition(
+                    BranchLifecycleTransition.DISCARD,
+                    BranchLifecycleState.DRAFT,
+                    BranchLifecycleState.CLOSED,
+                    internalEventFactories(),
+                    guards =
+                        listOf(
+                            branchClosureGuard(
+                                prerequisites,
+                                organisationId,
+                                branchId,
+                                "discarding",
+                            ),
+                        ),
                 ),
                 definition(
                     BranchLifecycleTransition.ARCHIVE,
@@ -713,15 +748,16 @@ private fun branchClosureGuard(
     prerequisites: LifecyclePrerequisites,
     organisationId: UUID,
     branchId: UUID,
+    action: String = "closing",
 ): BranchLifecycleGuard =
     TransitionGuard { context ->
         requireLifecycleGuard(
             !prerequisites.branchHasActiveAssignments(organisationId, branchId),
-            "Reassign or revoke active branch assignments before closing this branch.",
+            "Reassign or revoke active branch assignments before $action this branch.",
         )
         requireLifecycleGuard(
             !prerequisites.branchHasActiveChildren(organisationId, branchId),
-            "Close or re-parent active child branches before closing this branch.",
+            "Close or re-parent active child branches before $action this branch.",
         )
     }
 
