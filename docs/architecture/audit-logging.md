@@ -191,6 +191,12 @@ method security's `AccessDeniedException`, and the filter chain's access-denied 
 - **Never changes the answer.** A failed write or an unavailable bucket is a message-free `WARN`;
   the `403` is returned as it would have been. Set `finaxis.audit.denied-access.enabled=false` to
   turn the rows off.
+- **Platform audit routes.** A tenant admin refused on `/api/v1/platform/audit-events` or a
+  platform tenant route is written under the caller's own tenant (reason
+  `platform_context_required`), so the row shows in that tenant's log, and a platform
+  operator finds it there with `outcome=DENIED`; a refusal with no tenant context lands in the
+  platform log. `PlatformAuditSupportReadIntegrationTests` covers this, and `PLATFORM_SUPPORT`
+  reading both logs, which writes no row of its own.
 
 ## Current Adapter
 
