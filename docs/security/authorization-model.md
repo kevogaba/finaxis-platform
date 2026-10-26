@@ -11,14 +11,15 @@ Read this with [active organisation context](active-organisation-context.md),
 
 ## Permission catalogue and roles
 
-The global catalogue in `permission` holds **84 permission codes**: 54 foundation codes seeded by
+The global catalogue in `permission` holds **85 permission codes**: 54 foundation codes seeded by
 `V2__platform_reference_data.sql`, 26 accounting codes seeded by
 `V5__accounting_permission_catalogue.sql`, `branch.update`, added to the `branch` module by
 `V19__branch_update_permission.sql` (#203), and `user.update` (platform scope) and
 `membership.update` (tenant scope), added by `V32__user_and_membership_update_permissions.sql`
 (#161, ADR 0033), and `role.archive` (tenant scope), added by `V33__role_archive.sql` (#297,
-ADR 0035). One of the 84, `branch.activate`, is **DEPRECATED**
-(see "Branch approval"), so 83 are `ACTIVE`. Each has a stable `permission_code`, `module_code`,
+ADR 0035), and `audit.export` (tenant scope), added by `V34__audit_export_permission.sql` (#167,
+ADR 0039). One of the 85, `branch.activate`, is **DEPRECATED**
+(see "Branch approval"), so 84 are `ACTIVE`. Each has a stable `permission_code`, `module_code`,
 `risk_level`, `system_permission`, status, and a `kind` and `grant_scope` (see "Catalogue
 metadata"). Module codes are `tenant`, `branch`, `iam`,
 `audit`, `settings`, and `accounting`; risk levels are `LOW`, `MEDIUM`, `HIGH`, and `CRITICAL`.
@@ -38,7 +39,7 @@ migration.
 Organisation approval creates these organisation-local system roles from the catalogue (in code,
 not in a migration):
 
-- `TENANT_ADMIN`: **every `ACTIVE` permission whose `grant_scope` is `TENANT`** (68 today): the
+- `TENANT_ADMIN`: **every `ACTIVE` permission whose `grant_scope` is `TENANT`** (69 today): the
   foundation, audit, settings and business-date codes and every accounting code, maker and checker
   alike, including the two break-glass codes `fiscal_period.reopen` and
   `journal.post_prior_period`. It is **derived from the catalogue, not listed**: approval reads the
@@ -119,9 +120,10 @@ code, the platform administrator every `ACTIVE` code.
   [production hardening](production-hardening.md).
 - **Other bundles.** `IAM_ADMIN` + `branch.view`; `BRANCH_MANAGER` + `user.revoke_branch` and
   `user.view`; `BRANCH_OPERATOR` + `branch.view`; `PLATFORM_SUPPORT` as above;
-  `TENANT_AUDITOR` unchanged (`accounting_report.export` stays withheld until an export route
-  exists). Every seeded bundle holds a mutation only with the views `permission_view_requirement`
-  pairs with it (ADR 0030).
+  `TENANT_AUDITOR` unchanged (`accounting_report.export` stays withheld until an accounting export
+  route exists, and `audit.export` is withheld by decision: see "Audit export"). Every seeded
+  bundle holds a mutation only with the views `permission_view_requirement` pairs with it (ADR
+  0030).
 
 ## Catalogue metadata
 
@@ -141,7 +143,7 @@ migration, and are published by `GET /api/v1/tenant/permissions` (and `/{permiss
   `tenant_setting.manage_platform`. They gate the caller's own session context, or a platform-only
   setting that is read and written with the same code in the PLATFORM organisation (so no role
   could also hold the tenant `settings.view`). They require nothing and are not views.
-- `MUTATION` (63): everything else. Each requires the view of the resource it writes and returns.
+- `MUTATION` (64): everything else. Each requires the view of the resource it writes and returns.
 
 **`grant_scope`** says where a code is evaluated:
 
@@ -150,7 +152,7 @@ migration, and are published by `GET /api/v1/tenant/permissions` (and `/{permiss
   `update_draft`, `submit_for_approval`, `approve`, `reject`, `activate`, `suspend`, `reactivate`,
   `deprovision`, `bootstrap_retry`), `user.activate`, `user.suspend`, `user.deactivate`,
   `user.update` and `tenant_setting.manage_platform`.
-- `TENANT` (69): evaluated in a tenant organisation. Some of them are **also** evaluated in the
+- `TENANT` (70): evaluated in a tenant organisation. Some of them are **also** evaluated in the
   PLATFORM organisation (at least `tenant.view`, `branch.view`, `user.view`, `membership.view`,
   `branch_assignment.view`, `role.view`, `role_assignment.view`, `permission.view`, `audit.view`,
   `business_date.view`, `branch.create`, `branch.approve`, `branch.activate` and `user.approve`),
@@ -165,7 +167,7 @@ The platform administrator holds every code. The seeded tenant administrator is 
 column ("an admin holds every code of its scope", see "Seeded administrator roles"); `V22` itself
 touched no role, and `V23` applied the rule.
 
-**`permission_view_requirement`** pairs a `MUTATION` with each view it requires: 61 rows for the 60
+**`permission_view_requirement`** pairs a `MUTATION` with each view it requires: 65 rows for the 64
 mutations, because `user.invite` needs two. A role or a caller that holds the mutation must also
 hold these views (ADR 0030). The runtime enforces it for every mutation ("Mutation-time check"
 below); role composition enforces it for custom roles (see "Role composition"); the catalogue test
@@ -181,6 +183,7 @@ enforces it for the seeded roles.
 | `user.assign_branch`, `user.revoke_branch` | `branch_assignment.view` |
 | `user.assign_role`, `user.revoke_role` | `role_assignment.view` |
 | `role.create`, `update`, `activate`, `deactivate`, `archive`, `assign_permission`, `remove_permission` | `role.view` |
+| `audit.export` | `audit.view` |
 | `settings.update` | `settings.view` |
 | `business_date.advance`, `reopen`, `cob.start`, `cob.complete` | `business_date.view` |
 | `gl_account.create`, `update`, `submit`, `approve`, `deactivate` | `gl_account.view` |
@@ -474,6 +477,38 @@ rule:
 - **No new gate.** The route has no `@PreAuthorize` and no `ReadGateRules` allowlist entry: the
   controller's one GET handler calls a `@GatedRead` method. `iam` depends on `lifecycle::query` for
   branches; the reverse dependency does not exist.
+
+## Audit export
+
+`GET /api/v1/tenant/audit-events/export` (#167, [ADR
+0039](../adr/0039-global-search-and-audit-export.md)) is gated by one new code, `audit.export`,
+added by `V34__audit_export_permission.sql`: a `HIGH` `MUTATION` of `TENANT` scope that requires
+`audit.view`, id `40000000-0000-0000-0000-000000000068`. Reusing `audit.view` was rejected because
+every read-only viewer could then bulk-extract the log.
+
+- **Who holds it.** `PLATFORM_SUPER_ADMIN`, every tenant's seeded `TENANT_ADMIN` and the bootstrap
+  `local-admin`, by `V23`'s rule (the migration copies its steps 1a and 2, and a new tenant's
+  administrator derives it from the catalogue with no code edit). **Nobody else:** `TENANT_AUDITOR`
+  keeps `audit.view` and cannot export until a tenant administrator grants `audit.export` to a
+  custom role or a membership; no non-admin default bundle names it
+  (`SeededRolesDriftTests`, `AuditExportPermissionMigrationTests`).
+- **Enforcement.** `AuditPermissionGuardAdapter` now calls `requirePermissionWithViews`, so the
+  check asks `audit.export` and then `audit.view` and a refusal is `403` `forbidden`, `Missing
+  permission: <first missing code>.`. For `audit.view` itself, a view that pairs with nothing, the
+  check is the one code it always was, so the search, the by-id read and the platform reads are
+  unchanged. The export method of `AuditQueryService` is `@GatedRead` and asks the guard before its
+  first store call.
+- **No coarse gate.** The route has no `@PreAuthorize`, so the named `403` is the service's, and the
+  OpenAPI `403` text, which is derived from `@PreAuthorize` on other routes, is written by hand and
+  names `audit.export` and `audit.view`.
+- **Order.** Permission (`403`) first; then the filter and window (`400`, `occurred_from` required,
+  at most 31 days); then the bounded count (`400 audit.export_too_large` above 10,000 rows). A
+  caller who may not export gets the `403` even for a request that is also invalid, and nothing
+  is counted or read for it. The refusal writes the usual `api.access_denied` row and no
+  `audit.export` row.
+- **Audit.** One `audit.export` row per request that passed the check, about the request and never
+  its contents; `q` and `actor_subject` are stored as `[redacted]` in it. See
+  [audit logging](../architecture/audit-logging.md#audit-export-167).
 
 ## Effective permissions
 

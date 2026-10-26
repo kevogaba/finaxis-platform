@@ -1,6 +1,7 @@
 package com.finaxis.platform.common.audit
 
 import com.finaxis.platform.common.application.GatedRead
+import com.finaxis.platform.common.application.InvalidRequestException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.web.api.InvalidPageRequestException
@@ -17,12 +18,14 @@ import java.util.UUID
  * authorise the actor in the reserved PLATFORM organisation instead.
  *
  * Every search validates its filter ([requireValid]) after the permission check and before any
- * read, so a bad filter is a 400 with no query run.
+ * read, so a bad filter is a 400 with no query run. [prepareExport] does the same, in the order
+ * permission (403), then filter and window (400), then the bounded count (400 when too large).
  */
 @Service
 class AuditQueryService(
     private val queries: AuditEventQueries,
     private val permissionGuard: AuditPermissionGuard,
+    private val auditService: AuditService,
     private val clock: Clock = Clock.systemUTC(),
 ) {
     /** Gets an individual detailed audit event by id, verifying tenant scope and permissions. */
@@ -161,6 +164,49 @@ class AuditQueryService(
             )
         }
         return boundedSearch(filter)
+    }
+
+    /**
+     * Authorises and validates a CSV export of the tenant audit log and returns it ready to
+     * stream (#167, ADR 0039). The order is fixed: the caller must hold `audit.export` and, the
+     * catalogue pairing it with the view, `audit.view` (403 naming the first missing code, raised
+     * before anything is parsed or read); then the filter is parsed and bounded (400, with
+     * `occurred_from` required and a window of at most 31 days; an absent `occurred_to` is pinned
+     * to the request instant and a later one is clamped to it, so the counted and the streamed
+     * sets share an upper edge no later than the request); then the
+     * matches are counted, stopping at one more than [AUDIT_EXPORT_ROW_CAP]. More than the cap is a
+     * 400 `audit.export_too_large`, never a truncated file, and writes a `FAILURE` audit row of 0
+     * rows independently of the refusal. A 403 or a bad filter writes no export row.
+     */
+    @GatedRead
+    fun prepareExport(request: AuditExportRequest): AuditExport {
+        permissionGuard.requireTenantPermission(
+            request.actorId,
+            request.organisationId,
+            AUDIT_EXPORT_PERMISSION,
+        )
+        val now = clock.instant()
+        val parsed =
+            request.parameters.toFilter(request.organisationId, 0, AUDIT_EXPORT_BATCH_SIZE)
+        val filter = parsed.copy(occurredTo = minOf(parsed.occurredTo ?: now, now))
+        filter.requireExportWindow(now)
+        filter.requireValid(now)
+        if (queries.countBounded(filter, AUDIT_EXPORT_ROW_CAP + 1) > AUDIT_EXPORT_ROW_CAP) {
+            writeExportAudit(
+                auditService,
+                request,
+                AuditOutcome.FAILURE,
+                rowCount = 0,
+                errorClass = null,
+                independently = true,
+            )
+            throw InvalidRequestException(
+                AUDIT_EXPORT_TOO_LARGE_CODE,
+                "Too many audit events match for one export. " +
+                    "Narrow the occurred_from and occurred_to window or add filters.",
+            )
+        }
+        return AuditExport(now, filter, request, queries, auditService)
     }
 
     private fun requirePlatformAuditView(actorId: UUID) =

@@ -77,10 +77,62 @@ data class AuditEventPage(
     val totalItems: Long,
 )
 
+/**
+ * One audit event as the CSV export reads it (ADR 0039, point 14): exactly the exported columns,
+ * as typed values. The columns that can hold personal data or caller-supplied text (address, user
+ * agent, actor subject, the JSON documents, reason, correlation id) and the event id are not part
+ * of it: the statement behind it does not select them.
+ */
+data class AuditExportRow(
+    val occurredAt: Instant,
+    val action: String,
+    val outcome: String,
+    val severity: String,
+    val actorType: String,
+    val actorUserId: UUID?,
+    val branchId: UUID?,
+    val subjectUserId: UUID?,
+    val entityType: String,
+    val entityId: UUID?,
+    val requestId: String?,
+)
+
+/** Where the next export batch starts: strictly after this event in the export's order. */
+data class AuditExportCursor(
+    val eventTime: Instant,
+    val id: UUID,
+)
+
+/** One bounded batch of an export and the cursor of the batch after it. */
+data class AuditExportBatch(
+    val rows: List<AuditExportRow>,
+    val next: AuditExportCursor?,
+)
+
 /** Output port for paginated, tenant-scoped audit event reads. */
 interface AuditEventQueries {
     /** Returns a bounded page of audit events matching [filter]. */
     fun search(filter: AuditEventFilter): AuditEventPage
+
+    /**
+     * Counts the events matching [filter], stopping at [limit]: the result is the count when it is
+     * below [limit] and [limit] otherwise, so the cost is bounded whatever the log holds.
+     */
+    fun countBounded(
+        filter: AuditEventFilter,
+        limit: Int,
+    ): Int
+
+    /**
+     * Reads at most [limit] export rows matching [filter] in the filter's order, strictly after
+     * [after] (the start when null): one short statement per call, keyed on `(event_time, id)`,
+     * with no cursor or transaction held between calls. The filter's page and size are ignored.
+     */
+    fun exportBatch(
+        filter: AuditEventFilter,
+        after: AuditExportCursor?,
+        limit: Int,
+    ): AuditExportBatch
 
     /** Finds the detailed audit event by id within an organisation scope. */
     fun findById(

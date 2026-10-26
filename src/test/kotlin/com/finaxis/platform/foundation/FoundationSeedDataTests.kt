@@ -269,7 +269,7 @@ class FoundationSeedDataTests(
         const val BOOTSTRAP_ADMINISTRATOR_ID = "11111111-1111-1111-1111-111111111111"
         const val LOCAL_ADMIN_ROLE_ID = "77777777-7777-7777-7777-777777777777"
         const val CHECKER_USER_ID = "dddddddd-dddd-dddd-dddd-dddddddddd01"
-        const val EXPECTED_CATALOGUE_SIZE = 84
+        const val EXPECTED_CATALOGUE_SIZE = 85
 
         val PLATFORM_SUPPORT_PERMISSION_CODES =
             listOf(
@@ -291,6 +291,7 @@ class FoundationSeedDataTests(
             listOf(
                 "accounting_report.export",
                 "accounting_report.view",
+                "audit.export",
                 "audit.view",
                 "auth.select_branch",
                 "auth.select_organisation",

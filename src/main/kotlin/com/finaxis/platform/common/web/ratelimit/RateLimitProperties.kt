@@ -36,6 +36,9 @@ enum class RateLimitPolicyId(
     PLATFORM_COMMAND("platform-command"),
     TENANT_READ("tenant-read"),
     TENANT_COMMAND("tenant-command"),
+
+    /** Bulk extraction of the tenant audit log (ADR 0039): tighter than an ordinary read. */
+    TENANT_EXPORT("tenant-export"),
 }
 
 private fun defaultPolicies(): Map<RateLimitPolicyId, RateLimitPolicy> =
@@ -45,4 +48,5 @@ private fun defaultPolicies(): Map<RateLimitPolicyId, RateLimitPolicy> =
         RateLimitPolicyId.PLATFORM_COMMAND to RateLimitPolicy(capacity = 120, refillTokens = 120),
         RateLimitPolicyId.TENANT_READ to RateLimitPolicy(capacity = 600, refillTokens = 600),
         RateLimitPolicyId.TENANT_COMMAND to RateLimitPolicy(capacity = 120, refillTokens = 120),
+        RateLimitPolicyId.TENANT_EXPORT to RateLimitPolicy(capacity = 5, refillTokens = 5),
     )

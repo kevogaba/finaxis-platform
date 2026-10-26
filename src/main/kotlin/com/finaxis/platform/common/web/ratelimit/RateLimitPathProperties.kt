@@ -46,6 +46,12 @@ private fun defaultRateLimitPathRules(): List<RateLimitPathRule> =
         RateLimitPathRule("PUT", "/api/v1/platform/**", RateLimitPolicyId.PLATFORM_COMMAND),
         RateLimitPathRule("PATCH", "/api/v1/platform/**", RateLimitPolicyId.PLATFORM_COMMAND),
         RateLimitPathRule("DELETE", "/api/v1/platform/**", RateLimitPolicyId.PLATFORM_COMMAND),
+        // First match wins: the export's own, tighter policy must precede the catch-all read.
+        RateLimitPathRule(
+            "GET",
+            "/api/v1/tenant/audit-events/export",
+            RateLimitPolicyId.TENANT_EXPORT,
+        ),
         RateLimitPathRule("GET", "/api/v1/**", RateLimitPolicyId.TENANT_READ),
         RateLimitPathRule("POST", "/api/v1/**", RateLimitPolicyId.TENANT_COMMAND),
         RateLimitPathRule("PUT", "/api/v1/**", RateLimitPolicyId.TENANT_COMMAND),

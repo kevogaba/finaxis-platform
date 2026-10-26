@@ -49,6 +49,41 @@ must list it (see
 `docs/security/production-hardening.md`, "Forwarded headers"). Do not parse `X-Forwarded-For`
 headers directly in application code; `ClientIpResolver` (the audit address) is the one exception.
 
+## Named Policies And Path Rules
+
+The policy set is a closed enum (`RateLimitPolicyId`); `RateLimitProperties` refuses to start unless
+the configured `finaxis.rate-limit.policies` are exactly its entries. A request is matched against
+`finaxis.rate-limit.paths.rules` in order and the **first** matching method and path wins, so a
+specific rule must come before a catch-all. Each policy takes `capacity`, `refill-tokens` and
+`refill-period` from `FINAXIS_RATE_LIMIT_<POLICY>_CAPACITY`, `..._REFILL_TOKENS` and
+`..._REFILL_PERIOD` (the policy id upper-cased, `-` as `_`).
+
+| Policy            | Default (per minute) | Used by                                                   |
+|-------------------|----------------------|-----------------------------------------------------------|
+| `auth-selection`  | 20                   | `POST /api/v1/auth/select-organisation`, `select-branch`  |
+| `platform-read`   | 600                  | `GET /api/v1/auth/**`, `GET /api/v1/platform/**`          |
+| `platform-command`| 120                  | other methods of `/api/v1/auth/**` and `/api/v1/platform/**` |
+| `tenant-read`     | 600                  | `GET /api/v1/**`                                          |
+| `tenant-command`  | 120                  | `POST`, `PUT`, `PATCH`, `DELETE` of `/api/v1/**`          |
+| `tenant-export`   | 5                    | `GET /api/v1/tenant/audit-events/export`                  |
+
+### Audit export (`tenant-export`)
+
+The audit CSV export ([ADR 0039](../adr/0039-global-search-and-audit-export.md), point 18) is a bulk
+extraction, so it has its own, tighter policy: **5 requests per minute** by default (capacity 5,
+refill 5 per 1 minute), set with `FINAXIS_RATE_LIMIT_TENANT_EXPORT_CAPACITY`,
+`FINAXIS_RATE_LIMIT_TENANT_EXPORT_REFILL_TOKENS` and
+`FINAXIS_RATE_LIMIT_TENANT_EXPORT_REFILL_PERIOD`.
+The key is the usual per-user and tenant one, `rate-limit:tenant-export:auth:{tenantId}:{userId}`.
+Its path rule `GET /api/v1/tenant/audit-events/export` sits **before** `GET /api/v1/**` in both
+`defaultRateLimitPathRules()` and `application.yaml`: without it the route would fall under
+`tenant-read` and could be called 600 times a minute. A `429` carries the headers above.
+
+The limiter is fail-open like every other policy (`fail-open: true`); a per-policy fail-closed mode
+is not offered. During a Redis outage the 31-day window and the 10,000-row cap remain the bound on
+one export. The global search, which is an ordinary read, reuses `tenant-read` and has no policy of
+its own.
+
 ## Redis Topologies
 
 The rate limiter uses Lettuce because deployments may use:

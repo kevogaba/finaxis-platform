@@ -57,6 +57,39 @@ class RateLimitPropertiesTests {
     }
 
     @Test
+    fun `the audit export has its own policy, five a minute by default`() {
+        val yaml = bindApplicationYaml().policies.getValue(RateLimitPolicyId.TENANT_EXPORT)
+        val code = RateLimitProperties().policies.getValue(RateLimitPolicyId.TENANT_EXPORT)
+
+        assertEquals("tenant-export", RateLimitPolicyId.TENANT_EXPORT.externalId)
+        listOf(yaml, code).forEach {
+            assertEquals(5, it.capacity)
+            assertEquals(5, it.refillTokens)
+            assertEquals(java.time.Duration.ofMinutes(1), it.refillPeriod)
+        }
+        assertEquals(RateLimitPolicyId.entries.toSet(), RateLimitProperties().policies.keys)
+    }
+
+    @Test
+    fun `the export path rule precedes the tenant read catch all in yaml and in code`() {
+        val yamlRules = bindApplicationYaml().paths.rules
+        listOf(yamlRules, RateLimitPathProperties().rules).forEach { rules ->
+            val export =
+                rules.indexOfFirst {
+                    it.method == "GET" &&
+                        it.path == "/api/v1/tenant/audit-events/export" &&
+                        it.policy == RateLimitPolicyId.TENANT_EXPORT
+                }
+            val catchAll = rules.indexOfFirst { it.method == "GET" && it.path == "/api/v1/**" }
+
+            assertTrue(export >= 0, "the export rule exists")
+            assertTrue(catchAll >= 0)
+            assertTrue(export < catchAll, "first match wins, so the export rule comes first")
+            assertEquals(1, rules.count { it.policy == RateLimitPolicyId.TENANT_EXPORT })
+        }
+    }
+
+    @Test
     fun `policy configuration requires exactly the external policy set`() {
         assertFailsWith<IllegalArgumentException> {
             RateLimitProperties(

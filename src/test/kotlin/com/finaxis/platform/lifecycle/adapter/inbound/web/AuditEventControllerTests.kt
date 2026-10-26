@@ -5,8 +5,12 @@ import com.finaxis.platform.common.audit.AuditActorType
 import com.finaxis.platform.common.audit.AuditEventDetail
 import com.finaxis.platform.common.audit.AuditEventFilter
 import com.finaxis.platform.common.audit.AuditEventPage
+import com.finaxis.platform.common.audit.AuditExport
+import com.finaxis.platform.common.audit.AuditExportRequest
+import com.finaxis.platform.common.audit.AuditExportRow
 import com.finaxis.platform.common.audit.AuditOutcome
 import com.finaxis.platform.common.audit.AuditQueryService
+import com.finaxis.platform.common.audit.AuditSearchParameters
 import com.finaxis.platform.common.audit.AuditSeverity
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiExceptionHandler
@@ -21,6 +25,7 @@ import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.TestConfiguration
@@ -29,6 +34,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.http.HttpStatus
+import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.test.web.servlet.request
@@ -36,8 +42,11 @@ import org.springframework.security.test.web.servlet.request
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
+import org.springframework.web.bind.annotation.RequestParam
 import java.time.Instant
 import java.util.UUID
+import kotlin.reflect.full.declaredFunctions
+import kotlin.reflect.full.findAnnotation
 
 @WebMvcTest(controllers = [AuditEventController::class], useDefaultFilters = false)
 @AutoConfigureMockMvc
@@ -259,6 +268,122 @@ class AuditEventControllerTests
             val capturedFilter = searchAndCapture(tenantId, callerId, emptyMap())
 
             assertEquals(AuditEventFilter(tenantId, page = 1, size = 25), capturedFilter)
+        }
+
+        @Test
+        fun `export hands the service the caller, the tenant and only the filters sent`() {
+            val tenantId = uuidV7()
+            val callerId = uuidV7()
+            val captured = mutableListOf<AuditExportRequest>()
+            val export = streamingExport()
+            whenever(auditQueryService.prepareExport(any())).thenAnswer {
+                captured += it.getArgument<AuditExportRequest>(0)
+                export
+            }
+
+            val result =
+                mockMvc
+                    .get("${ApiPaths.AUDIT_EVENTS}/export") {
+                        param("occurred_from", "2026-10-20T00:00:00Z")
+                        param("q", "someone@example.com")
+                        param("outcome", "denied")
+                        param("page", "3")
+                        param("size", "50")
+                        with(authentication(tenantToken(emptySet(), tenantId, callerId)))
+                    }.andReturn()
+            result.asyncResult
+
+            val request = captured.single()
+            assertEquals(tenantId, request.organisationId)
+            assertEquals(callerId, request.actorId)
+            assertEquals(
+                mapOf(
+                    "occurred_from" to "2026-10-20T00:00:00Z",
+                    "q" to "someone@example.com",
+                    "outcome" to "denied",
+                ),
+                request.suppliedFilters,
+            )
+            assertEquals(Instant.parse("2026-10-20T00:00:00Z"), request.parameters.occurredFrom)
+            assertEquals("denied", request.parameters.outcome)
+            assertEquals(200, result.response.status)
+            assertEquals("text/csv;charset=UTF-8", result.response.contentType)
+            assertEquals(
+                "attachment; filename=\"audit-events-25-10-2026.csv\"",
+                result.response.getHeader("Content-Disposition"),
+            )
+            assertEquals("no-store", result.response.getHeader("Cache-Control"))
+            assertEquals(
+                "occurred_at,action,outcome,severity,actor_type,actor_user_id,branch_id," +
+                    "subject_user_id,entity_type,entity_id,request_id\r\n" +
+                    "2026-10-25T08:12:00Z,a.b,SUCCESS,INFO,USER,,,,T,,\r\n",
+                result.response.contentAsString,
+            )
+        }
+
+        @Test
+        fun `the export route is its own literal route and is not the by-id route`() {
+            // A UUID-typed path variable would answer 400 for "export"; the literal wins.
+            val export = streamingExport()
+            whenever(auditQueryService.prepareExport(any())).thenReturn(export)
+
+            mockMvc
+                .get("${ApiPaths.AUDIT_EVENTS}/export") {
+                    with(authentication(tenantToken(emptySet())))
+                }.andReturn()
+                .also { it.asyncResult }
+                .response
+                .also { assertEquals(200, it.status) }
+        }
+
+        @Test
+        fun `the export handler declares every audit filter once and no page, size or gate`() {
+            val handler =
+                AuditEventController::class.declaredFunctions.single {
+                    it.name == "exportAuditEvents"
+                }
+            val names =
+                handler.parameters.mapNotNull { parameter ->
+                    parameter.findAnnotation<RequestParam>()?.let {
+                        it.name.ifBlank { parameter.name.orEmpty() }
+                    }
+                }
+
+            assertEquals(AuditSearchParameters.NAMES.sorted(), names.sorted())
+            assertEquals(names.size, names.toSet().size)
+            assertEquals(null, handler.findAnnotation<PreAuthorize>())
+            assertEquals(null, AuditEventController::class.findAnnotation<PreAuthorize>())
+        }
+
+        private fun streamingExport(): AuditExport {
+            val export = mock<AuditExport>()
+            whenever(export.requestedAt).thenReturn(Instant.parse("2026-10-25T12:00:00Z"))
+            whenever(export.stream(any(), any())).thenAnswer {
+                @Suppress("UNCHECKED_CAST")
+                val start = it.arguments[0] as () -> Unit
+
+                @Suppress("UNCHECKED_CAST")
+                val batch = it.arguments[1] as (List<AuditExportRow>) -> Unit
+                start()
+                batch(
+                    listOf(
+                        AuditExportRow(
+                            Instant.parse("2026-10-25T08:12:00Z"),
+                            "a.b",
+                            "SUCCESS",
+                            "INFO",
+                            "USER",
+                            null,
+                            null,
+                            null,
+                            "T",
+                            null,
+                            null,
+                        ),
+                    ),
+                )
+            }
+            return export
         }
 
         private fun searchAndCapture(

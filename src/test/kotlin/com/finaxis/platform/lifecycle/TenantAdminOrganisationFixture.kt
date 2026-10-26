@@ -126,6 +126,24 @@ class TenantAdminOrganisationFixture(
         )
     }
 
+    /**
+     * Grants [actorId] a seeded role of [organisationId] by [roleCode] (for example
+     * `TENANT_AUDITOR`), exactly as provisioning seeded it, so a test can prove what that bundle
+     * does and does not allow.
+     */
+    fun grantSeededTenantRole(
+        organisationId: UUID,
+        actorId: UUID,
+        roleCode: String,
+    ) {
+        grantRole(
+            organisationId = organisationId,
+            actorId = actorId,
+            roleCode = roleCode,
+            missingRoleMessage = "$roleCode was not provisioned for the organisation.",
+        )
+    }
+
     /** Grants [actorId] the platform org's PLATFORM_SUPER_ADMIN role. */
     fun grantPlatformSuperAdmin(actorId: UUID) {
         grantRole(

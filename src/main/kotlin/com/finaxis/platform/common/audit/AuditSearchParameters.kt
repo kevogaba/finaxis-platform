@@ -65,6 +65,30 @@ data class AuditSearchParameters(
         )
     }
 
+    /** The query parameter names of an audit search, as a client spells them. */
+    companion object {
+        /** Every filter parameter, in snake_case: the export records which of these were sent. */
+        val NAMES: List<String> =
+            listOf(
+                "entity_type",
+                "entity_id",
+                "actor_id",
+                "subject_user_id",
+                "action",
+                "action_prefix",
+                "occurred_from",
+                "occurred_to",
+                "outcome",
+                "severity",
+                "min_severity",
+                "branch_id",
+                "q",
+                "actor_type",
+                "actor_subject",
+                "sort_dir",
+            )
+    }
+
     private inline fun <reified E : Enum<E>> parse(
         parameter: String,
         value: String,
@@ -109,6 +133,27 @@ fun AuditEventFilter.requireValid(now: Instant) {
         if (it.isBlank() || it.length > ACTOR_SUBJECT_MAX_LENGTH) {
             invalid("actor_subject", "Must be 1 to 255 characters and not blank.")
         }
+    }
+}
+
+/**
+ * Rejects an export window outside its bounds with a 400 naming `occurred_from` (ADR 0039, point
+ * 11): `occurred_from` is required, not after the end of the window (`occurred_to`, or [now]) and
+ * at most [AUDIT_TEXT_SEARCH_MAX_WINDOW] before it, the bound a text search already has.
+ *
+ * @throws InvalidPageRequestException naming `occurred_from`
+ */
+fun AuditEventFilter.requireExportWindow(now: Instant) {
+    val from = occurredFrom ?: invalid("occurred_from", "Required for an export.")
+    val until = occurredTo ?: now
+    if (from.isAfter(until)) {
+        invalid("occurred_from", "For an export, must not be after occurred_to or now.")
+    }
+    if (Duration.between(from, until) > AUDIT_TEXT_SEARCH_MAX_WINDOW) {
+        invalid(
+            "occurred_from",
+            "For an export, must be at most 31 days before occurred_to or now.",
+        )
     }
 }
 

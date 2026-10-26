@@ -388,6 +388,7 @@ class HighRiskOperationAuditCoverageTests(
                 "user.suspend" to "user_account.suspend",
                 "user.update" to "user.update",
                 "membership.update" to "membership.update",
+                "audit.export" to "audit.export",
             )
     }
 }

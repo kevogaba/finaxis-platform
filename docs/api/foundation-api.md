@@ -2106,6 +2106,7 @@ Base path: `/api/v1/tenant/audit-events`. List filters: `entity_type`, `entity_i
 |--------|---------------|----------------------------|--------------|-------|
 | GET    | `/`           | Search tenant audit events | `audit.view` | page  |
 | GET    | `/{event_id}` | Get tenant audit event     | `audit.view` | item  |
+| GET    | `/export`     | Export audit events as CSV | `audit.export` (and `audit.view`) | file  |
 
 #### Audit search filters
 
@@ -2164,6 +2165,83 @@ upper-case form is canonical and is the enum the OpenAPI document publishes.
   (`docs/architecture/audit-logging.md`).
 - **Behaviour change:** the audit searches used to ignore `sort_dir`; a value other than `ASC` or
   `DESC` is now a 400. `action` stays an exact match.
+
+#### Audit export (CSV)
+
+`GET /api/v1/tenant/audit-events/export` streams the tenant audit log as CSV (#167, [ADR
+0039](../adr/0039-global-search-and-audit-export.md)). It is for taking a bounded slice of the log
+out of the system, so it is bounded on every side and it is **audited**.
+
+- **Filters.** Every filter of the search above, with the same meaning (it is the same code), and
+  no `page` or `size`: `entity_type`, `entity_id`, `actor_id`, `subject_user_id`, `action`,
+  `action_prefix`, `occurred_from`, `occurred_to`, `outcome`, `severity`, `min_severity`,
+  `branch_id`, `q`, `actor_type`, `actor_subject`, `sort_dir`.
+- **`occurred_from` is required** (`400 invalid_parameter`, violation on `occurred_from`), and the
+  window from `occurred_from` to `occurred_to` (to the request instant when absent, and a later
+  value is clamped to it too, so the end is fixed for the whole export and never in the future) is
+  **at most 31 days**; `occurred_from` after the end is the same `400`.
+- **Cap: 10,000 rows, refused, never truncated.** When more than 10,000 events match, the answer
+  is `400` with problem code `audit.export_too_large` (its message says to narrow the window or add
+  filters, and gives no count), before any byte of the file is sent. Exactly 10,000 exports in full.
+  A matching row that appears after that count and pushes the export past 10,000 aborts the transfer
+  (an incomplete response, and a `FAILURE` `audit.export` audit row) rather than ending a short file
+  cleanly.
+- **Permission.** `audit.export` **and** its view `audit.view` (ADR 0030): a caller missing one
+  gets `403` `forbidden` naming the first missing code, `Missing permission: audit.export.`, then
+  `Missing permission: audit.view.`. The check runs **before** the filter is validated, so an
+  unauthorised caller gets the `403` even for a request that is also invalid. (A value Spring cannot
+  bind at all, such as a malformed UUID or timestamp, is a `400` before the handler runs, as on
+  every route.) The route carries no coarse `@PreAuthorize`, so the refusal always names the code.
+  The seeded `TENANT_AUDITOR` holds `audit.view` and **cannot export** until an administrator
+  grants `audit.export`.
+- **Response.** `200`, `Content-Type: text/csv; charset=UTF-8`, `Content-Disposition: attachment;
+  filename="audit-events-<dd-MM-yyyy>.csv"` (the request's UTC date) and `Cache-Control:
+  no-store`. RFC 4180: a header row, then one row per event, records ended by CRLF, no byte-order
+  mark, streamed in keyset batches of 1,000 rows.
+- **Columns, in this order.** `occurred_at`, `action`, `outcome`, `severity`, `actor_type`,
+  `actor_user_id`, `branch_id`, `subject_user_id`, `entity_type`, `entity_id`, `request_id`. A
+  missing id or request id is an empty cell. `occurred_at` is the same ISO-8601 UTC instant the
+  JSON API's `occurred_at` carries (`2026-07-25T08:12:00Z`, with fractional seconds when the event
+  has them). **Never exported:** the address, user agent, actor subject, the before, after and
+  metadata JSON, the reason, the correlation id and the event id.
+- **Formula injection.** A cell whose first character is `=`, `+`, `-`, `@`, TAB or CR is prefixed
+  with a single quote (`'`), so a spreadsheet shows it as text. This is a lossy change: a
+  programmatic consumer must strip one leading `'` from such a cell. `request_id` is the practical
+  vector, since a caller can choose it. A cell with a comma, a double quote, CR or LF is wrapped in
+  double quotes with inner quotes doubled.
+- **A stream that fails.** Once the first bytes are sent the status is `200` and cannot change, so a
+  failure after that (a read error, a lost database connection, or the two-minute request timeout)
+  **aborts the transfer** and no problem document is appended to the CSV. On the embedded Tomcat
+  the tests run against, the client sees an incomplete transfer (a premature end of the chunked
+  body, for example an `IOException` in `java.net.http`), never a complete-looking file. That is
+  what the server does, not a guarantee of every path: an intermediary that buffers the response (a
+  proxy or a CDN) may behave differently. There is **no trailer or checksum in v1**, so a client
+  that needs integrity must treat a transfer that did not end cleanly as a failed export, and may
+  compare the data rows with the `row_count` of the `audit.export` row (which records the rows
+  written, `FAILURE` on an abort). A refusal (`400`, `403`, `429`) is always a real status, because
+  the checks and the count run before the first byte.
+- **One audit row per request.** Action `audit.export`, resource type `AUDIT_EVENT`, no resource id.
+  `SUCCESS` (severity `MEDIUM`) when the last row has been written, `FAILURE` (`HIGH`) for an
+  aborted stream or the too-large refusal. Its metadata is `{ filters, row_count }` plus
+  `error_class` (a simple class name, never a message) on an aborted stream; `filters` holds the
+  parameters the caller sent, as sent, except `q` and `actor_subject`, which are stored as
+  `[redacted]`. It never holds a cell or an event id. A `403` writes only the usual
+  `api.access_denied` row, and a `400` for a bad filter writes none. The row is written after the
+  stream, so it is not in the file it describes; find it with `action=audit.export`.
+- **Rate limit.** Its own `tenant-export` policy, 5 a minute per user and tenant by default
+  (`FINAXIS_RATE_LIMIT_TENANT_EXPORT_*`), not the 600-a-minute `tenant-read`.
+- **Logs.** The HTTP access log records this route's query string as `query="[redacted]"`, as it
+  does for the global search, because `q` may be an email address and `actor_subject` is an
+  identity subject.
+
+| Status | Code                     | When                                                          |
+|--------|--------------------------|---------------------------------------------------------------|
+| 200    |                          | The CSV                                                       |
+| 400    | `invalid_parameter`      | `occurred_from` missing, after the end or over 31 days back; a bad filter value |
+| 400    | `audit.export_too_large` | More than 10,000 events match                                 |
+| 401    |                          | Unauthenticated                                               |
+| 403    | `forbidden`              | `audit.export` or `audit.view` missing (the first is named)    |
+| 429    | `rate_limit_exceeded`    | Over the `tenant-export` limit                                |
 
 #### Platform audit events
 

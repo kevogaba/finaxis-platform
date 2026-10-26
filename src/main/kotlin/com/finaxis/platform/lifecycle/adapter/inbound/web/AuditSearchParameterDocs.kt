@@ -32,3 +32,9 @@ internal const val PLATFORM_AUDIT_ACTOR_SUBJECT_DOC =
     "Not available: platform pages withhold actor_external_subject, so any value is a 400."
 internal const val AUDIT_SORT_DIR_DOC =
     "Order by event time, then id: DESC (default, newest first) or ASC. Case-insensitive."
+internal const val AUDIT_EXPORT_OCCURRED_FROM_DOC =
+    "Start of the exported window. Required: an export is always bounded. At most 31 days before " +
+        "occurred_to (or now)."
+internal const val AUDIT_EXPORT_OCCURRED_TO_DOC =
+    "End of the exported window. Defaults to the instant of the request, which is then fixed for " +
+        "the whole export."
