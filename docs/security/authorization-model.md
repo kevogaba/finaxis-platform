@@ -444,6 +444,37 @@ Role and role-assignment mutations write audit events. Role permission changes a
 assignment changes evict affected effective-permission cache entries and publish administration
 events for assignment/revocation.
 
+## Tenant global search
+
+`GET /api/v1/tenant/search?q=` (#167, [ADR 0039](../adr/0039-global-search-and-audit-export.md))
+introduces **no permission code and no migration**. It is a fan-out over four existing gated
+queries, each asking its own guard before its first store call, so the search holds no copy of any
+rule:
+
+| Type          | Code              | Scope rule (unchanged)                                                    |
+|---------------|-------------------|---------------------------------------------------------------------------|
+| `users`       | `user.view`       | tenant-wide                                                               |
+| `branches`    | `branch.view`     | target-aware: tenant-wide grant or the ACTIVE branches carrying a grant   |
+| `roles`       | `role.view`       | tenant-wide; the default list hides `ARCHIVED` roles (ADR 0035)           |
+| `memberships` | `membership.view` | tenant-wide                                                               |
+
+- **Omitted, not empty.** The search service (`GlobalSearchQueryService`, `@GatedRead`, taking the
+  caller) treats a `ForbiddenOperationException` from a type's query as "omit this type": the base
+  class, because a branch-scoped caller who holds `branch.view` nowhere gets the unnamed one from
+  `BranchVisibility.Branches.requireListRestriction`, not a `MissingPermissionException`. The catch
+  wraps the delegate call only; any other exception propagates. A refusal that is swallowed writes
+  no `api.access_denied` row, because that row is written where the `403` is answered.
+- **All refused: the named 403.** When none of the four may be viewed, the first refusal in the
+  fixed order users, branches, roles, memberships is rethrown, which is always `Missing permission:
+  user.view.`, and is audited as any refusal is.
+- **`q` first.** A malformed `q` is a `400` before any type is asked, so it is a `400` even for a
+  caller who may view nothing: the bounds carry no tenant data. The text is escaped (`\`, `%`, `_`)
+  before it reaches the per-resource `ILIKE`, which is why the search matches `%` literally while
+  those filters still treat it as a wildcard.
+- **No new gate.** The route has no `@PreAuthorize` and no `ReadGateRules` allowlist entry: the
+  controller's one GET handler calls a `@GatedRead` method. `iam` depends on `lifecycle::query` for
+  branches; the reverse dependency does not exist.
+
 ## Effective permissions
 
 Effective permissions are resolved for one active membership and optional selected branch:

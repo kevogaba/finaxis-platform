@@ -2370,6 +2370,69 @@ example `GET /api/v1/branches?status=PENDING_APPROVAL`) for the items.
   maker-checker control off (ADR 0032) counts the caller's own items too, since they are approvable.
 - Accounting approvals (manual journals, posting rules) are not included.
 
+### Global Search
+
+One call for the tenant directory (#167, [ADR 0039](../adr/0039-global-search-and-audit-export.md)).
+It is a fan-out read over four types, not a paginated list: **one bounded page per type**, no
+`page`, `size` or sort parameter, and no cross-type paging.
+
+| Method | Path                       | Summary                        | Permission                                   | Shape |
+|--------|----------------------------|--------------------------------|----------------------------------------------|-------|
+| GET    | `/api/v1/tenant/search?q=` | Search the tenant directory    | any of `user.view`, `branch.view`, `role.view`, `membership.view` | item  |
+
+`q` is required, trimmed, and 2 to 64 characters after trimming, with no control character
+(NUL, newline, DEL and the like); a missing, blank, out-of-range or control-bearing value is `400`
+`invalid_parameter` with a violation on `q` (the message never echoes the value). It is checked
+**before** permissions, so it is a `400` for every caller. It is plain text matched
+case-insensitively anywhere in the columns below: `%`, `_` and `\` match themselves (the
+per-resource `q` filters still treat `%` and `_` as wildcards). `q` is not written to the
+application log by the search, and the HTTP access log (`http_access`) records the route's query
+string as `query="[redacted]"` for every spelling of the route that is routed to the search
+handler (the path is compared decoded, so `/api/v1/tenant/%73earch` is covered); it can still
+appear in the request data an error monitor such as Sentry attaches to a failed request, so treat
+it as personal data.
+
+```json
+{
+  "users": [
+    { "id": "...", "label": "Alice Mwangi", "status": "ACTIVE", "email": "alice@acme.test" }
+  ],
+  "branches": [
+    { "id": "...", "label": "Nairobi Main", "status": "ACTIVE", "branch_code": "NBO-01" }
+  ],
+  "roles": [
+    { "id": "...", "label": "Teller", "status": "ACTIVE", "role_code": "TELLER" }
+  ],
+  "memberships": [
+    { "id": "...", "label": "Alice Mwangi", "status": "ACTIVE", "membership_type": "STAFF" }
+  ]
+}
+```
+
+| Key           | Permission        | Matches on                                  | `id`          | `label`        | `status`            | Secondary         |
+|---------------|-------------------|---------------------------------------------|---------------|----------------|---------------------|-------------------|
+| `users`       | `user.view`       | username, email, display name               | user id       | `display_name` | `user_status`       | `email`           |
+| `branches`    | `branch.view`     | branch code, branch name                    | branch id     | `branch_name`  | `status`            | `branch_code`     |
+| `roles`       | `role.view`       | role code, role name                        | role id       | `role_name`    | `status`            | `role_code`       |
+| `memberships` | `membership.view` | username, email, display name               | membership id | `display_name` | `membership_status` | `membership_type` |
+
+- Each array holds **at most 10 hits**, in the order that type's own list returns by default
+  (newest first, no relevance ranking). There is **no count and no `has_more`**: ten hits means ten
+  shown, and a caller who wants more uses that resource's own list with the same `q`.
+- A type the caller may not view has **no key**. An empty array always means "viewable, no match",
+  so a refused type never looks permitted and the caller learns nothing it did not know.
+- Each type keeps the scope rule of its own list: `user.view`, `role.view` and `membership.view`
+  tenant-wide; `branch.view` target-aware, so a branch-scoped caller gets only the branches it holds
+  `branch.view` on while they are `ACTIVE` (and no `branches` key when it holds none). Archived
+  roles are never hits.
+- A caller who may view **none** of the four types gets `403` `forbidden`, detail `Missing
+  permission: user.view.` (the first code in the order users, branches, roles, memberships),
+  audited as `api.access_denied` like any other refusal. A caller who may view at least one type
+  never gets a `403`, and the omitted types write no audit row.
+- A user and a membership of the same person are two hits with two different ids.
+- The route carries no `@PreAuthorize` (no single authority gates it), writes no audit row for an
+  answered search, and runs under the existing `tenant-read` rate-limit policy.
+
 ### Tenant Settings
 
 Base path: `/api/v1/tenant/settings`. List filters: `page`, `size`.

@@ -103,6 +103,13 @@ curl -fsS \
   -H "X-Active-Organisation-Context: $BRANCH_CONTEXT_TOKEN"
 echo
 
+echo "== Searching the tenant directory (a type the caller may not view has no key) =="
+curl -fsS \
+  "$APP_URL/api/v1/tenant/search?q=local" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "X-Active-Organisation-Context: $BRANCH_CONTEXT_TOKEN"
+echo
+
 echo "== Reading the tenant pending-approval counts (a key is omitted without its authority) =="
 curl -fsS \
   "$APP_URL/api/v1/tenant/approvals/pending-count" \
