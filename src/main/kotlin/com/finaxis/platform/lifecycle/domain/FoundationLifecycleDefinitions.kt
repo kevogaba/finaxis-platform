@@ -420,7 +420,7 @@ object FoundationLifecycleDefinitions {
                     eventFactories = externalizedEventFactories(BRANCH_CLOSED_TARGET),
                 ),
                 // A draft that is abandoned (ADR 0036): the direct way to the CLOSED state that
-                // SUSPEND_DRAFT then CLOSE_SUSPENDED reaches by way of a tenant suspension. A
+                // SUSPEND_DRAFT then CLOSE_SUSPENDED reaches by way of a tenant deprovisioning. A
                 // branch that never opened has nothing to announce, so it carries an internal
                 // event only and never BRANCH_CLOSED_TARGET.
                 definition(

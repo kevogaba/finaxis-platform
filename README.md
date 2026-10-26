@@ -7,8 +7,9 @@ and core-banking modular monolith. It uses hexagonal architecture and Spring Mod
 
 | Module | Responsibility | Current status |
 | --- | --- | --- |
-| `iam` | Identity, authorization, and tenant context | REST: auth, users, roles, permissions. |
-| `lifecycle` | Organisation, branch, setup FSMs | REST: tenants, branches, dates, audit. |
+| `iam` | Identity, authorization, and tenant context | REST: auth, users, roles (incl. archive), role assignments, permissions, search. |
+| `lifecycle` | Organisation, branch, setup FSMs | REST: tenants, branches, memberships, branch assignments, approvals, settings, dates, audit. |
+| `accounting` | General-ledger boundary, fiscal calendar, chart of accounts, journals, posting | Services and schema; no REST yet. |
 | `notifications` | RabbitMQ listener and JobRunr email over SMTP | Reference event pipeline. |
 | `common` | Transitions, audit, context, persistence, and web infrastructure | Shared interfaces. |
 | `config` | Application configuration | Infrastructure wiring, not a domain module. |
@@ -119,8 +120,9 @@ memberships, branch assignments, roles, role assignments, permissions, audit eve
 date, and tenant settings. The canonical contract reference is
 [Foundation REST API](docs/api/foundation-api.md).
 
-In local development, Scalar API documentation is available at `/scalar` and OpenAPI JSON at
-`/v3/api-docs`. Both are disabled in the production profile.
+Scalar API documentation is available at `/scalar` and OpenAPI JSON at `/v3/api-docs` in every
+profile, public unless `finaxis.security.api-docs.public-access-enabled` is `false` (default
+`true`; see [Production hardening](docs/security/production-hardening.md)).
 
 Foundation REST rules:
 
@@ -183,8 +185,9 @@ Run the complete local gate with:
 ./gradlew qualityGate
 ```
 
-It runs static analysis, checks, IAM-scoped JaCoCo verification, and `bootJar`. CI also runs a
-Qodana job in `.github/workflows/static-analysis-and-tests.yml`.
+It runs static analysis, checks, JaCoCo verification (`iam` and `accounting`, each with its own
+95% task), and `bootJar`. CI also runs a Qodana job in
+`.github/workflows/static-analysis-and-tests.yml`.
 
 ## Contributing changes
 
@@ -206,7 +209,7 @@ the top of the stack. Merge bottom-up, rebasing the remainder after each merge.
   says so while it is off.
 - `config` intentionally does not declare `@ApplicationModule`; it is infrastructure wiring
   rather than a domain module.
-- JaCoCo's enforced coverage rule is scoped to `iam` only.
+- JaCoCo's enforced coverage rules are scoped to `iam` and `accounting`, one 95% task each.
 
 ## Documentation index
 

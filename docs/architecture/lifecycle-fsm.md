@@ -17,6 +17,7 @@ stateDiagram-v2
     ACTIVE --> SUSPENDED: SUSPEND
     SUSPENDED --> ACTIVE: REACTIVATE
     ACTIVE --> DEPROVISIONING: START_DEPROVISIONING
+    SUSPENDED --> DEPROVISIONING: START_SUSPENDED_DEPROVISIONING
     DEPROVISIONING --> DEPROVISIONED: COMPLETE_DEPROVISIONING
     DEPROVISIONED --> ARCHIVED: ARCHIVE
 ```
@@ -27,11 +28,21 @@ stateDiagram-v2
     PENDING_APPROVAL --> ACTIVE: ACTIVATE
     PENDING_APPROVAL --> DRAFT: RETURN_FOR_CHANGES
     ACTIVE --> SUSPENDED: SUSPEND
+    DRAFT --> SUSPENDED: SUSPEND_DRAFT
+    PENDING_APPROVAL --> SUSPENDED: SUSPEND_PENDING_APPROVAL
+    SUSPENDED --> SUSPENDED: CONFIRM_SUSPENDED
     SUSPENDED --> ACTIVE: REACTIVATE
     ACTIVE --> CLOSED: CLOSE
+    SUSPENDED --> CLOSED: CLOSE_SUSPENDED
     DRAFT --> CLOSED: DISCARD
     CLOSED --> ARCHIVED: ARCHIVE
 ```
+
+`SUSPEND_DRAFT`, `SUSPEND_PENDING_APPROVAL` and `CONFIRM_SUSPENDED` (a branch already `SUSPENDED`,
+logged as a no-op edge) exist for the tenant deprovisioning cascade, which has to move a
+branch in any live state (`branchSuspensionTransition` in `OrganisationProvisioningService`).
+`CLOSED` and `ARCHIVED` branches are left out of the cascade: `branchesForDeprovisioning` does not
+select them. The tenant `SUSPEND` does not touch branches.
 
 **The platform organisation never transitions.** Every edge of the organisation graph carries a
 guard (`FoundationLifecycleDefinitions.organisationGraph`) that refuses the reserved `PLATFORM`
@@ -85,9 +96,8 @@ holds.
 ```mermaid
 stateDiagram-v2
     DRAFT --> PENDING_APPROVAL: SUBMIT
-    PENDING_APPROVAL --> PROVISIONING_IDP: START_PROVISIONING
+    PENDING_APPROVAL --> PROVISIONING_IDP: START_IDP_PROVISIONING
     PROVISIONING_IDP --> INVITED: INVITE
-    PROVISIONING_IDP --> ACTIVE: ACTIVATE
     INVITED --> ACTIVE: ACTIVATE
     ACTIVE --> SUSPENDED: SUSPEND
     SUSPENDED --> ACTIVE: REACTIVATE
@@ -104,7 +114,8 @@ stateDiagram-v2
     ACTIVE --> SUSPENDED: SUSPEND
     SUSPENDED --> ACTIVE: REACTIVATE
     ACTIVE --> REVOKED: REVOKE
-    SUSPENDED --> REVOKED: REVOKE
+    PENDING_APPROVAL --> REVOKED: REVOKE_PENDING
+    SUSPENDED --> REVOKED: REVOKE_SUSPENDED
     REVOKED --> PENDING_APPROVAL: REINVITE
 ```
 
@@ -176,9 +187,9 @@ existence signal), the branch (404), locks the organisation and requires it `ACT
 `PROVISIONING`, refuses the head office (`409 lifecycle.head_office_branch_protected`: tenant
 approval activates it), then lets the FSM refuse any state but `DRAFT`. **The code stays taken**
 (`uq_branch_organisation_code` ignores status), as for every closed branch. It is the direct route
-to the `CLOSED` state a draft already reaches by way of `SUSPEND_DRAFT` (the tenant suspend and
-deprovision cascade) then `CLOSE_SUSPENDED` (the close route); those edges are unchanged, and that
-path still announces `finaxis.lifecycle.branch.closed`, which `DISCARD` does not. See
+to the `CLOSED` state a draft already reaches by way of `SUSPEND_DRAFT` (the tenant
+deprovisioning cascade) then `CLOSE_SUSPENDED` (the close route); those edges are unchanged, and
+that path still announces `finaxis.lifecycle.branch.closed`, which `DISCARD` does not. See
 [foundation API](../api/foundation-api.md#discard-a-draft-branch),
 [authorization model](../security/authorization-model.md#branch-discard) and
 [ADR 0036](../adr/0036-discard-a-draft-branch.md).

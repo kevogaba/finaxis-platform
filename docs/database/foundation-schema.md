@@ -128,7 +128,7 @@ key. That write cost is deliberate. See
 | `identity_dispatch_log` | Idempotency ledger for Keycloak provisioning and application invites, keyed by a deterministic `dispatch_key`. |
 | `organisation_initial_administrator_bootstrap` | Maker-checker detail and asynchronous status for the first administrator of a new tenant. |
 | `api_idempotency_record` | Durable `Idempotency-Key` store, scoped per organisation, with a `CHECK` that a `COMPLETED` row has a coherent stored response. |
-| `*_transition_log` (4 tables) | Append-only lifecycle history, one per aggregate, each tenant-scoped with composite FKs. |
+| `*_transition_log` (5 tables) | Append-only lifecycle history, one per aggregate (`V33` added `role_transition_log`), each tenant-scoped with composite FKs. |
 | `audit_event` | Append-only business/security audit evidence. Must never contain credentials, bearer tokens, cookies, or raw sensitive PII. |
 
 ## Audit columns and optimistic locking

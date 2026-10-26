@@ -15,7 +15,7 @@ permission and its view) and [ADR 0031](0031-audit-one-row-per-transition-and-ex
 ## Context
 
 A branch draft has exactly two ways out. `SUBMIT` sends it to approval, and `SUSPEND_DRAFT`, an
-internal edge reachable only through the tenant-suspend and deprovision cascade
+internal edge reachable only through the tenant deprovisioning cascade
 (`OrganisationProvisioningService`), parks it in `SUSPENDED`. `BranchProvisioningService.suspend`
 always uses `SUSPEND`, which needs `ACTIVE`, and `close` accepts only `ACTIVE` or `SUSPENDED` and
 answers `409` otherwise. A draft that was created by mistake, or that its maker no longer wants, so
@@ -24,13 +24,14 @@ it with the amend route, which helps a draft that is wanted but not one that is 
 
 Two facts shape the answer:
 
-- **A draft can already become `CLOSED`, but only by way of the tenant.** The tenant-suspend and
-  deprovision cascade (`OrganisationProvisioningService.branchSuspensionTransition`) parks a draft
-  in `SUSPENDED` with `SUSPEND_DRAFT`, and `close` accepts a `SUSPENDED` branch
+- **A draft can already become `CLOSED`, but only by way of the tenant.** The tenant
+  deprovisioning cascade (`OrganisationProvisioningService.branchSuspensionTransition`, called
+  only from `deprovisionBranches`; the organisation `suspend` does not touch branches) parks a
+  draft in `SUSPENDED` with `SUSPEND_DRAFT`, and `close` accepts a `SUSPENDED` branch
   (`CLOSE_SUSPENDED`). `JooqFoundationLifecyclePersistence.openedOn` already documents "suspended
   from a draft, then closed": a branch that never opened is a legal `CLOSED` row, with
   `opened_on` null. What is missing is that end state for one branch of a tenant that stays
-  active, without the detour through a suspension nobody asked for.
+  active, without a deprovisioning and the suspension it brings.
 - **Every unique code outlives its row's status.** `uq_branch_organisation_code` is
   `UNIQUE (organisation_id, branch_code)` and `branchCodeExists` ignores status, so a closed branch
   keeps its code. The owner's rule for every terminal state (ADR 0035 for roles, ADR 0029 for the
@@ -46,10 +47,10 @@ Two facts shape the answer:
    child (or, in principle, an active assignment) is refused with a `409` whose message says
    "discarding" rather than "closing".
 2. **No new state.** `CLOSED` already exists, is already terminal but for `ARCHIVE`, and is already
-   what a never-opened branch becomes in a deprovision. ADR 0029 turned down a terminal
-   `REJECTED` branch state on cost, since a state widens `chk_branch_status` and every status
-   `when`; the same cost argument rules out a `DISCARDED` state, and it would buy nothing a
-   transition name does not.
+   what a never-opened branch can become once a deprovision has suspended it. ADR 0029 turned
+   down a terminal `REJECTED` branch state on cost, since a state widens `chk_branch_status` and
+   every status `when`; the same cost argument rules out a `DISCARDED` state, and it would buy
+   nothing a transition name does not.
 3. **No hard delete.** The branch row is referenced by `branch_transition_log`, `audit_event`
    (`branch_id`), and potentially by assignments, roles and journals; the audit trail must outlive
    it, as ADR 0005 (organisations) and ADR 0035 (roles) already hold for their own aggregates.
@@ -86,8 +87,8 @@ Two facts shape the answer:
 
 ## Relation to `SUSPEND_DRAFT` and `CLOSE_SUSPENDED`
 
-They are untouched. The cascade still parks a draft in `SUSPENDED`, and a branch that was a draft
-can still be closed from there by `CLOSE_SUSPENDED`, which **does** announce
+They are untouched. The deprovisioning cascade still parks a draft in `SUSPENDED`, and a branch
+that was a draft can still be closed from there by `CLOSE_SUSPENDED`, which **does** announce
 `finaxis.lifecycle.branch.closed` for it (existing behaviour, not changed here, and the one
 inconsistency `DISCARD` does not copy). `DISCARD` is the direct, caller-driven route to the same
 state, from `DRAFT` and without the suspension. A discarded branch is `CLOSED` with `closed_on`
@@ -116,3 +117,9 @@ the tenant's business date, stamped by the same `saveBranch` as any close, and `
   new code.
 - Freeing the code. That needs a partial unique index, which the owner has ruled out for terminal
   states.
+
+**Update (#176 documentation pass):** this ADR first described `SUSPEND_DRAFT` as reachable
+through "the tenant-suspend and deprovision cascade". Only deprovisioning cascades to branches
+(`deprovisionBranches`, then `branchSuspensionTransition`); the organisation `suspend` moves no
+branch, and `branchesForDeprovisioning` skips `CLOSED` and `ARCHIVED` rows. The sentences above are
+corrected; the decision is unchanged.
