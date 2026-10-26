@@ -12,7 +12,7 @@ internal fun keycloakDispatchKey(
     organisationId: UUID,
     userId: UUID,
     generation: Int = 0,
-): String = "$organisationId:$userId:KEYCLOAK_PROVISIONING${generationSuffix(generation)}"
+): String = "$organisationId:$userId:$KEYCLOAK_PROVISIONING_KEY_TAG${generationSuffix(generation)}"
 
 /**
  * The identity dispatch key of a user's application-invite email in one organisation, for one
@@ -30,4 +30,15 @@ internal fun applicationInviteDispatchKey(
  * earlier releases wrote and what jobs already stored are filed under, and `:G<n>` from the first
  * re-invitation on (ADR 0037). Each re-invitation is a new dispatch row and a new job.
  */
-internal fun generationSuffix(generation: Int): String = if (generation > 0) ":G$generation" else ""
+internal fun generationSuffix(generation: Int): String =
+    if (generation > 0) "$GENERATION_SUFFIX_PREFIX$generation" else ""
+
+/** The key segment naming a Keycloak provisioning dispatch, between the ids and any suffix. */
+internal const val KEYCLOAK_PROVISIONING_KEY_TAG = "KEYCLOAK_PROVISIONING"
+
+/**
+ * What precedes the generation number in a key's suffix. The invitation status read model
+ * rebuilds [keycloakDispatchKey] in SQL from this and [KEYCLOAK_PROVISIONING_KEY_TAG], and
+ * `MemberReinviteIntegrationTests` fails if the two ever differ.
+ */
+internal const val GENERATION_SUFFIX_PREFIX = ":G"

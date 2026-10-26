@@ -211,7 +211,9 @@ invitation per user and organisation, and each fails silently when the row is re
   loser of a creation race fails, is retried by JobRunr and then finds the user. The stale job's
   activation is refused in any case.
 - **The resend and recovery routes are unchanged.** They address the user's newest dispatch or the
-  key of the membership's current generation, and a resend is for an `ACTIVE` member only.
+  key of the membership's current generation, and a resend is for an `ACTIVE` member only. The
+  invitation status read model (#274) is **not** unchanged: it too must read the current
+  generation's dispatch, see the Amendment.
 - `UserProvisioningMembershipStore.membershipExists` is replaced by `existingMembership` (the row's
   id and status), and gains `resetMembershipForReinvite` and `lockedMembershipSnapshot`.
 
@@ -222,3 +224,25 @@ invitation per user and organisation, and each fails silently when the row is re
 - Undoing a re-invitation other than by revoking it again (`REVOKE_PENDING`), which is allowed and
   leaves the membership `REVOKED` and re-invitable once more.
 - Recovering a `REJECTED` tenant, by decision 13.
+
+## Amendment (2026-10-25): the invitation status reads the current generation's dispatch
+
+The final review of the re-invite stack found that this ADR left the invitation status read model
+(#274, `InvitationDispatchReader`) as it was, and it was wrong for a re-invited member. It picked
+the newest `KEYCLOAK_PROVISIONING` row by organisation and user, ignoring the generation, so a
+member re-invited and awaiting approval, who has no row under the new key until the approval,
+showed the first life's: `COMPLETED` after a delivered first invitation, or `FAILED` with code
+`CANCELLED` after the revoke cancelled the job, which offered `POST .../invitation/retry`, answered
+`409` because `requeueFailedProvisioning` looks up the current key. For a user who already has a
+Keycloak identity the approval queues no new dispatch, so the wrong status lasted the whole pending
+period.
+
+The reader now matches the dispatch row by **key**: the key `keycloakDispatchKey` derives for the
+membership's generation, rebuilt in SQL from `DispatchKeys.kt`'s own constants and the same
+`REINVITE` count as decision 7. Matching by key was chosen over restricting to rows created after
+the latest `REINVITE`: the key is the identity every writer of the dispatch already uses, it is
+unique (an index lookup, not a comparison of timestamps), and a generation 0 key is byte-for-byte
+the one earlier releases wrote, so a membership never re-invited reads exactly as before.
+`MemberReinviteIntegrationTests` proves the SQL and the function agree for generations 0, 1 and 2.
+The derivation (`deriveInvitationStatus`) is unchanged; a member with no row for the current
+generation is `AWAITING_APPROVAL` while pending, as a first invitation is.
