@@ -30,6 +30,7 @@ import com.finaxis.platform.lifecycle.application.BranchAssignmentType
 import com.finaxis.platform.lifecycle.application.BranchAssignmentWrite
 import com.finaxis.platform.lifecycle.application.BranchLifecycleSnapshot
 import com.finaxis.platform.lifecycle.application.BranchLifecycleStore
+import com.finaxis.platform.lifecycle.application.BranchTimezoneDefaults
 import com.finaxis.platform.lifecycle.application.CreateBranchCommand
 import com.finaxis.platform.lifecycle.application.CreateOrganisationDraftCommand
 import com.finaxis.platform.lifecycle.application.DeprovisionedAssignment
@@ -56,6 +57,7 @@ import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
+import com.finaxis.platform.lifecycle.domain.TenantSettingCatalog
 import org.jooq.Condition
 import org.jooq.DSLContext
 import org.jooq.Field
@@ -270,7 +272,25 @@ class JooqOrganisationBranchProvisioningStore(
     override fun organisationState(organisationId: UUID): OrganisationLifecycleState? =
         lifecycleState(organisationId)
 
+    override fun branchTimezoneDefaults(organisationId: UUID): BranchTimezoneDefaults {
+        val setting =
+            DSL
+                .select(settingText())
+                .from(ORGANISATION_SETTING)
+                .where(ORGANISATION_SETTING.ORGANISATION_ID.eq(organisationId))
+                .and(ORGANISATION_SETTING.SETTING_KEY.eq(TenantSettingCatalog.DEFAULT_TIMEZONE_KEY))
+                .and(ORGANISATION_SETTING.EFFECTIVE_TO.isNull)
+                .asField<String>()
+        return dsl
+            .select(setting, ORGANISATION.TIMEZONE)
+            .from(ORGANISATION)
+            .where(ORGANISATION.ID.eq(organisationId))
+            .fetchOne { BranchTimezoneDefaults(setting = it.value1(), organisation = it.value2()) }
+            ?: BranchTimezoneDefaults(setting = null, organisation = null)
+    }
+
     override fun createDraft(command: CreateBranchCommand): UUID {
+        val timezone = requireNotNull(command.timezone) { "A branch draft needs a resolved zone." }
         val id =
             dsl
                 .insertInto(
@@ -285,7 +305,7 @@ class JooqOrganisationBranchProvisioningStore(
                 .set(
                     BRANCH.STATUS,
                     BranchLifecycleState.DRAFT.name,
-                ).set(BRANCH.TIMEZONE, command.timezone)
+                ).set(BRANCH.TIMEZONE, timezone)
                 .set(
                     BRANCH.ADDRESS_JSONB,
                     JSONB.jsonb(objectMapper.writeValueAsString(command.address)),

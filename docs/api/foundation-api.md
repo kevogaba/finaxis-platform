@@ -788,6 +788,16 @@ Create branch request and detail response:
 }
 ```
 
+`timezone` is **optional on create** (#276), on the tenant route and on
+`POST /platform/tenants/{tenant_id}/branches`. Named, it must be an IANA region id spelled exactly
+as the JDK lists it (`Africa/Nairobi`, `UTC`, `Etc/GMT-3`): an unknown id or a raw offset
+(`+03:00`, `UTC+3`) is `422 invalid_operation` with the detail `timezone must be an IANA time-zone
+id, for example Africa/Nairobi.`, and a blank one is `400 validation_failed`; nothing is written
+either way. Absent, the branch takes the tenant's `default_timezone` setting, or else the
+organisation's own `timezone`, and the detail response shows the zone stored. Before #276 create
+required the field but did not check it. See
+[tenant settings](../operations/tenant-settings.md#the-default-time-zone).
+
 `address` is a free-form map of string values: the detail response (tenant and platform `GET
 /branches/{branch_id}`, and every lifecycle response that returns the detail) echoes exactly the
 keys and values that were stored on create. A stored value that cannot be read back as such a map
@@ -822,7 +832,8 @@ and answers `200` with the branch detail above, so the response carries the stor
   for changes (ADR 0029) can be amended by its maker. The update does not change the status and
   is not an FSM transition.
 - **Validation.** `branch_name` is 2-100 characters and not blank (`400 validation_failed`);
-  `timezone` must be a valid zone id (`422 invalid_operation`). `parent_branch_id` must be a
+  `timezone` must be an IANA region id, as on create (`422 invalid_operation`; a raw offset is
+  refused since #276). `parent_branch_id` must be a
   branch of the same organisation (`404 resource_not_found` otherwise, as on create), must not be
   the branch itself, and must not be a descendant of it (`422 invalid_operation`), and must not be
   `CLOSED` or `ARCHIVED` (`409 conflict`: closing refuses a branch with active children, so this
@@ -1142,6 +1153,11 @@ Amend without `admin`:
   "timezone": "Africa/Nairobi"
 }
 ```
+
+On create and amend, `timezone` follows the same rule as a branch's (#276): an IANA region id
+spelled exactly as the JDK lists it. An unknown id or a raw offset (`+03:00`, `UTC+3`) is
+`422 invalid_operation`; `Etc/GMT-3` names a fixed offset. A draft stored with an offset before
+#276 keeps it until it is amended.
 
 Tenant draft request and response:
 

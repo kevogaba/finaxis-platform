@@ -14,7 +14,10 @@ import java.time.LocalDate
 import java.util.Optional
 import java.util.UUID
 
-/** Request payload for creating a branch draft. */
+/**
+ * Request payload for creating a branch draft. `timezone` is optional (#276): absent, the branch
+ * takes the tenant's `default_timezone` setting, or else the organisation's own time zone.
+ */
 data class CreateBranchRequest(
     @field:NotBlank
     @field:Pattern(
@@ -34,9 +37,14 @@ data class CreateBranchRequest(
     val branchType: String,
     @field:Schema(example = "00000000-0000-0000-0000-000000000000")
     val parentBranchId: UUID? = null,
-    @field:NotBlank
-    @field:Schema(example = "Africa/Nairobi")
-    val timezone: String,
+    @field:Pattern(regexp = NOT_BLANK, message = "must not be blank")
+    @field:Schema(
+        example = "Africa/Nairobi",
+        description =
+            "An IANA time-zone id. Absent, the tenant's default_timezone setting applies, or " +
+                "else the organisation's own time zone.",
+    )
+    val timezone: String? = null,
     val address: Map<String, String> = emptyMap(),
 )
 

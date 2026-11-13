@@ -20,11 +20,10 @@ import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
+import com.finaxis.platform.lifecycle.domain.TimeZoneRule
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
-import java.time.DateTimeException
 import java.time.Instant
-import java.time.ZoneId
 import java.util.UUID
 
 /**
@@ -44,7 +43,10 @@ class BranchProvisioningService(
     private val permissionGuard: PermissionGuard,
     private val makerChecker: MakerCheckerPolicy,
 ) {
-    /** Creates a branch draft under an active or provisioning organisation. */
+    /**
+     * Creates a branch draft under an active or provisioning organisation. A request that names no
+     * time zone gets the tenant's `default_timezone`, or else the organisation's own (#276).
+     */
     @Transactional
     fun createDraft(command: CreateBranchCommand): BranchDraftResult {
         when (command.scope) {
@@ -73,7 +75,7 @@ class BranchProvisioningService(
                 lifecycleStore.parentBelongsToOrganisation(command.organisationId, parentId),
             )
         }
-        val branchId = lifecycleStore.createDraft(command)
+        val branchId = lifecycleStore.createDraft(command.copy(timezone = branchTimezone(command)))
         audit(
             command.organisationId,
             branchId.toString(),
@@ -82,6 +84,21 @@ class BranchProvisioningService(
             command.requestedBy.toString(),
         )
         return BranchDraftResult(branchId, BranchLifecycleState.DRAFT)
+    }
+
+    /**
+     * The zone a new branch is stored with (#276): the one the request names, checked against
+     * [TimeZoneRule]; else the tenant's `default_timezone`; else the organisation's own zone. The
+     * two defaults are not checked again: the setting was checked when it was written, and the
+     * organisation's zone is copied as the head office copies it.
+     */
+    private fun branchTimezone(command: CreateBranchCommand): String {
+        command.timezone?.let { return TimeZoneRule.require(it) }
+        val defaults = lifecycleStore.branchTimezoneDefaults(command.organisationId)
+        return defaults.setting
+            ?: checkNotNull(defaults.organisation) {
+                "Organisation ${command.organisationId} has no time zone."
+            }
     }
 
     /**
@@ -106,7 +123,7 @@ class BranchProvisioningService(
         )
         invalidOperationUnless(command.changedFields.isNotEmpty())
         command.branchName?.let { invalidOperationUnless(it.isNotBlank()) }
-        command.timezone?.let(::requireZoneId)
+        command.timezone?.let { TimeZoneRule.require(it) }
         if (command.changesParent && command.parentBranchId != null) {
             requireAcyclicParent(command, command.parentBranchId)
         }
@@ -795,14 +812,6 @@ class BranchProvisioningService(
          * branch and the tenant has switched that segregation off.
          */
         const val BRANCH_SELF_APPROVE_AUDIT_ACTION = "branch.self_approve"
-    }
-}
-
-private fun requireZoneId(timezone: String) {
-    try {
-        ZoneId.of(timezone)
-    } catch (_: DateTimeException) {
-        throw InvalidOperationException()
     }
 }
 

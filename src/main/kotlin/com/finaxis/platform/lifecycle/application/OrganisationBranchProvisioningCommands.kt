@@ -177,14 +177,17 @@ enum class ActingScope {
     PLATFORM,
 }
 
-/** Creates a branch draft inside an active or provisioning organisation. */
+/**
+ * Creates a branch draft inside an active or provisioning organisation. A null [timezone] means
+ * "the default": the tenant's `default_timezone`, or else the organisation's own zone (#276).
+ */
 data class CreateBranchCommand(
     val organisationId: UUID,
     val branchCode: String,
     val branchName: String,
     val branchType: String,
     val parentBranchId: UUID? = null,
-    val timezone: String,
+    val timezone: String? = null,
     val address: Map<String, String> = emptyMap(),
     val requestedBy: UUID,
     val scope: ActingScope = ActingScope.TENANT,

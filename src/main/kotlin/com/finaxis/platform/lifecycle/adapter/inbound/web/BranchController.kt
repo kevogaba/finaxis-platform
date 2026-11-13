@@ -174,7 +174,10 @@ class BranchController(
     @PreAuthorize("hasAuthority('branch.create')")
     @Operation(
         summary = "Create branch draft",
-        description = "Drafts a new operating branch under the active tenant.",
+        description =
+            "Drafts a new operating branch under the active tenant. Without a timezone the " +
+                "branch takes the tenant's default_timezone setting, or else the organisation's " +
+                "own time zone.",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -223,6 +226,16 @@ class BranchController(
         ApiResponse(
             responseCode = "409",
             description = "Branch code already exists",
+            content = [
+                Content(
+                    mediaType = "application/problem+json",
+                    schema = Schema(implementation = ApiProblem::class),
+                ),
+            ],
+        ),
+        ApiResponse(
+            responseCode = "422",
+            description = "Invalid time zone",
             content = [
                 Content(
                     mediaType = "application/problem+json",
