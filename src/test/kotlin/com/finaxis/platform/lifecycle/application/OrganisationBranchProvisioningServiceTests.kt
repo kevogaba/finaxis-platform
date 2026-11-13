@@ -28,6 +28,7 @@ import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.TenantSettingValueType
+import com.finaxis.platform.lifecycle.domain.TimeZoneRule
 import com.finaxis.platform.lifecycle.domain.UserLifecycleState
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.never
@@ -91,6 +92,75 @@ class OrganisationBranchProvisioningServiceTests {
             permissionGuard,
             allControlsOn(),
         )
+
+    @Test
+    fun `a branch with no zone takes the tenant default, else the organisation's`() {
+        val organisationId = uuidV7()
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+
+        val unset = branches.createDraft(branchCommand(organisationId, timezone = null)).branchId
+        assertEquals(ORGANISATION_TIMEZONE, store.branchTimezones[organisationId to unset])
+
+        store.defaultTimezoneSettings[organisationId] = "Africa/Kampala"
+        val defaulted =
+            branches.createDraft(branchCommand(organisationId, timezone = null)).branchId
+        assertEquals("Africa/Kampala", store.branchTimezones[organisationId to defaulted])
+
+        val named =
+            branches.createDraft(branchCommand(organisationId, timezone = "Europe/London")).branchId
+        assertEquals(
+            "Europe/London",
+            store.branchTimezones[organisationId to named],
+            "a zone the request names wins over the tenant default",
+        )
+    }
+
+    @Test
+    fun `a branch create naming an invalid or offset time zone is refused before any write`() {
+        val organisationId = uuidV7()
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+
+        listOf("Mars/Olympus", "+03:00", "UTC+3", "africa/nairobi").forEach { zone ->
+            val error =
+                assertFailsWith<InvalidOperationException>(zone) {
+                    branches.createDraft(branchCommand(organisationId, timezone = zone))
+                }
+            assertEquals(TimeZoneRule.SAFE_DETAIL, error.safeDetail)
+        }
+        assertTrue(store.branchCreators.keys.none { it.first == organisationId })
+    }
+
+    @Test
+    fun `an organisation draft naming an offset time zone is refused`() {
+        val error =
+            assertFailsWith<InvalidOperationException> {
+                organisations.createDraft(
+                    CreateOrganisationDraftCommand(
+                        tenantCode = "offset",
+                        displayName = "Offset SACCO",
+                        legalName = "Offset SACCO Limited",
+                        registrationNumber = "C-276",
+                        countryCode = "KE",
+                        baseCurrencyCode = "KES",
+                        timezone = "+03:00",
+                        requestedBy = uuidV7(),
+                    ),
+                )
+            }
+        assertEquals(TimeZoneRule.SAFE_DETAIL, error.safeDetail)
+    }
+
+    private fun branchCommand(
+        organisationId: UUID,
+        timezone: String?,
+    ) = CreateBranchCommand(
+        organisationId = organisationId,
+        branchCode = "BR-${uuidV7().toString().takeLast(6).uppercase()}",
+        branchName = "Zone Branch",
+        branchType = "OPERATIONAL",
+        timezone = timezone,
+        requestedBy = uuidV7(),
+    )
 
     @Test
     fun `creates organisation draft with requested settings and leaves the business date unset`() {
@@ -1264,6 +1334,8 @@ class OrganisationInitialSettingsProvisioningTests {
         )
 }
 
+private const val ORGANISATION_TIMEZONE = "Africa/Nairobi"
+
 private class ProvisioningFake(
     private val lifecycle: LifecycleFake,
 ) : OrganisationLifecycleProvisioningStore,
@@ -1425,13 +1497,26 @@ private class ProvisioningFake(
 
     val branchCreators = mutableMapOf<Pair<UUID, UUID>, UUID>()
 
+    /** The zone each created branch was stored with, keyed by organisation and branch. */
+    val branchTimezones = mutableMapOf<Pair<UUID, UUID>, String?>()
+
+    /** A tenant's current `default_timezone`; absent means unset. */
+    val defaultTimezoneSettings = mutableMapOf<UUID, String>()
+
     override fun organisationState(organisationId: UUID) = organisationStates[organisationId]
 
     override fun createDraft(command: CreateBranchCommand): UUID {
         val id = uuidV7()
         branchCreators[command.organisationId to id] = command.requestedBy
+        branchTimezones[command.organisationId to id] = command.timezone
         return id
     }
+
+    override fun branchTimezoneDefaults(organisationId: UUID) =
+        BranchTimezoneDefaults(
+            setting = defaultTimezoneSettings[organisationId],
+            organisation = ORGANISATION_TIMEZONE,
+        )
 
     override fun branchCodeExists(
         organisationId: UUID,

@@ -2127,6 +2127,9 @@ private class UserProvisioningFake :
 
     override fun createDraft(command: CreateBranchCommand): UUID = uuidV7()
 
+    override fun branchTimezoneDefaults(organisationId: UUID) =
+        BranchTimezoneDefaults(setting = null, organisation = "Africa/Nairobi")
+
     override fun branchCodeExists(
         organisationId: UUID,
         branchCode: String,
