@@ -57,8 +57,12 @@ pattern.
 ## Append-only guarantee
 
 `audit_event` has no `updated_at`/`updated_by` columns and no application code ever issues an
-`UPDATE` or `DELETE` against it. `JooqAuditEventRepository.save` only inserts. Treat any future
-code that mutates an existing audit row as a bug — see
+`UPDATE` against it. `JooqAuditEventRepository.save` only inserts. The one `DELETE` is the audit
+retention job (#278, [ADR 0042](../adr/0042-audit-retention.md), amending ADR 0007), through
+`JooqAuditRetentionStore.deleteBatch` alone (`AuditRetentionDeletePathTests`), and only of a tenant's
+`INFO`/`SUCCESS` rows older than its `audit_retention_days` (at least seven years), never an
+amendment the maker-checker rules still read; it is off unless the deployment turns it on. Treat any
+other code that mutates or deletes an audit row as a bug — see
 [ADR 0007](../adr/0007-append-only-audit-log-and-redaction-policy.md).
 
 An audit event with no tenant id would otherwise violate `audit_event.organisation_id`'s `NOT

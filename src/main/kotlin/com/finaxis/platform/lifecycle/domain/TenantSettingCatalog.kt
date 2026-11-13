@@ -19,6 +19,10 @@ data class TenantSettingDefinition(
     val label: String,
     val description: String,
     val group: String,
+    /** For an `INT` setting, the smallest value a write may store; null for no bound but zero. */
+    val minimum: Int? = null,
+    /** For an `INT` setting, the largest value a write may store; null for no upper bound. */
+    val maximum: Int? = null,
 )
 
 /**
@@ -46,6 +50,20 @@ object TenantSettingCatalog {
      * `settings.update`, since it hands that act to the platform.
      */
     const val BUSINESS_DATE_AUTO_ADVANCE_KEY = "business_date_auto_advance_enabled"
+
+    /** How many days a tenant's audit events are kept (#278); unset keeps them for good. */
+    const val AUDIT_RETENTION_DAYS_KEY = "audit_retention_days"
+
+    /**
+     * The floor of `audit_retention_days` (#278, ADR 0042): seven years, the period most often
+     * cited for financial records (FATF Recommendation 11 sets five as the minimum). A write below
+     * it is refused, and the retention job never keeps less whatever is stored. Lowering it is a
+     * compliance decision, so it is a reviewed constant, not configuration.
+     */
+    const val AUDIT_RETENTION_MINIMUM_DAYS: Int = 2555
+
+    /** The ceiling of `audit_retention_days`: a century, past which "unset" is the honest value. */
+    const val AUDIT_RETENTION_MAXIMUM_DAYS: Int = 36500
 
     private const val GROUP_GENERAL = "General"
     private const val GROUP_APPROVALS = "Approvals"
@@ -133,16 +151,21 @@ object TenantSettingCatalog {
                 group = GROUP_BUSINESS_DATE,
             ),
             TenantSettingDefinition(
-                key = "audit_retention_days",
+                key = AUDIT_RETENTION_DAYS_KEY,
                 valueType = TenantSettingValueType.INT,
                 sensitive = false,
                 platformAdminOnly = true,
                 defaultValue = null,
                 label = "Audit retention (days)",
                 description =
-                    "Reserved: how long audit events would be kept. Not yet applied; nothing " +
-                        "is purged today. Platform administrators only.",
+                    "How many days audit events are kept. Unset keeps them for good. Once the " +
+                        "platform operator turns the retention job on, routine successful " +
+                        "events older than this are deleted; refused, failed and high-severity " +
+                        "events are kept. At least 2555 days (seven years). Platform " +
+                        "administrators only.",
                 group = GROUP_AUDIT,
+                minimum = AUDIT_RETENTION_MINIMUM_DAYS,
+                maximum = AUDIT_RETENTION_MAXIMUM_DAYS,
             ),
         )
 
@@ -188,7 +211,7 @@ object TenantSettingCatalog {
         return when (definition.valueType) {
             TenantSettingValueType.STRING -> trimmed
             TenantSettingValueType.BOOLEAN -> canonicalizeBoolean(key, trimmed)
-            TenantSettingValueType.INT -> canonicalizeInt(key, trimmed)
+            TenantSettingValueType.INT -> canonicalizeInt(definition, trimmed)
             TenantSettingValueType.TIMEZONE -> canonicalizeTimezone(key, trimmed)
             TenantSettingValueType.CURRENCY -> canonicalizeCurrency(trimmed)
         }
@@ -209,13 +232,21 @@ object TenantSettingCatalog {
         }
 
     private fun canonicalizeInt(
-        key: String,
+        definition: TenantSettingDefinition,
         value: String,
     ): String {
+        val key = definition.key
         val parsed = value.toIntOrNull()
         if (parsed == null || parsed < 0) {
             throw InvalidOperationException(
                 safeDetail = "Setting $key must be a non-negative integer.",
+            )
+        }
+        val minimum = definition.minimum ?: 0
+        val maximum = definition.maximum ?: Int.MAX_VALUE
+        if (parsed !in minimum..maximum) {
+            throw InvalidOperationException(
+                safeDetail = "Setting $key must be an integer from $minimum to $maximum.",
             )
         }
         return parsed.toString()

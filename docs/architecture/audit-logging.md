@@ -219,14 +219,48 @@ refuses anyone with a successful `organisation.amend_draft` event on it
 (`lifecycle.approver_is_tenant_modifier`, #221). A purged amendment row makes its amender eligible
 again, so the rule fails open.
 
-- **Today nothing purges.** The `audit_retention_days` setting has no job behind it (#164), so no
-  code changes with this note.
-- **Any future retention or purge job must keep** the `branch.update` events of every branch, and
-  the `organisation.amend_draft` events of every tenant, that is still in progress (not yet
-  `ACTIVE` or terminal), or first move the amender fact into a dedicated table the rules read
-  instead (a durable column or table on `branch` and `organisation` is the long-term alternative).
-- **That job's tests must prove it**: a purge run past the retention window leaves those rows of an
-  in-progress branch and tenant in place, and the amender is still refused afterwards.
+- **The retention job keeps them** (#278, [ADR 0042](../adr/0042-audit-retention.md)): it never
+  deletes a `branch.update` event of a branch in `DRAFT`, `PENDING_APPROVAL` or `SUSPENDED`, nor an
+  `organisation.amend_draft` event of a tenant in `DRAFT`, `PENDING_APPROVAL` or `PROVISIONING`,
+  the states from which an approval, and so the amender rule, can still come.
+  `AuditRetentionIntegrationTests` proves the amender is still refused after a purge.
+- **Moving the amender fact into a dedicated table** the rules read instead (a durable column or
+  table on `branch` and `organisation`) stays the long-term alternative, and would let those rows
+  age out like any other.
+
+### The retention job (#278)
+
+`audit_retention_days` (platform-only, at least 2555 days, unset keeps everything) is applied by
+the recurring JobRunr job `audit-retention` (`AuditRetentionJob`, daily at 02:30 UTC by default,
+`finaxis.audit.retention.schedule`), which runs `AuditRetention`. ADR 0042 amends ADR 0007: this is
+the one path that deletes from `audit_event` (`JooqAuditRetentionStore.deleteBatch`, held to that by
+`AuditRetentionDeletePathTests`), and nothing updates a row. For each tenant that stores a period,
+it deletes the rows that are **all** of:
+
+- the tenant's own, and older than `now - max(audit_retention_days, 2555)` days: a value stored
+  below the floor (possible before the floor existed, or by hand) keeps the floor and logs a
+  `WARN`;
+- `INFO` in severity and `SUCCESS` in outcome: every `DENIED` and `FAILURE` row, and every `LOW`,
+  `MEDIUM`, `HIGH` and `CRITICAL` one, is kept;
+- not an amendment the maker-checker rules still read (above).
+
+It deletes in batches (`batch-size`, default 500; at most `max-batches-per-run` per tenant, default
+20; the next run carries on), each batch one statement leading `idx_audit_event_organisation_time`
+in a transaction of its own (`AuditRetentionBatch`), which bounds its lock wait (`lock-timeout`,
+default 5 s), takes the tenant's retention advisory lock (`pg_try_advisory_xact_lock`, so two runs
+never delete side by side), reads the tenant's period again under the lock every writer of
+`audit_retention_days` takes (so a period raised or removed since the run listed the tenant is the
+one that applies), deletes, and writes that batch's `audit.retention_purge` row: actor `SYSTEM`,
+severity `HIGH` (so the job never deletes its own record), the cutoff and the number deleted in its
+metadata. The rows and their record therefore commit together or not at all. When more tenants
+store a period than `max-organisations-per-run` (default 500), each UTC day's run takes the next
+window of them in organisation-id order. A failure stops only that tenant for this run and is
+logged without its message.
+
+**Operator switch.** `finaxis.audit.retention.mode` is `OFF` by default (nothing is read or
+deleted); `DRY_RUN` counts what each tenant would lose and logs it; `ON` deletes. A delete cannot be
+undone except from a backup, so run `DRY_RUN` in production first. A purged row is gone from every
+read: `GET /audit-events/{id}` answers `audit_event_not_found`, and totals and exports shrink.
 
 ## Request Correlation
 
@@ -294,8 +328,9 @@ JobRunr handler, a listener) has no context, so its address is the command's or 
   Traefik does; an entry with a port, `::ffff:` or other non-canonical text is the access log's
   address verbatim while the row holds the normalised address). Only the tenant audit
   routes and the platform detail route of the platform's own log return it; both platform pages
-  withhold it (owner ruling, #247). How long rows, and with them addresses, are kept is not yet
-  defined: the `audit_retention_days` setting has no purge job behind it (#164).
+  withhold it (owner ruling, #247). Rows, and with them addresses, are kept for the tenant's
+  `audit_retention_days` once the retention job is on (#278, see "The retention job"), and for good
+  otherwise.
 
 ### User agent (#185)
 
