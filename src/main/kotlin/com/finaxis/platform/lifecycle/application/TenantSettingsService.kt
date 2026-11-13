@@ -47,6 +47,7 @@ class TenantSettingsService(
         refuseMirroredKey(command.key)
         serialiseWithApprovals(command.organisationId, command.key)
         val canonical = TenantSettingCatalog.canonicalize(command.key, command.value)
+        requireAuthorityToAutoAdvance(command, canonical)
 
         val before =
             settingsStore.upsertSetting(
@@ -317,6 +318,26 @@ class TenantSettingsService(
         }
     }
 
+    /**
+     * Switching the scheduled advance on hands `business_date.advance` to the platform for this
+     * tenant (#277), so only a caller who may advance the date by hand may do it. Switching it off,
+     * or deleting the row, needs no more than `settings.update`: it takes authority away.
+     */
+    private fun requireAuthorityToAutoAdvance(
+        command: CreateOrUpdateTenantSettingCommand,
+        canonical: String,
+    ) {
+        if (command.key == TenantSettingCatalog.BUSINESS_DATE_AUTO_ADVANCE_KEY &&
+            canonical == "true"
+        ) {
+            permissionGuard.requirePermission(
+                command.actorId,
+                command.organisationId,
+                BUSINESS_DATE_ADVANCE_PERMISSION,
+            )
+        }
+    }
+
     private fun canManagePlatformSettings(actorId: UUID): Boolean =
         runCatching {
             permissionGuard.requirePermission(
@@ -424,6 +445,7 @@ class TenantSettingsService(
         const val SETTING_MUTATE_PERMISSION = "settings.update"
         const val SETTING_READ_PERMISSION = "settings.view"
         const val PLATFORM_SETTING_PERMISSION = "tenant_setting.manage_platform"
+        const val BUSINESS_DATE_ADVANCE_PERMISSION = "business_date.advance"
         const val MASK = "***REDACTED***"
         const val UNKNOWN_VALUE_TYPE = "STRING"
     }

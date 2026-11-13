@@ -292,6 +292,17 @@ finaxis:
     # new posting queue behind it, so this bounds the tenant's whole posting path and not just the
     # operator's request.
     business-date-lock-timeout: ${FINAXIS_LIFECYCLE_BUSINESS_DATE_LOCK_TIMEOUT:10s}
+    business-date:
+      # The scheduled advance for tenants that store business_date_auto_advance_enabled=true
+      # (#277, ADR 0041). OFF until an operator turns it on, with a WARN while a tenant has opted
+      # in: DRY_RUN logs each day it would advance and writes nothing; ON advances. Each run moves
+      # an opted-in date at most max-steps-per-run days towards the organisation's local date, and
+      # considers at most max-organisations-per-run tenants, the next window of them each hour.
+      auto-advance:
+        mode: ${FINAXIS_LIFECYCLE_BUSINESS_DATE_AUTO_ADVANCE_MODE:OFF}
+        schedule: ${FINAXIS_LIFECYCLE_BUSINESS_DATE_AUTO_ADVANCE_SCHEDULE:0 5 * * * *}
+        max-steps-per-run: ${FINAXIS_LIFECYCLE_BUSINESS_DATE_AUTO_ADVANCE_MAX_STEPS:7}
+        max-organisations-per-run: ${FINAXIS_LIFECYCLE_BUSINESS_DATE_AUTO_ADVANCE_MAX_ORGS:500}
   audit:
     # One denied-access audit row per 403 per caller, capped by a distributed bucket (#184).
     denied-access:

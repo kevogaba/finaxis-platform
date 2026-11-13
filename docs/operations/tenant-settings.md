@@ -187,7 +187,11 @@ is not writable through them (see above):
 - `default_timezone` (see "The default time zone")
 - `require_maker_checker_for_user_invites`
 - `require_maker_checker_for_branch_creation`
-- `business_date_auto_advance_enabled`
+- `business_date_auto_advance_enabled`: storing `true` also needs `business_date.advance` (#277),
+  since it hands that act to the platform; `false` and `DELETE` need only `settings.update`. The
+  scheduled advance it switches on is described in
+  [business date](business-date.md#scheduled-advance), and does nothing until the operator sets
+  `finaxis.lifecycle.business-date.auto-advance.mode`.
 
 Platform-only settings require `tenant_setting.manage_platform` scoped to the reserved platform
 organisation, not to the tenant organisation:

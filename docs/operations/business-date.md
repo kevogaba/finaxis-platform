@@ -20,9 +20,9 @@ current COB date, status, advance metadata, and an optimistic-lock `row_version`
 
 Organisation provisioning initializes this row automatically:
 
-- `createDraft` saves the initial business date, using the provided value or the organisation
-  timezone's current local date.
-- `approveProvisioning` ensures a business date again before activation.
+- `createDraft` saves an initial business date only when the request names one (#271).
+- `approveProvisioning` ensures a business date before activation: a draft that named none takes
+  the organisation timezone's current local date at approval.
 
 Application code rarely needs to call `InitializeBusinessDate` directly. The operation exists for
 completeness and rejects a second initialization when the singleton row already exists.
@@ -103,6 +103,54 @@ background jobs or the audit stream (no signal exists).
 Making `StartCob` refuse a not-ready tenant is a separate decision (ADR 0038, "Later:
 enforcement"): it would need the count read under the same lock, an audited override and a rule for
 `CompleteCob`.
+
+## Scheduled advance
+
+A tenant that stores `business_date_auto_advance_enabled = true` has its business date advanced by
+the platform (#277, [ADR 0041](../adr/0041-scheduled-business-date-advance.md)). The recurring
+JobRunr job `business-date-auto-advance` (`BusinessDateAutoAdvanceJob`, cron
+`finaxis.lifecycle.business-date.auto-advance.schedule`, default hourly at minute 5) runs
+`BusinessDateAutoAdvance`, which:
+
+1. reads at most `max-organisations-per-run` (default 500) candidates: `ACTIVE` organisations, the
+   platform organisation excepted, whose business date is `OPEN` and whose current setting row is
+   `true`, in organisation-id order. The setting defaults to `false`, so a tenant with no row is
+   never read. When more are opted in, each hour's run reads the next window of that many, so
+   every tenant is considered within `ceil(opted-in / max-organisations-per-run)` hours and tenants
+   whose dates cannot move never hold the others back for good;
+2. computes each candidate's local date from the organisation's `timezone` (in Kotlin, never with
+   SQL `AT TIME ZONE`), and while the business date is earlier, advances it **one day at a time**,
+   each day its own transaction through `BusinessDateService.advanceAsSystem`, at most
+   `max-steps-per-run` (default 7) days per run, so a long gap catches up over several runs;
+3. stops that organisation for this run at the first day it may not advance, and tries again next
+   run: the tenant has opted out since the run read it (the setting is read again in each day's
+   transaction, under the lock every writer of it takes, so an opt-out stops the very next day),
+   the organisation is no longer `ACTIVE`, the date is not `OPEN` (a close-of-business is under
+   way or done), someone moved the date first, a **BLOCKING** close-of-business readiness check
+   fails (a manual journal pending approval, above), the lock wait expires (the retryable `409`
+   above), or anything else fails (logged as a `WARN` naming the exception class, never its
+   message). One organisation's failure never stops another's.
+
+Each day advanced writes exactly what a manual advance writes: the `business_date` row, an
+`ADVANCED` history row, a `business_date.advance` audit row, the `BusinessDateAdvanced` outbox event
+and the daily-balance build for the date left. The actor is the system actor (`SystemActor.ID`), with
+actor type `SYSTEM` in the audit row **and** in the outbox event, and the reason
+`Scheduled advance (business_date_auto_advance_enabled)`. No actor permission is asked: the
+tenant's opt-in is the authority, and storing `true` needs `business_date.advance` as well as
+`settings.update`, so only someone who may advance by hand can hand the act to the platform.
+Switching it off needs only `settings.update`.
+
+The scheduled advance never runs close-of-business: a tenant that closes its days by hand stays
+`CLOSED` until it reopens, and the job skips it until then. It never moves a date past the
+organisation's local date, so it never creates a future business date.
+
+**Operator switch.** `finaxis.lifecycle.business-date.auto-advance.mode` is `OFF` by default
+(`FINAXIS_LIFECYCLE_BUSINESS_DATE_AUTO_ADVANCE_MODE`): a tenant's opt-in does nothing until the
+platform operator turns it on, and while it is `OFF` and some tenant has opted in, the first run
+after start logs a `WARN` saying so. `DRY_RUN` logs each day it would advance and writes nothing;
+`ON` advances. JobRunr's master server alone schedules recurring jobs and never starts a run while
+the previous one is still in flight, so one run is active across all replicas; a second run finds
+each date already moved. The job has no retries: the next run is the retry.
 
 ## History
 

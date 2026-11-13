@@ -8,8 +8,10 @@ import com.finaxis.platform.common.audit.AuditEvent
 import com.finaxis.platform.common.audit.AuditEventRepository
 import com.finaxis.platform.common.audit.AuditService
 import com.finaxis.platform.common.id.uuidV7
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.persistence.TransactionLockBound
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
+import com.finaxis.platform.common.transitions.TransitionActor
 import com.finaxis.platform.common.transitions.TransitionEvent
 import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.common.web.api.InvalidPageRequestException
@@ -44,6 +46,7 @@ class BusinessDateServiceTests {
     private val lockBound = RecordingLockBound()
     private val dailyBalanceBuilds = RecordingDailyBalanceBuilds()
     private val closeReadiness = FakeCloseReadiness()
+    private val settings = FakeAutoAdvanceSettings()
     private val service =
         BusinessDateService(
             lifecycleStore,
@@ -54,6 +57,7 @@ class BusinessDateServiceTests {
             events,
             dailyBalanceBuilds,
             closeReadiness,
+            settings,
             lockBound,
             BusinessDateProperties(CONFIGURED_LOCK_TIMEOUT),
             clock,
@@ -170,6 +174,98 @@ class BusinessDateServiceTests {
         assertEquals(
             listOf(organisationId to LocalDate.parse("2026-07-15")),
             dailyBalanceBuilds.scheduled,
+        )
+    }
+
+    @Test
+    fun `a system advance moves one day as the system actor and asks no permission`() {
+        val organisationId = activeOrganisation()
+        val from = LocalDate.parse("2026-07-15")
+        businessDateStore.snapshots[organisationId] = BusinessDateSnapshot(from, "OPEN", 0)
+        // A system advance's authority is the tenant's opt-in, not a grant (ADR 0041).
+        guard.deny(organisationId, "business_date.advance")
+
+        val outcome = service.advanceAsSystem(organisationId, from, "Scheduled advance")
+
+        assertEquals(ScheduledAdvanceOutcome.ADVANCED, outcome)
+        assertEquals(LocalDate.parse("2026-07-16"), businessDateStore.advancedTo[organisationId])
+        assertEquals(TransitionActor("SYSTEM", SystemActor.ID.toString()), publishedEvent().actor)
+        val audit = auditEvents.saved.single()
+        assertEquals("SYSTEM", audit.actorType)
+        assertEquals("Scheduled advance", audit.reason)
+        assertEquals(SystemActor.ID, historyStore.entries.single().actorId)
+        assertEquals(listOf(organisationId to from), dailyBalanceBuilds.scheduled)
+        assertEquals(listOf(CONFIGURED_LOCK_TIMEOUT), lockBound.applied)
+    }
+
+    @Test
+    fun `a system advance skips a date it may not move and writes nothing`() {
+        val from = LocalDate.parse("2026-07-15")
+        val inactive =
+            uuidV7().also {
+                lifecycleStore.states[it] =
+                    OrganisationLifecycleState.SUSPENDED
+            }
+        businessDateStore.snapshots[inactive] = BusinessDateSnapshot(from, "OPEN", 0)
+        val closing = activeOrganisation()
+        businessDateStore.snapshots[closing] = BusinessDateSnapshot(from, "CLOSING", 0)
+        val moved = activeOrganisation()
+        businessDateStore.snapshots[moved] = BusinessDateSnapshot(from.plusDays(1), "OPEN", 0)
+        val raced = activeOrganisation()
+        businessDateStore.snapshots[raced] = BusinessDateSnapshot(from, "OPEN", 0)
+
+        assertEquals(
+            ScheduledAdvanceOutcome.NOT_ACTIVE,
+            service.advanceAsSystem(inactive, from, "r"),
+        )
+        assertEquals(ScheduledAdvanceOutcome.NOT_OPEN, service.advanceAsSystem(closing, from, "r"))
+        assertEquals(ScheduledAdvanceOutcome.MOVED, service.advanceAsSystem(moved, from, "r"))
+        businessDateStore.advanceSucceeds = false
+        assertEquals(ScheduledAdvanceOutcome.MOVED, service.advanceAsSystem(raced, from, "r"))
+
+        assertEquals(emptyMap(), businessDateStore.advancedTo)
+        assertEquals(emptyList(), events.published)
+        assertEquals(emptyList(), dailyBalanceBuilds.scheduled)
+    }
+
+    @Test
+    fun `a system advance stops once the tenant has opted out, under the setting's lock`() {
+        val organisationId = activeOrganisation()
+        val from = LocalDate.parse("2026-07-15")
+        businessDateStore.snapshots[organisationId] = BusinessDateSnapshot(from, "OPEN", 0)
+        settings.optedOut += organisationId
+
+        assertEquals(
+            ScheduledAdvanceOutcome.NOT_OPTED_IN,
+            service.advanceAsSystem(organisationId, from, "r"),
+        )
+        assertEquals(
+            listOf(organisationId to "business_date_auto_advance_enabled"),
+            settings.lockedReads,
+        )
+        assertEquals(emptyMap(), businessDateStore.advancedTo)
+        assertEquals(emptyList(), events.published)
+        assertEquals(emptyList(), auditEvents.saved)
+    }
+
+    @Test
+    fun `a system advance waits while a blocking readiness check fails`() {
+        val organisationId = activeOrganisation()
+        val from = LocalDate.parse("2026-07-15")
+        businessDateStore.snapshots[organisationId] = BusinessDateSnapshot(from, "OPEN", 0)
+        closeReadiness.snapshot = CloseReadinessSnapshot(1, 0, 0)
+
+        assertEquals(
+            ScheduledAdvanceOutcome.NOT_READY,
+            service.advanceAsSystem(organisationId, from, "r"),
+        )
+        assertEquals(emptyMap(), businessDateStore.advancedTo)
+
+        // Advisory checks (a draft journal, a reconciliation break) never hold it back.
+        closeReadiness.snapshot = CloseReadinessSnapshot(0, 2, 1)
+        assertEquals(
+            ScheduledAdvanceOutcome.ADVANCED,
+            service.advanceAsSystem(organisationId, from, "r"),
         )
     }
 
@@ -779,4 +875,58 @@ private class RecordingAuditRepositoryForBusinessDate : AuditEventRepository {
     override fun save(event: AuditEvent) {
         saved.add(event)
     }
+}
+
+/**
+ * The opt-in [BusinessDateService.advanceAsSystem] re-reads in each day's transaction: every
+ * organisation stores `true` unless it is in [optedOut]. Only [lockedCurrentSetting] is used.
+ */
+private class FakeAutoAdvanceSettings : OrganisationSettingsStore {
+    val optedOut = mutableSetOf<UUID>()
+    val lockedReads = mutableListOf<Pair<UUID, String>>()
+
+    override fun lockedCurrentSetting(
+        organisationId: UUID,
+        key: String,
+    ): StoredSetting? {
+        lockedReads += organisationId to key
+        return if (organisationId in optedOut) {
+            null
+        } else {
+            StoredSetting(key, "true", "BOOLEAN", false)
+        }
+    }
+
+    override fun currentSettings(
+        organisationId: UUID,
+        keys: Set<String>,
+    ): Map<String, String> = error("not used")
+
+    override fun updateSettings(
+        organisationId: UUID,
+        updates: Map<String, String>,
+        actorId: UUID,
+    ): Unit = error("not used")
+
+    override fun currentSetting(
+        organisationId: UUID,
+        key: String,
+    ): StoredSetting? = error("not used")
+
+    override fun currentSettingsList(organisationId: UUID): List<StoredSetting> = error("not used")
+
+    override fun upsertSetting(
+        organisationId: UUID,
+        key: String,
+        value: String,
+        valueType: String,
+        sensitive: Boolean,
+        actorId: UUID,
+    ): StoredSetting? = error("not used")
+
+    override fun deactivateSetting(
+        organisationId: UUID,
+        key: String,
+        actorId: UUID,
+    ): Boolean = error("not used")
 }
