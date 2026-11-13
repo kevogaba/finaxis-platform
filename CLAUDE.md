@@ -361,6 +361,23 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   85 codes, 84 `ACTIVE`. `AuditPermissionGuardAdapter` now uses `requirePermissionWithViews`; each
   export request writes one `audit.export` audit row (`q` and `actor_subject` stored as
   `[redacted]`), the one read-like route that audits — see `docs/architecture/audit-logging.md`.
+- `V35__membership_member_number.sql` — **one column, two constraints and a backfill** (#287,
+  ADR 0040, superseding ADR 0033 decision 6): nullable `user_organisation_membership.member_number
+  BIGINT`, `CHECK (member_number > 0)` and `UNIQUE (organisation_id, member_number)` (a person in
+  two tenants has two numbers). The number comes from the organisation's `MEMBER`
+  `reference_sequence` counter, taken by `JooqFoundationLifecyclePersistence.saveMembership` in the
+  transaction that first makes a membership `ACTIVE` (`ReferenceSequences.next`, an upsert that
+  row-locks the counter, so a rollback hands it back and the numbers stay gapless); the same write
+  stamps `joined_at` while it is null. Kept through suspension, revocation and re-invite, never
+  edited; `null` until first activated. The backfill numbers every membership ever active in the
+  order it first became active and moves each counter past the highest number, under
+  `LOCK TABLE ... IN SHARE ROW EXCLUSIVE MODE` (the V21 precedent) with a 5 s lock timeout; it
+  writes only `member_number`. **No CHECK that an `ACTIVE` membership has a number yet**: an old
+  instance activates without one during a rolling deploy, so that CHECK, with a backfill of what
+  remains, is a later migration. **A new path that makes a membership `ACTIVE` must go through
+  `saveMembership`** (or take a number with `ReferenceSequences.next` itself, as
+  `LocalPlatformSmokeMembershipSeeder` does). Asserts its pre- and post-conditions in-file; no
+  trigger.
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -395,7 +412,8 @@ the permission catalogue's kind, grant scope and view requirements, `V23` the se
 administrator roles' grants, `V24` the closed bootstrap failure-code set, `V25`-`V28` the
 audit search indexes, `V29`-`V30` the audit subject user (column and index), and `V31` the
 retired legacy setting rows, `V32` the user and membership edit permissions, `V33` the role
-transition log and `role.archive`, and `V34` the `audit.export` permission; none is accounting.
+transition log and `role.archive`, `V34` the `audit.export` permission, and `V35` the
+membership's member number; none is accounting.
 Do not invent accounting tables or columns outside those documents.
 
 ## Authorization

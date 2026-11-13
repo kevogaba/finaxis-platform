@@ -1,5 +1,6 @@
 package com.finaxis.platform.config
 
+import com.finaxis.platform.common.persistence.ReferenceSequences
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
 import org.jooq.DSLContext
@@ -45,7 +46,16 @@ class LocalPlatformSmokeMembershipSeeder(
             .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, ACTIVE)
             .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, ADMIN)
             .set(USER_ORGANISATION_MEMBERSHIP.JOINED_AT, now)
-            .set(USER_ORGANISATION_MEMBERSHIP.CREATED_AT, now)
+            // An ACTIVE membership holds a member number (#287), taken as an activation takes it.
+            .set(
+                USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER,
+                ReferenceSequences.next(
+                    dsl,
+                    PLATFORM_ORGANISATION_ID,
+                    ReferenceSequences.MEMBER,
+                    now,
+                ),
+            ).set(USER_ORGANISATION_MEMBERSHIP.CREATED_AT, now)
             .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT, now)
             .onConflictDoNothing()
             .execute()

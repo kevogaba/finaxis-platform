@@ -45,6 +45,7 @@ class IamLifecycleReadAdapter(
                     sortBy = filter.sortBy,
                     sortDir = filter.sortDir,
                     userId = filter.userId,
+                    memberNumber = filter.memberNumber,
                 ),
                 caller,
             ).let { page -> ApiPage(page.items.map { it.toLifecycle() }, page.page) }
@@ -124,6 +125,7 @@ class IamLifecycleReadAdapter(
             invitation?.let {
                 LifecycleInvitationStatus(it.status, it.attempts, it.lastErrorCode, it.updatedAt)
             },
+            memberNumber,
         )
 
     private fun MembershipSummary.toLifecycle() =
@@ -139,6 +141,7 @@ class IamLifecycleReadAdapter(
             primaryBranchName = primaryBranchName,
             createdAt = createdAt,
             createdBy = createdBy,
+            memberNumber = memberNumber,
         )
 
     private fun BranchAssignmentSummary.toLifecycle() =

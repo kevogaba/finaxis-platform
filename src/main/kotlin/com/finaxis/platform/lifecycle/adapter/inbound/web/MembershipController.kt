@@ -112,6 +112,10 @@ class MembershipController(
         @RequestParam(required = false, name = "membership_status") membershipStatus: String?,
         @RequestParam(required = false, name = "membership_type") membershipType: String?,
         @RequestParam(required = false, name = "user_id") userId: UUID?,
+        @Parameter(description = "An exact member number (#287).")
+        @RequestParam(required = false, name = "member_number")
+        @Min(1)
+        memberNumber: Long?,
         @RequestParam(defaultValue = "0") @Min(0) page: Int,
         @RequestParam(defaultValue = "25") @Min(1) @Max(MAXIMUM_PAGE_SIZE) size: Int,
         @Parameter(
@@ -134,6 +138,7 @@ class MembershipController(
                     sortBy = sortBy,
                     sortDir = sortDir,
                     userId = userId,
+                    memberNumber = memberNumber,
                 ),
                 caller,
             )
@@ -610,6 +615,7 @@ class MembershipController(
             primaryBranchName = primaryBranchName,
             createdAt = createdAt,
             createdBy = createdBy.toResponse(),
+            memberNumber = memberNumber,
         )
 
     private companion object {

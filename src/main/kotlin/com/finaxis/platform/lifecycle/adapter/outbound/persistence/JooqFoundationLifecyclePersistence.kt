@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.common.context.RequestContexts
+import com.finaxis.platform.common.persistence.ReferenceSequences
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.transitions.TransitionLog
 import com.finaxis.platform.common.transitions.TransitionLogWriter
@@ -249,12 +250,21 @@ class JooqFoundationLifecyclePersistence(
         return aggregate
     }
 
+    /**
+     * Writes a membership transition. Every route into `ACTIVE` passes through here (approval, the
+     * Keycloak activation job, reactivation), so this is where a membership that becomes active
+     * first takes its member number and its `joined_at` (#287): both are set only while still
+     * null, so a reactivation or a re-invited member's next activation keeps the number, and a
+     * re-invite (whose reset clears `joined_at`) records its new join. The number is taken in this
+     * transaction, so a write the version check refuses hands it back.
+     */
     override fun saveMembership(
         aggregate: LifecycleAggregate<MembershipLifecycleState>,
     ): LifecycleAggregate<MembershipLifecycleState> {
         val expectedVersion = requireExpectedVersion(aggregate)
         val organisationId = requireExpectedOrganisationId(aggregate)
-        val updated =
+        val membershipId = UUID.fromString(aggregate.aggregateId)
+        var update =
             dsl
                 .update(USER_ORGANISATION_MEMBERSHIP)
                 .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, aggregate.state.name)
@@ -264,13 +274,43 @@ class JooqFoundationLifecyclePersistence(
                 .set(
                     USER_ORGANISATION_MEMBERSHIP.ROW_VERSION,
                     USER_ORGANISATION_MEMBERSHIP.ROW_VERSION.plus(1),
-                ).where(USER_ORGANISATION_MEMBERSHIP.ID.eq(UUID.fromString(aggregate.aggregateId)))
+                )
+        if (aggregate.state == MembershipLifecycleState.ACTIVE) {
+            update =
+                update
+                    .set(
+                        USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER,
+                        memberNumberOnActivation(organisationId, membershipId),
+                    ).set(
+                        USER_ORGANISATION_MEMBERSHIP.JOINED_AT,
+                        DSL.coalesce(USER_ORGANISATION_MEMBERSHIP.JOINED_AT, DSL.value(now())),
+                    )
+        }
+        val updated =
+            update
+                .where(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
                 .and(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId))
                 .and(USER_ORGANISATION_MEMBERSHIP.ROW_VERSION.eq(expectedVersion))
                 .execute()
         requireUpdated(updated, MEMBERSHIP_TYPE, aggregate.aggregateId)
         return aggregate
     }
+
+    /**
+     * The number an activating membership holds: the one it already has, or the next value of its
+     * organisation's `MEMBER` counter when it has none (its first activation).
+     */
+    private fun memberNumberOnActivation(
+        organisationId: UUID,
+        membershipId: UUID,
+    ): Long =
+        dsl
+            .select(USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER)
+            .from(USER_ORGANISATION_MEMBERSHIP)
+            .where(USER_ORGANISATION_MEMBERSHIP.ID.eq(membershipId))
+            .and(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID.eq(organisationId))
+            .fetchOne(USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER)
+            ?: ReferenceSequences.next(dsl, organisationId, ReferenceSequences.MEMBER, now())
 
     override fun revokeActiveAssignments(
         organisationId: UUID,
