@@ -85,6 +85,18 @@ class JooqOrganisationSettingsStore(
             .and(ORGANISATION_SETTING.EFFECTIVE_TO.isNull)
             .fetchOne(::storedSetting)
 
+    override fun lockedCurrentSetting(
+        organisationId: UUID,
+        key: String,
+    ): StoredSetting? {
+        // Outside a transaction the advisory lock would be released by the statement that took it.
+        check(TransactionSynchronizationManager.isActualTransactionActive()) {
+            "Reading a setting under its write lock requires an active transaction."
+        }
+        lockSettingKey(organisationId, key)
+        return findCurrentSetting(organisationId, key)
+    }
+
     override fun currentSettingsList(organisationId: UUID): List<StoredSetting> =
         dsl
             .select(
