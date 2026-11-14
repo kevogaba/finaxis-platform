@@ -89,7 +89,8 @@ The implemented setup is:
 - default setting `settings.operational=true`;
 - one business date using the organisation timezone;
 - a `HEAD_OFFICE` branch that is submitted and activated if it is not already active;
-- default reference sequences `MEMBER`, `TRANSACTION`, and `JOURNAL`;
+- default reference sequences `MEMBER`, `TRANSACTION`, and `JOURNAL` (`MEMBER` numbers each
+  membership at its first activation: see [ADR 0040](../adr/0040-member-number.md));
 - organisation-local system roles from the global permission catalogue:
   `TENANT_ADMIN`, `TENANT_AUDITOR`, `IAM_ADMIN`, `BRANCH_MANAGER`, `BRANCH_OPERATOR`,
   `ACCOUNTING_OPERATOR` and `ACCOUNTING_APPROVER`. `TENANT_ADMIN` holds every `ACTIVE` permission

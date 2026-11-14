@@ -54,6 +54,7 @@ import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -257,6 +258,34 @@ class MemberReinviteIntegrationTests
 
             assertEquals(2, reinviteLogRows(member))
             assertEquals(1, membershipCount(member.userId))
+        }
+
+        @Test
+        fun `a re-invited member keeps their number and gets a fresh join date`() {
+            val member = activeMember()
+            val number = membershipColumn(member.membershipId, "member_number") as Long
+            assertNotNull(membershipColumn(member.membershipId, "joined_at"))
+            invitation(member).andExpect { jsonPath("$.member_number") { value(number) } }
+            mockMvc
+                .get(ApiPaths.MEMBERSHIPS) {
+                    param("member_number", number.toString())
+                    with(authentication(token(admin, setOf("membership.view"))))
+                }.andExpect {
+                    status { isOk() }
+                    jsonPath("$.items.length()") { value(1) }
+                    jsonPath("$.items[0].id") { value(member.membershipId.toString()) }
+                    jsonPath("$.items[0].member_number") { value(number) }
+                }
+
+            revoke(member).andExpect { status { isOk() } }
+            reinvite(member).andExpect { status { isCreated() } }
+            // The re-invite resets the join date and keeps the number (ADR 0040).
+            assertEquals(number, membershipColumn(member.membershipId, "member_number"))
+            assertNull(membershipColumn(member.membershipId, "joined_at"))
+
+            approve(member, checker()).andExpect { status { is2xxSuccessful() } }
+            assertEquals(number, membershipColumn(member.membershipId, "member_number"))
+            assertNotNull(membershipColumn(member.membershipId, "joined_at"))
         }
 
         @Test

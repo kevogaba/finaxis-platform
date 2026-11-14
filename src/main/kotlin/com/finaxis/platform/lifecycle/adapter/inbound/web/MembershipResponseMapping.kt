@@ -25,4 +25,5 @@ internal fun LifecycleMembershipDetail.toResponse() =
             invitation?.let {
                 InvitationStatusResponse(it.status, it.attempts, it.lastErrorCode, it.updatedAt)
             },
+        memberNumber = memberNumber,
     )

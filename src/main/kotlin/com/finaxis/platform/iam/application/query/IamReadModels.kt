@@ -66,6 +66,8 @@ data class MembershipDetail(
     val createdBy: ActorRef? = null,
     /** Where the member's identity provisioning stands (#274); null outside a detail read. */
     val invitation: InvitationStatus? = null,
+    /** The member's number in the organisation (#287); null until first activated. */
+    val memberNumber: Long? = null,
 )
 
 /** Summary projection of an organisation membership, with the user's names and the dates. */
@@ -82,6 +84,8 @@ data class MembershipSummary(
     val createdAt: Instant,
     /** Who invited this member, or null when the system did or the caller may not see them. */
     val createdBy: ActorRef? = null,
+    /** The member's number in the organisation (#287); null until first activated. */
+    val memberNumber: Long? = null,
 )
 
 /** Summary projection of a branch assignment, with the user's and the branch's names. */

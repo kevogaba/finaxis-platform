@@ -42,7 +42,9 @@ phone, username and display name it carries.
 5. **An invitation for an existing account keeps ignoring its profile fields, and says so** (no
    `409`): the account already has an owner of its profile. Changing the phone or name is a
    `user.update`, by the platform. The invite documentation states this.
-6. **No member number is allocated, and the `MEMBER` sequence stays reserved.** There is no product
+6. **Superseded by [ADR 0040](0040-member-number.md)** (#287), which allocates the member number
+   at first activation. The original decision: **No member number is allocated, and the `MEMBER`
+   sequence stays reserved.** There is no product
    need on record for a member or staff number, and a gapless counter nobody reads is cost with no
    reader. The sequence row stays (provisioning's setup check still requires it, and dropping it
    would be a schema change with no benefit); allocating from it, with a column and its own

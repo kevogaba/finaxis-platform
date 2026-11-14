@@ -201,6 +201,7 @@ class JooqIamAdministrationQueries(
                 USER_ORGANISATION_MEMBERSHIP.CREATED_AT,
                 USER_ORGANISATION_MEMBERSHIP.UPDATED_AT,
                 USER_ORGANISATION_MEMBERSHIP.CREATED_BY,
+                USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER,
                 *invitations.fields.toTypedArray(),
             ).from(USER_ORGANISATION_MEMBERSHIP)
             .join(USER_ACCOUNT)
@@ -248,6 +249,7 @@ class JooqIamAdministrationQueries(
                     USER_ACCOUNT.DISPLAY_NAME,
                     BRANCH.BRANCH_NAME,
                     USER_ORGANISATION_MEMBERSHIP.CREATED_BY,
+                    USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER,
                 ).from(USER_ORGANISATION_MEMBERSHIP)
                 .join(USER_ACCOUNT)
                 .on(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(USER_ACCOUNT.ID))
@@ -278,6 +280,9 @@ class JooqIamAdministrationQueries(
         }
         filter.userId?.let {
             condition = condition.and(USER_ORGANISATION_MEMBERSHIP.USER_ID.eq(it))
+        }
+        filter.memberNumber?.let {
+            condition = condition.and(USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER.eq(it))
         }
         filter.q?.let { q ->
             val query = "%$q%"
@@ -748,6 +753,7 @@ private fun Record.toMembershipSummary(makers: Map<UUID, ActorRef>) =
                 get(USER_ORGANISATION_MEMBERSHIP.CREATED_AT),
             ).toInstant(),
         createdBy = get(USER_ORGANISATION_MEMBERSHIP.CREATED_BY)?.let(makers::get),
+        memberNumber = get(USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER),
     )
 
 private fun Record.toBranchAssignmentSummary() =
@@ -825,4 +831,5 @@ private fun Record.toMembershipDetail(maker: ActorRef?) =
                 get(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT),
             ).toInstant(),
         createdBy = maker,
+        memberNumber = get(USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER),
     )
