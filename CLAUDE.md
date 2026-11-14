@@ -378,6 +378,20 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   `saveMembership`** (or take a number with `ReferenceSequences.next` itself, as
   `LocalPlatformSmokeMembershipSeeder` does). Asserts its pre- and post-conditions in-file; no
   trigger.
+- `V36__audit_event_retention_comment.sql` — **one `COMMENT ON TABLE`, no schema, no data** (#278,
+  ADR 0042, amending ADR 0007): restates `audit_event` as append-only **except the retention job**,
+  superseding V1's comment, as V16 restated a column. The job (`AuditRetention`, recurring JobRunr
+  `audit-retention`, **`finaxis.audit.retention.mode` `OFF` by default**, `DRY_RUN` counts, `ON`
+  deletes) deletes, for each tenant that stores `audit_retention_days`, only rows older than
+  `max(stored, 2555)` days that are `INFO` **and** `SUCCESS` and not an amendment the maker-checker
+  rules still read (`branch.update` of a `DRAFT`/`PENDING_APPROVAL`/`SUSPENDED` branch,
+  `organisation.amend_draft` of a `DRAFT`/`PENDING_APPROVAL`/`PROVISIONING` tenant, #255), in
+  batches under a bounded lock wait and a per-tenant advisory lock, each re-reading the period under
+  the settings writers' lock and writing its own `HIGH` `audit.retention_purge` row in the same
+  transaction as the delete. **`JooqAuditRetentionStore.deleteBatch` is the only code
+  that may delete from `audit_event`, and nothing may update it** (`AuditRetentionDeletePathTests`).
+  The catalogue now bounds `audit_retention_days` to 2555-36500 on every write path. The
+  application still connects as the table owner; a separate deletion role is later work.
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -412,8 +426,8 @@ the permission catalogue's kind, grant scope and view requirements, `V23` the se
 administrator roles' grants, `V24` the closed bootstrap failure-code set, `V25`-`V28` the
 audit search indexes, `V29`-`V30` the audit subject user (column and index), and `V31` the
 retired legacy setting rows, `V32` the user and membership edit permissions, `V33` the role
-transition log and `role.archive`, `V34` the `audit.export` permission, and `V35` the
-membership's member number; none is accounting.
+transition log and `role.archive`, `V34` the `audit.export` permission, `V35` the
+membership's member number, and `V36` the audit table's retention comment; none is accounting.
 Do not invent accounting tables or columns outside those documents.
 
 ## Authorization
