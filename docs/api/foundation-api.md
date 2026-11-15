@@ -2562,8 +2562,10 @@ Base path: `/api/v1/tenant/settings`. List filters: `page`, `size`.
 
 Every setting carries `label`, `description` and `group` (all `null` for a stored key outside the
 catalogue) and `is_default`: `true` when `value` is the catalogue default because nothing is
-stored, so an unset and an explicitly stored value are told apart. A description says whether the
-platform applies the setting yet; the maker-checker switches are applied (ADR 0032).
+stored, so an unset and an explicitly stored value are told apart. A description says what the
+setting does. Every catalogue setting is now applied: the maker-checker switches (ADR 0032),
+`default_timezone` (#276), `business_date_auto_advance_enabled` (#277, ADR 0041) and
+`audit_retention_days` (#278, ADR 0042); the last two act only once the operator turns their job on.
 
 **Platform route (#273).** `/api/v1/platform/tenants/{tenant_id}/settings` (`GET /`, `GET /{key}`,
 `PUT /{key}`, `DELETE /{key}`) lets a platform administrator who is no member of the tenant read and
@@ -2572,6 +2574,10 @@ in the platform organisation, checked first (403, never 404 for an unknown tenan
 `404` for an unknown tenant and `422 invalid_operation` for a key that is not platform-only. Writes
 need an `ACTIVE` tenant (`409` otherwise), are idempotent, and are audited as `settings.update`
 with the platform administrator as actor. `GET /` lists only the platform-only keys.
+`audit_retention_days` must be an integer from 2555 (seven years) to 36500; anything else is
+`422 invalid_operation` and nothing is written (#278). The retention job that applies it is off
+unless the deployment turns it on; see
+[audit logging](../architecture/audit-logging.md#the-retention-job-278).
 
 | Method | Path     | Summary                         | Permission                    | Shape    |
 |--------|----------|---------------------------------|-------------------------------|----------|

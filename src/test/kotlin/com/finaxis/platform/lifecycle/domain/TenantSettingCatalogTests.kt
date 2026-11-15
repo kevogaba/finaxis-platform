@@ -94,7 +94,13 @@ class TenantSettingCatalogTests {
             "true",
             TenantSettingCatalog.canonicalize("business_date_auto_advance_enabled", "TRUE"),
         )
-        assertEquals("30", TenantSettingCatalog.canonicalize("audit_retention_days", "30"))
+        assertEquals("2555", TenantSettingCatalog.canonicalize("audit_retention_days", "2555"))
+        // Below the seven-year floor, zero included, or past a century, is refused (#278).
+        listOf("0", "30", "2554", "36501").forEach { days ->
+            assertFailsWith<InvalidOperationException>(days) {
+                TenantSettingCatalog.canonicalize("audit_retention_days", days)
+            }
+        }
         assertFailsWith<InvalidOperationException> {
             TenantSettingCatalog.canonicalize("business_date_auto_advance_enabled", "yes")
         }

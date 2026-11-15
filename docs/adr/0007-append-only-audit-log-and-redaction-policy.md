@@ -24,6 +24,10 @@ their outcome.
 
 ## Decision
 
+> **Amended by [ADR 0042](0042-audit-retention.md)** (#278): the audit retention job is the one
+> path that deletes from `audit_event`, and only rows a tenant's `audit_retention_days` has expired
+> under that ADR's rules. Nothing updates a row.
+
 `audit_event` remains insert-only. No code path issues `UPDATE` or `DELETE` against it, and the
 table has no `updated_at`/`updated_by` columns to make that mistake easy to introduce by copy.
 `JooqAuditEventRepository.save` only inserts. A tenant-less audit command no longer disappears

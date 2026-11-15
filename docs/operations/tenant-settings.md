@@ -60,7 +60,8 @@ Validation and canonicalization are catalog-owned:
   is the amount rather than the currency that fails. Refusing them here is what stops a tenant
   reaching that state.
 - `BOOLEAN`: accepts only `true` or `false`, case-insensitively, and stores lowercase.
-- `INT`: must parse as a non-negative integer and stores the canonical decimal string.
+- `INT`: must parse as a non-negative integer and stores the canonical decimal string. A key may
+  bound it further: `audit_retention_days` is 2555 to 36500.
 
 Blank values are rejected before type validation. Currency values are stored uppercase.
 
@@ -196,8 +197,11 @@ is not writable through them (see above):
 Platform-only settings require `tenant_setting.manage_platform` scoped to the reserved platform
 organisation, not to the tenant organisation:
 
-- `audit_retention_days` (a future purge job must keep the amend rows the maker-checker rules
-  read: see [audit logging](../architecture/audit-logging.md), "Retention (#255)")
+- `audit_retention_days`: an integer from 2555 (seven years, the floor) to 36500 days, refused
+  with `422` outside that range (#278). Unset keeps every audit row. Once the operator turns the
+  retention job on (`finaxis.audit.retention.mode`), the tenant's routine successful rows older
+  than this are deleted, never the amend rows the maker-checker rules read: see
+  [audit logging](../architecture/audit-logging.md), "The retention job"
 
 The permission check is dependency-inverted. `lifecycle` defines the `PermissionGuard` port, and
 `iam` implements it with `LifecyclePermissionGuardAdapter`, avoiding a direct

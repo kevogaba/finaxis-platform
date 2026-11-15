@@ -62,10 +62,10 @@ class PlatformTenantSettingsIntegrationTests
                     jsonPath("$.platform_admin_only") { value(true) }
                 }
 
-            put(tenant, "audit_retention_days", """{"value":"365","reason":"Policy"}""", token)
+            put(tenant, "audit_retention_days", """{"value":"3650","reason":"Policy"}""", token)
                 .andExpect {
                     status { isOk() }
-                    jsonPath("$.value") { value("365") }
+                    jsonPath("$.value") { value("3650") }
                     jsonPath("$.is_default") { value(false) }
                 }
 
@@ -75,7 +75,7 @@ class PlatformTenantSettingsIntegrationTests
                     status { isOk() }
                     jsonPath("$.items.length()") { value(1) }
                     jsonPath("$.items[0].key") { value("audit_retention_days") }
-                    jsonPath("$.items[0].value") { value("365") }
+                    jsonPath("$.items[0].value") { value("3650") }
                     jsonPath("$.page.total_items") { value(1) }
                 }
             assertEquals(1, settingsAudit(tenant, admin))
@@ -109,7 +109,7 @@ class PlatformTenantSettingsIntegrationTests
             mockMvc
                 .get("$base/${uuidV7()}/settings") { with(authentication(token)) }
                 .andExpect { status { isNotFound() } }
-            put(uuidV7(), "audit_retention_days", """{"value":"30"}""", token)
+            put(uuidV7(), "audit_retention_days", """{"value":"2555"}""", token)
                 .andExpect { status { isNotFound() } }
         }
 
@@ -130,7 +130,7 @@ class PlatformTenantSettingsIntegrationTests
                 .get("$base/$platform/settings/audit_retention_days") {
                     with(authentication(token))
                 }.andExpect { status { isConflict() } }
-            put(platform, "audit_retention_days", """{"value":"30"}""", token)
+            put(platform, "audit_retention_days", """{"value":"2555"}""", token)
                 .andExpect { status { isConflict() } }
             mockMvc
                 .delete("$base/$platform/settings/audit_retention_days") {
@@ -157,7 +157,7 @@ class PlatformTenantSettingsIntegrationTests
             val holder = seedUser("no-grant")
 
             // The authority is missing: the route refuses before anything about the tenant is read.
-            put(tenant, "audit_retention_days", """{"value":"30"}""", platformToken(holder, null))
+            put(tenant, "audit_retention_days", """{"value":"2555"}""", platformToken(holder, null))
                 .andExpect { status { isForbidden() } }
             mockMvc
                 .get("$base/${uuidV7()}/settings") {
@@ -165,14 +165,14 @@ class PlatformTenantSettingsIntegrationTests
                 }.andExpect { status { isForbidden() } }
             // The authority is claimed but the user holds no grant: the service refuses it, 403
             // and never 404 for an unknown tenant.
-            put(tenant, "audit_retention_days", """{"value":"30"}""", platformToken(holder))
+            put(tenant, "audit_retention_days", """{"value":"2555"}""", platformToken(holder))
                 .andExpect { status { isForbidden() } }
             mockMvc
                 .get("$base/${uuidV7()}/settings") {
                     with(authentication(platformToken(holder)))
                 }.andExpect { status { isForbidden() } }
             // A tenant-context caller never reaches it.
-            put(tenant, "audit_retention_days", """{"value":"30"}""", tenantToken(holder, tenant))
+            put(tenant, "audit_retention_days", """{"value":"2555"}""", tenantToken(holder, tenant))
                 .andExpect { status { isForbidden() } }
         }
 

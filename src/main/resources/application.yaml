@@ -304,6 +304,18 @@ finaxis:
         max-steps-per-run: ${FINAXIS_LIFECYCLE_BUSINESS_DATE_AUTO_ADVANCE_MAX_STEPS:7}
         max-organisations-per-run: ${FINAXIS_LIFECYCLE_BUSINESS_DATE_AUTO_ADVANCE_MAX_ORGS:500}
   audit:
+    # The audit retention job (#278, ADR 0042): deletes routine successful audit rows older than a
+    # tenant's audit_retention_days (never fewer than seven years; unset keeps everything). OFF
+    # until an operator turns it on, because a delete cannot be undone: DRY_RUN counts and logs,
+    # ON deletes in batches, each its own transaction with its own audit.retention_purge row. At
+    # most max-organisations-per-run tenants per run: the next window of them each UTC day.
+    retention:
+      mode: ${FINAXIS_AUDIT_RETENTION_MODE:OFF}
+      schedule: ${FINAXIS_AUDIT_RETENTION_SCHEDULE:0 30 2 * * *}
+      batch-size: ${FINAXIS_AUDIT_RETENTION_BATCH_SIZE:500}
+      max-batches-per-run: ${FINAXIS_AUDIT_RETENTION_MAX_BATCHES:20}
+      max-organisations-per-run: ${FINAXIS_AUDIT_RETENTION_MAX_ORGS:500}
+      lock-timeout: ${FINAXIS_AUDIT_RETENTION_LOCK_TIMEOUT:5s}
     # One denied-access audit row per 403 per caller, capped by a distributed bucket (#184).
     denied-access:
       enabled: ${FINAXIS_AUDIT_DENIED_ACCESS_ENABLED:true}
