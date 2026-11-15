@@ -64,6 +64,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # Testcontainers would otherwise pull these lazily, inside `:test` and on its critical path
+      # (the Grafana LGTM image alone is over 3 GB unpacked). Pulled in the background instead, so
+      # the downloads overlap Java and Gradle setup, compilation and static analysis. The list is
+      # read from TestContainerImages.kt, the one place the suite pins its images; a pull that is
+      # still running when a test needs the image is simply joined by Docker, and one that failed
+      # is retried by Testcontainers as before.
+      - name: Pre-pull test container images
+        run: |
+          sed -n 's/.*const val [A-Z_]* = "\(.*\)".*/\1/p' \
+            src/test/kotlin/com/finaxis/platform/TestContainerImages.kt |
+            while read -r image; do
+              nohup docker pull --quiet "$image" > /dev/null 2>&1 &
+            done
+
       - name: Set up Java
         uses: actions/setup-java@v6
         with:

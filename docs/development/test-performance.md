@@ -35,8 +35,10 @@ The baseline run (406 classes, 3,586 tests) took 20.5 min of test phase:
 | R1 | Shared PostgreSQL, RabbitMQ and LGTM per test JVM | 16.43 min | 4.05 min | 1,008 s |
 | R2 | One ArchUnit import per test JVM | 14.26 min | 2.17 min | 878 s |
 | R3 | Two test JVMs (and two order dependencies fixed) | 10.18 min | 4.08 min | 636 s |
+| R4 | CI pulls the test images during compilation | CI only | 50-72 s of pulls | |
 
 Together: **20.48 min to 10.18 min of test phase (-50%)**, every test still passing.
+Step R4 shortens CI only.
 
 ### 1. One PostgreSQL, RabbitMQ and LGTM server per test JVM
 
@@ -105,6 +107,38 @@ the same order:
   costs 289 blocks every time and every other budget is equally stable.
 
 Saved **4.08 min**.
+
+### 4. Pulling test images while the build compiles (CI only)
+
+Testcontainers pulled the images lazily, inside `:test`. A CI runner starts with none of them, so
+every run paid for those pulls on the critical path. The workflow now pulls the images listed in
+`TestContainerImages.kt` in the background right after checkout, so the downloads overlap Java and
+Gradle setup, compilation and static analysis, about two and a half minutes before `:test` starts.
+
+Measured locally with the images removed, as on a fresh runner, the suite took 11.22 min of test
+phase against 9.47 and 10.18 min with them present: each fork blocked on pulls for 50 to 72 s (the
+LGTM image 26 to 52 s, PostgreSQL about 10 s, Redis, RabbitMQ and GreenMail a few seconds each).
+That is the time the pre-pull takes off `:test` when it finishes first.
+
+## Results on CI
+
+The same `ubuntu-latest` runner as the benchmark, one run per branch of the stack:
+
+| Branch | Quality Gate job | `:test` |
+|---|---|---|
+| Baseline | 20.6 min (mean of 20) | 17.50 min (mean of 10) |
+| R1 shared servers | 15.7 min | 13.50 min |
+| R2 + one ArchUnit import | 16.2 min | 13.41 min |
+| R3 + two test JVMs | 11.5 min | 8.89 min |
+| R4 + image pre-pull (two runs) | 12.4 and 14.4 min | 9.61 and 11.16 min |
+
+`:test` is read from the job log, from `> Task :testClasses` to `> Task :check`. Across the ten
+baseline runs it varied from 14.8 to 19.6 min (standard deviation 1.95 min), and the two runs of the
+identical R4 commit differed by 1.5 min, so one run per branch cannot resolve a step of a minute or
+two: on CI the ArchUnit step and the pre-pull both fall inside that spread, and their savings above
+come from the controlled local runs. The three CI runs with two test JVMs (R3 once, R4 twice) took
+11.5, 12.4 and 14.4 min for the job, a mean of **12.7 min against the benchmark's 20.6 (-38%)**,
+and 8.89, 9.61 and 11.16 min for `:test`, a mean of **9.89 min against 17.50 (-43%)**.
 
 ## Considered and not done
 
