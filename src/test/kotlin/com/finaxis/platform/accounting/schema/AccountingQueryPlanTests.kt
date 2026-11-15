@@ -540,15 +540,17 @@ class AccountingQueryPlanTests(
          * every line the position has, which is the read the contract permits precisely because a
          * position's history is bounded by the position rather than by the tenant.
          *
-         * Measured, not guessed: 1,016 lines of the long-lived position cost 680 shared blocks.
+         * Measured, not guessed: 1,016 lines of the long-lived position cost 289 shared blocks,
+         * with the fixture writing each journal's lines together as the posting engine does (it
+         * used to leave their order to the planner, and the same lines cost 559 to 1,030).
          *
-         * Roughly two thirds of a block per line, because `idx_journal_line_subledger` carries
-         * neither `signed_functional_amount` nor `posting_date` as payload, so the aggregate takes
-         * a heap tuple per row. That is the honest cost of this read and the headroom above 680 is
-         * for plan drift, not for growth: what the budget asserts is that the work is proportional
-         * to **the position's** history and not the tenant's. A sequential scan of the fixture's
-         * 200,000 lines runs to several thousand blocks, so this still fails loudly if the index
-         * stops being used.
+         * About one block per journal, because `idx_journal_line_subledger` carries neither
+         * `signed_functional_amount` nor `posting_date` as payload, so the aggregate takes a heap
+         * tuple per row, and a journal's lines share a page. That is the honest cost of this read
+         * and the headroom above it is for plan drift, not for growth: what the budget asserts is
+         * that the work is proportional to **the position's** history and not the tenant's. A
+         * sequential scan of the fixture's 200,000 lines runs to several thousand blocks, so this
+         * still fails loudly if the index stops being used.
          *
          * The previous 600 was calibrated against `SAV-1`, which the fixture's even spread gave
          * about eight lines — a budget that could not have detected any regression at all.
@@ -914,6 +916,12 @@ class LedgerVolumeFixture(
               ON a.organisation_id = ?
              AND a.account_code = lpad((((r.n * leg) % ?) + 1)::text, 4, '0')
             WHERE EXISTS (SELECT 1 FROM requests) AND EXISTS (SELECT 1 FROM entries)
+            -- Journal by journal, each journal's four lines together, as the posting engine writes
+            -- them. Without it the planner may emit the cross join leg-major (every journal's
+            -- first line, then every second line), depending on what statistics autovacuum has
+            -- gathered by then, which puts a journal's lines on four heap pages instead of one and
+            -- moved Q2 between 559 and 1,030 blocks with the classes that ran before this one.
+            ORDER BY r.n, leg
             """.trimIndent()
     }
 }
