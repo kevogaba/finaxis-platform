@@ -1,8 +1,6 @@
 package com.finaxis.platform.architecture
 
 import com.tngtech.archunit.core.domain.JavaClasses
-import com.tngtech.archunit.core.importer.ClassFileImporter
-import com.tngtech.archunit.core.importer.ImportOption
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
 import com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.slices
@@ -15,10 +13,7 @@ private const val BASE_PACKAGE = "com.finaxis.platform"
  * model separated as the modular monolith grows.
  */
 class HexagonalArchitectureTest {
-    private val importedClasses: JavaClasses =
-        ClassFileImporter()
-            .withImportOption(ImportOption.DoNotIncludeTests())
-            .importPackages(BASE_PACKAGE)
+    private val importedClasses: JavaClasses = ProductionClasses.all
 
     @Test
     fun `inbound adapters do not depend on persistence adapters`() {

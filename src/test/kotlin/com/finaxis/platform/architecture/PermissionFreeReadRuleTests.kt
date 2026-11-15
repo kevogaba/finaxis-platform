@@ -45,7 +45,6 @@ import com.finaxis.platform.lifecycle.application.InitialAdministratorBootstrapS
 import com.finaxis.platform.lifecycle.application.UserProvisioningService
 import com.tngtech.archunit.core.domain.JavaClasses
 import com.tngtech.archunit.core.importer.ClassFileImporter
-import com.tngtech.archunit.core.importer.ImportOption
 import com.tngtech.archunit.lang.ArchRule
 import org.junit.jupiter.api.Test
 import kotlin.test.assertContains
@@ -101,10 +100,7 @@ import kotlin.test.assertTrue
  *    copies a `TenantCaller`/`PlatformCaller` outside `CallerContextResolver`.
  */
 class PermissionFreeReadRuleTests {
-    private val production: JavaClasses =
-        ClassFileImporter()
-            .withImportOption(ImportOption.DoNotIncludeTests())
-            .importPackages(ROOT)
+    private val production: JavaClasses = ProductionClasses.all
 
     @Test
     fun `no permission-free read-back helper exists`() {
@@ -467,7 +463,6 @@ class PermissionFreeReadRuleTests {
     }
 
     private companion object {
-        const val ROOT = "com.finaxis.platform"
         const val MIN_WEB_QUERY_CALLS = 20
         const val MIN_GATED_METHODS = 30
         const val MIN_ACCOUNTING_MARKED = 7

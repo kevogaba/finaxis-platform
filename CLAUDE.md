@@ -645,6 +645,8 @@ Do not invent accounting tables or columns outside those documents.
   virtual host of its own. Never declare one of those as a container `@Bean` - that boots a server
   per context - and give a new backing service the same shape. See
   `docs/development/test-performance.md`.
+- An ArchUnit rule over production code reads `ProductionClasses.all`, imported once per test JVM,
+  rather than running its own `ClassFileImporter`.
 
 ## Pull requests and commits
 

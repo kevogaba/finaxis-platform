@@ -1,9 +1,8 @@
 package com.finaxis.platform.architecture
 
 import com.finaxis.platform.lifecycle.adapter.outbound.persistence.JooqAuditRetentionStore
+import com.tngtech.archunit.core.domain.JavaClasses
 import com.tngtech.archunit.core.domain.JavaCodeUnit
-import com.tngtech.archunit.core.importer.ClassFileImporter
-import com.tngtech.archunit.core.importer.ImportOption
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -16,10 +15,7 @@ import kotlin.test.assertTrue
  * is structural: plain SQL text is not seen, as for every rule in this package.
  */
 class AuditRetentionDeletePathTests {
-    private val production =
-        ClassFileImporter()
-            .withImportOption(ImportOption.DoNotIncludeTests())
-            .importPackages("com.finaxis.platform")
+    private val production: JavaClasses = ProductionClasses.all
 
     @Test
     fun `only the retention store deletes audit rows and nothing updates them`() {

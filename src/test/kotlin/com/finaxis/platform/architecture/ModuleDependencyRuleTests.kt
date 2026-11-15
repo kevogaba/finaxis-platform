@@ -1,8 +1,6 @@
 package com.finaxis.platform.architecture
 
 import com.tngtech.archunit.core.domain.JavaClasses
-import com.tngtech.archunit.core.importer.ClassFileImporter
-import com.tngtech.archunit.core.importer.ImportOption
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
 import org.junit.jupiter.api.Test
 
@@ -11,10 +9,7 @@ import org.junit.jupiter.api.Test
  * adapter, and cross-module internals as the foundation grows.
  */
 class ModuleDependencyRuleTests {
-    private val productionClasses: JavaClasses =
-        ClassFileImporter()
-            .withImportOption(ImportOption.DoNotIncludeTests())
-            .importPackages(BASE_PACKAGE)
+    private val productionClasses: JavaClasses = ProductionClasses.all
 
     @Test
     fun `domain packages do not depend on adapter or framework infrastructure`() {
@@ -93,9 +88,5 @@ class ModuleDependencyRuleTests {
                 "broker types belong at the messaging edge; application and domain code " +
                     "publishes through the outbox and never speaks AMQP",
             ).check(productionClasses)
-    }
-
-    private companion object {
-        const val BASE_PACKAGE = "com.finaxis.platform"
     }
 }

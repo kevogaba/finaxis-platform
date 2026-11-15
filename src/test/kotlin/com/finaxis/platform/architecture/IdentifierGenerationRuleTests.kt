@@ -1,8 +1,6 @@
 package com.finaxis.platform.architecture
 
 import com.tngtech.archunit.core.domain.JavaClasses
-import com.tngtech.archunit.core.importer.ClassFileImporter
-import com.tngtech.archunit.core.importer.ImportOption
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
 import org.junit.jupiter.api.Test
 import java.util.UUID
@@ -15,10 +13,7 @@ import kotlin.test.assertEquals
  * `V1__foundation_schema.sql`.
  */
 class IdentifierGenerationRuleTests {
-    private val productionClasses: JavaClasses =
-        ClassFileImporter()
-            .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
-            .importPackages("com.finaxis.platform")
+    private val productionClasses: JavaClasses = ProductionClasses.all
 
     @Test
     fun `production code never generates random version 4 identifiers`() {
