@@ -24,10 +24,10 @@ import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.TenantSettingCatalog
 import com.finaxis.platform.lifecycle.domain.TenantSettingValueType
+import com.finaxis.platform.lifecycle.domain.TimeZoneRule
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
-import java.time.DateTimeException
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
@@ -607,7 +607,7 @@ private fun validateCreate(command: CreateOrganisationDraftCommand) {
     errorUnless(command.displayName.isNotBlank(), SafeError.INVALID_OPERATION)
     errorUnless(COUNTRY_CODE.matches(command.countryCode), SafeError.INVALID_OPERATION)
     val draftCurrency = MoneyPolicy.requireSettlementCurrency(command.baseCurrencyCode).currencyCode
-    validateTimezone(command.timezone)
+    TimeZoneRule.require(command.timezone)
     // The draft's own base_currency_code is the column the ledger reads, and a setting naming
     // another currency could only disagree with it. The supplied value is canonicalised first, so
     // an unpostable code still answers with accounting's own currency error, as before.
@@ -634,7 +634,7 @@ private fun validateAmend(command: AmendOrganisationDraftCommand) {
     errorUnless(command.displayName.isNotBlank(), SafeError.INVALID_OPERATION)
     errorUnless(COUNTRY_CODE.matches(command.countryCode), SafeError.INVALID_OPERATION)
     MoneyPolicy.requireSettlementCurrency(command.baseCurrencyCode)
-    validateTimezone(command.timezone)
+    TimeZoneRule.require(command.timezone)
     if (command.initialSettings.isNotEmpty()) {
         throw InvalidOperationException(
             safeDetail = "initial_settings cannot be changed by an amend.",
@@ -651,14 +651,6 @@ private fun validateAdmin(admin: InitialAdministratorDraft) {
     errorUnless(admin.displayName.isNotBlank(), SafeError.INVALID_OPERATION)
     admin.phoneE164?.let { phone ->
         errorUnless(PHONE_E164_REGEX.matches(phone), SafeError.INVALID_OPERATION)
-    }
-}
-
-private fun validateTimezone(timezone: String) {
-    try {
-        ZoneId.of(timezone)
-    } catch (_: DateTimeException) {
-        throw InvalidOperationException()
     }
 }
 

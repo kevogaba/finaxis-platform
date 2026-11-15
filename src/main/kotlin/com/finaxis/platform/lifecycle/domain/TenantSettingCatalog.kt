@@ -2,7 +2,6 @@ package com.finaxis.platform.lifecycle.domain
 
 import com.finaxis.platform.accounting.domain.MoneyPolicy
 import com.finaxis.platform.common.application.InvalidOperationException
-import java.time.ZoneId
 
 /** Storage/validation kind of a tenant setting value. */
 enum class TenantSettingValueType { STRING, BOOLEAN, INT, TIMEZONE, CURRENCY }
@@ -34,6 +33,13 @@ object TenantSettingCatalog {
      */
     const val BASE_CURRENCY_KEY = "base_currency"
 
+    /**
+     * The time zone a new branch takes when its create request names none (#276). Unset, a new
+     * branch takes the organisation's own time zone. It never governs the organisation's zone or
+     * the business date.
+     */
+    const val DEFAULT_TIMEZONE_KEY = "default_timezone"
+
     private const val GROUP_GENERAL = "General"
     private const val GROUP_APPROVALS = "Approvals"
     private const val GROUP_BUSINESS_DATE = "Business date"
@@ -55,15 +61,16 @@ object TenantSettingCatalog {
     private val definitions0 =
         listOf(
             TenantSettingDefinition(
-                key = "default_timezone",
+                key = DEFAULT_TIMEZONE_KEY,
                 valueType = TenantSettingValueType.TIMEZONE,
                 sensitive = false,
                 platformAdminOnly = false,
                 defaultValue = null,
                 label = "Default time zone",
                 description =
-                    "Reserved: the time zone new branches would default to. Not yet applied by " +
-                        "the platform; the organisation's own time zone is what is used today.",
+                    "The time zone a new branch takes when it is created without one. Unset, a " +
+                        "new branch takes the organisation's own time zone, which alone decides " +
+                        "the business date.",
                 group = GROUP_GENERAL,
             ),
             TenantSettingDefinition(
@@ -206,17 +213,12 @@ object TenantSettingCatalog {
         return parsed.toString()
     }
 
+    // The same rule the organisation and its branches apply (#276), so the setting can hold any
+    // zone a branch may be created with.
     private fun canonicalizeTimezone(
         key: String,
         value: String,
-    ): String {
-        if (!ZoneId.getAvailableZoneIds().contains(value)) {
-            throw InvalidOperationException(
-                safeDetail = "Setting $key must be a valid IANA time-zone id.",
-            )
-        }
-        return value
-    }
+    ): String = TimeZoneRule.require(value, "Setting $key must be a valid IANA time-zone id.")
 
     /**
      * Canonicalizes a currency setting by asking the ledger, which is the only currency authority.

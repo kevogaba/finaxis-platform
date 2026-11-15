@@ -47,7 +47,10 @@ value keep it on, so the default is `true` and no existing tenant changes behavi
 
 Validation and canonicalization are catalog-owned:
 
-- `TIMEZONE`: must be an IANA zone id from `ZoneId.getAvailableZoneIds()`.
+- `TIMEZONE`: must be an IANA zone id from `ZoneId.getAvailableZoneIds()`, spelled exactly. This
+  is `TimeZoneRule`, the one rule the organisation's and a branch's `timezone` also follow (#276),
+  so the setting can hold any zone a branch can be created with. A raw offset (`+03:00`, `UTC+3`)
+  is refused everywhere; `Etc/GMT-3` names the same fixed offset (see "The default time zone").
 - `CURRENCY`: must be a currency the ledger can post in, resolved by
   `MoneyPolicy.requireSettlementCurrency`. That is an ISO 4217 code the JDK knows **and**
   one that has a minor unit, so `XXX` and the metals (`XAU`, `XAG`, `XPD`, `XPT`) are
@@ -87,6 +90,43 @@ way if it is current when `V31` runs.
 Changing a maker-checker switch locks the organisation row, the lock a membership or branch
 approval takes before it reads the switch, so an approval never acts on a value a committed change
 has replaced.
+
+## The default time zone
+
+`default_timezone` is the time zone a **new branch** takes when its create request names none
+(#276), on the tenant route (`POST /api/v1/branches`) and the platform route
+(`POST /api/v1/platform/tenants/{tenant_id}/branches`) alike. The zone is chosen in this order:
+
+1. the `timezone` the request names, checked by `TimeZoneRule`;
+2. else the tenant's current `default_timezone`;
+3. else the organisation's own `timezone`.
+
+The resolved zone is stored on the branch, so changing the setting later changes no existing
+branch. It governs nothing else: the organisation's `timezone` stays required on the tenant draft
+and alone decides the business date, the head office still copies the organisation's zone at
+approval, and a branch update that names no zone leaves the branch's zone alone.
+
+**One rule for every zone.** The organisation (create and amend), a branch (create and update) and
+the setting all accept an IANA region id spelled exactly as the JDK lists it, and nothing else. A
+raw offset (`+03:00`, `UTC+3`, `GMT+3`) is refused with `422 invalid_operation` and the detail
+`timezone must be an IANA time-zone id, for example Africa/Nairobi.` (the setting keeps its own
+detail). `ZoneId.of` parses an offset, but PostgreSQL reads `AT TIME ZONE '+03:00'` with the POSIX
+sign, three hours the wrong way, so an offset id dates a row differently in SQL than in Kotlin
+(`V18`'s header). `Etc/GMT-3` names the same fixed UTC+3 offset with one meaning in both. Until
+#276 the organisation and a branch update accepted offsets and a branch **create** checked nothing
+at all; a zone stored before then is read as it is, and only new writes are checked. To find
+stored zones the rule would now refuse:
+
+```sql
+SELECT 'organisation' AS kind, id, timezone FROM organisation
+WHERE timezone NOT IN (SELECT name FROM pg_timezone_names)
+UNION ALL
+SELECT 'branch', id, timezone FROM branch
+WHERE timezone NOT IN (SELECT name FROM pg_timezone_names);
+```
+
+PostgreSQL's zone list and the JDK's are both IANA but not identical, so treat a hit as a row to
+look at, not a verdict.
 
 ## The base currency is a read-only mirror
 
@@ -144,7 +184,7 @@ Only active organisations can be changed.
 Normal tenant settings require `settings.update` scoped to the target organisation. `base_currency`
 is not writable through them (see above):
 
-- `default_timezone`
+- `default_timezone` (see "The default time zone")
 - `require_maker_checker_for_user_invites`
 - `require_maker_checker_for_branch_creation`
 - `business_date_auto_advance_enabled`

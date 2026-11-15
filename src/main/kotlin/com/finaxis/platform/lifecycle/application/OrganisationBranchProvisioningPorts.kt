@@ -380,14 +380,30 @@ const val BRANCH_UPDATE_AUDIT_ACTION = "branch.update"
 /** The audit `entity_type` of every branch event, shared by the audit writer and the reader. */
 const val BRANCH_AUDIT_ENTITY_TYPE = "BRANCH"
 
+/**
+ * The two zones a new branch can default to (#276): the tenant's current `default_timezone`
+ * setting, null when unset, and the organisation's own zone, null only when the organisation does
+ * not exist.
+ */
+data class BranchTimezoneDefaults(
+    val setting: String?,
+    val organisation: String?,
+)
+
 /** Branch lifecycle persistence port, always scoped to its owning organisation. */
 @Suppress("TooManyFunctions") // One cohesive branch-lookup port; splitting it buys nothing.
 interface BranchLifecycleStore {
     /** Resolves the lifecycle state of an owning organisation. */
     fun organisationState(organisationId: UUID): OrganisationLifecycleState?
 
-    /** Persists a branch draft and returns its identifier. */
+    /**
+     * Persists a branch draft and returns its identifier. [CreateBranchCommand.timezone] is
+     * already resolved: the service never passes a null zone.
+     */
     fun createDraft(command: CreateBranchCommand): UUID
+
+    /** The zones a branch created in [organisationId] without a zone of its own defaults to. */
+    fun branchTimezoneDefaults(organisationId: UUID): BranchTimezoneDefaults
 
     /** Checks uniqueness of a branch code within the selected organisation. */
     fun branchCodeExists(
