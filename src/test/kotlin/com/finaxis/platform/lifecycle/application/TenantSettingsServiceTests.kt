@@ -285,6 +285,26 @@ class TenantSettingsServiceTests {
     }
 
     @Test
+    fun `switching the scheduled advance on needs business-date advance and off does not`() {
+        activate()
+        guard.deny(organisationId, "business_date.advance")
+        val key = "business_date_auto_advance_enabled"
+
+        assertFailsWith<SecurityException> {
+            service.createOrUpdate(
+                CreateOrUpdateTenantSettingCommand(organisationId, key, "TRUE", actorId),
+            )
+        }
+        assertEquals(null, settingsStore.stored(organisationId, key))
+
+        // Turning it off takes authority away, so settings.update alone is enough.
+        service.createOrUpdate(
+            CreateOrUpdateTenantSettingCommand(organisationId, key, "false", actorId),
+        )
+        assertEquals("false", settingsStore.stored(organisationId, key)?.value)
+    }
+
+    @Test
     fun `createOrUpdate persists, audits, and publishes for a normal setting`() {
         activate()
         val view =
@@ -586,6 +606,11 @@ private class FakeSettingsStore : OrganisationSettingsStore {
 
     override fun currentSettingsList(organisationId: UUID): List<StoredSetting> =
         data.filterKeys { it.first == organisationId }.values.toList()
+
+    override fun lockedCurrentSetting(
+        organisationId: UUID,
+        key: String,
+    ): StoredSetting? = data[organisationId to key]
 
     override fun upsertSetting(
         organisationId: UUID,

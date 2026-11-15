@@ -2583,7 +2583,9 @@ with the platform administrator as actor. `GET /` lists only the platform-only k
 A write to a catalogue setting requires `settings.update` and its view `settings.view`; a read
 requires `settings.view`. A platform-only key (`audit_retention_days`) is checked instead against
 `tenant_setting.manage_platform` in the platform organisation, for both reads and writes, and that
-code is a context code with no view. `GET /` masks a set platform-only value as `***REDACTED***`
+code is a context code with no view. Storing `true` in `business_date_auto_advance_enabled` also
+requires `business_date.advance` (#277, `403` without it, nothing written); `false` and `DELETE` do
+not. `GET /` masks a set platform-only value as `***REDACTED***`
 for a caller without that permission, and reports an unset one as `null`.
 `GET /{key}` authorises per key before it reads the stored row: an unknown key without
 `settings.view` answers 403 (it was 400 before ADR 0030 step 7), the same refusal as a known key,

@@ -18,6 +18,7 @@ import com.finaxis.platform.lifecycle.PlatformCaller
 import com.finaxis.platform.lifecycle.TenantCaller
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleState
 import com.finaxis.platform.lifecycle.domain.BranchLifecycleTransition
+import com.finaxis.platform.lifecycle.domain.BusinessDateCalendar
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleState
 import com.finaxis.platform.lifecycle.domain.MembershipLifecycleTransition
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
@@ -29,7 +30,6 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
 import java.time.LocalDate
-import java.time.ZoneId
 import java.util.UUID
 
 /**
@@ -533,7 +533,7 @@ class OrganisationProvisioningService(
     }
 
     private fun businessDate(timezone: String): LocalDate =
-        LocalDate.now(clock.withZone(ZoneId.of(timezone)))
+        BusinessDateCalendar.localToday(clock, timezone)
 
     private fun audit(
         organisationId: UUID,

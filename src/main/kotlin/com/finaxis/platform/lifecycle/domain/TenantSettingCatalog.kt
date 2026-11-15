@@ -40,6 +40,13 @@ object TenantSettingCatalog {
      */
     const val DEFAULT_TIMEZONE_KEY = "default_timezone"
 
+    /**
+     * Whether the scheduled job advances the tenant's business date (#277). `false` unless the
+     * tenant stores `true`; storing `true` needs `business_date.advance` as well as
+     * `settings.update`, since it hands that act to the platform.
+     */
+    const val BUSINESS_DATE_AUTO_ADVANCE_KEY = "business_date_auto_advance_enabled"
+
     private const val GROUP_GENERAL = "General"
     private const val GROUP_APPROVALS = "Approvals"
     private const val GROUP_BUSINESS_DATE = "Business date"
@@ -112,16 +119,17 @@ object TenantSettingCatalog {
                 group = GROUP_APPROVALS,
             ),
             TenantSettingDefinition(
-                key = "business_date_auto_advance_enabled",
+                key = BUSINESS_DATE_AUTO_ADVANCE_KEY,
                 valueType = TenantSettingValueType.BOOLEAN,
                 sensitive = false,
                 platformAdminOnly = false,
                 defaultValue = "false",
                 label = "Advance the business date automatically",
                 description =
-                    "Reserved: would advance the business date each day without a manual " +
-                        "request. Not yet applied; the business date moves only when someone " +
-                        "advances it.",
+                    "When true, the platform advances an open business date one day at a time " +
+                        "until it reaches the organisation's local date, without a manual " +
+                        "request, once the platform operator has switched scheduled advances " +
+                        "on. Switching it on needs business_date.advance.",
                 group = GROUP_BUSINESS_DATE,
             ),
             TenantSettingDefinition(

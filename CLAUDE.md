@@ -494,7 +494,8 @@ Do not invent accounting tables or columns outside those documents.
   `SystemActor`, build or copy no caller outside `CallerContextResolver`, and never start
   `InitialAdministratorBootstrapService`; only that service may call or reference
   `UserProvisioningService.inviteAsSystem`/`approveAsSystem` (`inviteAsSystem` also requires
-  `SystemActor.ID`). A new read needs the marker and its own authorisation. Do not add a
+  `SystemActor.ID`), and only `BusinessDateAutoAdvance` may call
+  `BusinessDateService.advanceAsSystem` (#277, ADR 0041, `ScheduledAdvanceRuleTests`). A new read needs the marker and its own authorisation. Do not add a
   controller-side check that repeats the service's (`RoleController`, `RoleAssignmentController`
   and `PermissionController` still do: an open item of ADR 0030).
 - Maker-checker: a platform-context actor holding the permission in the platform organisation may

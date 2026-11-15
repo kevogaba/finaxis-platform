@@ -202,6 +202,17 @@ interface OrganisationSettingsStore {
     fun currentSettingsList(organisationId: UUID): List<StoredSetting>
 
     /**
+     * Takes the per-key lock every writer of [key] takes, then returns the setting current under
+     * it, or null when unset (#277). It runs in the caller's transaction, which holds the lock
+     * until it ends: a write of [key] waits for the caller to commit, so what was read stays
+     * current for the caller's whole transaction.
+     */
+    fun lockedCurrentSetting(
+        organisationId: UUID,
+        key: String,
+    ): StoredSetting?
+
+    /**
      * Closes the open row for [key], inserts a typed replacement, and returns the row closed while
      * holding the per-key lock; null means no row was currently effective.
      */

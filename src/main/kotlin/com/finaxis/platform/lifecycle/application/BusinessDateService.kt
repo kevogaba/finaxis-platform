@@ -6,6 +6,7 @@ import com.finaxis.platform.common.application.GatedRead
 import com.finaxis.platform.common.application.InvalidOperationException
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.audit.AuditService
+import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.persistence.TransactionLockBound
 import com.finaxis.platform.common.transitions.ExternalizedTransitionEvent
 import com.finaxis.platform.common.transitions.TransitionActor
@@ -13,6 +14,7 @@ import com.finaxis.platform.common.transitions.TransitionEventPublisher
 import com.finaxis.platform.common.web.api.requireValidPage
 import com.finaxis.platform.lifecycle.PermissionGuard
 import com.finaxis.platform.lifecycle.domain.OrganisationLifecycleState
+import com.finaxis.platform.lifecycle.domain.TenantSettingCatalog
 import org.springframework.dao.CannotAcquireLockException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -39,6 +41,10 @@ import java.util.UUID
  * deliberately, because close-of-business must not deadlock corrections.
  */
 @Service
+// One cohesive business-date use-case service: every mutation shares the bounded lock wait, the
+// state checks and the one recording path, and the scheduled advance (#277) must reuse them rather
+// than copy them into a second service.
+@Suppress("TooManyFunctions")
 class BusinessDateService(
     private val lifecycleStore: OrganisationLifecycleProvisioningStore,
     private val businessDateStore: BusinessDateStore,
@@ -48,6 +54,7 @@ class BusinessDateService(
     private val eventPublisher: TransitionEventPublisher,
     private val dailyBalanceBuilds: DailyBalanceBuildScheduler,
     private val closeReadiness: AccountingCloseReadiness,
+    private val settingsStore: OrganisationSettingsStore,
     private val lockTimeout: TransactionLockBound,
     private val properties: BusinessDateProperties,
     private val clock: Clock,
@@ -95,14 +102,137 @@ class BusinessDateService(
         val current = requireCurrent(command.organisationId)
         conflictUnless(current.status == OPEN)
         invalidOperationUnless(command.newBusinessDate.isAfter(current.currentBusinessDate))
-        conflictUnless(
+        conflictUnless(applyAdvance(command, current, USER_ACTOR))
+        return BusinessDateAdvanceResult(
+            command.organisationId,
+            current.currentBusinessDate,
+            command.newBusinessDate,
+        )
+    }
+
+    /**
+     * Advances [organisationId]'s business date by one day, from [from], for the scheduled advance
+     * (#277, ADR 0041): the one caller is `BusinessDateAutoAdvance`, which an architecture rule
+     * holds to that.
+     *
+     * **No actor permission is asked.** The authority is the tenant's own audited opt-in
+     * (`business_date_auto_advance_enabled`, which only a holder of `business_date.advance` can
+     * switch on), so the advance is recorded as the system actor, with actor type `SYSTEM` in the
+     * audit row and the outbox event. That opt-in is read again in each day's transaction, under
+     * the lock every writer of the setting takes, so an opt-out committed during a run stops the
+     * next day. Every state rule of a manual [advance] still holds, and a date that fails one is
+     * skipped, not refused: the organisation is `ACTIVE`, the date is
+     * `OPEN`, it is still [from] (a manual advance or a concurrent run has not moved it), and no
+     * BLOCKING close-of-business readiness check fails (ADR 0038's checks, which a manual advance
+     * does not consult). A lost race on the row version is skipped the same way. The lock wait is
+     * bounded as for a manual advance, and its expiry is the retryable `409` the caller skips.
+     */
+    @Transactional
+    fun advanceAsSystem(
+        organisationId: UUID,
+        from: LocalDate,
+        reason: String,
+    ): ScheduledAdvanceOutcome =
+        withBoundedLockWait {
+            val current = businessDateStore.current(organisationId)
+            val skipped = scheduledAdvanceSkip(organisationId, current, from)
+            when {
+                skipped != null -> {
+                    skipped
+                }
+
+                applyAdvance(
+                    AdvanceBusinessDateCommand(
+                        organisationId,
+                        from.plusDays(1),
+                        SystemActor.ID,
+                        reason,
+                    ),
+                    checkNotNull(current),
+                    SYSTEM_ACTOR,
+                ) -> {
+                    ScheduledAdvanceOutcome.ADVANCED
+                }
+
+                else -> {
+                    ScheduledAdvanceOutcome.MOVED
+                }
+            }
+        }
+
+    /** Why the scheduled advance leaves this date alone, or null when it may advance it. */
+    private fun scheduledAdvanceSkip(
+        organisationId: UUID,
+        current: BusinessDateSnapshot?,
+        from: LocalDate,
+    ): ScheduledAdvanceOutcome? {
+        val organisationState = lifecycleStore.lifecycleState(organisationId)
+        return when {
+            !stillOptedIn(organisationId) -> {
+                ScheduledAdvanceOutcome.NOT_OPTED_IN
+            }
+
+            organisationState != OrganisationLifecycleState.ACTIVE -> {
+                ScheduledAdvanceOutcome.NOT_ACTIVE
+            }
+
+            current == null || current.status != OPEN -> {
+                ScheduledAdvanceOutcome.NOT_OPEN
+            }
+
+            current.currentBusinessDate != from -> {
+                ScheduledAdvanceOutcome.MOVED
+            }
+
+            !CobReadinessChecks
+                .evaluate(
+                    current.currentBusinessDate,
+                    current.status,
+                    organisationState,
+                    closeReadiness.snapshot(organisationId),
+                ).ready -> {
+                ScheduledAdvanceOutcome.NOT_READY
+            }
+
+            else -> {
+                null
+            }
+        }
+    }
+
+    /**
+     * Whether the tenant still stores `business_date_auto_advance_enabled = true`, read under the
+     * per-key lock every writer of that setting takes, which this transaction then holds: an
+     * opt-out committed before this read stops the advance, and one made after it waits for this
+     * day's advance to commit (ADR 0041).
+     */
+    private fun stillOptedIn(organisationId: UUID): Boolean =
+        settingsStore
+            .lockedCurrentSetting(
+                organisationId,
+                TenantSettingCatalog.BUSINESS_DATE_AUTO_ADVANCE_KEY,
+            )?.value == AUTO_ADVANCE_ENABLED
+
+    /**
+     * Writes an advance the caller has already checked: the row (refused when its version moved),
+     * its history, audit row and outbox event, and the daily-balance build for the date left.
+     * Returns false, having written nothing, when the version check refused it.
+     */
+    private fun applyAdvance(
+        command: AdvanceBusinessDateCommand,
+        current: BusinessDateSnapshot,
+        actorType: String,
+    ): Boolean {
+        val advanced =
             businessDateStore.advance(
                 command.organisationId,
                 command.newBusinessDate,
                 current.rowVersion,
                 command.actorId,
-            ),
-        )
+            )
+        if (!advanced) {
+            return false
+        }
         record(
             BusinessDateTransition(
                 organisationId = command.organisationId,
@@ -119,14 +249,11 @@ class BusinessDateService(
                 externalEventType = "BusinessDateAdvanced",
                 eventFromState = current.currentBusinessDate.toString(),
                 eventToState = command.newBusinessDate.toString(),
+                actorType = actorType,
             ),
         )
         scheduleDailyBalanceBuild(command.organisationId, current.currentBusinessDate)
-        return BusinessDateAdvanceResult(
-            command.organisationId,
-            current.currentBusinessDate,
-            command.newBusinessDate,
-        )
+        return true
     }
 
     /** Moves an open business date into CLOSING and captures its COB date. */
@@ -340,9 +467,11 @@ class BusinessDateService(
      * [completeCob]: a backdated posting into a still-open prior period is legal while the business
      * date is `CLOSED`, so at close-of-business the set is still filling.
      *
-     * Failure to enqueue fails the advance, which is the safer direction: an advance whose
-     * projection was never scheduled leaves a day that nothing will settle until the next rebuild
-     * reaches back for it, and the operator would have no reason to suspect it.
+     * Inside a transaction the enqueue therefore cannot fail the advance: it runs after the date
+     * has moved, so a failure there reaches the caller once the advance is already committed, and
+     * a lost enqueue is picked up by the next build's trailing business-date re-scan
+     * (`JobRunrDailyBalanceBuildScheduler`). Only a failure to register the callback would roll
+     * the advance back.
      */
     private fun scheduleDailyBalanceBuild(
         organisationId: UUID,
@@ -389,7 +518,7 @@ class BusinessDateService(
             action = transition.action,
             resourceType = BUSINESS_DATE,
             resourceId = transition.organisationId.toString(),
-            actorType = USER_ACTOR,
+            actorType = transition.actorType,
             reason = transition.reason,
             before = businessDateState(transition.fromStatus, transition.fromBusinessDate),
             after = businessDateState(transition.toStatus, transition.toBusinessDate),
@@ -403,7 +532,7 @@ class BusinessDateService(
                 transition = transition.transition,
                 fromState = transition.eventFromState,
                 toState = transition.eventToState,
-                actor = TransitionActor(USER_ACTOR, transition.actorId.toString()),
+                actor = TransitionActor(transition.actorType, transition.actorId.toString()),
                 occurredAt = occurredAt,
                 metadata =
                     mapOf(
@@ -422,6 +551,8 @@ class BusinessDateService(
     private companion object {
         const val BUSINESS_DATE = "BUSINESS_DATE"
         const val USER_ACTOR = "USER"
+        const val SYSTEM_ACTOR = "SYSTEM"
+        const val AUTO_ADVANCE_ENABLED = "true"
         const val OPEN = "OPEN"
         const val CLOSING = "CLOSING"
         const val CLOSED = "CLOSED"
@@ -465,4 +596,6 @@ private data class BusinessDateTransition(
     val externalEventType: String,
     val eventFromState: String = fromStatus ?: "NONE",
     val eventToState: String = toStatus,
+    /** `USER` for a person's request, `SYSTEM` for the scheduled advance (#277). */
+    val actorType: String = "USER",
 )
