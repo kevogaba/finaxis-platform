@@ -58,6 +58,8 @@ data class LifecycleMembershipFilter(
     val sortBy: String? = null,
     val sortDir: String? = null,
     val userId: UUID? = null,
+    /** An exact member number (#287). */
+    val memberNumber: Long? = null,
 )
 
 /** Filter parameters for branch-assignment queries exposed to lifecycle adapters. */
@@ -90,6 +92,7 @@ data class LifecycleMembershipSummary(
     val primaryBranchName: String?,
     val createdAt: Instant,
     val createdBy: ActorRef? = null,
+    val memberNumber: Long? = null,
 )
 
 /** Membership detail projection exposed to lifecycle adapters. */
@@ -108,6 +111,7 @@ data class LifecycleMembershipDetail(
     val updatedAt: Instant,
     val createdBy: ActorRef? = null,
     val invitation: LifecycleInvitationStatus? = null,
+    val memberNumber: Long? = null,
 )
 
 /** Where a member's identity provisioning stands, as the lifecycle adapters see it (#274). */

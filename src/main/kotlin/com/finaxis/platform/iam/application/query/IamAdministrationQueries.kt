@@ -25,6 +25,8 @@ data class MembershipFilter(
     val sortDir: String? = null,
     /** Narrows to the one user's membership in the organisation. */
     val userId: UUID? = null,
+    /** Narrows to the membership holding this member number (#287): an exact match. */
+    val memberNumber: Long? = null,
 )
 
 /** Filter parameters for branch assignment queries. */

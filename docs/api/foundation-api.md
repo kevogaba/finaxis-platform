@@ -1567,9 +1567,19 @@ the keys it always had). The audit row is the transition's own, `membership.rein
 ### Memberships
 
 Base path: `/api/v1/tenant/memberships`. List filters: `q`, `membership_status`,
-`membership_type`, `user_id`, `sort_by`, `sort_dir`, `page`, `size`. `user_id` narrows the list to
-that user's membership in the active organisation (a malformed UUID is `400`; a user with no
-membership here is an empty page). Sorting is described under [Pagination](#pagination).
+`membership_type`, `user_id`, `member_number`, `sort_by`, `sort_dir`, `page`, `size`. `user_id`
+narrows the list to that user's membership in the active organisation (a malformed UUID is `400`; a
+user with no membership here is an empty page). `member_number` is an exact match (`400` when it is
+not a positive integer). Sorting is described under [Pagination](#pagination).
+
+**Member number (#287, [ADR 0040](../adr/0040-member-number.md)).** The detail and the list items
+carry `member_number`: the membership's number within this organisation, a positive integer taken
+from the tenant's `MEMBER` counter when the membership first becomes `ACTIVE`, gapless across the
+organisation's members and unique within it. It is `null` while the membership has never been
+active (an invitation awaiting approval, or revoked before approval, takes none). Suspension,
+revocation and a re-invite keep it, so a returning member keeps their number; nothing edits it. A
+member of two tenants has a number in each. Memberships active before the release were numbered by
+`V35` in the order they first became active.
 
 | Method | Path                          | Summary                         | Permission              | Shape    |
 |--------|-------------------------------|---------------------------------|-------------------------|----------|

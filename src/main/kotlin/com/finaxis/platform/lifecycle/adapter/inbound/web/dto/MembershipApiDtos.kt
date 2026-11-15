@@ -71,6 +71,16 @@ data class MembershipDetailResponse(
                 "result of a mutation that does not read it.",
     )
     val invitation: InvitationStatusResponse? = null,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        description =
+            "The member's number in this organisation (#287): taken from the tenant's member " +
+                "counter when the membership first becomes active and kept through " +
+                "suspension, revocation and re-invite. `null` until first activated.",
+        example = "42",
+    )
+    val memberNumber: Long? = null,
 )
 
 /** Where a member's identity provisioning stands; a view, not a lifecycle state. */
@@ -120,6 +130,16 @@ data class MembershipSummaryResponse(
                 "callers).",
     )
     val createdBy: ActorRefResponse?,
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
+    @field:Schema(
+        nullable = true,
+        description =
+            "The member's number in this organisation (#287): taken from the tenant's member " +
+                "counter when the membership first becomes active and kept through " +
+                "suspension, revocation and re-invite. `null` until first activated.",
+        example = "42",
+    )
+    val memberNumber: Long? = null,
 )
 
 /**
