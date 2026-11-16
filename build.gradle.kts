@@ -674,6 +674,58 @@ tasks.test {
     finalizedBy(tasks.jacocoTestReport)
 }
 
+// CI spreads the suite over several runners: `-PtestShard=i/n` runs only the i-th of n disjoint
+// slices of the test classes. A class belongs to the slice its top-level class name hashes to, so
+// a class and its nested classes always run together, every class lands in exactly one slice, and
+// the split needs no list to maintain. The slices' JaCoCo data is merged and verified afterwards
+// (`shardCoverage` below). Without the property every class runs, as `qualityGate` does locally.
+providers.gradleProperty("testShard").orNull?.let { shard ->
+    val (index, count) =
+        shard.split('/').mapNotNull(String::toIntOrNull).takeIf { it.size == 2 }
+            ?: error("testShard must be i/n, for example 1/2, not '$shard'")
+    require(count >= 1 && index in 1..count) { "testShard needs 1 <= i <= n, not '$shard'" }
+    tasks.test {
+        exclude { element ->
+            val path = element.relativePath.pathString
+            val topLevelClass = path.removeSuffix(".class").substringBefore('$')
+            !element.isDirectory &&
+                path.endsWith(".class") &&
+                Math.floorMod(topLevelClass.hashCode(), count) != index - 1
+        }
+    }
+}
+
+// CI's Quality Gate job verifies coverage without running a test: `-PshardCoverage=<dir>` reads the
+// test shards' execution data (`<dir>/*.exec`) and the main classes they ran against
+// (`<dir>/classes`, copied from a shard so the class ids match the data), and the coverage tasks
+// then do not depend on `test`. The rules and the class filters are the same in both modes.
+val shardCoverage: File? = providers.gradleProperty("shardCoverage").orNull?.let(::file)
+
+/** The main classes coverage is measured over: compiled here, or copied from a test shard. */
+val coverageClassRoots: Set<File> =
+    shardCoverage?.let { root ->
+        listOf("java", "kotlin").map { root.resolve("classes/$it/main") }.toSet()
+    } ?: sourceSets.main
+        .get()
+        .output.classesDirs.files
+
+/** Applies the merge mode to a coverage task: the shards' data, and no test run of its own. */
+fun JacocoReportBase.coverageInputs() {
+    val root = shardCoverage
+    if (root == null) {
+        dependsOn(tasks.test)
+        return
+    }
+    executionData.setFrom(fileTree(root) { include("*.exec") })
+    // JaCoCo skips a task whose execution data is missing, and a skipped verification reads as a
+    // pass. Merging, missing data or classes is a broken hand-over, so the task runs and fails.
+    setOnlyIf("merging test shards, missing coverage data fails the task") { true }
+    doFirst {
+        check(!executionData.asFileTree.isEmpty) { "no *.exec under $root" }
+        check(!classDirectories.asFileTree.isEmpty) { "no classes under $root/classes" }
+    }
+}
+
 jacoco {
     toolVersion = "0.8.15"
 }
@@ -716,10 +768,10 @@ val accountingCoverageExclusions =
     coverageExclusions.filterNot { it in setOf("**/*Request*", "**/*Response*", "**/ApiError*") }
 
 tasks.jacocoTestReport {
-    dependsOn(tasks.test)
+    coverageInputs()
     classDirectories.setFrom(
         files(
-            classDirectories.files.map {
+            coverageClassRoots.map {
                 fileTree(it) {
                     exclude(coverageExclusions)
                 }
@@ -733,10 +785,10 @@ tasks.jacocoTestReport {
 }
 
 tasks.jacocoTestCoverageVerification {
-    dependsOn(tasks.test)
+    coverageInputs()
     classDirectories.setFrom(
         files(
-            classDirectories.files.map {
+            coverageClassRoots.map {
                 fileTree(it) {
                     // The repository's ratcheted coverage contract is the IAM implementation.
                     // Generated jOOQ records and other infrastructure remain visible in the report,
@@ -775,20 +827,18 @@ tasks.jacocoTestCoverageVerification {
 tasks.register<JacocoCoverageVerification>("jacocoAccountingCoverageVerification") {
     group = "verification"
     description = "Verifies the accounting module's line coverage against its documented floor."
-    dependsOn(tasks.test)
     executionData.setFrom(
         tasks.test.map { it.extensions.getByType<JacocoTaskExtension>().destinationFile!! },
     )
+    coverageInputs()
     sourceDirectories.setFrom(files("src/main/kotlin"))
-    // The main source set's own output, not the report task's remapped `classDirectories`: that
-    // property has already been replaced by a set of individual class FILES, and `fileTree()` of a
-    // file is empty - which makes the rule pass over nothing at all. Caught by raising the floor to
-    // 99% and watching it still pass.
+    // The main source set's own output (or, merging shards, the classes they ran), not the report
+    // task's remapped `classDirectories`: that property has already been replaced by a set of
+    // individual class FILES, and `fileTree()` of a file is empty - which makes the rule pass over
+    // nothing at all. Caught by raising the floor to 99% and watching it still pass.
     classDirectories.setFrom(
         files(
-            sourceSets.main
-                .get()
-                .output.classesDirs.files
+            coverageClassRoots
                 .map {
                     fileTree(it) {
                         // Accounting is the financial system of record: its application

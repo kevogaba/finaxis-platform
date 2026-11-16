@@ -677,6 +677,10 @@ Do not invent accounting tables or columns outside those documents.
   at most four, so two on the CI runner and one on a 2-vCPU runner (`-PtestForks=N` overrides). A
   test that changes shared seed rows restores them after itself as well as before: which class runs
   next on a context depends on how the classes are spread over the forks.
+- CI splits `qualityGate` into parallel jobs: static analysis, three test shards
+  (`-PtestShard=i/3`, by a hash of the top-level class name) and the `Quality Gate` job, which
+  verifies the coverage rules over every shard's data (`-PshardCoverage`) and fails unless every
+  other job passed. Require that job. Locally `qualityGate` runs everything, as before.
 
 ## Pull requests and commits
 

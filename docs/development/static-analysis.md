@@ -73,7 +73,10 @@ Useful individual checks:
 ```
 
 `./gradlew test` runs the ArchUnit and Spring Modulith architecture tests.
-`./gradlew check` depends on `staticAnalysis`, so CI gets the same quality gates.
+`./gradlew check` depends on `staticAnalysis`, so CI gets the same quality gates. CI runs
+`qualityGate`'s parts as parallel jobs - static analysis and `bootJar`, the tests split over three
+runners, then the coverage rules over every runner's merged data - see
+`docs/development/test-performance.md` ("Test shards on CI").
 
 ## Reports
 
