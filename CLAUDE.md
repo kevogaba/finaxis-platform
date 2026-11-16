@@ -392,6 +392,19 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   that may delete from `audit_event`, and nothing may update it** (`AuditRetentionDeletePathTests`).
   The catalogue now bounds `audit_retention_days` to 2555-36500 on every write path. The
   application still connects as the table owner; a separate deletion role is later work.
+- `V37__normalise_offset_time_zones.sql` — **data only, no schema** (#331): every
+  `organisation.timezone` and `branch.timezone` that spells a whole-hour UTC offset in a layout
+  `ZoneId.of` reads (`+3`, `+03:00`, `UTC+3`, `GMT-05:00`, `Z`, ...; accepted before #276's
+  `TimeZoneRule`) becomes the IANA id of the same fixed offset: `UTC` for zero, `Etc/GMT-3` for
+  `+03:00` (the `Etc` names invert the sign; `Etc/GMT-14` to `Etc/GMT+12`). Every local date is
+  unchanged and SQL's `AT TIME ZONE` now agrees with Kotlin. It writes only `timezone` (not
+  `updated_at` or `row_version`), never guesses a region, leaves minute offsets (`+05:30`),
+  out-of-range offsets and misspelt ids alone, and uses one session-local `pg_temp` function it
+  drops at the end (no trigger, nothing persists). Idempotent, with pre- and post-conditions
+  in-file. What it leaves is reported at every start by `StoredTimeZoneStartupWarning` (counts and
+  up to ten ids per table, never the stored text; a database error is logged by class name and does
+  not stop the boot); the fixes are in `docs/operations/tenant-settings.md` ("Time zones stored
+  before the rule").
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -427,7 +440,8 @@ administrator roles' grants, `V24` the closed bootstrap failure-code set, `V25`-
 audit search indexes, `V29`-`V30` the audit subject user (column and index), and `V31` the
 retired legacy setting rows, `V32` the user and membership edit permissions, `V33` the role
 transition log and `role.archive`, `V34` the `audit.export` permission, `V35` the
-membership's member number, and `V36` the audit table's retention comment; none is accounting.
+membership's member number, `V36` the audit table's retention comment, and `V37` the
+normalised offset time zones; none is accounting.
 Do not invent accounting tables or columns outside those documents.
 
 ## Authorization
