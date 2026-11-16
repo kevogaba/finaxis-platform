@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.inbound.web
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.TestMemberNumbers
 import com.finaxis.platform.common.application.ForbiddenOperationException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
@@ -701,11 +702,13 @@ class AssignmentLookupsByKeyIntegrationTests
             val now = OffsetDateTime.now()
             dsl.execute(
                 "INSERT INTO user_organisation_membership (id, organisation_id, user_id, " +
-                    "membership_status, membership_type, created_by, created_at, updated_at) " +
-                    "VALUES (?, ?, ?, 'ACTIVE', 'STAFF', ?, ?::timestamptz, ?::timestamptz)",
+                    "membership_status, membership_type, member_number, created_by, created_at, " +
+                    "updated_at) " +
+                    "VALUES (?, ?, ?, 'ACTIVE', 'STAFF', ?, ?, ?::timestamptz, ?::timestamptz)",
                 uuidV7(),
                 organisationId,
                 userId,
+                TestMemberNumbers.next(dsl, organisationId),
                 SystemActor.ID,
                 now,
                 now,

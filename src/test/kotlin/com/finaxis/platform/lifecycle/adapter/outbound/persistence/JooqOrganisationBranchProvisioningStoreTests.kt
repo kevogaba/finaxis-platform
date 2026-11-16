@@ -2,6 +2,7 @@ package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.TestMemberNumbers
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.jooq.tables.references.BRANCH
 import com.finaxis.platform.jooq.tables.references.ORGANISATION
@@ -512,7 +513,10 @@ class JooqOrganisationBranchProvisioningStoreTests(
             .set(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID, organisationId)
             .set(USER_ORGANISATION_MEMBERSHIP.USER_ID, userId)
             .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, "ACTIVE")
-            .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, "STAFF")
+            .set(
+                USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER,
+                TestMemberNumbers.next(dsl, organisationId),
+            ).set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, "STAFF")
             .set(USER_ORGANISATION_MEMBERSHIP.CREATED_AT, now)
             .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT, now)
             .execute()

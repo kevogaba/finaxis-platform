@@ -64,7 +64,12 @@ Facts that shape the answer:
    `CHECK (membership_status <> 'ACTIVE' OR member_number IS NOT NULL)` added with `V35` would fail
    every activation an instance of the previous release makes during a rolling deploy. Instead an
    old instance's activation is left unnumbered, takes its number the next time it becomes
-   `ACTIVE`, and a later migration numbers what remains and adds the check.
+   `ACTIVE`, and a later migration numbers what remains and adds the check. That migration is
+   `V38` (#332): it numbers any membership ever active that still has none, by this decision's
+   order, and adds `chk_membership_active_has_member_number`,
+   `CHECK (membership_status NOT IN ('ACTIVE', 'SUSPENDED') OR member_number IS NOT NULL)`. A
+   suspended membership can only have come from `ACTIVE`, so it is held to the same rule. It ships
+   in a release after the one carrying `V35`, once no older instance runs.
 
 ## Consequences
 

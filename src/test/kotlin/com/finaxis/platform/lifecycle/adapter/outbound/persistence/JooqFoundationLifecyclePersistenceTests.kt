@@ -1,6 +1,7 @@
 package com.finaxis.platform.lifecycle.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.TestMemberNumbers
 import com.finaxis.platform.common.application.ResourceNotFoundException
 import com.finaxis.platform.common.context.ActorContext
 import com.finaxis.platform.common.context.RequestContexts
@@ -643,6 +644,9 @@ class JooqFoundationLifecyclePersistenceTests(
             .set(
                 USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS,
                 state.name,
+            ).set(
+                USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER,
+                TestMemberNumbers.forStatus(dsl, organisationId, state.name),
             ).set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, "STAFF")
             .set(USER_ORGANISATION_MEMBERSHIP.CREATED_AT, now)
             .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT, now)

@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.TestMemberNumbers
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.query.BranchAssignmentFilter
 import com.finaxis.platform.iam.application.query.IamQueryService
@@ -319,7 +320,10 @@ class JooqIamTenantListSortTests(
             .set(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID, orgId)
             .set(USER_ORGANISATION_MEMBERSHIP.USER_ID, userId)
             .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, person.membershipStatus)
-            .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, person.membershipType)
+            .set(
+                USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER,
+                TestMemberNumbers.forStatus(dsl, orgId, person.membershipStatus),
+            ).set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, person.membershipType)
             .set(USER_ORGANISATION_MEMBERSHIP.CREATED_AT, at)
             .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT, at)
             .execute()

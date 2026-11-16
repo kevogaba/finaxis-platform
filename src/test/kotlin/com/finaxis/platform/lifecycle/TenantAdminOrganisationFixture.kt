@@ -1,5 +1,6 @@
 package com.finaxis.platform.lifecycle
 
+import com.finaxis.platform.TestMemberNumbers
 import com.finaxis.platform.common.context.PlatformOrganisation
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
@@ -339,7 +340,10 @@ class TenantAdminOrganisationFixture(
             .set(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID, organisationId)
             .set(USER_ORGANISATION_MEMBERSHIP.USER_ID, actorId)
             .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, "ACTIVE")
-            .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, "ADMIN")
+            .set(
+                USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER,
+                TestMemberNumbers.next(dsl, organisationId),
+            ).set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, "ADMIN")
             // As the real bootstrap does: the first administrator is created by the system actor.
             .set(USER_ORGANISATION_MEMBERSHIP.CREATED_BY, SystemActor.ID)
             .set(USER_ORGANISATION_MEMBERSHIP.CREATED_AT, now)

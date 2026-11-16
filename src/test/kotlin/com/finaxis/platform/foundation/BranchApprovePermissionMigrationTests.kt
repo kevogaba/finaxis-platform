@@ -1,6 +1,7 @@
 package com.finaxis.platform.foundation
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.TestMemberNumbers
 import com.finaxis.platform.common.id.uuidV7
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
@@ -511,12 +512,13 @@ class BranchApprovePermissionMigrationTests(
             """
             INSERT INTO user_organisation_membership (
                 id, organisation_id, user_id, membership_status, membership_type, joined_at,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, 'ACTIVE', 'STAFF', NOW(), NOW(), NOW())
+                member_number, created_at, updated_at
+            ) VALUES (?, ?, ?, 'ACTIVE', 'STAFF', NOW(), ?, NOW(), NOW())
             """.trimIndent(),
             membershipId,
             organisationId,
             userId,
+            TestMemberNumbers.next(jdbcTemplate, organisationId),
         )
         addOverride(organisationId, membershipId, permissionCode, effect)
         return membershipId

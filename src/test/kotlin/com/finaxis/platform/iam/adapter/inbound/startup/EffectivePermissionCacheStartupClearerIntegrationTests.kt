@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.adapter.inbound.startup
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.TestMemberNumbers
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.authorization.EffectivePermissionResolver
 import org.awaitility.Awaitility.await
@@ -112,12 +113,13 @@ class EffectivePermissionCacheStartupClearerIntegrationTests(
             """
             INSERT INTO user_organisation_membership (
                 id, organisation_id, user_id, membership_status, membership_type, joined_at,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, 'ACTIVE', 'STAFF', NOW(), NOW(), NOW())
+                member_number, created_at, updated_at
+            ) VALUES (?, ?, ?, 'ACTIVE', 'STAFF', NOW(), ?, NOW(), NOW())
             """.trimIndent(),
             membershipId,
             organisationId,
             userId,
+            TestMemberNumbers.next(jdbcTemplate, organisationId),
         )
         jdbcTemplate.update(
             """

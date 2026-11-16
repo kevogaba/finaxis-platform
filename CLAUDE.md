@@ -372,9 +372,9 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   edited; `null` until first activated. The backfill numbers every membership ever active in the
   order it first became active and moves each counter past the highest number, under
   `LOCK TABLE ... IN SHARE ROW EXCLUSIVE MODE` (the V21 precedent) with a 5 s lock timeout; it
-  writes only `member_number`. **No CHECK that an `ACTIVE` membership has a number yet**: an old
-  instance activates without one during a rolling deploy, so that CHECK, with a backfill of what
-  remains, is a later migration. **A new path that makes a membership `ACTIVE` must go through
+  writes only `member_number`. No CHECK that an `ACTIVE` membership has a number, because an old
+  instance activates without one during a rolling deploy; `V38` adds it, a release later. **A new
+  path that makes a membership `ACTIVE` must go through
   `saveMembership`** (or take a number with `ReferenceSequences.next` itself, as
   `LocalPlatformSmokeMembershipSeeder` does). Asserts its pre- and post-conditions in-file; no
   trigger.
@@ -405,6 +405,18 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   up to ten ids per table, never the stored text; a database error is logged by class name and does
   not stop the boot); the fixes are in `docs/operations/tenant-settings.md` ("Time zones stored
   before the rule").
+- `V38__membership_active_requires_member_number.sql` — **one declarative CHECK, after a backfill**
+  (#332, ADR 0040 decision 7): `chk_membership_active_has_member_number`,
+  `CHECK (membership_status NOT IN ('ACTIVE', 'SUSPENDED') OR member_number IS NOT NULL)`, the
+  check `V35` deferred. Under `V35`'s table lock and lock timeout it first numbers, by `V35`'s rules
+  and order, any membership ever active that still has no number (one an instance older than #287
+  activated after `V35` ran), moves each `MEMBER` counter past the highest number, then adds the
+  CHECK (validating every row) and restates the column comment. Writes only `member_number`; no
+  trigger (ADR 0024 does not apply); idempotent, with pre- and post-conditions in-file. **Deploy it
+  only once no instance older than #287 runs**: such an instance's activation now fails with
+  SQLSTATE 23514 (a 500) until it is replaced. **A test fixture that inserts an `ACTIVE` or
+  `SUSPENDED` membership directly takes its number from `TestMemberNumbers`** (the organisation's
+  `MEMBER` counter, as the application does), or the insert fails.
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -440,8 +452,8 @@ administrator roles' grants, `V24` the closed bootstrap failure-code set, `V25`-
 audit search indexes, `V29`-`V30` the audit subject user (column and index), and `V31` the
 retired legacy setting rows, `V32` the user and membership edit permissions, `V33` the role
 transition log and `role.archive`, `V34` the `audit.export` permission, `V35` the
-membership's member number, `V36` the audit table's retention comment, and `V37` the
-normalised offset time zones; none is accounting.
+membership's member number, `V36` the audit table's retention comment, `V37` the
+normalised offset time zones, and `V38` the member-number CHECK; none is accounting.
 Do not invent accounting tables or columns outside those documents.
 
 ## Authorization

@@ -1,6 +1,7 @@
 package com.finaxis.platform.foundation
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.TestMemberNumbers
 import com.finaxis.platform.common.id.uuidV7
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
@@ -56,6 +57,10 @@ class BranchUpdatePermissionMigrationTests(
                 organisationId,
             )
             jdbcTemplate.update("DELETE FROM role WHERE organisation_id = ?", organisationId)
+            jdbcTemplate.update(
+                "DELETE FROM reference_sequence WHERE organisation_id = ?",
+                organisationId,
+            )
             jdbcTemplate.update("DELETE FROM organisation WHERE id = ?", organisationId)
         }
         organisations.clear()
@@ -370,12 +375,13 @@ class BranchUpdatePermissionMigrationTests(
             """
             INSERT INTO user_organisation_membership (
                 id, organisation_id, user_id, membership_status, membership_type, joined_at,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, 'ACTIVE', 'STAFF', NOW(), NOW(), NOW())
+                member_number, created_at, updated_at
+            ) VALUES (?, ?, ?, 'ACTIVE', 'STAFF', NOW(), ?, NOW(), NOW())
             """.trimIndent(),
             membershipId,
             organisationId,
             userId,
+            TestMemberNumbers.next(jdbcTemplate, organisationId),
         )
         jdbcTemplate.update(
             """
