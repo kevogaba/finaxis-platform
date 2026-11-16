@@ -1,11 +1,13 @@
 package com.finaxis.platform.iam.adapter.inbound.web.dto
 
+import com.finaxis.platform.common.web.api.NOT_BLANK_PATTERN
 import com.finaxis.platform.lifecycle.application.RoleAssignmentScopeType
 import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.NotNull
 import jakarta.validation.constraints.Pattern
 import java.time.Instant
+import java.util.Optional
 import java.util.UUID
 
 /** Request payload for creating a tenant-managed role. */
@@ -21,10 +23,29 @@ data class CreateRoleRequest(
     val description: String? = null,
 )
 
-/** Request payload for updating a tenant-managed role's mutable metadata. */
+/**
+ * Request payload for updating a tenant-managed role's mutable metadata (#340). Every field is
+ * optional: an absent field is left unchanged. `description` is an `Optional` so an explicit JSON
+ * `null` (clear it) can be told apart from an absent field (keep it); a blank string is refused by
+ * the controller, because Bean Validation can't see inside the `Optional`.
+ */
 data class UpdateRoleRequest(
-    val roleName: String?,
-    val description: String?,
+    @field:Pattern(regexp = NOT_BLANK_PATTERN, message = "must not be blank")
+    @field:Schema(
+        nullable = true,
+        description = "Absent or null keeps the name; a value must not be blank.",
+        example = "Front office operations",
+    )
+    val roleName: String? = null,
+    @field:Schema(
+        type = "string",
+        nullable = true,
+        description =
+            "Absent leaves the description unchanged; an explicit null clears it; a non-blank " +
+                "string sets it. A blank string is refused.",
+        example = "Tellers and supervisors of the front office.",
+    )
+    val description: Optional<String>? = null,
 )
 
 /** Request payload for granting one catalogue permission to a role. */

@@ -1,5 +1,6 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
+import com.finaxis.platform.common.application.InvalidRequestException
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.web.api.ApiPage
 import com.finaxis.platform.common.web.api.ApiProblem
@@ -297,6 +298,13 @@ class RoleController(
         @PathVariable("role_id") roleId: UUID,
         @RequestBody @Valid request: UpdateRoleRequest,
     ): RoleDetailResponse {
+        val description = request.description?.orElse(null)
+        if (description != null && description.isBlank()) {
+            throw InvalidRequestException(
+                "validation_failed",
+                "description must not be blank; send null to clear it.",
+            )
+        }
         val caller = CallerContextResolver.getTenantCaller()
         permissionGuard.requireTenantPermission(
             caller.actorId,
@@ -308,7 +316,8 @@ class RoleController(
                 caller.activeOrganisationId,
                 roleId,
                 request.roleName,
-                request.description,
+                changesDescription = request.description != null,
+                description = description,
                 caller.actorId,
                 uuidV7().toString(),
             ),

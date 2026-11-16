@@ -116,6 +116,38 @@ class RoleManagementServiceTests {
         assertEquals("req-update", audit.requestId)
     }
 
+    /** A blank name is refused by the service too, before any write, as on create (#340). */
+    @Test
+    fun `update tenant role refuses a blank name before writing`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+
+        assertFailsWith<InvalidOperationException> {
+            fixture.service.updateTenantRole(fixture.updateRole(roleName = "\u00A0"))
+        }
+
+        assertTrue(fixture.persistence.updatedRoles.isEmpty())
+        assertTrue(fixture.audits.events.isEmpty())
+    }
+
+    /** The description is written only when the command says it changes, null included (#340). */
+    @Test
+    fun `update tenant role clears the description only when asked`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+
+        fixture.service.updateTenantRole(
+            fixture.updateRole(roleName = null, changesDescription = true, description = null),
+        )
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.service.updateTenantRole(
+            fixture.updateRole(roleName = null, changesDescription = false, description = null),
+        )
+
+        assertEquals(
+            listOf<Pair<Boolean, String?>>(true to null, false to null),
+            fixture.persistence.updatedDescriptions,
+        )
+    }
+
     /** Rejects a missing role on the update path before audit or persistence writes. */
     @Test
     fun `update tenant role rejects unknown role`() {
@@ -1172,9 +1204,19 @@ class RoleManagementServiceTests {
         ) = CreateTenantRole(organisationId, roleCode, roleName, null, actorId, requestId)
 
         fun updateRole(
-            roleName: String = "Updated",
+            roleName: String? = "Updated",
+            changesDescription: Boolean = false,
+            description: String? = null,
             requestId: String? = null,
-        ) = UpdateTenantRole(organisationId, roleId, roleName, null, actorId, requestId)
+        ) = UpdateTenantRole(
+            organisationId,
+            roleId,
+            roleName,
+            changesDescription,
+            description,
+            actorId,
+            requestId,
+        )
 
         fun activateRole(requestId: String? = null) =
             ActivateRole(organisationId, roleId, actorId, requestId)
@@ -1326,6 +1368,7 @@ class RoleManagementServiceTests {
         val activeAssignments = mutableListOf<UUID>()
         val updatedRoles = mutableListOf<Pair<UUID, String?>>()
         val updatedRowVersions = mutableListOf<Long>()
+        val updatedDescriptions = mutableListOf<Pair<Boolean, String?>>()
         val statusChanges = mutableListOf<Pair<UUID, RoleStatus>>()
         val statusRowVersions = mutableListOf<Long>()
         val grantedPermissions = mutableListOf<UUID>()
@@ -1385,12 +1428,14 @@ class RoleManagementServiceTests {
             organisationId: UUID,
             roleId: UUID,
             roleName: String?,
+            changesDescription: Boolean,
             description: String?,
             rowVersion: Long,
             actorId: UUID,
         ) {
             updatedRoles += roleId to roleName
             updatedRowVersions += rowVersion
+            updatedDescriptions += changesDescription to description
         }
 
         override fun setRoleStatus(

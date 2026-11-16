@@ -48,11 +48,15 @@ interface RolePersistence {
         actorId: UUID,
     ): UUID
 
-    /** Updates mutable role fields using [rowVersion] for optimistic locking. */
+    /**
+     * Updates mutable role fields using [rowVersion] for optimistic locking. A null [roleName] is
+     * left unchanged; [description] is written, `null` included, only when [changesDescription].
+     */
     fun updateRole(
         organisationId: UUID,
         roleId: UUID,
         roleName: String?,
+        changesDescription: Boolean,
         description: String?,
         rowVersion: Long,
         actorId: UUID,

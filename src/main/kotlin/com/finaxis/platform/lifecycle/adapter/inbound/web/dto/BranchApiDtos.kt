@@ -3,6 +3,7 @@ package com.finaxis.platform.lifecycle.adapter.inbound.web.dto
 import com.fasterxml.jackson.annotation.JsonFormat
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.finaxis.platform.common.web.api.ActorRefResponse
+import com.finaxis.platform.common.web.api.NOT_BLANK_PATTERN
 import com.finaxis.platform.lifecycle.application.DecisionRemark
 import com.finaxis.platform.lifecycle.application.Reason
 import io.swagger.v3.oas.annotations.media.Schema
@@ -37,7 +38,7 @@ data class CreateBranchRequest(
     val branchType: String,
     @field:Schema(example = "00000000-0000-0000-0000-000000000000")
     val parentBranchId: UUID? = null,
-    @field:Pattern(regexp = NOT_BLANK, message = "must not be blank")
+    @field:Pattern(regexp = NOT_BLANK_PATTERN, message = "must not be blank")
     @field:Schema(
         example = "Africa/Nairobi",
         description =
@@ -48,11 +49,6 @@ data class CreateBranchRequest(
     val address: Map<String, String> = emptyMap(),
 )
 
-// `@NotBlank` rejects null, and an optional field is allowed to be absent. `[\s\S]` rather than
-// `.` so a line break inside a value is accepted, as `@NotBlank` (used on create) accepts it, and
-// the pattern stays valid in the published JSON Schema.
-private const val NOT_BLANK = "[\\s\\S]*\\S[\\s\\S]*"
-
 /**
  * Request payload for updating a draft or active branch.
  *
@@ -61,7 +57,7 @@ private const val NOT_BLANK = "[\\s\\S]*\\S[\\s\\S]*"
  * have no such value, so `null` is the same as absent. The branch code and type cannot be changed.
  */
 data class UpdateBranchRequest(
-    @field:Pattern(regexp = NOT_BLANK, message = "must not be blank")
+    @field:Pattern(regexp = NOT_BLANK_PATTERN, message = "must not be blank")
     @field:Size(min = 2, max = 100)
     @field:Schema(example = "Riverside Branch")
     val branchName: String? = null,
@@ -72,7 +68,7 @@ data class UpdateBranchRequest(
         description = "Absent leaves the parent alone; an explicit null detaches the branch.",
     )
     val parentBranchId: Optional<UUID>? = null,
-    @field:Pattern(regexp = NOT_BLANK, message = "must not be blank")
+    @field:Pattern(regexp = NOT_BLANK_PATTERN, message = "must not be blank")
     @field:Schema(example = "Africa/Nairobi")
     val timezone: String? = null,
     val address: Map<String, String>? = null,
