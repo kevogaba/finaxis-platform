@@ -39,10 +39,9 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean
 import org.springframework.web.filter.OncePerRequestFilter
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.Proxy
 import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import java.time.Duration
 import java.time.Instant
 import java.time.OffsetDateTime
@@ -85,14 +84,6 @@ class AuditExportTimeoutEndToEndTests
         private lateinit var queries: AuditEventQueries
 
         private val fixture = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
-
-        private val client: HttpClient =
-            HttpClient
-                .newBuilder()
-                .proxy(HttpClient.Builder.NO_PROXY)
-                .version(HttpClient.Version.HTTP_1_1)
-                .connectTimeout(Duration.ofSeconds(10))
-                .build()
 
         @Test
         fun `the async timeout aborts the transfer, writes no bytes itself and still audits`() {
@@ -155,30 +146,39 @@ class AuditExportTimeoutEndToEndTests
             user: UUID,
             organisationId: UUID,
             marker: String,
-        ): HttpResponse<java.io.InputStream> {
+        ): HttpURLConnection {
             val from = Instant.now().minus(Duration.ofDays(1))
-            val request =
-                HttpRequest
-                    .newBuilder(
-                        URI.create(
-                            "http://127.0.0.1:$port${ApiPaths.AUDIT_EVENTS}/export" +
-                                "?occurred_from=$from&action_prefix=$marker.",
-                        ),
-                    ).header("X-Test-User", user.toString())
-                    .header("X-Test-Organisation", organisationId.toString())
-                    .timeout(Duration.ofSeconds(60))
-                    .GET()
-                    .build()
-            return client.send(request, HttpResponse.BodyHandlers.ofInputStream())
+            return (
+                URI
+                    .create(
+                        "http://127.0.0.1:$port${ApiPaths.AUDIT_EVENTS}/export" +
+                            "?occurred_from=$from&action_prefix=$marker.",
+                    ).toURL()
+                    .openConnection(Proxy.NO_PROXY) as HttpURLConnection
+            ).apply {
+                setRequestProperty("X-Test-User", user.toString())
+                setRequestProperty("X-Test-Organisation", organisationId.toString())
+                connectTimeout = CONNECT_TIMEOUT_MILLIS
+                readTimeout = READ_TIMEOUT_MILLIS
+            }
         }
 
-        /** Reads the body to its end, keeping what arrived; returns the failure, if any. */
+        /**
+         * Reads the body to its end, keeping what arrived; returns the failure, if any.
+         *
+         * Through [HttpURLConnection], which reads the socket on this thread and so hands over
+         * every byte that arrived before it reports the incomplete chunked body. The tail of the
+         * first batch reaches the socket only when the abort closes the connection, and
+         * `java.net.http.HttpClient` - which this test used - then discards whatever it had already
+         * received but not yet handed over (`HttpResponseInputStream` checks for the failure
+         * before draining its queue): under load, one run in eight saw 945 lines instead of 1,001.
+         */
         private fun readUntilEnd(
-            response: HttpResponse<java.io.InputStream>,
+            connection: HttpURLConnection,
             into: ByteArrayOutputStream,
         ): Throwable? =
             try {
-                response.body().use { it.copyTo(into) }
+                connection.inputStream.use { it.copyTo(into) }
                 null
             } catch (
                 @Suppress("TooGenericExceptionCaught") failure: Exception,
@@ -250,6 +250,8 @@ class AuditExportTimeoutEndToEndTests
 
         private companion object {
             const val STALL_MILLIS = 20_000L
+            const val CONNECT_TIMEOUT_MILLIS = 10_000
+            const val READ_TIMEOUT_MILLIS = 60_000
             const val POLL_MILLIS = 100L
         }
     }
