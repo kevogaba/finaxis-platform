@@ -77,7 +77,8 @@ imports it once. `PermissionFreeReadRuleTests` went from 88 s to 5 s. Saved **2.
 
 ### 3. Two test JVMs
 
-`maxParallelForks` is 2 (`-PtestForks=N` overrides; 1 restores a single JVM). Each fork has its own
+`maxParallelForks` defaults to two on the CI runner (`-PtestForks=N` overrides; 1 restores a single
+JVM); it is sized to the machine, see "Smaller runners" below. Each fork has its own
 context cache and its own shared servers, so forks never see each other's data. The cost is that a
 context used by classes in both forks boots in both (68 boots instead of 63), and that the boots
 are slower on a busy CPU. Three forks were measured too:
@@ -139,6 +140,27 @@ two: on CI the ArchUnit step and the pre-pull both fall inside that spread, and 
 come from the controlled local runs. The three CI runs with two test JVMs (R3 once, R4 twice) took
 11.5, 12.4 and 14.4 min for the job, a mean of **12.7 min against the benchmark's 20.6 (-38%)**,
 and 8.89, 9.61 and 11.16 min for `:test`, a mean of **9.89 min against 17.50 (-43%)**.
+
+## Smaller runners
+
+A private repository's standard GitHub runner has 2 vCPUs and 7 to 8 GB instead of 4 and 16. That
+was simulated by confining the Gradle daemon, the test JVMs and every Docker container (through
+`dockerd --cgroup-parent`) to one cgroup of 2 CPUs and 8 GB, with the images already pulled:
+
+| Configuration | Test phase | `./gradlew test` | Outcome |
+|---|---|---|---|
+| Before R1 | 22.61 min | 23m40s | green, at the 8 GB ceiling throughout |
+| Two forks (R3's fixed default) | | failed at 13m38s | a test JVM killed for lack of memory |
+| One fork | 16.15 min | 16m58s | green, peak 6.8 GB |
+
+Two forks needed about 8.1 GB: each test JVM about 2.7 GB (a 2 GB heap plus metaspace), and each
+fork's own PostgreSQL (279 backends between them, one per pooled connection of every cached
+context), RabbitMQ and LGTM about 1 GB more. So the default number of forks is sized to the
+machine: half the cores, at most one per 4 GB after 2 GB for Gradle and the OS, at most four, at
+least one. That is two on the 4-vCPU, 16 GB CI runner, as before, and one on a 2-vCPU runner.
+Compilation and static analysis before `:test` took 4.0 min there from clean against 3.0 min on
+4 cores, so a Quality Gate job on a 2-vCPU runner would take about 20 to 21 min, against about 28
+before R1.
 
 ## Considered and not done
 

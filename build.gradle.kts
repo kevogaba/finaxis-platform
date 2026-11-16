@@ -1,11 +1,13 @@
 import com.github.spotbugs.snom.Confidence
 import com.github.spotbugs.snom.Effort
 import com.github.spotbugs.snom.SpotBugsTask
+import com.sun.management.OperatingSystemMXBean
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
 import net.ltgt.gradle.errorprone.errorprone
 import org.flywaydb.core.Flyway
 import org.springframework.boot.gradle.tasks.bundling.BootBuildImage
 import org.springframework.boot.gradle.tasks.bundling.BootJar
+import java.lang.management.ManagementFactory
 
 // Versions pinned here only for jOOQ codegen bootstrapping; keep aligned with the versions
 // resolved for the application's own Flyway/PostgreSQL dependencies below.
@@ -449,6 +451,22 @@ tasks.withType<JavaCompile>().configureEach {
     }
 }
 
+// The default number of test JVMs, sized to the machine rather than fixed. A fork pays off only
+// with about two cores of its own, and needs about 4 GB: a 2 GB heap plus metaspace, and the
+// PostgreSQL, RabbitMQ and LGTM servers it starts. On the 4-vCPU, 16 GB CI runner that is two,
+// which took about 30% off the suite while three were barely faster and saturated the CPU. On a
+// 2-vCPU, 8 GB runner it is one: two forks there were killed by the kernel's out-of-memory killer
+// (docs/development/test-performance.md). Gradle and the OS keep about 2 GB. The cap of four is a
+// judgement, not a measurement: each fork boots the shared contexts again.
+val defaultTestForks: Int =
+    run {
+        val cores = Runtime.getRuntime().availableProcessors()
+        val memoryGb =
+            (ManagementFactory.getOperatingSystemMXBean() as OperatingSystemMXBean)
+                .totalMemorySize / (1024L * 1024 * 1024)
+        minOf(cores / 2, ((memoryGb - 2) / 4).toInt(), 4).coerceAtLeast(1)
+    }
+
 tasks.withType<Test> {
     useJUnitPlatform()
     // Gradle's worker-daemon default (512m) is too small for Spring Boot + Testcontainers
@@ -456,11 +474,11 @@ tasks.withType<Test> {
     maxHeapSize = "2g"
     // Test classes are spread over parallel JVMs. Each fork has its own Spring context cache and
     // its own PostgreSQL, RabbitMQ and LGTM servers (SharedTestContainers), so forks never see each
-    // other's data; the cost is that a context used by classes in both forks boots in both. On a
-    // 4-vCPU runner two forks took about 30% off the suite and three were barely faster while
-    // saturating the CPU (docs/development/test-performance.md). `-PtestForks=1` restores a
-    // single JVM, for example to debug an ordering-dependent failure.
-    maxParallelForks = providers.gradleProperty("testForks").map(String::toInt).getOrElse(2)
+    // other's data; the cost is that a context used by classes in both forks boots in both.
+    // `-PtestForks=N` overrides the default, and `-PtestForks=1` restores a single JVM, for example
+    // to debug an ordering-dependent failure.
+    maxParallelForks =
+        providers.gradleProperty("testForks").map(String::toInt).getOrElse(defaultTestForks)
 }
 
 tasks.withType<JavaExec> {
