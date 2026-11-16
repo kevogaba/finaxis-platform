@@ -139,4 +139,17 @@ object LifecycleErrorCodes {
     /** The safe detail that accompanies [INVITATION_RESEND_TOO_SOON]. */
     const val INVITATION_RESEND_TOO_SOON_DETAIL =
         "This invitation was sent a moment ago; wait before sending it again."
+
+    /** A membership suspension or revocation refused because it is the caller's own (ADR 0043). */
+    const val SELF_MEMBERSHIP_CHANGE = "lifecycle.self_membership_change"
+
+    /** The safe detail that accompanies [SELF_MEMBERSHIP_CHANGE]. */
+    const val SELF_MEMBERSHIP_CHANGE_DETAIL =
+        "A member cannot suspend or revoke their own membership."
+
+    /** An account suspension or deactivation refused because it is the caller's own (ADR 0043). */
+    const val SELF_ACCOUNT_CHANGE = "lifecycle.self_account_change"
+
+    /** The safe detail that accompanies [SELF_ACCOUNT_CHANGE]. */
+    const val SELF_ACCOUNT_CHANGE_DETAIL = "A user cannot suspend or deactivate their own account."
 }

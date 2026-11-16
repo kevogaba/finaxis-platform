@@ -1751,6 +1751,139 @@ class UserProvisioningServiceTests {
     }
 
     @Test
+    fun `suspending your own membership is refused before any transition`() {
+        val context = activeInvitationContext()
+        val self = fake.addUser("self@example.test", "self", UserLifecycleState.ACTIVE)
+        val membershipId = fake.addMembership(context.org, self, MembershipLifecycleState.ACTIVE)
+
+        val refusal =
+            assertFailsWith<ForbiddenOperationException> {
+                service.suspendMembership(
+                    SuspendMembershipCommand(
+                        context.org,
+                        membershipId,
+                        self,
+                        Reason.required("risk"),
+                    ),
+                )
+            }
+
+        assertEquals(LifecycleErrorCodes.SELF_MEMBERSHIP_CHANGE, refusal.code)
+        assertEquals(
+            MembershipLifecycleState.ACTIVE,
+            fake.memberships.getValue(context.org to membershipId).state,
+        )
+        assertTrue(logs.logs.isEmpty())
+        assertEquals(
+            listOf("membership.suspend" to AuditOutcome.DENIED),
+            audits.events.map { it.action to it.outcome },
+        )
+    }
+
+    @Test
+    fun `revoking your own membership is refused and cascades nothing`() {
+        val context = activeInvitationContext()
+        val self = fake.addUser("self@example.test", "self", UserLifecycleState.ACTIVE)
+        val membershipId = fake.addMembership(context.org, self, MembershipLifecycleState.ACTIVE)
+        fake.branchAssignments += BranchAssignmentKey(context.org, self)
+        fake.roleAssignments += RoleAssignmentKey(context.org, self, context.role, null)
+
+        val refusal =
+            assertFailsWith<ForbiddenOperationException> {
+                service.revokeTenantMembership(
+                    RevokeTenantMembershipCommand(
+                        context.org,
+                        membershipId,
+                        self,
+                        Reason.required("offboard"),
+                    ),
+                )
+            }
+
+        assertEquals(LifecycleErrorCodes.SELF_MEMBERSHIP_CHANGE, refusal.code)
+        assertEquals(
+            MembershipLifecycleState.ACTIVE,
+            fake.memberships.getValue(context.org to membershipId).state,
+        )
+        assertEquals(1, fake.branchAssignments.size)
+        assertEquals(1, fake.roleAssignments.size)
+        assertTrue(logs.logs.isEmpty())
+        assertEquals(
+            listOf("membership.revoke" to AuditOutcome.DENIED),
+            audits.events.map { it.action to it.outcome },
+        )
+    }
+
+    @Test
+    fun `a caller without the permission gets the permission refusal before the self check`() {
+        val context = activeInvitationContext()
+        val membershipId =
+            fake.addMembership(context.org, context.actor, MembershipLifecycleState.ACTIVE)
+        doThrow(MissingPermissionException("membership.suspend"))
+            .whenever(permissionGuard)
+            .requireTenantPermission(context.actor, context.org, "membership.suspend")
+
+        assertFailsWith<MissingPermissionException> {
+            service.suspendMembership(
+                SuspendMembershipCommand(
+                    context.org,
+                    membershipId,
+                    context.actor,
+                    Reason.required("risk"),
+                ),
+            )
+        }
+
+        assertTrue(audits.events.isEmpty())
+    }
+
+    @Test
+    fun `suspending your own account is refused before any transition`() {
+        val org = uuidV7()
+        val actor = fake.addUser("self@example.test", "self", UserLifecycleState.ACTIVE)
+        fake.organisationStates[org] = OrganisationLifecycleState.ACTIVE
+        fake.identityLinks += actor
+
+        val refusal =
+            assertFailsWith<ForbiddenOperationException> {
+                service.suspendUser(SuspendUserCommand(org, actor, actor, Reason.required("risk")))
+            }
+
+        assertEquals(LifecycleErrorCodes.SELF_ACCOUNT_CHANGE, refusal.code)
+        assertEquals(UserLifecycleState.ACTIVE, fake.users.getValue(actor).state)
+        assertTrue(logs.logs.isEmpty())
+        assertEquals(
+            listOf("user_account.suspend" to AuditOutcome.DENIED),
+            audits.events.map { it.action to it.outcome },
+        )
+    }
+
+    @Test
+    fun `deactivating your own account is refused and revokes nothing`() {
+        val org = uuidV7()
+        val actor = fake.addUser("self@example.test", "self", UserLifecycleState.ACTIVE)
+        fake.organisationStates[org] = OrganisationLifecycleState.ACTIVE
+        fake.identityLinks += actor
+        fake.branchAssignments += BranchAssignmentKey(org, actor)
+
+        val refusal =
+            assertFailsWith<ForbiddenOperationException> {
+                service.deactivateUser(
+                    DeactivateUserCommand(org, actor, actor, Reason.required("left")),
+                )
+            }
+
+        assertEquals(LifecycleErrorCodes.SELF_ACCOUNT_CHANGE, refusal.code)
+        assertEquals(UserLifecycleState.ACTIVE, fake.users.getValue(actor).state)
+        assertEquals(1, fake.branchAssignments.size)
+        assertTrue(logs.logs.isEmpty())
+        assertEquals(
+            listOf("user_account.start_deactivation" to AuditOutcome.DENIED),
+            audits.events.map { it.action to it.outcome },
+        )
+    }
+
+    @Test
     fun `each user lifecycle mutation asks its own permission in the platform before any lookup`() {
         val actor = uuidV7()
         val unknown = uuidV7()

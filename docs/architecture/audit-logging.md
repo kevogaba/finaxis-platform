@@ -177,7 +177,8 @@ method security's `AccessDeniedException`, and the filter chain's access-denied 
 - **Tenancy.** A denial with no tenant context is recorded under the platform organisation
   explicitly, instead of through the repository's warned fallback (#157), and says so in metadata.
 - **Not twice.** A refusal that already writes its own durable `DENIED` row
-  (`lifecycle.approver_is_*`) is not written again. An unauthenticated request is a `401` and is
+  (`lifecycle.approver_is_*`, and the self-access refusals `lifecycle.self_*` of ADR 0043) is not
+  written again. An unauthenticated request is a `401` and is
   not audited here; neither is the active-organisation filter's own `403` for a tenant the
   caller does not belong to, which runs before the request context exists.
 - **Before a context exists.** A JWT-only caller choosing an organisation has no request context

@@ -117,6 +117,24 @@ class DeniedAccessAuditorTests {
     }
 
     @Test
+    fun `a self-access refusal writes no second row`() {
+        whenever(provider.ifAvailable).thenReturn(limiter)
+
+        asCaller {
+            auditor().applicationDenial(
+                request,
+                ForbiddenOperationException("lifecycle.self_membership_change", "no"),
+            )
+            auditor().applicationDenial(
+                request,
+                ForbiddenOperationException("lifecycle.self_account_change", "no"),
+            )
+        }
+
+        assertTrue(audits.isEmpty())
+    }
+
+    @Test
     fun `a refusal that names its own user is audited when no request context has an actor`() {
         whenever(provider.ifAvailable).thenReturn(limiter)
         val selecting = uuidV7()

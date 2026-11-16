@@ -1406,6 +1406,11 @@ Base path: `/api/v1/platform/users`. List filters: `q`, `user_status`, `organisa
 | POST   | `/{user_id}/reactivate` | Reactivate global user account | `user.activate` + `user.view` | mutation |
 | POST   | `/{user_id}/deactivate` | Deactivate global user account | `user.deactivate` + `user.view` | mutation |
 
+**Self-access guard (#341, ADR 0043).** Suspending or deactivating the caller's **own** account is
+`403 lifecycle.self_account_change`. The check runs after the permission check and before any
+write: the account is unchanged, no assignment is revoked, and the attempt is one `DENIED`, `HIGH`
+audit row under `user_account.suspend` or `user_account.start_deactivation` in the platform log.
+
 **Profile edit (#161).** `PATCH /api/v1/platform/users/{user_id}` takes `display_name` (2 to 100
 characters after trimming; the trimmed value is stored) and `phone_e164` (E.164); a `DEACTIVATED`
 or `ARCHIVED` account is not edited (`422`); an absent key leaves the field as it is, a phone is replaced
@@ -1590,6 +1595,14 @@ member of two tenants has a number in each. Memberships active before the releas
 | POST   | `/{membership_id}/reactivate` | Reactivate                      | `membership.reactivate` + `membership.view` | mutation |
 | POST   | `/{membership_id}/revoke`     | Revoke membership               | `membership.revoke` + `membership.view` | mutation |
 | PATCH  | `/{membership_id}`            | Edit type and primary branch    | `membership.update` + `membership.view` | mutation |
+
+**Self-access guard (#341, ADR 0043).** Suspending or revoking the caller's **own** membership is
+`403 lifecycle.self_membership_change`. The check runs after the permission check and the lookup
+(a caller without the permission still gets `403 forbidden`, an unknown membership `404`) and
+before any write: nothing changes, nothing cascades, and the attempt is one `DENIED`, `HIGH` audit
+row under `membership.suspend` or `membership.revoke`, with the caller as `subject_user_id`.
+Reactivating or editing one's own membership, and revoking one's own role or branch assignment,
+stay allowed.
 
 **Edit (`PATCH /{membership_id}`, #161).** The body takes `membership_type` (`STAFF`, `ADMIN` or
 `AUDITOR`) and `primary_branch_id`; an absent key leaves the field as it is, an explicit

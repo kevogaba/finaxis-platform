@@ -48,6 +48,7 @@ class UserProvisioningService(
     makerChecker: MakerCheckerPolicy,
 ) {
     private val membershipCheckerRule = MembershipCheckerRule(store, auditService, makerChecker)
+    private val selfAccessGuard = SelfAccessGuard(auditService)
 
     /**
      * Persists a local user invitation with branch and role prerequisites. The inviter must hold
@@ -287,6 +288,15 @@ class UserProvisioningService(
     @Transactional
     fun suspendUser(command: SuspendUserCommand) {
         permissionGuard.requirePlatformPermission(command.actorId, "user.suspend")
+        selfAccessGuard.requireNotOwnAccount(
+            SelfAccessAttempt(
+                command.actorId,
+                command.organisationId,
+                "user_account.suspend",
+                command.requestId,
+            ),
+            command.userId,
+        )
         // The FSM writes the transition's one audit row (ADR 0031); no service row repeats it.
         lifecycleService.transition(
             UserTransitionCommand(
@@ -322,6 +332,15 @@ class UserProvisioningService(
     @Transactional
     fun deactivateUser(command: DeactivateUserCommand) {
         permissionGuard.requirePlatformPermission(command.actorId, "user.deactivate")
+        selfAccessGuard.requireNotOwnAccount(
+            SelfAccessAttempt(
+                command.actorId,
+                command.organisationId,
+                "user_account.start_deactivation",
+                command.requestId,
+            ),
+            command.userId,
+        )
         lifecycleService.transition(
             UserTransitionCommand(
                 command.organisationId,
@@ -353,6 +372,16 @@ class UserProvisioningService(
             "membership.revoke",
         )
         val snapshot = store.requireMembership(command.organisationId, command.membershipId)
+        selfAccessGuard.requireNotOwnMembership(
+            SelfAccessAttempt(
+                command.actorId,
+                command.organisationId,
+                "membership.revoke",
+                command.requestId,
+            ),
+            command.membershipId,
+            snapshot.userId,
+        )
         lifecycleService.transition(
             MembershipTransitionCommand(
                 command.organisationId,
@@ -404,7 +433,17 @@ class UserProvisioningService(
             command.organisationId,
             "membership.suspend",
         )
-        store.requireMembership(command.organisationId, command.membershipId)
+        val snapshot = store.requireMembership(command.organisationId, command.membershipId)
+        selfAccessGuard.requireNotOwnMembership(
+            SelfAccessAttempt(
+                command.actorId,
+                command.organisationId,
+                "membership.suspend",
+                command.requestId,
+            ),
+            command.membershipId,
+            snapshot.userId,
+        )
         // The FSM writes the transition's one audit row, keyed by the membership (ADR 0031).
         lifecycleService.transition(
             MembershipTransitionCommand(
