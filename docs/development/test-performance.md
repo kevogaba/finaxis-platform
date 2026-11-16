@@ -36,9 +36,10 @@ The baseline run (406 classes, 3,586 tests) took 20.5 min of test phase:
 | R2 | One ArchUnit import per test JVM | 14.26 min | 2.17 min | 878 s |
 | R3 | Two test JVMs (and two order dependencies fixed) | 10.18 min | 4.08 min | 636 s |
 | R4 | CI pulls the test images during compilation | CI only | 50-72 s of pulls | |
+| R5 | CI runs the tests as three shards on three runners | CI only | slowest shard 5.46 min | |
 
 Together: **20.48 min to 10.18 min of test phase (-50%)**, every test still passing.
-Step R4 shortens CI only.
+Steps R4 and R5 shorten CI only.
 
 ### 1. One PostgreSQL, RabbitMQ and LGTM server per test JVM
 
@@ -121,6 +122,59 @@ phase against 9.47 and 10.18 min with them present: each fork blocked on pulls f
 LGTM image 26 to 52 s, PostgreSQL about 10 s, Redis, RabbitMQ and GreenMail a few seconds each).
 That is the time the pre-pull takes off `:test` when it finishes first.
 
+### 5. Test shards on CI (CI only)
+
+After steps 1 to 4 the job was about two minutes of setup, compilation and static analysis, then
+7.5 to 9 minutes of `:test`, and that test phase does not keep the runner busy. A local run with
+every process's CPU sampled used 67% of the four CPUs on average, and from the sixth minute on
+only 1.6 to 2.5 of them, while each test JVM mostly waited: on JobRunr polls and retry back-offs,
+on awaits, on PostgreSQL. The test JVMs took 74% of the CPU used, PostgreSQL 12%, Gradle and the
+system 10%, and the LGTM stack under 2%, so there was no busy neighbour left to remove. A third
+fork would soak up some of the idle time, but a fork needs about 4 GB with its own servers, so the
+fork count is sized to memory ("Smaller runners") and a 16 GB runner holds two.
+
+So the workflow runs the suite on three runners at once, as five jobs:
+
+- `Tests (1/3)` to `Tests (3/3)` run `./gradlew test -PtestShard=i/3`. A class belongs to the
+  shard its top-level class name hashes to, so the split needs no list to maintain, a nested class
+  always runs with its outer class, and every class runs in exactly one shard: 123, 150 and 133
+  classes, about 37%, 32% and 31% of the suite's time. The shard count is the matrix's length.
+- `Static Analysis` runs everything else `check` runs (`check -x test`) and `bootJar`.
+- `Quality Gate` runs after the others and **fails unless each of them succeeded**; GitHub reports
+  a job skipped after a failure as a success, so this is the check to require. It then requires
+  one data file per shard and runs the same two coverage rules, and the report, over the shards'
+  merged JaCoCo data (`-PshardCoverage=<dir>`). The classes they are measured against are the ones
+  a shard ran, copied from it rather than compiled again, because JaCoCo matches execution data to
+  classes by a checksum of their bytecode. An empty data or class set fails the task instead of
+  passing a rule over nothing.
+
+Locally nothing changes: `qualityGate` still runs everything in one invocation.
+
+Checked locally, on the same 4-CPU machine:
+
+- Split three ways the shards ran 123, 150 and 133 classes (1,164, 1,229 and 1,193 tests), and
+  split two ways 201 and 205 classes (1,780 and 1,806 tests): disjoint each time, and together
+  exactly the 406 classes and 3,586 tests of an unsharded run.
+- The two-way merged report equals an unsharded run's line for line: 1,043 classes, the same
+  covered and missed lines, branches and instructions, so both coverage rules judge exactly what
+  they judged. A merge of n shards is the same union of the same probes.
+- With no execution data, or data but no classes, the three coverage tasks fail. JaCoCo on its own
+  *skips* a task whose data is missing, which a build reports as success, so merge mode overrides
+  that.
+
+| Split | Test phase per shard | Slowest |
+|---|---|---|
+| None | 10.24 to 10.48 min | 10.48 min |
+| Two shards | 7.13 and 5.58 min | 7.13 min |
+| Three shards | 5.46, 4.63 and 4.86 min | 5.46 min |
+
+Not a clean division: every shard pays its forks' start-up (the first context boot is about 50 s)
+and boots the contexts its own classes need (two-way, 38 and 36 of the 68), and every shard job
+pays about two minutes of Gradle start and test compilation before its first test. Two shards
+were tried on CI first; on a slow runner they left the check above ten minutes (see "Results on
+CI"), so three. The cost is runner time: each extra job pays its own setup, which standard runners
+give a public repository for free.
+
 ## Results on CI
 
 The same `ubuntu-latest` runner as the benchmark, one run per branch of the stack:
@@ -141,6 +195,23 @@ come from the controlled local runs. The three CI runs with two test JVMs (R3 on
 11.5, 12.4 and 14.4 min for the job, a mean of **12.7 min against the benchmark's 20.6 (-38%)**,
 and 8.89, 9.61 and 11.16 min for `:test`, a mean of **9.89 min against 17.50 (-43%)**.
 
+The test shards of step 5 were measured in pairs instead, because the runner pool was slow that
+day: the unsharded job took 14.6 to 15.6 min, against 9.6 and 11.8 min that morning. Each
+sharded run but the first started within seconds of an unsharded one, and the time is from the
+run's start to the end of its `Quality Gate` job, which is when the check reports:
+
+| Started (UTC) | Unsharded job | Two shards | Three shards |
+|---|---|---|---|
+| 08:48 | | 11.2 min | |
+| 09:03 | 14.6 min | 11.3 min | |
+| 09:28 | 14.8 min | | 10.3 min |
+| 12:51 | 15.6 min | | 10.8 min |
+
+Three shards took **4.5 and 4.8 min (about 31%) off the unsharded job started with them**. In
+each three-shard run the first shard finished last, 1.3 to 2.1 min after the other two: its
+classes hold 37% of the suite's time, and each shard pays about two minutes of Gradle start and
+test compilation before its first test plus about 50 s for its forks' first context.
+
 ## Smaller runners
 
 A private repository's standard GitHub runner has 2 vCPUs and 7 to 8 GB instead of 4 and 16. That
@@ -160,7 +231,8 @@ machine: half the cores, at most one per 4 GB after 2 GB for Gradle and the OS, 
 least one. That is two on the 4-vCPU, 16 GB CI runner, as before, and one on a 2-vCPU runner.
 Compilation and static analysis before `:test` took 4.0 min there from clean against 3.0 min on
 4 cores, so a Quality Gate job on a 2-vCPU runner would take about 20 to 21 min, against about 28
-before R1.
+before R1. With the test shards of step 5, each 2-vCPU runner would run one fork over about a
+third of the suite instead (an estimate, not simulated).
 
 ## Considered and not done
 
@@ -172,6 +244,20 @@ before R1.
   retry timing; tightening them trades minutes for flakiness.
 - **JUnit's in-JVM parallel execution.** Classes sharing a context also share a database, and many
   tests reset shared seed rows; running them concurrently would need every such test rewritten.
+- **The C1 compiler only (`-XX:TieredStopAtLevel=1`).** Measured: 13.80 min of test phase against
+  10.48, context boots 11.8 s instead of 8.0. The suite runs long enough for C2 to pay for itself.
+- **The parallel garbage collector (`-XX:+UseParallelGC`).** Measured in two pairs against G1: the
+  test JVMs used 12% less CPU, but the test phase moved by 0.8 and by 0.0 min, inside the spread of
+  identical runs. The suite waits more than it computes, so CPU saved barely shows on the clock.
+- **Restricting the JaCoCo agent to `com.finaxis.*`.** Measured: no change in test phase.
+- **Sharing one LGTM stack between forks.** It used under 2% of the CPU of a sampled run.
+- **Merging contexts.** The 58 distinct context keys are deliberate: properties, mocks, `@Import`s
+  or `@DirtiesContext` that a test's assertions depend on. The two that look identical
+  (`BootstrapKeycloakRetryIntegrationTests`, `KeycloakProvisioningRetryIntegrationTests`) are each
+  discarded after their class (`@DirtiesContext`), which keeps their JobRunr servers and jobs apart.
+- **Building `AccountingQueryPlanTests`' 50,000-journal fixture faster.** Its minute is PostgreSQL
+  maintaining the real indexes; loading first and indexing after would change the block counts
+  the test budgets.
 
 ## Keeping it fast
 
