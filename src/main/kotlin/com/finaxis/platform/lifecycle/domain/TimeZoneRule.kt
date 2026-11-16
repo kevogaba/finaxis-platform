@@ -11,16 +11,21 @@ import java.time.ZoneId
  * them accepts the others accept too. A raw offset (`+03:00`, `UTC+3`, `GMT+3`) is refused even
  * though `ZoneId.of` parses it: PostgreSQL reads `AT TIME ZONE '+03:00'` with the POSIX sign, three
  * hours the wrong way (see V18's header), so an offset id dates a row differently in SQL than in
- * Kotlin. `Etc/GMT-3` names the same fixed offset with one meaning in both. A zone stored before
- * this rule is read as it is; only new writes are checked.
+ * Kotlin. `Etc/GMT-3` names the same fixed offset with one meaning in both. Only new writes are
+ * checked: `V37` rewrote the whole-hour offsets stored before this rule to that equivalent (#331),
+ * and what it could not rewrite is read as it is and reported at every start
+ * (`StoredTimeZoneStartupWarning`).
  */
 object TimeZoneRule {
     /** The detail a refused zone answers with; it names the field and gives an example. */
     const val SAFE_DETAIL: String =
         "timezone must be an IANA time-zone id, for example Africa/Nairobi."
 
+    /** Every accepted time-zone id: the JDK's IANA region list. */
+    fun acceptedIds(): Set<String> = ZoneId.getAvailableZoneIds()
+
     /** Whether [value] is an accepted time-zone id. */
-    fun isValid(value: String): Boolean = value in ZoneId.getAvailableZoneIds()
+    fun isValid(value: String): Boolean = value in acceptedIds()
 
     /**
      * Returns [value] when it is an accepted time-zone id, and otherwise throws

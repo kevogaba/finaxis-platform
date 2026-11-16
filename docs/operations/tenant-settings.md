@@ -113,10 +113,45 @@ raw offset (`+03:00`, `UTC+3`, `GMT+3`) is refused with `422 invalid_operation` 
 `timezone must be an IANA time-zone id, for example Africa/Nairobi.` (the setting keeps its own
 detail). `ZoneId.of` parses an offset, but PostgreSQL reads `AT TIME ZONE '+03:00'` with the POSIX
 sign, three hours the wrong way, so an offset id dates a row differently in SQL than in Kotlin
-(`V18`'s header). `Etc/GMT-3` names the same fixed UTC+3 offset with one meaning in both. Until
-#276 the organisation and a branch update accepted offsets and a branch **create** checked nothing
-at all; a zone stored before then is read as it is, and only new writes are checked. To find
-stored zones the rule would now refuse:
+(`V18`'s header). `Etc/GMT-3` names the same fixed UTC+3 offset with one meaning in both. Only new
+writes are checked; for zones stored earlier, see the next section.
+
+### Time zones stored before the rule
+
+Until #276 the organisation (create and amend) and a branch update accepted anything `ZoneId.of`
+parses, raw offsets included, and a branch **create** checked nothing at all. `default_timezone`
+has always been held to the JDK's region list, so only `organisation.timezone` and
+`branch.timezone` can hold a value the rule now refuses (#331).
+
+**`V37` rewrote the ones with an exact equivalent.** Every organisation and branch zone that spells
+a whole-hour offset, in any layout `ZoneId.of` reads, became the IANA id of that same fixed offset:
+
+| Stored (examples) | Now |
+|---|---|
+| `Z`, `UT`, `+00:00`, `UTC+0`, `-0` | `UTC` |
+| `+3`, `+03`, `+0300`, `+03:00`, `+03:00:00`, `UTC+3`, `GMT+03:00`, `UT+03` | `Etc/GMT-3` |
+| `-05:00`, `GMT-5` | `Etc/GMT+5` |
+
+The IANA `Etc` names invert the sign, and they run from `Etc/GMT-14` to `Etc/GMT+12`. Same offset,
+so every local date the application computes, the business date included, is unchanged, and SQL
+now reads the zone the right way. Only `timezone` was written, not `updated_at` or `row_version`.
+`V37` never guesses a region: `+03:00` is not necessarily `Africa/Nairobi`, so change it to a
+region yourself if you know one.
+
+**What `V37` left is reported at every start.** A minute or second offset (`+05:30`; no `Etc` id
+names it), an offset outside the `Etc` range (`+15:00`), and a misspelt or unknown id (only a
+branch create could store one) are read as they are. While any remains, each start logs one
+`WARN` from `StoredTimeZoneStartupWarning`, after migrations and before traffic:
+
+```text
+1 organisation(s) [<id>] and 2 branch(es) [<id>, <id>] store a time zone that is not an IANA
+region id (TimeZoneRule, #331). ...
+```
+
+It applies the application's own rule, gives at most ten ids per table and never the stored
+text. If the database cannot answer, it logs the exception's class name and the boot goes on. To
+list every such row (PostgreSQL's zone list and the JDK's are both IANA but not identical, so treat
+a hit as a row to look at, not a verdict):
 
 ```sql
 SELECT 'organisation' AS kind, id, timezone FROM organisation
@@ -126,8 +161,20 @@ SELECT 'branch', id, timezone FROM branch
 WHERE timezone NOT IN (SELECT name FROM pg_timezone_names);
 ```
 
-PostgreSQL's zone list and the JDK's are both IANA but not identical, so treat a hit as a row to
-look at, not a verdict.
+**Fixing one.** Choose a region whose current offset matches the stored one (`Asia/Kolkata` for
+`+05:30`) unless the stored zone was simply wrong. The organisation's zone decides the business
+date, so a different offset moves "today" for that tenant.
+
+- **A `DRAFT` or `ACTIVE` branch:** `PATCH /api/v1/branches/{id}` with a `timezone`, which needs
+  `branch.update` and is audited.
+- **A draft organisation:** amend the draft with a `timezone`.
+- **Anything else** (an organisation past its draft, or a branch that is pending, suspended or
+  closed): no route changes it, so an operator runs
+  `UPDATE organisation SET timezone = '<region>' WHERE id = '<id>'` (or `branch`), one row, in a
+  transaction. SQL writes no audit row, so record the change where your change control requires
+  it.
+
+The `WARN` stops at the next start once nothing is left.
 
 ## The base currency is a read-only mirror
 
