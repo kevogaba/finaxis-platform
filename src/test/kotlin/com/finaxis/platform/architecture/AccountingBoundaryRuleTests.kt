@@ -5,8 +5,6 @@ import com.tngtech.archunit.core.domain.JavaClass
 import com.tngtech.archunit.core.domain.JavaClasses
 import com.tngtech.archunit.core.domain.JavaMethod
 import com.tngtech.archunit.core.domain.JavaModifier
-import com.tngtech.archunit.core.importer.ClassFileImporter
-import com.tngtech.archunit.core.importer.ImportOption
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -24,10 +22,7 @@ import kotlin.test.assertEquals
  * `docs/adr/0020-immutable-ledger-and-reversal-only-correction.md`.
  */
 class AccountingBoundaryRuleTests {
-    private val productionClasses: JavaClasses =
-        ClassFileImporter()
-            .withImportOption(ImportOption.DoNotIncludeTests())
-            .importPackages(ROOT)
+    private val productionClasses: JavaClasses = ProductionClasses.all
 
     @Test
     fun `accounting code never uses binary floating point`() {
@@ -381,7 +376,6 @@ class AccountingBoundaryRuleTests {
     }
 
     private companion object {
-        const val ROOT = "com.finaxis.platform"
         const val ACCOUNTING = "com.finaxis.platform.accounting.."
         const val ACCOUNTING_PACKAGE = "com.finaxis.platform.accounting"
         const val ACCOUNTING_SOURCE_ROOT = "src/main/kotlin/com/finaxis/platform/accounting"

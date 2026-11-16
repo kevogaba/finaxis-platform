@@ -5,8 +5,7 @@ import com.finaxis.platform.lifecycle.application.BusinessDateService
 import com.tngtech.archunit.base.DescribedPredicate
 import com.tngtech.archunit.core.domain.JavaAccess
 import com.tngtech.archunit.core.domain.JavaClass
-import com.tngtech.archunit.core.importer.ClassFileImporter
-import com.tngtech.archunit.core.importer.ImportOption
+import com.tngtech.archunit.core.domain.JavaClasses
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
 import org.junit.jupiter.api.Test
 import kotlin.test.assertTrue
@@ -17,10 +16,7 @@ import kotlin.test.assertTrue
  * it, as only the bootstrap may call `inviteAsSystem`.
  */
 class ScheduledAdvanceRuleTests {
-    private val production =
-        ClassFileImporter()
-            .withImportOption(ImportOption.DoNotIncludeTests())
-            .importPackages("com.finaxis.platform")
+    private val production: JavaClasses = ProductionClasses.all
 
     @Test
     fun `only the scheduled advance moves a business date as the system`() {

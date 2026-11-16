@@ -33,8 +33,9 @@ The baseline run (406 classes, 3,586 tests) took 20.5 min of test phase:
 |---|---|---|---|---|
 | R0 | Baseline | 20.48 min | | 1,271 s |
 | R1 | Shared PostgreSQL, RabbitMQ and LGTM per test JVM | 16.43 min | 4.05 min | 1,008 s |
+| R2 | One ArchUnit import per test JVM | 14.26 min | 2.17 min | 878 s |
 
-Together: **20.48 min to 16.43 min of test phase (-20%)**, every test still passing.
+Together: **20.48 min to 14.26 min of test phase (-30%)**, every test still passing.
 
 ### 1. One PostgreSQL, RabbitMQ and LGTM server per test JVM
 
@@ -64,6 +65,13 @@ Saved **4.05 min**: container starts fell from 111 to 46 (42 of them the sub-sec
 context boots from 539 s to 327 s - more than the container time alone, because the runner no
 longer carries a score of idle servers.
 
+### 2. One ArchUnit import per test JVM
+
+Seven rule classes imported `com.finaxis.platform` in a property initializer, and JUnit creates a
+test instance per method, so a run re-read every production class file 67 times, about 2.5 s each.
+They all asked for exactly the same set, and `JavaClasses` is immutable, so `ProductionClasses.all`
+imports it once. `PermissionFreeReadRuleTests` went from 88 s to 5 s. Saved **2.17 min**.
+
 ## Considered and not done
 
 - **A pre-migrated template database.** Flyway costs 19 s a run, and skipping it would stop the
@@ -77,6 +85,7 @@ longer carries a score of idle servers.
   `PostgresTestConfiguration`, `PostgresRabbitTestConfiguration` or `TestcontainersConfiguration`.
   A new backing service follows `SharedTestContainers`' pattern: one server per JVM, one isolated
   namespace per context.
+- An ArchUnit rule over production code uses `ProductionClasses.all`, not its own importer.
 - Every distinct `@Import`, `properties`, `@MockitoBean` or `@DynamicPropertySource` combination is
   a context boot (about 5 s). Reuse an existing combination where the test allows.
 - To compare runs, read the JUnit XML in `build/test-results/test`: each `TEST-*.xml` has the class
