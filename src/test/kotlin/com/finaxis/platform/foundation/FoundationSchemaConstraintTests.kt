@@ -1,6 +1,7 @@
 package com.finaxis.platform.foundation
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.TestMemberNumbers
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
@@ -128,11 +129,12 @@ class FoundationSchemaConstraintTests(
             """
             INSERT INTO user_organisation_membership (
                 organisation_id, user_id, membership_status, membership_type, joined_at,
-                created_at, updated_at
-            ) VALUES (?, ?, 'ACTIVE', 'ADMIN', NOW(), NOW(), NOW())
+                member_number, created_at, updated_at
+            ) VALUES (?, ?, 'ACTIVE', 'ADMIN', NOW(), ?, NOW(), NOW())
             """.trimIndent(),
             organisationId,
             userId,
+            TestMemberNumbers.next(jdbcTemplate, organisationId),
         )
     }
 

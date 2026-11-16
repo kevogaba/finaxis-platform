@@ -1,6 +1,7 @@
 package com.finaxis.platform.accounting
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.TestMemberNumbers
 import com.finaxis.platform.accounting.application.reporting.BalanceSheetQuery
 import com.finaxis.platform.accounting.application.reporting.FinancialStatementService
 import com.finaxis.platform.accounting.application.reporting.IncomeStatementQuery
@@ -487,7 +488,10 @@ class FinancialStatementIntegrationTests(
                 .set(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID, organisationId)
                 .set(USER_ORGANISATION_MEMBERSHIP.USER_ID, userId)
                 .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, "ACTIVE")
-                .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, "STAFF")
+                .set(
+                    USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER,
+                    TestMemberNumbers.next(dsl, organisationId),
+                ).set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, "STAFF")
                 .set(USER_ORGANISATION_MEMBERSHIP.JOINED_AT, now)
                 .set(USER_ORGANISATION_MEMBERSHIP.CREATED_AT, now)
                 .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT, now)

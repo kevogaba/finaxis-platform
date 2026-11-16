@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.TestMemberNumbers
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.iam.application.query.MembershipFilter
 import com.finaxis.platform.iam.application.query.RoleFilter
@@ -263,7 +264,10 @@ class JooqIamAdministrationQueriesTests(
             .set(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID, orgId)
             .set(USER_ORGANISATION_MEMBERSHIP.USER_ID, userId)
             .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, status)
-            .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, type)
+            .set(
+                USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER,
+                TestMemberNumbers.forStatus(dsl, orgId, status),
+            ).set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, type)
             .set(USER_ORGANISATION_MEMBERSHIP.CREATED_AT, now)
             .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT, now)
             .execute()

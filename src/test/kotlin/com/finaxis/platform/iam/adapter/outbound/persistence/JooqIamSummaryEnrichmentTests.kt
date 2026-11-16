@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.adapter.outbound.persistence
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.TestMemberNumbers
 import com.finaxis.platform.common.application.ActorRef
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
@@ -283,7 +284,10 @@ class JooqIamSummaryEnrichmentTests(
             .set(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID, organisationId)
             .set(USER_ORGANISATION_MEMBERSHIP.USER_ID, userId)
             .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, status)
-            .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, type)
+            .set(
+                USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER,
+                TestMemberNumbers.forStatus(dsl, organisationId, status),
+            ).set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, type)
             .set(USER_ORGANISATION_MEMBERSHIP.PRIMARY_BRANCH_ID, primaryBranchId)
             .set(USER_ORGANISATION_MEMBERSHIP.CREATED_BY, createdBy)
             .set(USER_ORGANISATION_MEMBERSHIP.CREATED_AT, at)

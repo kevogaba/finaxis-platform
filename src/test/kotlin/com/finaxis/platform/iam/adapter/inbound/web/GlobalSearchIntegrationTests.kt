@@ -1,6 +1,7 @@
 package com.finaxis.platform.iam.adapter.inbound.web
 
 import com.finaxis.platform.PostgresTestConfiguration
+import com.finaxis.platform.TestMemberNumbers
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
 import com.finaxis.platform.common.web.ratelimit.RateLimitIdentity
@@ -521,7 +522,10 @@ class GlobalSearchIntegrationTests
                         .set(USER_ORGANISATION_MEMBERSHIP.ORGANISATION_ID, organisation)
                         .set(USER_ORGANISATION_MEMBERSHIP.USER_ID, userId)
                         .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_STATUS, "ACTIVE")
-                        .set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, "STAFF")
+                        .set(
+                            USER_ORGANISATION_MEMBERSHIP.MEMBER_NUMBER,
+                            TestMemberNumbers.next(dsl, organisation),
+                        ).set(USER_ORGANISATION_MEMBERSHIP.MEMBERSHIP_TYPE, "STAFF")
                         .set(USER_ORGANISATION_MEMBERSHIP.CREATED_BY, SystemActor.ID)
                         .set(USER_ORGANISATION_MEMBERSHIP.CREATED_AT, now)
                         .set(USER_ORGANISATION_MEMBERSHIP.UPDATED_AT, now)
