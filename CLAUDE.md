@@ -640,6 +640,11 @@ Do not invent accounting tables or columns outside those documents.
   `FinancialTransactionAtomicityFixture` and prove they commit or roll back together. See
   `docs/architecture/financial-transaction-atomicity.md` and
   `docs/adr/0018-financial-transaction-atomicity-invariant.md`.
+- Integration tests share one PostgreSQL, RabbitMQ and Grafana LGTM server per test JVM
+  (`SharedTestContainers`); each Spring context still gets an empty database and a RabbitMQ
+  virtual host of its own. Never declare one of those as a container `@Bean` - that boots a server
+  per context - and give a new backing service the same shape. See
+  `docs/development/test-performance.md`.
 
 ## Pull requests and commits
 

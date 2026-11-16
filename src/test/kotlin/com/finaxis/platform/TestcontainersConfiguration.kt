@@ -1,39 +1,31 @@
 package com.finaxis.platform
 
+import com.finaxis.platform.SharedTestContainers.IsolatedPostgresDatabase
+import com.finaxis.platform.SharedTestContainers.IsolatedRabbitVirtualHost
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.springframework.context.annotation.Bean
 import org.testcontainers.containers.GenericContainer
 import org.testcontainers.grafana.LgtmStackContainer
-import org.testcontainers.postgresql.PostgreSQLContainer
-import org.testcontainers.rabbitmq.RabbitMQContainer
 import org.testcontainers.utility.DockerImageName
-import java.time.Duration
 
+/**
+ * The full set of backing services: a database and a RabbitMQ virtual host of its own on the
+ * suite's shared servers, the shared Grafana LGTM stack (see [SharedTestContainers]), a Redis
+ * container of its own, and the shared GreenMail server below.
+ */
 @TestConfiguration(proxyBeanMethods = false)
 class TestcontainersConfiguration {
-    /**
-     * The observability stack is the heaviest container in the suite - an OpenTelemetry collector,
-     * Grafana, Loki, Tempo, Prometheus and Pyroscope in one image - and on a shared CI runner that
-     * is already carrying a dozen cached Spring contexts it can take longer than Testcontainers'
-     * default 60-second startup wait to log that it is up. That wait is a ceiling, not a delay: a
-     * fast start is still fast, and only a slow runner uses the headroom.
-     */
+    /** Shared by every context; see [SharedTestContainers.lgtm]. */
     @Bean
     @ServiceConnection
-    fun grafanaLgtmContainer(): LgtmStackContainer =
-        LgtmStackContainer(DockerImageName.parse(TestContainerImages.GRAFANA_OTEL_LGTM))
-            .withStartupTimeout(LGTM_STARTUP_TIMEOUT)
+    fun grafanaLgtmContainer(): LgtmStackContainer = SharedTestContainers.lgtm
 
     @Bean
-    @ServiceConnection
-    fun postgresContainer(): PostgreSQLContainer =
-        PostgreSQLContainer(DockerImageName.parse(TestContainerImages.POSTGRES))
+    fun postgresDatabase(): IsolatedPostgresDatabase = SharedTestContainers.newDatabase()
 
     @Bean
-    @ServiceConnection
-    fun rabbitContainer(): RabbitMQContainer =
-        RabbitMQContainer(DockerImageName.parse(TestContainerImages.RABBITMQ))
+    fun rabbitVirtualHost(): IsolatedRabbitVirtualHost = SharedTestContainers.newVirtualHost()
 
     @Bean
     @ServiceConnection(name = "redis")
@@ -41,8 +33,6 @@ class TestcontainersConfiguration {
         GenericContainer(DockerImageName.parse(TestContainerImages.REDIS)).withExposedPorts(6379)
 
     companion object {
-        private val LGTM_STARTUP_TIMEOUT: Duration = Duration.ofMinutes(3)
-
         /**
          * A Testcontainers "singleton container" (started once, in a static initializer, and
          * reaped by Testcontainers' own Ryuk container at suite end — never stopped by Spring)

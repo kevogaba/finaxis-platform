@@ -1,19 +1,21 @@
 package com.finaxis.platform
 
+import com.finaxis.platform.SharedTestContainers.IsolatedPostgresDatabase
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.springframework.context.annotation.Bean
 import org.springframework.security.oauth2.jwt.JwtDecoder
 import org.testcontainers.containers.GenericContainer
-import org.testcontainers.postgresql.PostgreSQLContainer
 import org.testcontainers.utility.DockerImageName
 
+/**
+ * A database of its own on the suite's shared PostgreSQL server (see [SharedTestContainers]),
+ * plus a Redis container of its own.
+ */
 @TestConfiguration(proxyBeanMethods = false)
 class PostgresTestConfiguration {
     @Bean
-    @ServiceConnection
-    fun postgresContainer(): PostgreSQLContainer =
-        PostgreSQLContainer(DockerImageName.parse(TestContainerImages.POSTGRES))
+    fun postgresDatabase(): IsolatedPostgresDatabase = SharedTestContainers.newDatabase()
 
     @Bean
     @ServiceConnection(name = "redis")
