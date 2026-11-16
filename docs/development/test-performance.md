@@ -34,8 +34,9 @@ The baseline run (406 classes, 3,586 tests) took 20.5 min of test phase:
 | R0 | Baseline | 20.48 min | | 1,271 s |
 | R1 | Shared PostgreSQL, RabbitMQ and LGTM per test JVM | 16.43 min | 4.05 min | 1,008 s |
 | R2 | One ArchUnit import per test JVM | 14.26 min | 2.17 min | 878 s |
+| R3 | Two test JVMs (and two order dependencies fixed) | 10.18 min | 4.08 min | 636 s |
 
-Together: **20.48 min to 14.26 min of test phase (-30%)**, every test still passing.
+Together: **20.48 min to 10.18 min of test phase (-50%)**, every test still passing.
 
 ### 1. One PostgreSQL, RabbitMQ and LGTM server per test JVM
 
@@ -72,12 +73,49 @@ test instance per method, so a run re-read every production class file 67 times,
 They all asked for exactly the same set, and `JavaClasses` is immutable, so `ProductionClasses.all`
 imports it once. `PermissionFreeReadRuleTests` went from 88 s to 5 s. Saved **2.17 min**.
 
+### 3. Two test JVMs
+
+`maxParallelForks` is 2 (`-PtestForks=N` overrides; 1 restores a single JVM). Each fork has its own
+context cache and its own shared servers, so forks never see each other's data. The cost is that a
+context used by classes in both forks boots in both (68 boots instead of 63), and that the boots
+are slower on a busy CPU. Three forks were measured too:
+
+| Forks | Test phase |
+|---|---|
+| 1 | 14.26 min |
+| 2 | 10.18 min |
+| 3 | 9.72 min |
+
+Three forks saved another 0.46 min, within run-to-run noise, with the CPU saturated: the mean
+context boot rose from 7.6 s to 11.5 s and the summed class time from 19.4 to 25.8 min. Two keep
+headroom for the race tests that wait on real timing.
+
+Spreading classes over two JVMs changes which class runs after which, and that exposed two
+pre-existing order dependencies, both reproducible in a single JVM by running the same classes in
+the same order:
+
+- `AuthFlowIntegrationTests` reset the shared seed before each test but not after, so the class
+  that followed it inherited `local.admin` suspended, deprovisioned or stripped of its profile
+  grant. In one JVM the next class happened to repair it. It now restores the seed after each test
+  too.
+- `AccountingQueryPlanTests`' volume fixture left the order of each journal's four lines to the
+  planner, which emitted them journal-major or leg-major depending on the statistics autovacuum had
+  gathered, so Q2's cost moved between 559 and 1,030 blocks with the classes that ran before it
+  (budget 900). The fixture now writes a journal's lines together, as the posting engine does; Q2
+  costs 289 blocks every time and every other budget is equally stable.
+
+Saved **4.08 min**.
+
 ## Considered and not done
 
 - **A pre-migrated template database.** Flyway costs 19 s a run, and skipping it would stop the
   application's own Flyway from migrating an empty database in any context.
 - **Turning off Spring Modulith's runtime verification in tests.** It costs about 19 s once per JVM
   (Modulith caches it); it is a production fail-fast check and feeds the observability support.
+- **Shortening the JobRunr waits.** Those tests deliberately run the real background server and its
+  retry timing; tightening them trades minutes for flakiness.
+- **JUnit's in-JVM parallel execution.** Classes sharing a context also share a database, and many
+  tests reset shared seed rows; running them concurrently would need every such test rewritten.
 
 ## Keeping it fast
 
@@ -87,6 +125,9 @@ imports it once. `PermissionFreeReadRuleTests` went from 88 s to 5 s. Saved **2.
   namespace per context.
 - An ArchUnit rule over production code uses `ProductionClasses.all`, not its own importer.
 - Every distinct `@Import`, `properties`, `@MockitoBean` or `@DynamicPropertySource` combination is
-  a context boot (about 5 s). Reuse an existing combination where the test allows.
+  a context boot (about 5 s, once per fork). Reuse an existing combination where the test allows.
+- A test that changes shared seed rows restores them after itself as well as before. Which class
+  runs next depends on how the classes are spread over the forks, and that changes whenever a class
+  is added.
 - To compare runs, read the JUnit XML in `build/test-results/test`: each `TEST-*.xml` has the class
   start time and duration, and Spring's `Started ... in N seconds` line marks a context boot.

@@ -18,6 +18,7 @@ import org.hamcrest.Matchers.empty
 import org.hamcrest.Matchers.hasItem
 import org.hamcrest.Matchers.hasItems
 import org.jooq.DSLContext
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -80,6 +81,15 @@ class AuthFlowIntegrationTests {
         restoreProfilePermission()
         cacheManager.getCache(EffectivePermissionResolver.CACHE_NAME)?.invalidate()
     }
+
+    /**
+     * Leaves the seed as the next class on this cached context expects it. Each test here suspends,
+     * deprovisions, closes or strips something of `local.admin`'s, and the class after this one -
+     * whichever the run happens to schedule - inherits the last test's mutation: in one test JVM
+     * it was a class that repaired it, in two forks it was `ContextDiscoveryIntegrationTests`.
+     */
+    @AfterEach
+    fun restoreSeedState() = resetSeedState()
 
     @Test
     fun `smoke auth flow selects tenant context and returns current profile`() {

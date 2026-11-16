@@ -454,6 +454,13 @@ tasks.withType<Test> {
     // Gradle's worker-daemon default (512m) is too small for Spring Boot + Testcontainers
     // integration tests loading many distinct application contexts; raise it explicitly.
     maxHeapSize = "2g"
+    // Test classes are spread over parallel JVMs. Each fork has its own Spring context cache and
+    // its own PostgreSQL, RabbitMQ and LGTM servers (SharedTestContainers), so forks never see each
+    // other's data; the cost is that a context used by classes in both forks boots in both. On a
+    // 4-vCPU runner two forks took about 30% off the suite and three were barely faster while
+    // saturating the CPU (docs/development/test-performance.md). `-PtestForks=1` restores a
+    // single JVM, for example to debug an ordering-dependent failure.
+    maxParallelForks = providers.gradleProperty("testForks").map(String::toInt).getOrElse(2)
 }
 
 tasks.withType<JavaExec> {

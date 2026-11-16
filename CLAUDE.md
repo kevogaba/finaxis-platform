@@ -647,6 +647,9 @@ Do not invent accounting tables or columns outside those documents.
   `docs/development/test-performance.md`.
 - An ArchUnit rule over production code reads `ProductionClasses.all`, imported once per test JVM,
   rather than running its own `ClassFileImporter`.
+- `./gradlew test` runs two test JVMs (`-PtestForks=N` overrides). A test that changes shared seed
+  rows restores them after itself as well as before: which class runs next on a context depends on
+  how the classes are spread over the forks.
 
 ## Pull requests and commits
 
