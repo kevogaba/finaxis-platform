@@ -361,7 +361,9 @@ class MembershipController(
         ),
         ApiResponse(
             responseCode = "403",
-            description = "Forbidden",
+            description =
+                "Forbidden: a missing permission (`forbidden`), or the caller's own membership " +
+                    "(`lifecycle.self_membership_change`)",
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -551,7 +553,9 @@ class MembershipController(
         ),
         ApiResponse(
             responseCode = "403",
-            description = "Forbidden",
+            description =
+                "Forbidden: a missing permission (`forbidden`), or the caller's own membership " +
+                    "(`lifecycle.self_membership_change`)",
             content = [
                 Content(
                     mediaType = "application/problem+json",

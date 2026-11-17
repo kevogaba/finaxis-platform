@@ -202,7 +202,9 @@ class PlatformUserLifecycleController(
         ),
         ApiResponse(
             responseCode = "403",
-            description = "Forbidden",
+            description =
+                "Forbidden: a missing permission (`forbidden`), or the caller's own account " +
+                    "(`lifecycle.self_account_change`)",
             content = [
                 Content(
                     mediaType = "application/problem+json",
@@ -334,7 +336,9 @@ class PlatformUserLifecycleController(
         ),
         ApiResponse(
             responseCode = "403",
-            description = "Forbidden",
+            description =
+                "Forbidden: a missing permission (`forbidden`), or the caller's own account " +
+                    "(`lifecycle.self_account_change`)",
             content = [
                 Content(
                     mediaType = "application/problem+json",

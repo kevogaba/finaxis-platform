@@ -929,6 +929,25 @@ Every use is attributed to the platform actor in the tenant's audit log: the tra
 or `branch.return_for_changes_as_platform_checker` (a branch it returned) row, each with the same
 metadata. Filter on any of them to review them.
 
+## Self-access guard (#341)
+
+Nobody suspends or revokes their own membership, or suspends or deactivates their own account
+([ADR 0043](../adr/0043-self-access-change-guard.md)). `SelfAccessGuard` runs in
+`UserProvisioningService` after the permission check (and, for a membership, the lookup) and
+before any write:
+
+| Route | Refused when | Code (403) |
+|---|---|---|
+| `POST /api/v1/tenant/memberships/{membership_id}/suspend`, `/revoke` | the membership's user is the caller | `lifecycle.self_membership_change` |
+| `POST /api/v1/platform/users/{user_id}/suspend`, `/deactivate` | the account is the caller's | `lifecycle.self_account_change` |
+
+A refusal is one `DENIED`, `HIGH` audit row under the transition's own action, written through
+`AuditService.recordIndependently` so the rollback can't take it, and `DeniedAccessAuditor` adds no
+`api.access_denied` row for a `lifecycle.self_` code. Still allowed: reactivating, editing one's own
+membership, and revoking one's own role or branch assignment (another holder of
+`user.assign_role` or `user.assign_branch` can restore it). Assigning a role or a branch to oneself
+is a separate question, #342.
+
 ## The platform organisation is never a tenant
 
 The reserved `PLATFORM` organisation (`00000000-0000-0000-0000-000000000000`, seeded by `V2`) is the

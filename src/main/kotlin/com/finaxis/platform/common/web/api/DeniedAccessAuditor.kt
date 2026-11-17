@@ -29,9 +29,10 @@ import java.util.UUID
  * audit never changes the answer: a failed write or an unavailable bucket is a message-free `WARN`
  * and the `403` goes out as it would have.
  *
- * A refusal that already writes its own durable `DENIED` row (`lifecycle.approver_is_*`) is not
- * written twice. A refusal raised before any request context names the caller (a JWT-only user
- * choosing an organisation) carries the user it is about in
+ * A refusal that already writes its own durable `DENIED` row (`lifecycle.approver_is_*`, and the
+ * self-access refusals `lifecycle.self_*` of ADR 0043) is not written twice. A refusal raised
+ * before any request context names the caller (a JWT-only user choosing an organisation) carries
+ * the user it is about in
  * [ForbiddenOperationException.actorUserId]. A denial with no tenant context is recorded under the
  * platform organisation explicitly, with `tenant_context=none`, instead of through the repository's
  * warned fallback.
@@ -63,7 +64,7 @@ class DeniedAccessAuditor(
         request: HttpServletRequest,
         exception: ForbiddenOperationException,
     ) {
-        if (exception.code.startsWith(OWN_ROW_PREFIX)) return
+        if (OWN_ROW_PREFIXES.any(exception.code::startsWith)) return
         record(
             request,
             exception.code,
@@ -145,7 +146,7 @@ class DeniedAccessAuditor(
     private companion object {
         const val ACTION = "api.access_denied"
         const val RESOURCE_TYPE = "API_ROUTE"
-        const val OWN_ROW_PREFIX = "lifecycle.approver_is_"
+        val OWN_ROW_PREFIXES = listOf("lifecycle.approver_is_", "lifecycle.self_")
         const val UNMATCHED_ROUTE = "unmatched"
     }
 }
