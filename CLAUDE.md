@@ -357,9 +357,9 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   tenant's seeded `TENANT_ADMIN` and the bootstrap `local-admin` get it (V23's rule); **no other
   role does: `TENANT_AUDITOR` holds `audit.view` and cannot export**, and no non-admin default
   bundle may name it. It writes `kind`, `grant_scope` and the view requirement in the same file,
-  asserts its pre- and post-conditions in-file, and is idempotent. No trigger. The catalogue is now
-  85 codes, 84 `ACTIVE`. `AuditPermissionGuardAdapter` now uses `requirePermissionWithViews`; each
-  export request writes one `audit.export` audit row (`q` and `actor_subject` stored as
+  asserts its pre- and post-conditions in-file, and is idempotent. No trigger. The catalogue was
+  then 85 codes, 84 `ACTIVE`. `AuditPermissionGuardAdapter` now uses `requirePermissionWithViews`;
+  each export request writes one `audit.export` audit row (`q` and `actor_subject` stored as
   `[redacted]`), the one read-like route that audits — see `docs/architecture/audit-logging.md`.
 - `V35__membership_member_number.sql` — **one column, two constraints and a backfill** (#287,
   ADR 0040, superseding ADR 0033 decision 6): nullable `user_organisation_membership.member_number
@@ -417,6 +417,17 @@ forward-only `V4+` migration. Never edit `V1`–`V3`.
   SQLSTATE 23514 (a 500) until it is replaced. **A test fixture that inserts an `ACTIVE` or
   `SUSPENDED` membership directly takes its number from `TestMemberNumbers`** (the organisation's
   `MEMBER` counter, as the application does), or the insert fails.
+- `V39__user_assign_self_permission.sql` — **reference data only, no schema** (#342, ADR 0044):
+  `user.assign_self` (`MUTATION`, `TENANT` scope, `HIGH`, module `iam`, requires `user.view`, id
+  `…069`), which `POST /api/v1/tenant/role-assignments` and `POST /api/v1/tenant/branch-assignments`
+  require, tenant-wide, when the user being assigned is the caller (and
+  `POST /api/v1/tenant/roles/{role_id}/permissions` and `.../activate` when the caller holds the
+  role).
+  `PLATFORM_SUPER_ADMIN`, every tenant's seeded `TENANT_ADMIN` and the bootstrap `local-admin` get
+  it (V23's rule); **no other role does**, no non-admin default bundle may name it, and the API
+  refuses to grant it to any role (422). It writes `kind`, `grant_scope` and the view requirement
+  in the same file, asserts its pre- and post-conditions in-file, and is idempotent. No trigger.
+  The catalogue is now 86 codes, 85 `ACTIVE`.
 
 Identifier rules, enforced by `IdentifierGenerationRuleTests`:
 
@@ -453,7 +464,8 @@ audit search indexes, `V29`-`V30` the audit subject user (column and index), and
 retired legacy setting rows, `V32` the user and membership edit permissions, `V33` the role
 transition log and `role.archive`, `V34` the `audit.export` permission, `V35` the
 membership's member number, `V36` the audit table's retention comment, `V37` the
-normalised offset time zones, and `V38` the member-number CHECK; none is accounting.
+normalised offset time zones, `V38` the member-number CHECK, and `V39` the `user.assign_self`
+permission; none is accounting.
 Do not invent accounting tables or columns outside those documents.
 
 ## Authorization
@@ -538,6 +550,14 @@ Do not invent accounting tables or columns outside those documents.
   `BusinessDateService.advanceAsSystem` (#277, ADR 0041, `ScheduledAdvanceRuleTests`). A new read needs the marker and its own authorisation. Do not add a
   controller-side check that repeats the service's (`RoleController`, `RoleAssignmentController`
   and `PermissionController` still do: an open item of ADR 0030).
+- **No self-assignment below the tenant administrator** (ADR 0044): assigning a role or a branch to
+  yourself also needs `user.assign_self` tenant-wide, checked right after the route's own permission
+  and before any other lookup (a named 403 otherwise), and so does adding a permission to, or
+  re-enabling, a role you hold (an `ACTIVE` assignment at any scope, read under the role lock). Only
+  the seeded administrator roles hold it, and `assign-permission` refuses it for any role, so no
+  custom role can carry it. A new path that creates a `user_role_assignment` or
+  `user_branch_assignment` for an existing member, or adds to a role's permissions or re-enables it,
+  must apply the same check.
 - Maker-checker: a platform-context actor holding the permission in the platform organisation may
   be the audited checker of a pending membership only while the tenant has no ACTIVE member beyond
   its bootstrap administrator, and of a pending branch only while it has no ACTIVE branch beyond

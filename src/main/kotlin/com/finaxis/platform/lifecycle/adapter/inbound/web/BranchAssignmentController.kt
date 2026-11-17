@@ -237,7 +237,9 @@ class BranchAssignmentController(
         ),
         ApiResponse(
             responseCode = "403",
-            description = "Forbidden",
+            description =
+                "Forbidden: a missing permission, including `user.assign_self` when the user is " +
+                    "the caller (#342)",
             content = [Content(schema = Schema(implementation = ApiProblem::class))],
         ),
         ApiResponse(

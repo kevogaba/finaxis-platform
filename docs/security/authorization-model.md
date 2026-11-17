@@ -11,15 +11,16 @@ Read this with [active organisation context](active-organisation-context.md),
 
 ## Permission catalogue and roles
 
-The global catalogue in `permission` holds **85 permission codes**: 54 foundation codes seeded by
+The global catalogue in `permission` holds **86 permission codes**: 54 foundation codes seeded by
 `V2__platform_reference_data.sql`, 26 accounting codes seeded by
 `V5__accounting_permission_catalogue.sql`, `branch.update`, added to the `branch` module by
 `V19__branch_update_permission.sql` (#203), and `user.update` (platform scope) and
 `membership.update` (tenant scope), added by `V32__user_and_membership_update_permissions.sql`
 (#161, ADR 0033), and `role.archive` (tenant scope), added by `V33__role_archive.sql` (#297,
 ADR 0035), and `audit.export` (tenant scope), added by `V34__audit_export_permission.sql` (#167,
-ADR 0039). One of the 85, `branch.activate`, is **DEPRECATED**
-(see "Branch approval"), so 84 are `ACTIVE`. Each has a stable `permission_code`, `module_code`,
+ADR 0039), and `user.assign_self` (tenant scope), added by `V39__user_assign_self_permission.sql`
+(#342, ADR 0044). One of the 86, `branch.activate`, is **DEPRECATED**
+(see "Branch approval"), so 85 are `ACTIVE`. Each has a stable `permission_code`, `module_code`,
 `risk_level`, `system_permission`, status, and a `kind` and `grant_scope` (see "Catalogue
 metadata"). Module codes are `tenant`, `branch`, `iam`,
 `audit`, `settings`, and `accounting`; risk levels are `LOW`, `MEDIUM`, `HIGH`, and `CRITICAL`.
@@ -167,7 +168,7 @@ The platform administrator holds every code. The seeded tenant administrator is 
 column ("an admin holds every code of its scope", see "Seeded administrator roles"); `V22` itself
 touched no role, and `V23` applied the rule.
 
-**`permission_view_requirement`** pairs a `MUTATION` with each view it requires: 65 rows for the 64
+**`permission_view_requirement`** pairs a `MUTATION` with each view it requires: 66 rows for the 65
 mutations, because `user.invite` needs two. A role or a caller that holds the mutation must also
 hold these views (ADR 0030). The runtime enforces it for every mutation ("Mutation-time check"
 below); role composition enforces it for custom roles (see "Role composition"); the catalogue test
@@ -179,7 +180,7 @@ enforces it for the seeded roles.
 | `branch.create`, `update`, `approve`, `activate` (deprecated), `suspend`, `reactivate`, `close` | `branch.view` |
 | `user.invite` | `membership.view` **and** `user.view` |
 | `user.approve`, `membership.suspend`, `membership.reactivate`, `membership.revoke` | `membership.view` |
-| `user.activate`, `user.suspend`, `user.deactivate` | `user.view` |
+| `user.activate`, `user.suspend`, `user.deactivate`, `user.assign_self` | `user.view` |
 | `user.assign_branch`, `user.revoke_branch` | `branch_assignment.view` |
 | `user.assign_role`, `user.revoke_role` | `role_assignment.view` |
 | `role.create`, `update`, `activate`, `deactivate`, `archive`, `assign_permission`, `remove_permission` | `role.view` |
@@ -947,6 +948,31 @@ A refusal is one `DENIED`, `HIGH` audit row under the transition's own action, w
 membership, and revoking one's own role or branch assignment (another holder of
 `user.assign_role` or `user.assign_branch` can restore it). Assigning a role or a branch to oneself
 is a separate question, #342.
+
+## Self-assignment (#342)
+
+Nobody assigns a role or a branch to themselves except the tenant's own super user
+([ADR 0044](../adr/0044-self-assignment-guard.md)). When the user being assigned is the caller,
+`RoleManagementService.assignRoleToUser` and `BranchProvisioningService.assignUser` also require
+`user.assign_self` at tenant scope, right after the route's own permission (on the branch route,
+which also answers 404 for an unknown branch) and before any other lookup.
+
+- `user.assign_self` (`MUTATION`, `TENANT`, `HIGH`, requires `user.view`, `V39`) is held only by
+  the seeded administrator roles: every tenant's `TENANT_ADMIN` (derived from the catalogue, so a
+  new tenant's administrator holds it), the bootstrap `local-admin` and `PLATFORM_SUPER_ADMIN`. No
+  non-admin bundle names it, and `POST /api/v1/tenant/roles/{role_id}/permissions` refuses it for
+  any role (422 `invalid_operation`), so it reaches a user only with a seeded administrator role
+  (assigning `TENANT_ADMIN` to someone else hands it over, by design), never through a custom one.
+- Adding a permission to, or re-enabling, a role the caller holds (an `ACTIVE` assignment at any
+  scope) adds to their own access too, so `POST /api/v1/tenant/roles/{role_id}/permissions` and
+  `POST .../activate` (on a `DISABLED` role) also require `user.assign_self` tenant-wide then, read
+  under the role lock every new assignment also takes. Composing or re-enabling a role the caller
+  does not hold, removing a permission from one they do, and deactivating it, are unchanged.
+- A caller without it gets the standard named 403 (`Missing permission: user.assign_self.`),
+  recorded as one `api.access_denied` row. Held only at a branch, or in another tenant, it does
+  not count.
+- An allowed self-assignment writes the usual `user.assign_role` or `branch.assign_user` row, with
+  the administrator as both actor and subject.
 
 ## The platform organisation is never a tenant
 

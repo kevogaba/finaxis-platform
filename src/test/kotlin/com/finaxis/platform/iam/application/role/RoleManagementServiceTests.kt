@@ -29,6 +29,7 @@ import com.finaxis.platform.iam.domain.OrganisationStatus
 import com.finaxis.platform.iam.domain.RoleStatus
 import com.finaxis.platform.lifecycle.BranchVisibility
 import com.finaxis.platform.lifecycle.PermissionGuard
+import org.mockito.Mockito
 import org.mockito.Mockito.doThrow
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.verify
@@ -881,6 +882,239 @@ class RoleManagementServiceTests {
         assertTrue(fixture.persistence.assignedScopes.isEmpty())
     }
 
+    /** A self-assignment needs user.assign_self, even when the assignment already exists (#342). */
+    @Test
+    fun `assigning a role to yourself needs user assign self`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.memberships[fixture.actorId] = fixture.activeMembership()
+        // An existing assignment would be a 201 replay; the refusal comes before that shortcut.
+        fixture.persistence.activeAssignments += fixture.assignmentId
+        doThrow(MissingPermissionException(SELF_ASSIGN))
+            .`when`(fixture.permissionGuard)
+            .requireTenantPermission(fixture.actorId, fixture.organisationId, SELF_ASSIGN)
+
+        assertFailsWith<MissingPermissionException> {
+            fixture.service.assignRoleToUser(selfAssignment())
+        }
+
+        assertTrue(fixture.persistence.assignedScopes.isEmpty())
+        assertTrue(fixture.audits.events.isEmpty())
+    }
+
+    /**
+     * The self check runs before any lookup: with no membership and no role seeded, a lookup first
+     * would answer 404 instead (#342, ADR 0044 decision 3).
+     */
+    @Test
+    fun `a self-assignment is refused before any lookup`() {
+        doThrow(MissingPermissionException(SELF_ASSIGN))
+            .`when`(fixture.permissionGuard)
+            .requireTenantPermission(fixture.actorId, fixture.organisationId, SELF_ASSIGN)
+
+        val refusal =
+            assertFailsWith<MissingPermissionException> {
+                fixture.service.assignRoleToUser(selfAssignment())
+            }
+
+        assertEquals(SELF_ASSIGN, refusal.permissionCode)
+    }
+
+    /** The route's own permission is still checked first, so it is the one a caller is told. */
+    @Test
+    fun `a self-assignment without user assign role is refused for that first`() {
+        doThrow(MissingPermissionException("user.assign_role"))
+            .`when`(fixture.permissionGuard)
+            .requireTenantPermission(fixture.actorId, fixture.organisationId, "user.assign_role")
+        doThrow(MissingPermissionException(SELF_ASSIGN))
+            .`when`(fixture.permissionGuard)
+            .requireTenantPermission(fixture.actorId, fixture.organisationId, SELF_ASSIGN)
+
+        val refusal =
+            assertFailsWith<MissingPermissionException> {
+                fixture.service.assignRoleToUser(selfAssignment())
+            }
+
+        assertEquals("user.assign_role", refusal.permissionCode)
+    }
+
+    /** The seeded administrator holds user.assign_self and may assign a role to themselves. */
+    @Test
+    fun `an administrator may assign a role to themselves`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.memberships[fixture.actorId] = fixture.activeMembership()
+
+        fixture.service.assignRoleToUser(selfAssignment())
+
+        assertEquals(RoleScopeType.TENANT to null, fixture.persistence.assignedScopes.single())
+        verify(fixture.permissionGuard)
+            .requireTenantPermission(fixture.actorId, fixture.organisationId, SELF_ASSIGN)
+    }
+
+    /** Assigning someone else never asks for user.assign_self. */
+    @Test
+    fun `assigning someone else never asks for user assign self`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.memberships[fixture.userId] = fixture.activeMembership()
+
+        fixture.service.assignRoleToUser(fixture.assignRole())
+
+        verify(fixture.permissionGuard, Mockito.never())
+            .requireTenantPermission(fixture.actorId, fixture.organisationId, SELF_ASSIGN)
+    }
+
+    /** The bypass can't be delegated: no API path grants user.assign_self to a role (#342). */
+    @Test
+    fun `user assign self cannot be granted to a role`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.permissions[SELF_ASSIGN] = fixture.permissionId
+
+        val refusal =
+            assertFailsWith<InvalidOperationException> {
+                fixture.service.assignPermissionToRole(
+                    AssignPermissionToRole(
+                        fixture.organisationId,
+                        fixture.roleId,
+                        SELF_ASSIGN,
+                        fixture.actorId,
+                    ),
+                )
+            }
+
+        assertEquals(
+            "user.assign_self is held only by the seeded administrator roles and cannot be " +
+                "granted.",
+            refusal.safeDetail,
+        )
+        assertTrue(fixture.persistence.grantedPermissions.isEmpty())
+        assertTrue(fixture.audits.events.isEmpty())
+    }
+
+    /**
+     * Adding a permission to a role you hold adds to your own access, so it needs
+     * user.assign_self too (#342, ADR 0044); nothing is granted or audited without it.
+     */
+    @Test
+    fun `adding a permission to a role you hold needs user assign self`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.permissions["tenant.approve"] = fixture.permissionId
+        fixture.persistence.memberships[fixture.actorId] = fixture.activeMembership()
+        fixture.persistence.membershipsWithRole[fixture.roleId] = listOf(fixture.membershipId)
+        doThrow(MissingPermissionException(SELF_ASSIGN))
+            .`when`(fixture.permissionGuard)
+            .requireTenantPermission(fixture.actorId, fixture.organisationId, SELF_ASSIGN)
+
+        val refusal =
+            assertFailsWith<MissingPermissionException> {
+                fixture.service.assignPermissionToRole(fixture.assignPermission())
+            }
+
+        assertEquals(SELF_ASSIGN, refusal.permissionCode)
+        assertTrue(fixture.persistence.grantedPermissions.isEmpty())
+        assertTrue(fixture.audits.events.isEmpty())
+    }
+
+    /** The seeded administrator may add a permission to a role they hold. */
+    @Test
+    fun `an administrator may add a permission to a role they hold`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.permissions["tenant.approve"] = fixture.permissionId
+        fixture.persistence.memberships[fixture.actorId] = fixture.activeMembership()
+        fixture.persistence.membershipsWithRole[fixture.roleId] = listOf(fixture.membershipId)
+
+        fixture.service.assignPermissionToRole(fixture.assignPermission())
+
+        assertEquals(fixture.permissionId, fixture.persistence.grantedPermissions.single())
+        verify(fixture.permissionGuard)
+            .requireTenantPermission(fixture.actorId, fixture.organisationId, SELF_ASSIGN)
+    }
+
+    /** Composing a role someone else holds is unchanged, and so is removing from a held one. */
+    @Test
+    fun `composing a role you do not hold or removing from one you do never asks for it`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.permissions["tenant.approve"] = fixture.permissionId
+        fixture.persistence.memberships[fixture.actorId] = fixture.activeMembership()
+        // Someone else's membership holds it.
+        fixture.persistence.membershipsWithRole[fixture.roleId] = listOf(uuidV7())
+
+        fixture.service.assignPermissionToRole(fixture.assignPermission())
+        fixture.persistence.membershipsWithRole[fixture.roleId] = listOf(fixture.membershipId)
+        fixture.service.removePermissionFromRole(fixture.removePermission())
+
+        assertEquals(fixture.permissionId, fixture.persistence.grantedPermissions.single())
+        assertEquals(fixture.permissionId, fixture.persistence.removedPermissions.single())
+        verify(fixture.permissionGuard, Mockito.never())
+            .requireTenantPermission(fixture.actorId, fixture.organisationId, SELF_ASSIGN)
+    }
+
+    /**
+     * Reactivating a DISABLED role you hold gives its permissions back, so it needs
+     * user.assign_self too (#342, ADR 0044); the role stays disabled without it.
+     */
+    @Test
+    fun `reactivating a role you hold needs user assign self`() {
+        fixture.persistence.roles[fixture.roleId] =
+            fixture.tenantRole().copy(status = RoleStatus.DISABLED)
+        fixture.persistence.memberships[fixture.actorId] = fixture.activeMembership()
+        fixture.persistence.membershipsWithRole[fixture.roleId] = listOf(fixture.membershipId)
+        doThrow(MissingPermissionException(SELF_ASSIGN))
+            .`when`(fixture.permissionGuard)
+            .requireTenantPermission(fixture.actorId, fixture.organisationId, SELF_ASSIGN)
+
+        val refusal =
+            assertFailsWith<MissingPermissionException> {
+                fixture.service.activateRole(fixture.activateRole())
+            }
+
+        assertEquals(SELF_ASSIGN, refusal.permissionCode)
+        assertTrue(fixture.persistence.statusChanges.isEmpty())
+        assertTrue(fixture.audits.events.isEmpty())
+    }
+
+    /** The seeded administrator may reactivate a role they hold. */
+    @Test
+    fun `an administrator may reactivate a role they hold`() {
+        fixture.persistence.roles[fixture.roleId] =
+            fixture.tenantRole().copy(status = RoleStatus.DISABLED)
+        fixture.persistence.memberships[fixture.actorId] = fixture.activeMembership()
+        fixture.persistence.membershipsWithRole[fixture.roleId] = listOf(fixture.membershipId)
+
+        val result = fixture.service.activateRole(fixture.activateRole())
+
+        assertEquals(RoleResult(fixture.roleId, RoleStatus.ACTIVE), result)
+        verify(fixture.permissionGuard)
+            .requireTenantPermission(fixture.actorId, fixture.organisationId, SELF_ASSIGN)
+    }
+
+    /** Deactivating a role you hold, or reactivating one you do not, never asks for it. */
+    @Test
+    fun `deactivating a held role or reactivating another never asks for user assign self`() {
+        fixture.persistence.roles[fixture.roleId] = fixture.tenantRole()
+        fixture.persistence.memberships[fixture.actorId] = fixture.activeMembership()
+        fixture.persistence.membershipsWithRole[fixture.roleId] = listOf(fixture.membershipId)
+
+        fixture.service.deactivateRole(fixture.deactivateRole())
+        fixture.persistence.roles[fixture.roleId] =
+            fixture.tenantRole().copy(status = RoleStatus.DISABLED)
+        fixture.persistence.membershipsWithRole[fixture.roleId] = listOf(uuidV7())
+        fixture.service.activateRole(fixture.activateRole())
+
+        assertEquals(2, fixture.persistence.statusChanges.size)
+        verify(fixture.permissionGuard, Mockito.never())
+            .requireTenantPermission(fixture.actorId, fixture.organisationId, SELF_ASSIGN)
+    }
+
+    private fun selfAssignment() =
+        AssignRoleToUser(
+            fixture.organisationId,
+            fixture.actorId,
+            fixture.roleId,
+            RoleScopeType.TENANT,
+            null,
+            fixture.actorId,
+            null,
+        )
+
     /** Assigns tenant-scoped roles without a branch and clears the membership permission cache. */
     @Test
     fun `assigning tenant scoped role persists assignment and emits audit metadata`() {
@@ -1300,6 +1534,7 @@ class RoleManagementServiceTests {
     }
 
     private companion object {
+        const val SELF_ASSIGN = "user.assign_self"
         const val REVOKE_ROLE = "user.revoke_role"
     }
 
