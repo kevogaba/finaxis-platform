@@ -1814,6 +1814,14 @@ described under [Pagination](#pagination).
 | POST   | `/`                | Assign user to branch     | `user.assign_branch` + `branch_assignment.view` | mutation |
 | DELETE | `/{assignment_id}` | Revoke branch assignment  | `user.revoke_branch` + `branch_assignment.view` | mutation |
 
+**Self-assignment (#342, ADR 0044).** When `user_id` is the caller, `POST /` also needs
+`user.assign_self` held tenant-wide, checked right after its own permission (which also answers
+`404` for an unknown branch) and before any other lookup.
+Only the seeded administrator roles hold it (every tenant's `TENANT_ADMIN`, the bootstrap
+`local-admin` and `PLATFORM_SUPER_ADMIN`), and no role can be granted it through the API. Anyone
+else is refused `403 forbidden` with detail `Missing permission: user.assign_self.`, even for an
+assignment they already hold; assigning someone else is unchanged.
+
 Reads are target-aware (ADR 0030, decision 5) and carry no coarse `@PreAuthorize` gate: the
 check is a tenant-wide `branch_assignment.view` **or** that permission on the assignment's branch,
 and the application layer is the only authorisation.
@@ -1889,7 +1897,10 @@ Endpoints:
   `400 validation_failed` (send `null` to remove a description). An empty body is a no-op update
   that still writes its `role.update` audit row.
 - `POST /{role_id}/activate`: re-enable a `DISABLED` role. Permission `role.activate` +
-  `role.view`. Shape: mutation. Any other status (including a repeat) is 409 `conflict`.
+  `role.view`. Shape: mutation. Any other status (including a repeat) is 409 `conflict`. When the
+  caller holds an `ACTIVE` assignment of the role (any scope), re-enabling it gives them its
+  permissions back, so it also needs `user.assign_self` tenant-wide (#342, ADR 0044): `403
+  forbidden`, detail `Missing permission: user.assign_self.`, otherwise.
 - `POST /{role_id}/deactivate`: disable an `ACTIVE` role. Permission `role.deactivate` +
   `role.view`. Shape: mutation. Any other status (including a repeat) is 409 `conflict`.
 - `POST /{role_id}/archive`: archive a role, a **terminal** state (ADR 0035, #297). Permission
@@ -1908,7 +1919,13 @@ Endpoints:
   Shape: page.
 - `POST /{role_id}/permissions`: grant role permission. Permission `role.assign_permission` +
   `role.view`. Shape: mutation. Refused with `400 validation_failed` when it grants a mutation
-  permission whose required views the role does not hold (see "Role composition" below).
+  permission whose required views the role does not hold (see "Role composition" below), and with
+  `422 invalid_operation` for `user.assign_self`, which only the seeded administrator roles hold
+  and no role can be granted (#342, ADR 0044; see "Self-assignment" under Role Assignments). When
+  the caller holds an `ACTIVE` assignment of the role (any scope), the grant adds to their own
+  access, so it also needs `user.assign_self` tenant-wide: `403 forbidden`, detail
+  `Missing permission: user.assign_self.`, otherwise, even when the role already has the
+  permission. Removing a permission needs no such check.
 - `DELETE /{role_id}/permissions/{role_permission_id}`: remove role permission grant.
   Permission `role.remove_permission` + `role.view`. Shape: mutation. The permission check is
   first (`403` naming `Missing permission: role.view.` when the view is missing), then the role
@@ -2005,6 +2022,13 @@ Base path: `/api/v1/tenant/role-assignments`. List filters: `user_id`, `role_id`
 | GET    | `/{assignment_id}` | Get role assignment     | `role_assignment.view` | item     |
 | POST   | `/`                | Assign role to user     | `user.assign_role` + `role_assignment.view` | mutation |
 | DELETE | `/{assignment_id}` | Revoke role assignment  | `user.revoke_role` + `role_assignment.view` | mutation |
+
+**Self-assignment (#342, ADR 0044).** When `user_id` is the caller, `POST /` also needs
+`user.assign_self` held tenant-wide, checked right after its own permission and before any lookup.
+Only the seeded administrator roles hold it (every tenant's `TENANT_ADMIN`, the bootstrap
+`local-admin` and `PLATFORM_SUPER_ADMIN`), and no role can be granted it through the API. Anyone
+else is refused `403 forbidden` with detail `Missing permission: user.assign_self.`, even for an
+assignment they already hold; assigning someone else is unchanged.
 
 Reads are target-aware (ADR 0030, decision 5) and carry no coarse `@PreAuthorize` gate. Rows with
 `scope_type = BRANCH` need a tenant-wide `role_assignment.view` **or** that permission on the

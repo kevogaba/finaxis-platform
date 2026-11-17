@@ -141,6 +141,25 @@ class SeededRolesDriftTests(
     }
 
     @Test
+    fun `user assign self reaches the administrators only and no default bundle names it`() {
+        val organisationId = fixture.createActiveOrganisation("drift-self", ACTOR_ID)
+        val held = (ROLE_CODES + TENANT_ADMIN).associateWith { heldByRole(organisationId, it) }
+
+        // Derived like every tenant code (#342), so a new tenant's administrator holds it.
+        assertTrue(SELF_ASSIGN in held.getValue(TENANT_ADMIN))
+        assertTrue(SELF_ASSIGN in heldBy(PLATFORM_SUPER_ADMIN_ROLE_ID))
+        assertTrue(SELF_ASSIGN in heldBy(LOCAL_ADMIN_ROLE_ID))
+        held.filterKeys { it != TENANT_ADMIN }.forEach { (role, codes) ->
+            assertTrue(SELF_ASSIGN !in codes, "$role must not hold $SELF_ASSIGN")
+        }
+        assertTrue(SELF_ASSIGN !in heldBy(PLATFORM_SUPPORT_ROLE_ID))
+        assertTrue(
+            OrganisationBootstrapDefaults.EXPLICIT_ROLE_PERMISSIONS.values
+                .none { SELF_ASSIGN in it },
+        )
+    }
+
+    @Test
     fun `audit export reaches the administrators, derived, and no other seeded role`() {
         val organisationId = fixture.createActiveOrganisation("drift-export", ACTOR_ID)
         val held = (ROLE_CODES + TENANT_ADMIN).associateWith { heldByRole(organisationId, it) }
@@ -331,6 +350,7 @@ class SeededRolesDriftTests(
 
     private companion object {
         const val TENANT_ADMIN = "TENANT_ADMIN"
+        const val SELF_ASSIGN = "user.assign_self"
         const val PLATFORM_SUPER_ADMIN_ROLE_ID = "50000000-0000-0000-0000-000000000001"
         const val PLATFORM_SUPPORT_ROLE_ID = "50000000-0000-0000-0000-000000000002"
         const val LOCAL_ADMIN_ROLE_ID = "77777777-7777-7777-7777-777777777777"

@@ -609,6 +609,89 @@ class OrganisationBranchProvisioningServiceTests {
     }
 
     @Test
+    fun `assigning yourself to a branch needs user assign self`() {
+        val organisationId = uuidV7()
+        val branchId = uuidV7()
+        val self = uuidV7()
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
+        store.memberships[organisationId to self] =
+            MembershipSnapshot(MembershipLifecycleState.ACTIVE, MembershipType.STAFF)
+        doThrow(MissingPermissionException("user.assign_self"))
+            .whenever(permissionGuard)
+            .requireTenantPermission(self, organisationId, "user.assign_self")
+
+        assertFailsWith<MissingPermissionException> {
+            branches.assignUser(
+                AssignUserToBranchCommand(
+                    organisationId,
+                    self,
+                    branchId,
+                    BranchAssignmentType.OPERATE,
+                    self,
+                ),
+            )
+        }
+
+        assertEquals(0, store.assignmentCount(organisationId, self))
+    }
+
+    /**
+     * Before the organisation and membership lookups: neither is seeded, so either read first would
+     * answer 409 instead. The branch exists, because the route check confirms that first (#342).
+     */
+    @Test
+    fun `assigning yourself to a branch is refused before the membership lookups`() {
+        val organisationId = uuidV7()
+        val branchId = uuidV7()
+        val self = uuidV7()
+        store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
+        doThrow(MissingPermissionException("user.assign_self"))
+            .whenever(permissionGuard)
+            .requireTenantPermission(self, organisationId, "user.assign_self")
+
+        val refusal =
+            assertFailsWith<MissingPermissionException> {
+                branches.assignUser(
+                    AssignUserToBranchCommand(
+                        organisationId,
+                        self,
+                        branchId,
+                        BranchAssignmentType.OPERATE,
+                        self,
+                    ),
+                )
+            }
+
+        assertEquals("user.assign_self", refusal.permissionCode)
+    }
+
+    @Test
+    fun `assigning someone else to a branch never asks for user assign self`() {
+        val organisationId = uuidV7()
+        val branchId = uuidV7()
+        val userId = uuidV7()
+        store.organisationStates[organisationId] = OrganisationLifecycleState.ACTIVE
+        store.branchStates[organisationId to branchId] = BranchLifecycleState.ACTIVE
+        store.memberships[organisationId to userId] =
+            MembershipSnapshot(MembershipLifecycleState.ACTIVE, MembershipType.STAFF)
+
+        branches.assignUser(
+            AssignUserToBranchCommand(
+                organisationId,
+                userId,
+                branchId,
+                BranchAssignmentType.OPERATE,
+                uuidV7(),
+            ),
+        )
+
+        assertEquals(1, store.assignmentCount(organisationId, userId))
+        verify(permissionGuard, never())
+            .requireTenantPermission(any(), any(), eq("user.assign_self"))
+    }
+
+    @Test
     fun `branch assignment rejects an inactive branch`() {
         val organisationId = uuidV7()
         val branchId = uuidV7()

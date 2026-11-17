@@ -39,12 +39,12 @@ class PermissionCatalogueMetadataTests(
                 Long::class.java,
             ),
         )
-        assertEquals(CATALOGUE_SIZE, catalogue.size, "the live catalogue is 85 codes")
+        assertEquals(CATALOGUE_SIZE, catalogue.size, "the live catalogue is 86 codes")
         assertTrue(catalogue.values.all { it.kind in KINDS && it.grantScope in SCOPES })
     }
 
     @Test
-    fun `the catalogue holds eighteen views, three context codes and sixty four mutations`() {
+    fun `the catalogue holds eighteen views, three context codes and sixty five mutations`() {
         val byKind = catalogue.values.groupingBy { it.kind }.eachCount()
 
         assertEquals(VIEW_COUNT, byKind["VIEW"])
@@ -73,7 +73,7 @@ class PermissionCatalogueMetadataTests(
     }
 
     @Test
-    fun `fifteen codes are platform scope and seventy are tenant scope`() {
+    fun `fifteen codes are platform scope and seventy one are tenant scope`() {
         assertEquals(PLATFORM_CODES, codesOfScope("PLATFORM"))
         assertEquals(TENANT_SCOPE_COUNT, codesOfScope("TENANT").size)
         assertEquals(PLATFORM_SCOPE_COUNT, codesOfScope("PLATFORM").size)
@@ -276,12 +276,12 @@ class PermissionCatalogueMetadataTests(
     )
 
     private companion object {
-        const val CATALOGUE_SIZE = 85
+        const val CATALOGUE_SIZE = 86
         const val VIEW_COUNT = 18
         const val CONTEXT_COUNT = 3
-        const val MUTATION_COUNT = 64
+        const val MUTATION_COUNT = 65
         const val PLATFORM_SCOPE_COUNT = 15
-        const val TENANT_SCOPE_COUNT = 70
+        const val TENANT_SCOPE_COUNT = 71
 
         /** The complete pairing table of `V22`: mutation code to the views it requires. */
         val EXPECTED_REQUIREMENTS: Map<String, Set<String>> =
@@ -313,6 +313,7 @@ class PermissionCatalogueMetadataTests(
                 "user.assign_branch" to setOf("branch_assignment.view"),
                 "user.revoke_branch" to setOf("branch_assignment.view"),
                 "user.assign_role" to setOf("role_assignment.view"),
+                "user.assign_self" to setOf("user.view"),
                 "user.revoke_role" to setOf("role_assignment.view"),
                 "membership.suspend" to setOf("membership.view"),
                 "membership.reactivate" to setOf("membership.view"),
