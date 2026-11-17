@@ -18,6 +18,8 @@ data class UpdateTenantRole(
     val organisationId: UUID,
     val roleId: UUID,
     val roleName: String?,
+    /** True when [description] is to be written, `null` included (which clears it). */
+    val changesDescription: Boolean,
     val description: String?,
     val actorId: UUID,
     val requestId: String? = null,

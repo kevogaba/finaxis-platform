@@ -75,12 +75,17 @@ class RoleManagementService(
     @Transactional
     fun updateTenantRole(command: UpdateTenantRole): RoleResult {
         requireTenantPermission(command.actorId, command.organisationId, "role.update")
+        // The web layer refuses a blank value first (400); this holds for every other caller, as
+        // createTenantRole's check does (#340).
+        invalidOperationUnless(command.roleName?.isNotBlank() ?: true)
+        invalidOperationUnless(command.description?.isNotBlank() ?: true)
         val role = requiredRole(command.organisationId, command.roleId)
         requireEditable(role)
         persistence.updateRole(
             command.organisationId,
             command.roleId,
             command.roleName,
+            command.changesDescription,
             command.description,
             role.rowVersion,
             command.actorId,

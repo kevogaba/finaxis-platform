@@ -1870,6 +1870,11 @@ Endpoints:
 - `POST /`: create role. Permission `role.create` + `role.view`. Shape: mutation.
 - `GET /{role_id}`: get role. Permission `role.view`. Shape: item.
 - `PATCH /{role_id}`: update role metadata. Permission `role.update` + `role.view`. Shape: mutation.
+  Each field is optional (#340). `role_name`: absent or `null` keeps the name; a value must hold
+  a non-whitespace character, or the request is `400 validation_failed`. `description`: absent
+  keeps it, an explicit `null` clears it, a string sets it, and a blank string is
+  `400 validation_failed` (send `null` to remove a description). An empty body is a no-op update
+  that still writes its `role.update` audit row.
 - `POST /{role_id}/activate`: re-enable a `DISABLED` role. Permission `role.activate` +
   `role.view`. Shape: mutation. Any other status (including a repeat) is 409 `conflict`.
 - `POST /{role_id}/deactivate`: disable an `ACTIVE` role. Permission `role.deactivate` +

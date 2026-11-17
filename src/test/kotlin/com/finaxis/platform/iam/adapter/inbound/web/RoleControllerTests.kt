@@ -12,14 +12,16 @@ import com.finaxis.platform.common.web.api.apiPageOf
 import com.finaxis.platform.common.web.versioning.ApiPaths
 import com.finaxis.platform.iam.adapter.inbound.web.dto.AssignPermissionRequest
 import com.finaxis.platform.iam.adapter.inbound.web.dto.CreateRoleRequest
-import com.finaxis.platform.iam.adapter.inbound.web.dto.UpdateRoleRequest
 import com.finaxis.platform.iam.application.role.ArchiveRole
 import com.finaxis.platform.iam.application.role.RoleResult
+import com.finaxis.platform.iam.application.role.UpdateTenantRole
 import com.finaxis.platform.iam.domain.RoleStatus
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.never
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.springframework.beans.factory.annotation.Autowired
@@ -39,6 +41,7 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.reque
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.header
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
+import java.util.UUID
 import kotlin.test.assertEquals
 
 @WebMvcTest(
@@ -100,7 +103,7 @@ class RoleControllerTests
             mockMvc
                 .patch("${ApiPaths.ROLES}/$roleId") {
                     contentType = MediaType.APPLICATION_JSON
-                    content = apiJsonCodec.mapper.writeValueAsString(UpdateRoleRequest("Ops", null))
+                    content = """{"role_name":"Ops"}"""
                     with(authentication(tenantToken(setOf("role.update"), tenantId)))
                 }.andExpect { status { isOk() } }
             mockMvc
@@ -365,5 +368,70 @@ class RoleControllerTests
             verify(roleManagementService).removePermissionFromRole(commandCaptor.capture())
             kotlin.test.assertEquals(roleId, commandCaptor.firstValue.roleId)
             kotlin.test.assertEquals(grantId, commandCaptor.firstValue.rolePermissionId)
+        }
+
+        @Test
+        fun `a blank role name is a validation failure that reaches no service`() {
+            patchRole(uuidV7(), uuidV7(), """{"role_name":"   "}""").andExpect {
+                status { isBadRequest() }
+                jsonPath("$.code") { value("validation_failed") }
+            }
+            verify(roleManagementService, never()).updateTenantRole(any())
+        }
+
+        @Test
+        fun `a blank description is a validation failure that reaches no service`() {
+            patchRole(uuidV7(), uuidV7(), """{"description":" "}""").andExpect {
+                status { isBadRequest() }
+                jsonPath("$.code") { value("validation_failed") }
+            }
+            verify(roleManagementService, never()).updateTenantRole(any())
+        }
+
+        @Test
+        fun `the description passes through as absent null or a value`() {
+            val tenantId = uuidV7()
+            val roleId = uuidV7()
+            whenever(roleManagementService.updateTenantRole(any())).thenReturn(
+                RoleResult(roleId, RoleStatus.ACTIVE),
+            )
+            whenever(iamQueryService.getRole(eq(tenantId), eq(roleId), any())).thenReturn(
+                roleDetail(tenantId, roleId),
+            )
+
+            listOf(
+                """{"role_name":"Ops"}""",
+                """{"role_name":null,"description":null}""",
+                """{"description":"Front office"}""",
+            ).forEach { body ->
+                patchRole(tenantId, roleId, body).andExpect { status { isOk() } }
+            }
+
+            val commands = argumentCaptor<UpdateTenantRole>()
+            verify(roleManagementService, times(3)).updateTenantRole(commands.capture())
+            assertEquals(
+                listOf(
+                    Triple("Ops", false, null),
+                    Triple(null, true, null),
+                    Triple(null, true, "Front office"),
+                ),
+                commands.allValues.map {
+                    Triple(
+                        it.roleName,
+                        it.changesDescription,
+                        it.description,
+                    )
+                },
+            )
+        }
+
+        private fun patchRole(
+            tenantId: UUID,
+            roleId: UUID,
+            body: String,
+        ) = mockMvc.patch("${ApiPaths.ROLES}/$roleId") {
+            contentType = MediaType.APPLICATION_JSON
+            content = body
+            with(authentication(tenantToken(setOf("role.update"), tenantId)))
         }
     }

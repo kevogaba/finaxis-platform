@@ -90,6 +90,7 @@ class JooqIamAdministrationPersistence(
         organisationId: UUID,
         roleId: UUID,
         roleName: String?,
+        changesDescription: Boolean,
         description: String?,
         rowVersion: Long,
         actorId: UUID,
@@ -101,7 +102,7 @@ class JooqIamAdministrationPersistence(
                 .set(ROLE.UPDATED_BY, actorId)
                 .set(ROLE.ROW_VERSION, rowVersion + 1)
         roleName?.let { update = update.set(ROLE.ROLE_NAME, it) }
-        description?.let { update = update.set(ROLE.DESCRIPTION, it) }
+        if (changesDescription) update = update.set(ROLE.DESCRIPTION, description)
         val updated =
             update
                 .where(ROLE.ORGANISATION_ID.eq(organisationId))
