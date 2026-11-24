@@ -9,7 +9,10 @@ import org.junit.jupiter.api.Test
 import org.springframework.validation.annotation.Validated
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
+import java.lang.reflect.AnnotatedArrayType
 import java.lang.reflect.AnnotatedElement
+import java.lang.reflect.AnnotatedParameterizedType
+import java.lang.reflect.AnnotatedType
 import java.lang.reflect.GenericArrayType
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
@@ -24,8 +27,11 @@ private const val CONSTRAINTS_PACKAGE = "jakarta.validation.constraints."
 
 /**
  * Bean Validation only runs on a request body that is marked `@Valid` (or `@Validated`), and only
- * cascades into a nested object whose field is `@Valid`. A constraint on a DTO that nothing
- * triggers is silently skipped, so this guard fails the build for every such gap (#206).
+ * cascades into a nested object whose field is `@Valid`, or into the elements of a collection, map
+ * or array whose element type is (`List<@Valid T>`). A constraint on a DTO that nothing triggers is
+ * silently skipped, so this guard fails the build for every such gap (#206). It also refuses
+ * `@Valid` on the container itself (`@field:Valid val items: List<T>`), which Hibernate Validator
+ * deprecates (HV000271) in favour of the element form.
  *
  * Known limits, deliberately not covered:
  * - constraints inherited from a superclass or interface of a DTO (only the declared fields and
@@ -44,7 +50,8 @@ class RequestBodyValidationArchitectureTest {
         assertTrue(
             violations.isEmpty(),
             "Constrained @RequestBody DTOs must be @Valid, with @field:Valid on nested " +
-                "constrained fields:\n${violations.joinToString("\n")}",
+                "constrained objects and List<@Valid T> on constrained elements:\n" +
+                violations.joinToString("\n"),
         )
     }
 
@@ -81,9 +88,27 @@ class RequestBodyValidationArchitectureTest {
         assertEquals(
             listOf(
                 "$where: $outer.child is not @Valid",
-                "$where: $outer.children is not @Valid",
+                "$where: $outer.children elements are not @Valid (List<@Valid T>)",
             ),
             validationViolations(listOf(NestedMissingCascadeController::class.java)).sorted(),
+        )
+    }
+
+    @Test
+    fun `guard refuses @Valid on a container instead of on its element type`() {
+        val where = "${ContainerLevelCascadeController::class.java.name}#create"
+        val outer = OuterWithContainerLevelCascade::class.java.name
+
+        assertEquals(
+            listOf(
+                "$where: $outer.children elements are not @Valid (List<@Valid T>)",
+                "$where: $outer.children is @Valid on its container, which Hibernate " +
+                    "Validator deprecates: mark the element type (List<@Valid T>)",
+                "$where: $outer.lookup elements are not @Valid (List<@Valid T>)",
+                "$where: $outer.lookup is @Valid on its container, which Hibernate " +
+                    "Validator deprecates: mark the element type (List<@Valid T>)",
+            ),
+            validationViolations(listOf(ContainerLevelCascadeController::class.java)).sorted(),
         )
     }
 
@@ -147,16 +172,65 @@ class RequestBodyValidationArchitectureTest {
         return type.declaredFields
             .filterNot { it.isSynthetic || Modifier.isStatic(it.modifiers) }
             .flatMap { field ->
-                val children = platformTypesIn(field.genericType)
-                val needsCascade = children.any { isConstrained(it, mutableSetOf()) }
                 buildList {
-                    if (needsCascade && !field.isAnnotationPresent(Valid::class.java)) {
-                        add("$where: ${type.name}.${field.name} is not @Valid")
+                    addAll(
+                        markViolations(
+                            field.annotatedType,
+                            field.isAnnotationPresent(Valid::class.java),
+                            "$where: ${type.name}.${field.name}",
+                        ),
+                    )
+                    platformTypesIn(field.genericType).forEach {
+                        addAll(cascadeViolations(it, where, visited))
                     }
-                    children.forEach { addAll(cascadeViolations(it, where, visited)) }
                 }
             }
     }
+
+    /**
+     * Where the cascade into [type] must be marked: on the field itself for a nested object, on the
+     * element type for a collection, map or array (each element type that reaches a constraint,
+     * nested containers included), and never on the container.
+     */
+    private fun markViolations(
+        type: AnnotatedType,
+        valid: Boolean,
+        label: String,
+    ): List<String> {
+        val elements = containerElements(type)
+        if (elements == null) {
+            val needsCascade = platformTypesIn(type.type).any { isConstrained(it, mutableSetOf()) }
+            return if (needsCascade && !valid) listOf("$label is not @Valid") else emptyList()
+        }
+        return buildList {
+            if (valid) {
+                add(
+                    "$label is @Valid on its container, which Hibernate Validator deprecates: " +
+                        "mark the element type (List<@Valid T>)",
+                )
+            }
+            elements.forEach { element ->
+                val elementValid = element.isAnnotationPresent(Valid::class.java)
+                if (containerElements(element) == null) {
+                    val needsCascade =
+                        platformTypesIn(element.type).any { isConstrained(it, mutableSetOf()) }
+                    if (needsCascade && !elementValid) {
+                        add("$label elements are not @Valid (List<@Valid T>)")
+                    }
+                } else {
+                    addAll(markViolations(element, elementValid, label))
+                }
+            }
+        }.distinct()
+    }
+
+    /** The element types of a container (type arguments, or an array's component), else null. */
+    private fun containerElements(type: AnnotatedType): List<AnnotatedType>? =
+        when (type) {
+            is AnnotatedParameterizedType -> type.annotatedActualTypeArguments.toList()
+            is AnnotatedArrayType -> listOf(type.annotatedGenericComponentType)
+            else -> null
+        }
 
     private fun isValidationTrigger(element: AnnotatedElement): Boolean =
         element.isAnnotationPresent(Valid::class.java) ||
@@ -282,9 +356,24 @@ private data class OuterWithUncascadedChild(
 private data class OuterWithCascadedChild(
     @field:Valid
     val child: ConstrainedBody,
+    val children: List<@Valid ConstrainedBody>,
+    val lookup: Map<String, List<@Valid ConstrainedBody>>,
+)
+
+private data class OuterWithContainerLevelCascade(
     @field:Valid
     val children: List<ConstrainedBody>,
+    @field:Valid
+    val lookup: Map<String, ConstrainedBody>,
 )
+
+@Suppress("UnusedParameter") // Fixture: only the handler signature matters.
+private class ContainerLevelCascadeController {
+    @PostMapping
+    fun create(
+        @RequestBody @Valid body: OuterWithContainerLevelCascade,
+    ) = Unit
+}
 
 @Suppress("UnusedParameter") // Fixture: only the handler signature matters.
 private class NestedMissingCascadeController {

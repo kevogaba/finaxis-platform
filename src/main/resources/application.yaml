@@ -4,8 +4,12 @@ server:
   # Tomcat's RemoteIpValve, believing X-Forwarded-For/-Proto/-Host/-Port ONLY from the proxies in
   # finaxis.security.client-ip.trusted-proxies (TrustedProxyValveCustomizer, #256); empty: from no
   # peer. Any other value, unset included, is refused at startup: `framework` believes them from
-  # any peer, `none` installs no valve and so ignores the list.
-  forward-headers-strategy: native
+  # any peer, `none` installs no valve and so ignores the list. (`web-server` is Spring Boot 4.2's
+  # name for the deprecated `server.forward-headers-strategy: native`.)
+  request:
+    header:
+      forwarded:
+        strategy: web-server
   compression:
     enabled: true
     min-response-size: 1KB
@@ -214,6 +218,12 @@ management:
   observations:
     annotations:
       enabled: true
+  metrics:
+    observations:
+      # Spring Boot 4.2 no longer creates each observation's `<name>.active` long-task timer by
+      # default (4.1 did, e.g. `http.server.requests.active`, `outbox.record.process.active`);
+      # keep them so the upgrade changes no exported metric.
+      include-active-long-task-timer: true
   tracing:
     propagation:
       type: b3

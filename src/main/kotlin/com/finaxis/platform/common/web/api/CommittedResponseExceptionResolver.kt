@@ -62,7 +62,7 @@ class CommittedResponseExceptionResolver :
             "Failure after the response started, aborting the transfer for {} ({}): " +
                 "exceptionClass={} rootCauseClass={}"
         val arguments =
-            arrayOf(
+            arrayOf<Any>(
                 request.requestURI,
                 request.dispatcherType,
                 ex.javaClass.name,

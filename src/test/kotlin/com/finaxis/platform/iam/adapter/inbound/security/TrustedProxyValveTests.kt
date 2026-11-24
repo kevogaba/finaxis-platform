@@ -7,7 +7,6 @@ import ch.qos.logback.core.read.ListAppender
 import org.apache.catalina.connector.Connector
 import org.apache.catalina.connector.Request
 import org.apache.catalina.connector.Response
-import org.apache.catalina.core.StandardContext
 import org.apache.catalina.valves.RemoteIpValve
 import org.apache.catalina.valves.ValveBase
 import org.junit.jupiter.api.Test
@@ -15,9 +14,12 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.EnumSource
 import org.junit.jupiter.params.provider.ValueSource
 import org.slf4j.LoggerFactory
+import org.springframework.boot.tomcat.RemoteIp
+import org.springframework.boot.tomcat.TomcatWebServer
 import org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory
+import org.springframework.boot.web.server.ForwardedRequestHeaders
+import org.springframework.boot.web.server.autoconfigure.ForwardedHeaderStrategy
 import org.springframework.boot.web.server.autoconfigure.ServerProperties
-import org.springframework.boot.web.server.autoconfigure.ServerProperties.ForwardHeadersStrategy
 import org.springframework.mock.env.MockEnvironment
 import org.springframework.mock.web.MockHttpServletRequest
 import java.math.BigInteger
@@ -32,8 +34,9 @@ import org.apache.coyote.Request as CoyoteRequest
 
 /**
  * The #256 trusted-proxy rule for Tomcat's `RemoteIpValve`: the pattern built from
- * `finaxis.security.client-ip.trusted-proxies`, the customizer that installs it, and the real
- * valve followed by [ClientIpResolver], which must never trust more than the resolver alone.
+ * `finaxis.security.client-ip.trusted-proxies`, the customizer that hands it to Spring Boot, and
+ * the valve Spring Boot builds from it followed by [ClientIpResolver], which must never trust more
+ * than the resolver alone.
  */
 class TrustedProxyValveTests {
     @Test
@@ -153,18 +156,62 @@ class TrustedProxyValveTests {
 
     @Test
     fun `the customizer replaces Tomcat's private-range default with the configured list`() {
-        val factory = TomcatServletWebServerFactory()
-        val valve = RemoteIpValve().apply { setTrustedProxies("192\\.168\\..*") }
-        factory.addEngineValves(valve)
+        // What `server.tomcat.remoteip.*` could make Spring Boot hand the valve: other headers,
+        // a wider trust and a different usage. Only the HTTPS value and the usage survive.
+        val factory =
+            TomcatServletWebServerFactory().apply {
+                remoteIp =
+                    RemoteIp(
+                        RemoteIp.Header("X-Host", "X-Port", "X-Real-IP", "X-Scheme", "on"),
+                        RemoteIp.Proxies("192\\.168\\..*", "10\\..*"),
+                        RemoteIp.Usage.ALWAYS,
+                    )
+            }
 
         customizer("192.0.2.10").customize(factory)
 
-        assertEquals(TrustedProxyPattern.of(ranges("192.0.2.10")), valve.internalProxies)
-        assertNull(valve.trustedProxies)
-        assertEquals(1, factory.engineValves.size)
+        val narrowed = requireNotNull(factory.remoteIp)
+        assertEquals(
+            RemoteIp.Proxies(TrustedProxyPattern.of(ranges("192.0.2.10")), null),
+            narrowed.proxies(),
+        )
+        assertEquals(
+            RemoteIp.Header(
+                "X-Forwarded-Host",
+                "X-Forwarded-Port",
+                "X-Forwarded-For",
+                "X-Forwarded-Proto",
+                "on",
+            ),
+            narrowed.header(),
+        )
+        assertEquals(RemoteIp.Usage.ALWAYS, narrowed.usage())
 
         customizer().customize(factory)
-        assertEquals(TrustedProxyPattern.NOTHING, valve.internalProxies)
+        assertEquals(TrustedProxyPattern.NOTHING, factory.remoteIp?.proxies()?.internal())
+    }
+
+    @Test
+    fun `with nothing configured the valve reads the four headers for forwarded requests`() {
+        val factory = TomcatServletWebServerFactory()
+
+        customizer().customize(factory)
+
+        val narrowed = requireNotNull(factory.remoteIp)
+        assertNull(narrowed.header()?.protocolHttpsValue())
+        assertEquals(RemoteIp.Usage.FOR_FORWARDED_REQUEST_HEADERS, narrowed.usage())
+    }
+
+    @Test
+    fun `the valve Spring Boot builds trusts exactly the configured list`() {
+        val valve = bootValve(listOf("192.0.2.10"))
+
+        assertEquals(TrustedProxyPattern.of(ranges("192.0.2.10")), valve.internalProxies)
+        assertNull(valve.trustedProxies)
+        assertEquals("X-Forwarded-For", valve.remoteIpHeader)
+        assertEquals("X-Forwarded-Proto", valve.protocolHeader)
+        assertEquals("X-Forwarded-Host", valve.hostHeader)
+        assertEquals("X-Forwarded-Port", valve.portHeader)
     }
 
     @Test
@@ -193,15 +240,18 @@ class TrustedProxyValveTests {
     }
 
     @ParameterizedTest
-    @EnumSource(ForwardHeadersStrategy::class, names = ["FRAMEWORK", "NONE"])
-    fun `every strategy but native is refused at startup`(strategy: ForwardHeadersStrategy) {
+    @EnumSource(ForwardedHeaderStrategy::class, names = ["FRAMEWORK", "NONE"])
+    fun `every strategy but web-server is refused at startup`(strategy: ForwardedHeaderStrategy) {
         val failure =
             assertFailsWith<IllegalStateException> {
                 customizer(strategy = strategy).customize(factory())
             }
 
         val message = requireNotNull(failure.message)
-        assertTrue(message.contains("server.forward-headers-strategy must be native"), message)
+        assertTrue(
+            message.contains("server.request.header.forwarded.strategy must be web-server"),
+            message,
+        )
         assertTrue(message.contains("was $strategy"), message)
     }
 
@@ -212,26 +262,64 @@ class TrustedProxyValveTests {
                 customizer(strategy = null).customize(factory())
             }
 
-        assertTrue(requireNotNull(failure.message).contains("must be native, was unset"))
+        assertTrue(requireNotNull(failure.message).contains("must be web-server, was unset"))
     }
 
     @Test
-    fun `native builds a server only with the valve Spring Boot adds`() {
+    fun `web-server builds a server only with the valve Spring Boot adds`() {
         val withValve = factory()
-        customizer(strategy = ForwardHeadersStrategy.NATIVE).customize(withValve)
-        buildContext(withValve)
+        customizer("192.0.2.10").customize(withValve)
+        build(withValve).destroy()
 
-        // Customizing a factory without the valve is allowed (a MOCK context does it and never
-        // starts a server); building a server from it is not.
-        val withoutValve = TomcatServletWebServerFactory()
+        // Customizing a factory Spring Boot builds no valve for is allowed (a MOCK context does it
+        // and never starts a server); building a server from it is not.
+        val withoutValve = TomcatServletWebServerFactory(0)
         customizer().customize(withoutValve)
-        val failure = assertFailsWith<IllegalStateException> { buildContext(withoutValve) }
-        assertTrue(requireNotNull(failure.message).contains("no RemoteIpValve"))
+        assertRefusedToBuild(withoutValve)
     }
 
-    /** What building the server does with the context customizers. */
-    private fun buildContext(factory: TomcatServletWebServerFactory) =
-        factory.contextCustomizers.forEach { it.customize(StandardContext()) }
+    @Test
+    fun `a server whose valve does not trust exactly the list is refused`() {
+        // A later customizer widening what this one set.
+        val widened = factory()
+        customizer("192.0.2.10").customize(widened)
+        val narrowed = requireNotNull(widened.remoteIp)
+        widened.remoteIp =
+            RemoteIp(narrowed.header(), RemoteIp.Proxies(".*", null), narrowed.usage())
+        assertRefusedToBuild(widened)
+
+        // A second valve of its own, which would believe forwarded headers from Tomcat's
+        // private-range default.
+        val second = factory().apply { addEngineValves(RemoteIpValve()) }
+        customizer("192.0.2.10").customize(second)
+        assertRefusedToBuild(second)
+    }
+
+    private fun assertRefusedToBuild(factory: TomcatServletWebServerFactory) {
+        val failure = assertFailsWith<IllegalStateException> { build(factory).destroy() }
+        assertTrue(requireNotNull(failure.message).contains("no RemoteIpValve"), failure.message)
+    }
+
+    /**
+     * An embedded Tomcat built (not started: no connector is bound until `start()`) as an
+     * application context builds it, so the context customizers run against Spring Boot's engine.
+     */
+    private fun build(factory: TomcatServletWebServerFactory) =
+        factory.getWebServer() as TomcatWebServer
+
+    /** The `RemoteIpValve` Spring Boot builds for the list once the customizer has run. */
+    private fun bootValve(trusted: List<String>): RemoteIpValve {
+        val factory = factory()
+        customizer(*trusted.toTypedArray()).customize(factory)
+        val server = build(factory)
+        try {
+            return server.tomcat.engine.pipeline.valves
+                .filterIsInstance<RemoteIpValve>()
+                .single()
+        } finally {
+            server.destroy()
+        }
+    }
 
     @Test
     fun `with no trusted proxy the valve changes nothing`() {
@@ -321,10 +409,7 @@ class TrustedProxyValveTests {
         peer: String,
         vararg headers: Pair<String, String>,
     ): Seen {
-        val factory = TomcatServletWebServerFactory()
-        val valve = RemoteIpValve()
-        factory.addEngineValves(valve)
-        customizer(*trusted.toTypedArray()).customize(factory)
+        val valve = bootValve(trusted)
         val resolver = ClientIpResolver(ClientIpProperties(trusted))
         var seen: Seen? = null
         valve.next =
@@ -362,16 +447,19 @@ class TrustedProxyValveTests {
 
     private fun customizer(
         vararg trusted: String,
-        strategy: ForwardHeadersStrategy? = ForwardHeadersStrategy.NATIVE,
+        strategy: ForwardedHeaderStrategy? = ForwardedHeaderStrategy.WEB_SERVER,
         environment: MockEnvironment = MockEnvironment(),
     ) = TrustedProxyValveCustomizer(
         ClientIpProperties(trusted.toList()),
-        ServerProperties().apply { forwardHeadersStrategy = strategy },
+        ServerProperties().apply { request.header.forwarded.strategy = strategy },
         environment,
     )
 
+    /** A factory as `web-server` leaves it: Spring Boot builds a valve from `remoteIp`. */
     private fun factory() =
-        TomcatServletWebServerFactory().apply { addEngineValves(RemoteIpValve()) }
+        TomcatServletWebServerFactory(0).apply {
+            forwardedRequestHeaders = ForwardedRequestHeaders.X_FORWARDED_WITHOUT_PREFIX
+        }
 
     private fun captureWarnings(action: () -> Unit): List<String> {
         val logger = LoggerFactory.getLogger(TrustedProxyValveCustomizer::class.java) as Logger

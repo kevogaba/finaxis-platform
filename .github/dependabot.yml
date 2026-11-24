@@ -8,6 +8,12 @@ updates:
       time: "08:00"
       timezone: "Africa/Nairobi"
     open-pull-requests-limit: 10
+    ignore:
+      # jOOQ code generation runs Flyway against these embedded binaries. Keep them on the
+      # PostgreSQL major the application runs on (`TestContainerImages.POSTGRES`, compose.yaml),
+      # so generated code matches runtime and Flyway stays on a version it has verified.
+      - dependency-name: "io.zonky.test.postgres:embedded-postgres-binaries-bom"
+        update-types: ["version-update:semver-major"]
     groups:
       gradle-dependencies:
         patterns:

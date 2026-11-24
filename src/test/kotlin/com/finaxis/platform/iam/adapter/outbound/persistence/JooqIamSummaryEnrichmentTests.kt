@@ -20,8 +20,8 @@ import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import com.finaxis.platform.jooq.tables.references.USER_ROLE_ASSIGNMENT
 import org.jooq.DSLContext
 import org.jooq.ExecuteContext
+import org.jooq.ExecuteListener
 import org.jooq.impl.DSL
-import org.jooq.impl.DefaultExecuteListener
 import org.jooq.impl.DefaultExecuteListenerProvider
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
@@ -182,7 +182,7 @@ class JooqIamSummaryEnrichmentTests(
                 DSL.using(
                     dsl.configuration().derive(
                         DefaultExecuteListenerProvider(
-                            object : DefaultExecuteListener() {
+                            object : ExecuteListener {
                                 override fun executeStart(ctx: ExecuteContext) {
                                     counter.incrementAndGet()
                                 }

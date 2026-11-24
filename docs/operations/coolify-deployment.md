@@ -28,12 +28,12 @@ deployment, not a Coolify-native build from source.
   `SecurityConfiguration` permits only the literal string `/actuator/health` unauthenticated;
   `/actuator/health/readiness` or `/actuator/health/liveness` will 401 against Coolify's check even
   though the probes themselves are enabled (`management.endpoint.health.probes.enabled: true`).
-- Coolify sits in front of the application as a reverse proxy (Traefik). `server.forward-headers-
-  strategy: native` believes Traefik's `X-Forwarded-*` headers **only** once
-  `FINAXIS_CLIENT_IP_TRUSTED_PROXIES` names Traefik [^client-ip]; until then the client address,
-  scheme and port the application sees are Traefik's connection's (#256), HSTS is not sent and a
-  same-origin browser request is refused as CORS. Set it before, or with, the first deploy of this
-  release; the `production` profile logs a startup `WARN` while it is empty.
+- Coolify sits in front of the application as a reverse proxy (Traefik).
+  `server.request.header.forwarded.strategy: web-server` believes Traefik's `X-Forwarded-*` headers
+  **only** once `FINAXIS_CLIENT_IP_TRUSTED_PROXIES` names Traefik [^client-ip]; until then the
+  client address, scheme and port the application sees are Traefik's connection's (#256), HSTS is
+  not sent and a same-origin browser request is refused as CORS. Set it before, or with, the first
+  deploy of this release; the `production` profile logs a startup `WARN` while it is empty.
 
 ## Required environment variables
 
