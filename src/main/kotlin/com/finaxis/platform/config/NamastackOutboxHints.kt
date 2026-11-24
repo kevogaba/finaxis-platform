@@ -57,7 +57,7 @@ class NamastackOutboxHints : RuntimeHintsRegistrar {
                 "io.namastack.outbox.OutboxProcessingScheduler" to "process",
                 "io.namastack.outbox.instance.OutboxInstanceRegistry" to
                     "performHeartbeatAndCleanup",
-                "io.namastack.outbox.rabbit.RabbitOutboxHandler" to "handle",
+                "com.finaxis.platform.common.transitions.AmqpOutboxHandler" to "handle",
             )
     }
 }

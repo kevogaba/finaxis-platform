@@ -48,16 +48,8 @@ class TransitionModuleConfigurationTests {
                 "spring.modulith.events.externalization.serialize-externalization",
             ),
         )
-        assertEquals(
-            "correlated",
-            environment.getProperty("spring.rabbitmq.publisher-confirm-type"),
-        )
-        assertEquals("true", environment.getProperty("spring.rabbitmq.publisher-returns"))
-        assertEquals("true", environment.getProperty("spring.rabbitmq.template.mandatory"))
-        assertEquals(
-            "true",
-            environment.getProperty("namastack.outbox.rabbit.fail-on-unroutable"),
-        )
+        assertEquals("10s", environment.getProperty("finaxis.outbox.amqp.publish-timeout"))
+        assertEquals(null, environment.getProperty("spring.rabbitmq.host"))
         assertEquals("true", environment.getProperty("namastack.outbox.enabled"))
         assertEquals("fixed", environment.getProperty("namastack.outbox.polling.trigger"))
         assertEquals("2s", environment.getProperty("namastack.outbox.polling.fixed.interval"))

@@ -2,14 +2,16 @@
 
 Namastack (`io.namastack:namastack-outbox-*:2.0.0`, via `spring-modulith-starter-namastack`) is the
 **only** transactional outbox mechanism in this codebase, and must remain the only one. There is no
-custom poller, publisher, or claim logic anywhere in `com.finaxis.platform`, and there must never
-be one — see [ADR 0008](../adr/0008-transactional-outbox-over-direct-amqp.md). Read this with
+custom poller or claim logic anywhere in `com.finaxis.platform`, and there must never be one — see
+[ADR 0008](../adr/0008-transactional-outbox-over-direct-amqp.md). The one publisher is a Namastack
+`OutboxHandler`, `AmqpOutboxHandler`, because Namastack has no AMQP 1.0 module
+([ADR 0046](../adr/0046-publish-the-outbox-over-amqp-1-0.md)). Read this with
 [FSM transitions](fsm-transitions.md), [ADR 0002](../adr/0002-fsm-transition-infrastructure.md),
 and [ADR 0004](../adr/0004-membership-activation-notification-pipeline.md), which establish the
 `transition -> Spring application event -> Modulith externalization -> Namastack outbox ->
-RabbitMQ -> thin listener` pipeline this document assumes. The outbox publishes over AMQP 0.9.1;
-the listeners consume over RabbitMQ's native AMQP 1.0
-([ADR 0045](../adr/0045-consume-integration-events-over-amqp-1-0.md)).
+RabbitMQ -> thin listener` pipeline this document assumes. The outbox publishes and the listeners
+consume over RabbitMQ's native AMQP 1.0
+([ADR 0045](../adr/0045-consume-integration-events-over-amqp-1-0.md), ADR 0046).
 
 ## Transactional guarantee
 
@@ -28,7 +30,7 @@ transition.
 Every externalized event today is an instance of the single generic `ExternalizedTransitionEvent`
 envelope (`common.transitions`), distinguished by its `target` string — a lowercase,
 dot-separated name that is simultaneously the Namastack routing target **and** the RabbitMQ
-exchange name (see `RabbitOutboxRouting` in `TransitionModuleConfiguration`). This table maps that
+exchange name (`AmqpOutboxHandler` publishes to the exchange of that name). This table maps that
 convention onto the human-readable, PascalCase catalogue used elsewhere in project discussions:
 
 | `target` | Catalogue name | Wired today? |
@@ -60,7 +62,7 @@ convention onto the human-readable, PascalCase catalogue used elsewhere in proje
 | — | `UserInvited`, `UserActivated`, `UserSuspended`, `UserDeactivated` | **No** — these user FSM transitions currently use `InternalTransitionEvent` only. |
 | — | `PermissionAssignedToRole` | **No** — audited (`role.assign_permission`) but not externalized. |
 | — | `KeycloakUserProvisioned` | **No, deliberately** — Keycloak provisioning success is now audited (`recordExternalDispatch`), but has no externalized event; nothing downstream consumes it yet. Add one when a real consumer needs it. |
-| — | Branch `RETURN_FOR_CHANGES` (`PENDING_APPROVAL` to `DRAFT`) | **No** — internal by design, **implemented** (#180, [ADR 0029](../adr/0029-approval-model-per-resource-extensions.md)): `internalEventFactories()` only, as `SUSPEND_PENDING_APPROVAL`. Consumers of `branch.approval-requested` see a repeat per resubmit with no exit event; externalize a `*.returned-for-changes` event (a new `target`, a `RabbitOutboxRouting` route and an exchange entry) if a consumer needs it. |
+| — | Branch `RETURN_FOR_CHANGES` (`PENDING_APPROVAL` to `DRAFT`) | **No** — internal by design, **implemented** (#180, [ADR 0029](../adr/0029-approval-model-per-resource-extensions.md)): `internalEventFactories()` only, as `SUSPEND_PENDING_APPROVAL`. Consumers of `branch.approval-requested` see a repeat per resubmit with no exit event; externalize a `*.returned-for-changes` event (a new `target` and its exchange, declared and bound) if a consumer needs it. |
 | — | Organisation `RETURN_FOR_CHANGES` (`PENDING_APPROVAL` to `DRAFT`) | **No** — internal by design, **implemented** (#181, [ADR 0029](../adr/0029-approval-model-per-resource-extensions.md)): `internalEventFactories()` only, as `START_PROVISIONING`. Consumers of `organisation.approval-requested` see a repeat per resubmit with no exit event; same follow-up as for the branch. |
 
 This change deliberately closes only the gaps needed for the two new audited mutations
@@ -126,10 +128,16 @@ namastack:
     processing:
       stop-on-first-failure: true                  # preserves per-record-key ordering
       delete-completed-records: false               # retain COMPLETED rows for inspection
-    rabbit:
-      fail-on-unroutable: true
-      publisher-confirm-timeout: 10s
+finaxis:
+  outbox:
+    amqp:
+      publish-timeout: 10s                         # AmqpOutboxHandler's wait for RabbitMQ's outcome
 ```
+
+`AmqpOutboxHandler` returns only once RabbitMQ has accepted the message. A rejected or released
+message (RabbitMQ releases one no queue is bound to receive, as `fail-on-unroutable` used to fail
+it), no outcome within `publish-timeout`, or a connection failure throws, and the record is retried
+on the backoff above.
 
 Setting `namastack.outbox.enabled: false` (or the `FINAXIS_OUTBOX_ENABLED` env var) disables the
 outbox worker entirely, satisfying "outbox worker can be disabled/enabled by configuration."
@@ -142,8 +150,8 @@ Namastack (like virtually every outbox implementation) provides **at-least-once*
 crash between a successful RabbitMQ publish and marking the record `COMPLETED` results in the
 same record being retried and republished on the next poll. Consumers must be idempotent.
 
-Every AMQP message published through `RabbitOutboxRouting` now carries an
-`X-Outbox-Record-Key` header (`TransitionModuleConfiguration.rabbitOutboxRouting()`), set from
+Every AMQP message `AmqpOutboxHandler` publishes carries an `X-Outbox-Record-Key` application
+property, set from
 Namastack's own `OutboxRecordMetadata.key` — the same key Namastack uses to order and partition
 records. Consumers can use it to deduplicate redelivered messages.
 
@@ -183,6 +191,21 @@ The upgrade from 1.11.1 keeps the tables, payloads, handler ids and retry state 
   `<name>.active` timer by default; `management.metrics.observations.include-active-long-task-timer:
   true` keeps them, so `outbox.record.process.active` is still exported.
 
+## Publishing over AMQP 1.0 (ADR 0046)
+
+Namastack's RabbitMQ module publishes over AMQP 0.9.1 only, so the release that moved to AMQP 1.0
+replaced it with `AmqpOutboxHandler` (`common.transitions`), the outbox's one `OutboxHandler`:
+
+- It publishes through `RabbitAmqpTemplate` on the AMQP 1.0 connection the listeners and the
+  topology use, to the exchange named by the event's `target` with no routing key, as JSON written
+  by Spring Boot's Jackson 3 mapper (the payload Namastack's module sent).
+- A record scheduled before that release names Namastack's AMQP 0.9.1 handler
+  (`io.namastack.outbox.rabbit.RabbitOutboxHandler#handle(...)`); `AmqpOutboxHandler` declares
+  that id as an identity alias, so such a record is delivered by it, not stranded.
+- Only it may use `RabbitAmqpTemplate` or `RabbitTemplate` (`ModuleDependencyRuleTests`).
+- With `finaxis.amqp.enabled=false` (a test context without a broker) it fails each record
+  without connecting.
+
 ## Observability
 
 `namastack-outbox-observability` (already a dependency) auto-configures Micrometer
@@ -202,6 +225,9 @@ what the library already emits would be redundant.
 
 ## Tests
 
+- `AmqpOutboxHandlerTests` (the message and every outcome, without a broker) and
+  `AmqpOutboxHandlerIntegrationTests` (accepted and delivered, released for an unbound exchange,
+  refused for a missing one, the AMQP 0.9.1 handler id routed to it).
 - `OrganisationActivationOutboxIntegrationTests`, `BranchActivationOutboxIntegrationTests`,
   `MembershipActivationPipelineIntegrationTests` — already prove transactional persist and
   eventual `PUBLISHED`-equivalent (`COMPLETED`) delivery for the pre-existing events.

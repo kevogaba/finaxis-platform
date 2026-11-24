@@ -1,8 +1,11 @@
 package com.finaxis.platform.architecture
 
+import com.finaxis.platform.common.transitions.AmqpOutboxConfiguration
+import com.finaxis.platform.common.transitions.AmqpOutboxHandler
 import com.tngtech.archunit.core.domain.JavaClasses
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
 import org.junit.jupiter.api.Test
+import org.springframework.amqp.rabbitmq.client.RabbitAmqpTemplate
 
 /**
  * Focused module-coupling rules for production packages that must stay independent of framework,
@@ -59,17 +62,25 @@ class ModuleDependencyRuleTests {
     }
 
     @Test
-    fun `no production code publishes directly through RabbitTemplate`() {
+    fun `nothing but the outbox handler publishes to RabbitMQ`() {
         noClasses()
             .that()
             .resideInAPackage("com.finaxis.platform..")
+            .and()
+            .doNotHaveFullyQualifiedName(AmqpOutboxHandler::class.java.name)
+            .and()
+            .doNotHaveFullyQualifiedName(AmqpOutboxConfiguration::class.java.name)
             .should()
             .dependOnClassesThat()
             .haveFullyQualifiedName("org.springframework.amqp.rabbit.core.RabbitTemplate")
+            .orShould()
+            .dependOnClassesThat()
+            .haveFullyQualifiedName(RabbitAmqpTemplate::class.java.name)
             .because(
                 "integration events are externalized only through transition event factories and " +
-                    "the Namastack outbox; see " +
-                    "docs/adr/0008-transactional-outbox-over-direct-amqp.md",
+                    "the Namastack outbox, whose one handler publishes them; see " +
+                    "docs/adr/0008-transactional-outbox-over-direct-amqp.md and " +
+                    "docs/adr/0046-publish-the-outbox-over-amqp-1-0.md",
             ).check(productionClasses)
     }
 

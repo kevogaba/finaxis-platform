@@ -156,7 +156,8 @@ Use strongly named external routing targets, for example:
 - `tradestack.inventory.adjusted`
 - `tradestack.mobile-sync.hint`
 
-Do not call `RabbitTemplate` from inside a transition transaction. The preferred path is:
+Do not call `RabbitTemplate` or `RabbitAmqpTemplate` from inside a transition transaction. The
+preferred path is:
 
 ```text
 transition -> Spring application event -> Spring Modulith externalization

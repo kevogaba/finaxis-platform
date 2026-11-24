@@ -401,9 +401,10 @@ nothing else looks wrong.
   serialization *silently produces `{}`*, so the record is written empty and only the
   publisher fails later, on a payload that can no longer be recovered. A native image built
   before this hint existed wrote exactly that, with nothing in the log to say so.
-- **The handler.** `OutboxHandlerInvoker` dispatches to `RabbitOutboxHandler.handle`
-  reflectively, and without it the publishing thread dies with
-  `MissingReflectionRegistrationError`.
+- **The handler.** `OutboxHandlerInvoker` dispatches to `AmqpOutboxHandler.handle` (Namastack's
+  `RabbitOutboxHandler.handle` before ADR 0046) reflectively, and without it the publishing thread
+  dies with `MissingReflectionRegistrationError`. The AMQP 1.0 client has not yet been through a
+  native build (ADR 0045).
 - **The background tasks.** Both outbox lifecycle beans hand their work to a `TaskScheduler`
   on start-up and Spring runs each tick through a reflective `ScheduledMethodRunnable`. AOT
   registers the scheduled work it can find by walking bean definitions, which needs the

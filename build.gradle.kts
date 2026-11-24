@@ -71,7 +71,6 @@ val mockitoAgent: Configuration = configurations.create("mockitoAgent") { isTran
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.boot:spring-boot-starter-amqp-rabbitmq")
-    implementation("org.springframework.boot:spring-boot-starter-rabbitmq")
     implementation("org.springframework.boot:spring-boot-starter-aspectj")
     implementation("org.springframework.boot:spring-boot-starter-cache")
     implementation("org.springframework.boot:spring-boot-starter-data-jdbc")
@@ -116,7 +115,6 @@ dependencies {
     implementation("tools.jackson.module:jackson-module-kotlin")
     implementation("org.springframework.boot:spring-boot-starter-session-data-redis")
     implementation(platform(libs.namastack.bom))
-    implementation("io.namastack:namastack-outbox-rabbit")
     implementation("io.namastack:namastack-outbox-observability")
     implementation("io.namastack:namastack-outbox-starter-jdbc")
     developmentOnly("org.springframework.boot:spring-boot-devtools")
@@ -127,7 +125,6 @@ dependencies {
     runtimeOnly("org.springframework.modulith:spring-modulith-runtime")
     runtimeOnly("org.springframework.modulith:spring-modulith-starter-insight")
     testImplementation("org.springframework.boot:spring-boot-starter-actuator-test")
-    testImplementation("org.springframework.boot:spring-boot-starter-rabbitmq-test")
     testImplementation("org.springframework.boot:spring-boot-starter-data-jdbc-test")
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis-test")
     testImplementation("org.springframework.boot:spring-boot-starter-flyway-test")

@@ -34,7 +34,7 @@ import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
 import org.springframework.amqp.core.Message
 import org.springframework.amqp.core.MessageProperties
-import org.springframework.amqp.rabbit.core.RabbitTemplate
+import org.springframework.amqp.rabbitmq.client.RabbitAmqpTemplate
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
@@ -88,7 +88,7 @@ class ApplicationInvitePipelineIntegrationTests(
     private val storageProvider: StorageProvider,
     private val dsl: DSLContext,
     private val flakyDispatchStore: FlakyDispatchStore,
-    private val rabbitTemplate: RabbitTemplate,
+    private val amqpTemplate: RabbitAmqpTemplate,
     private val jsonMapper: JsonMapper,
 ) {
     private val fixture = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
@@ -379,16 +379,16 @@ class ApplicationInvitePipelineIntegrationTests(
                         "dispatchKey" to invite.dispatchKey,
                     ),
             )
-        // `send`, not `convertAndSend`: the template's JSON converter (installed by Namastack's
-        // outbox) would send the bytes as a JSON string, which the listener rejects unread. The
-        // event is written by Spring Boot's Jackson 3 mapper, as the outbox writes it.
-        rabbitTemplate.send(
-            USER_PROVISIONING_QUEUE,
-            Message(
-                jsonMapper.writeValueAsBytes(event),
-                MessageProperties().apply { contentType = MessageProperties.CONTENT_TYPE_JSON },
-            ),
-        )
+        // Written by Spring Boot's Jackson 3 mapper, as the outbox writes it; sent straight to the
+        // queue over AMQP 1.0, waiting for the broker to accept it.
+        amqpTemplate
+            .send(
+                USER_PROVISIONING_QUEUE,
+                Message(
+                    jsonMapper.writeValueAsBytes(event),
+                    MessageProperties().apply { contentType = MessageProperties.CONTENT_TYPE_JSON },
+                ),
+            ).get(PUBLISH_TIMEOUT_SECONDS, TimeUnit.SECONDS)
     }
 
     private fun fetchInboxMessageCount(recipientEmail: String): Int {
@@ -487,6 +487,7 @@ class ApplicationInvitePipelineIntegrationTests(
         const val GREENMAIL_SMTP_PORT = 3025
         const val USER_PROVISIONING_QUEUE = "finaxis.lifecycle.user-provisioning-events"
         const val APPLICATION_INVITE_TARGET = "finaxis.lifecycle.user.application-invite-requested"
+        const val PUBLISH_TIMEOUT_SECONDS = 10L
 
         @DynamicPropertySource
         @JvmStatic

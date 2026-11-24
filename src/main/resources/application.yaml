@@ -113,23 +113,14 @@ spring:
       verification-enabled: true
   amqp:
     rabbitmq:
-      # RabbitMQ's native AMQP 1.0, which the @RabbitListener consumers and the topology
-      # declarations use (AmqpListenerConfiguration). Same broker, port and credentials as the
-      # AMQP 0.9.1 client below, which the outbox publisher still uses: RabbitMQ serves both
-      # protocols on one port. The application refuses to start while this broker is unreachable.
+      # RabbitMQ's native AMQP 1.0, the one protocol the application speaks: the outbox publisher
+      # (AmqpOutboxHandler), the @RabbitListener consumers and the topology declarations
+      # (AmqpListenerConfiguration). The application refuses to start while this broker is
+      # unreachable (ADR 0045).
       host: ${FINAXIS_RABBITMQ_HOST:localhost}
       port: ${FINAXIS_RABBITMQ_PORT:5673}
       username: ${FINAXIS_RABBITMQ_USERNAME:finaxis}
       password: ${FINAXIS_RABBITMQ_PASSWORD:finaxis}
-  rabbitmq:
-    host: ${FINAXIS_RABBITMQ_HOST:localhost}
-    port: ${FINAXIS_RABBITMQ_PORT:5673}
-    username: ${FINAXIS_RABBITMQ_USERNAME:finaxis}
-    password: ${FINAXIS_RABBITMQ_PASSWORD:finaxis}
-    publisher-confirm-type: correlated
-    publisher-returns: true
-    template:
-      mandatory: true
   mail:
     host: ${FINAXIS_SMTP_HOST:localhost}
     port: ${FINAXIS_SMTP_PORT:1025}
@@ -171,9 +162,6 @@ namastack:
     processing:
       stop-on-first-failure: true
       delete-completed-records: false
-    rabbit:
-      fail-on-unroutable: true
-      publisher-confirm-timeout: ${FINAXIS_OUTBOX_RABBIT_CONFIRM_TIMEOUT:10s}
 
 jobrunr:
   background-job-server:
@@ -293,6 +281,12 @@ sentry:
   dsn: ""
 
 finaxis:
+  outbox:
+    amqp:
+      # How long the outbox publisher waits for RabbitMQ to accept a message before the record is
+      # retried (AmqpOutboxHandler, ADR 0046). FINAXIS_OUTBOX_RABBIT_CONFIRM_TIMEOUT, the AMQP 0.9.1
+      # publisher's confirm timeout, is still read when the new name is unset.
+      publish-timeout: ${FINAXIS_OUTBOX_PUBLISH_TIMEOUT:${FINAXIS_OUTBOX_RABBIT_CONFIRM_TIMEOUT:10s}}
   api:
     idempotency:
       retention: ${FINAXIS_API_IDEMPOTENCY_RETENTION:24h}

@@ -23,15 +23,16 @@ with their lifecycles, the journal schema, the synchronous posting engine, versi
 reversal, control-account reconciliation and manual journals - see
 `docs/architecture/accounting-module-boundary.md`), `notifications` (RabbitMQ
 listener → JobRunr job), `common` (reusable transitions/audit/context/persistence/web infra and
-the AMQP 1.0 listener wiring), `config`.
+the AMQP 1.0 messaging: the outbox handler and the listener wiring), `config`.
 
 The membership-activation pipeline is the **reference event pattern** — copy it for new
 domain events rather than inventing another mechanism: transition `eventFactory` →
 `ExternalizedTransitionEvent` → Modulith/Namastack outbox → RabbitMQ (routed by the event's
 `target`) → thin `@RabbitListener` → application service → JobRunr job. See
-`docs/adr/0004-membership-activation-notification-pipeline.md`. The listeners consume over
-RabbitMQ's native AMQP 1.0 and the application fails fast at startup while the broker is
-unreachable (`docs/adr/0045-consume-integration-events-over-amqp-1-0.md`).
+`docs/adr/0004-membership-activation-notification-pipeline.md`. The outbox publishes and the
+listeners consume over RabbitMQ's native AMQP 1.0, and the application fails fast at startup while
+the broker is unreachable (`docs/adr/0045-consume-integration-events-over-amqp-1-0.md`,
+`docs/adr/0046-publish-the-outbox-over-amqp-1-0.md`).
 
 Known follow-ups (do not treat as bugs): `config` intentionally does not declare an
 `@ApplicationModule` because it is infrastructure wiring rather than a domain module; JaCoCo
@@ -597,9 +598,11 @@ Do not invent accounting tables or columns outside those documents.
   `eventFactories` — publish `InternalTransitionEvent` for in-process signals and
   `ExternalizedTransitionEvent` (with a `target`) for integration events.
 - **Never** hand-write a module-private outbox table or ad-hoc broker publish. Externalize
-  only through `eventFactories` + Spring Modulith + Namastack Outbox. The RabbitMQ exchange is
-  chosen by a Namastack `RabbitOutboxRouting` bean keyed on the event `target` (the Modulith
-  bridge drops the exchange), so a new externalized event needs a matching route.
+  only through `eventFactories` + Spring Modulith + Namastack Outbox. The outbox's one handler,
+  `AmqpOutboxHandler`, publishes each event over AMQP 1.0 to the exchange named by its `target`
+  and fails the record (so Namastack retries it) unless RabbitMQ accepts it, so a new externalized
+  event needs its exchange declared and bound to a queue (ADR 0046). Nothing else may use
+  `RabbitAmqpTemplate` (`ModuleDependencyRuleTests`).
 - Keep RabbitMQ listeners thin: deserialize, validate, delegate to an application service,
   ensure idempotency (deterministic job/keys), ack/nack on outcome. Every `@RabbitListener` runs
   in an AMQP 1.0 container from `AmqpListenerConfiguration`'s factory (ADR 0045); throw

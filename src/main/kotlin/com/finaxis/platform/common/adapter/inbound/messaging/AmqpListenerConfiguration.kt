@@ -12,12 +12,11 @@ import org.springframework.context.annotation.Configuration
 
 /**
  * Every `@RabbitListener` consumes over RabbitMQ's native AMQP 1.0, and the broker topology (the
- * `Exchange`, `Queue`, `Binding` and `Declarables` beans) is declared over the same connection.
+ * `Exchange`, `Queue`, `Binding` and `Declarables` beans) is declared over the same connection,
+ * the one the outbox publisher (`AmqpOutboxHandler`) uses.
  *
- * The listener factory is declared here, under the name `@RabbitListener` looks up, rather than
- * left to auto-configuration: Spring Boot's AMQP 0.9.1 support, still on the classpath for the
- * outbox publisher, registers a factory under the same name, and which of the two wins would
- * otherwise depend on auto-configuration order.
+ * The listener factory and the admin are declared here rather than left to auto-configuration so
+ * they can refuse to start while [AmqpProperties.enabled] is off (see below).
  *
  * Neither the admin nor the listeners start without a reachable broker: RabbitMQ's AMQP 1.0
  * client makes one attempt at its first connection, so an unreachable broker fails the
@@ -85,11 +84,11 @@ class AmqpListenerConfiguration {
 }
 
 /**
- * Whether the AMQP 1.0 admin and listener containers run at all.
+ * Whether the AMQP 1.0 admin, listener containers and outbox publisher connect at all.
  *
  * @property enabled `true` in every deployment, so a broker that cannot be reached fails startup;
- *   `false` only for a context that runs no broker (most test contexts), where they never start
- *   and nothing connects to RabbitMQ.
+ *   `false` only for a context that runs no broker (most test contexts), where the admin and the
+ *   containers never start and the outbox publisher fails each record without connecting.
  */
 @ConfigurationProperties(prefix = "finaxis.amqp")
 data class AmqpProperties(

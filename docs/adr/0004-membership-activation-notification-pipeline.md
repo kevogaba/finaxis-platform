@@ -6,6 +6,10 @@ Accepted
 
 Date: 2026-07-13
 
+Amended by [ADR 0045](0045-consume-integration-events-over-amqp-1-0.md) (the listeners consume
+over AMQP 1.0) and [ADR 0046](0046-publish-the-outbox-over-amqp-1-0.md) (`AmqpOutboxHandler`
+publishes the outbox over AMQP 1.0 in place of `RabbitOutboxRouting`).
+
 ## Context
 
 Selected lifecycle transitions need reliable integration delivery without coupling transition

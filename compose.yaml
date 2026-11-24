@@ -55,8 +55,9 @@ services:
   # which keeps local development in step with whatever this file declares.
   #
   # Consequence, worth knowing before you debug it: while these containers are running, the
-  # compose-derived details take precedence over `spring.datasource.url`, `spring.rabbitmq.*`, and
-  # `spring.data.redis.*`, so the FINAXIS_* environment variables are effectively no-ops LOCALLY.
+  # compose-derived details take precedence over `spring.datasource.url`, `spring.amqp.rabbitmq.*`,
+  # and `spring.data.redis.*`, so the FINAXIS_* environment variables are effectively no-ops
+  # LOCALLY.
   # They are authoritative in staging and production, where `spring-boot-docker-compose` is a
   # `developmentOnly` dependency and is not on the classpath at all.
   #

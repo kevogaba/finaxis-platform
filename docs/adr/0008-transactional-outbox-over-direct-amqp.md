@@ -6,6 +6,11 @@ Accepted
 
 Date: 2026-07-15
 
+Amended by [ADR 0046](0046-publish-the-outbox-over-amqp-1-0.md): Namastack remains the only
+outbox, but its records are published over AMQP 1.0 by one `OutboxHandler` of this repository,
+`AmqpOutboxHandler`, since Namastack has no AMQP 1.0 module. Every other rule here stands: no other
+outbox table, poller, publisher or claim logic.
+
 ## Context
 
 ADR 0002 and ADR 0004 already established that lifecycle transitions publish through Spring

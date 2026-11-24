@@ -8,7 +8,10 @@ Date: 2026-11-24
 
 Changes the consumer half of the [ADR 0004](0004-membership-activation-notification-pipeline.md)
 reference pipeline. The publisher half, [ADR 0008](0008-transactional-outbox-over-direct-amqp.md)'s
-Namastack outbox over AMQP 0.9.1, is unchanged here and moves in a follow-up.
+Namastack outbox over AMQP 0.9.1, was unchanged here and moved in
+[ADR 0046](0046-publish-the-outbox-over-amqp-1-0.md), which also removed the AMQP 0.9.1 stack:
+since then `RabbitAmqpAdmin` alone declares the topology, `spring.rabbitmq.*` is gone and the health
+aggregate has no `rabbit` component.
 
 ## Context
 

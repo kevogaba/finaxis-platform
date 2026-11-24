@@ -11,7 +11,6 @@ import org.springframework.amqp.rabbitmq.client.config.RabbitAmqpListenerContain
 import org.springframework.boot.amqp.rabbitmq.autoconfigure.AmqpRabbitAutoConfiguration
 import org.springframework.boot.autoconfigure.AutoConfigurations
 import org.springframework.boot.context.properties.EnableConfigurationProperties
-import org.springframework.boot.rabbitmq.autoconfigure.RabbitAutoConfiguration
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.Bean
@@ -23,20 +22,15 @@ import kotlin.test.assertTrue
 /**
  * [AmqpListenerConfiguration] against a port nothing listens on: an unreachable broker fails
  * startup unless [AmqpProperties.enabled] is off, which keeps the admin and the listener
- * containers from ever connecting, and the `@RabbitListener` factory is the AMQP 1.0 one although
- * Spring Boot's AMQP 0.9.1 support registers one under the same name.
+ * containers from ever connecting, and the `@RabbitListener` factory is the AMQP 1.0 one.
  */
 class AmqpListenerConfigurationTests {
     private val closedPort = ServerSocket(0).use { it.localPort }
 
     private val runner =
         ApplicationContextRunner()
-            .withConfiguration(
-                AutoConfigurations.of(
-                    AmqpRabbitAutoConfiguration::class.java,
-                    RabbitAutoConfiguration::class.java,
-                ),
-            ).withUserConfiguration(AmqpListenerConfiguration::class.java, Properties::class.java)
+            .withConfiguration(AutoConfigurations.of(AmqpRabbitAutoConfiguration::class.java))
+            .withUserConfiguration(AmqpListenerConfiguration::class.java, Properties::class.java)
             .withPropertyValues(
                 "spring.amqp.rabbitmq.host=localhost",
                 "spring.amqp.rabbitmq.port=$closedPort",

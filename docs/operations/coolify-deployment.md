@@ -71,11 +71,13 @@ deployment and are not provisioned by it:
 [^issuer]: Reachable both by the app container and by whatever URL clients use to obtain tokens.
   Keycloak stamps each token with the issuer URL the caller used; an internal-only hostname here
   401s every request — the same trap `compose.yaml` documents for local host networking.
-[^amqp]: The consumers and the topology use RabbitMQ's native AMQP 1.0 (the outbox publisher still
-  uses AMQP 0.9.1), on the same port and credentials. The AMQP 1.0 client makes one attempt at
-  its first connection, so a broker that cannot be reached keeps the application from starting
-  and Coolify restarts it; the outbox keeps every event in PostgreSQL meanwhile. See
-  [ADR 0045](../adr/0045-consume-integration-events-over-amqp-1-0.md).
+[^amqp]: The outbox publisher, the consumers and the topology use RabbitMQ's native AMQP 1.0. Its
+  client makes one attempt at its first connection, so a broker that cannot be reached keeps the
+  application from starting and Coolify restarts it; the outbox keeps every event in PostgreSQL
+  meanwhile. `FINAXIS_OUTBOX_PUBLISH_TIMEOUT` (default `10s`; the former
+  `FINAXIS_OUTBOX_RABBIT_CONFIRM_TIMEOUT` is still read) bounds the wait for RabbitMQ to accept a
+  message. See [ADR 0045](../adr/0045-consume-integration-events-over-amqp-1-0.md) and
+  [ADR 0046](../adr/0046-publish-the-outbox-over-amqp-1-0.md).
 
 ## The operational switches
 

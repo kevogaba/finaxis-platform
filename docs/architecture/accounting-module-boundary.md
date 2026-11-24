@@ -202,7 +202,8 @@ Wrapping either in an accounting-owned port would add indirection with no bounda
 5. Accounting `domain` stays free of framework and persistence types.
 
 `ModuleDependencyRuleTests` also gained two repository-wide rules this issue asked for: no
-production code may depend on `RabbitTemplate`, and only messaging adapters may depend on
+production code may depend on `RabbitTemplate` (since ADR 0046, nor on `RabbitAmqpTemplate`, except
+the outbox's `AmqpOutboxHandler`), and only messaging adapters may depend on
 `org.springframework.amqp` at all. Both passed on first run, which is the point — they lock in an
 invariant the codebase already held rather than forcing a change.
 

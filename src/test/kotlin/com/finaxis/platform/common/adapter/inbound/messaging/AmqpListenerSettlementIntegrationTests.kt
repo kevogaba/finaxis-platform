@@ -18,9 +18,9 @@ import org.slf4j.LoggerFactory
 import org.springframework.amqp.core.Message
 import org.springframework.amqp.core.MessageProperties
 import org.springframework.amqp.listener.ConditionalRejectingErrorHandler
-import org.springframework.amqp.rabbit.core.RabbitTemplate
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry
 import org.springframework.amqp.rabbitmq.client.RabbitAmqpAdmin
+import org.springframework.amqp.rabbitmq.client.RabbitAmqpTemplate
 import org.springframework.amqp.rabbitmq.client.listener.RabbitAmqpListenerContainer
 import org.springframework.beans.factory.config.BeanDefinition
 import org.springframework.boot.test.context.SpringBootTest
@@ -33,6 +33,7 @@ import org.springframework.test.context.TestConstructor
 import tools.jackson.databind.json.JsonMapper
 import java.time.Duration
 import java.time.Instant
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
@@ -50,7 +51,7 @@ import kotlin.test.assertTrue
 @SpringBootTest
 @TestConstructor(autowireMode = TestConstructor.AutowireMode.ALL)
 class AmqpListenerSettlementIntegrationTests(
-    private val rabbitTemplate: RabbitTemplate,
+    private val template: RabbitAmqpTemplate,
     private val admin: RabbitAmqpAdmin,
     private val jsonMapper: JsonMapper,
     private val registry: RabbitListenerEndpointRegistry,
@@ -108,19 +109,19 @@ class AmqpListenerSettlementIntegrationTests(
     }
 
     /**
-     * Sends [body] as it is, as the outbox does: not through `convertAndSend`, whose JSON
-     * converter (installed by Namastack's outbox) would send a byte array as a JSON string. An
-     * event is written by Spring Boot's Jackson 3 mapper, the one that converter uses.
+     * Sends [body] straight to the queue and waits for the broker to accept it. An event is
+     * written by Spring Boot's Jackson 3 mapper, as the outbox writes it.
      */
-    private fun publish(body: ByteArray) =
-        rabbitTemplate.send(
-            "",
-            QUEUE,
-            Message(
-                body,
-                MessageProperties().apply { contentType = MessageProperties.CONTENT_TYPE_JSON },
-            ),
-        )
+    private fun publish(body: ByteArray) {
+        template
+            .send(
+                QUEUE,
+                Message(
+                    body,
+                    MessageProperties().apply { contentType = MessageProperties.CONTENT_TYPE_JSON },
+                ),
+            ).get(SETTLE.toSeconds(), TimeUnit.SECONDS)
+    }
 
     private fun listenerFailures() = failures.list.count { it.level == Level.WARN }
 
