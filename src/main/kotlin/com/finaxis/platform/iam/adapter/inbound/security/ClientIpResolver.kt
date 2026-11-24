@@ -14,7 +14,8 @@ import java.net.InetAddress
  *
  * - The peer is the **container's** remote address, read from the innermost request rather than
  *   through any wrapper, so no filter's view of the address is ever used.
- * - Under `server.forward-headers-strategy: native` (#256) Tomcat's `RemoteIpValve` has already
+ * - Under `server.request.header.forwarded.strategy: web-server` (#256) Tomcat's `RemoteIpValve`
+ *   has already
  *   applied the same trusted list ([TrustedProxyValveCustomizer]) before any filter runs: from a
  *   trusted peer it walked `X-Forwarded-For` from the right past the trusted hops, made the entry
  *   it stopped at the remote address and left only the entries to the left of it in the header.

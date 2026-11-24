@@ -33,10 +33,8 @@ data class InviteUserRequest(
     @field:NotNull
     val membershipType: MembershipType,
     val primaryBranchId: UUID? = null,
-    @field:Valid
-    val branchAssignments: List<BranchAssignmentEntryDto> = emptyList(),
-    @field:Valid
-    val roleAssignments: List<RoleAssignmentEntryDto> = emptyList(),
+    val branchAssignments: List<@Valid BranchAssignmentEntryDto> = emptyList(),
+    val roleAssignments: List<@Valid RoleAssignmentEntryDto> = emptyList(),
     val sendKeycloakInvite: Boolean = true,
     val sendApplicationInvite: Boolean = false,
 )

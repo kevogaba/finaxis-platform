@@ -12,6 +12,7 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.TestConstructor
+import org.springframework.transaction.support.TransactionTemplate
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -38,6 +39,7 @@ import kotlin.test.assertTrue
 class OutboxSchemaAndRetryIntegrationTests(
     private val jdbcTemplate: JdbcTemplate,
     private val outbox: Outbox,
+    private val transactionTemplate: TransactionTemplate,
 ) {
     @Test
     fun `outbox record table exposes columns and indexes the application depends on`() {
@@ -89,7 +91,12 @@ class OutboxSchemaAndRetryIntegrationTests(
 
     private fun scheduleFailingEvent(): String {
         val recordKey = "phase-b-outbox-${uuidV7()}"
-        outbox.schedule(FailingOutboxPayload(recordKey), recordKey)
+        // Namastack 2.0 refuses `Outbox.schedule` outside a transaction, so the record can only
+        // ever be written with the change that raised it. The application schedules through
+        // Spring Modulith's externalization, inside the transaction that publishes the event.
+        transactionTemplate.executeWithoutResult {
+            outbox.schedule(FailingOutboxPayload(recordKey), recordKey)
+        }
         return recordKey
     }
 
@@ -162,15 +169,18 @@ class OutboxSchemaAndRetryIntegrationTests(
                 OutboxColumn("handler_id", "character varying", "NO"),
             )
 
+        // Namastack 2.0's four, as its schema script creates them in a new database. A database
+        // first created by 1.x also keeps the five 1.x indexes, which 2.0 neither reads nor drops
+        // (docs/architecture/transactional-outbox-amqp.md).
         val expectedIndexes =
             mapOf(
-                "idx_outbox_record_record_key_created" to listOf("record_key", "created_at"),
-                "idx_outbox_record_partition_status_retry" to
-                    listOf("partition_no", "status", "next_retry_at"),
-                "idx_outbox_record_status_retry" to listOf("status", "next_retry_at"),
-                "idx_outbox_record_status" to listOf("status"),
-                "idx_outbox_record_record_key_completed_created" to
-                    listOf("record_key", "completed_at", "created_at"),
+                "idx_outbox_record_status_created_id" to
+                    listOf("status", "created_at", "id", "partition_no", "next_retry_at"),
+                "idx_outbox_record_key_completed_created_id" to
+                    listOf("record_key", "completed_at", "created_at", "id"),
+                "idx_outbox_record_status_retry_partition" to
+                    listOf("status", "next_retry_at", "partition_no"),
+                "idx_outbox_record_status_partition" to listOf("status", "partition_no"),
             )
     }
 }

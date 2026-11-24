@@ -295,20 +295,20 @@ JobRunr handler, a listener) has no context, so its address is the command's or 
   property and the entry. An IPv4-mapped entry (`::ffff:10.0.0.0/104`) is the IPv4 range it maps.
 - **The peer is the container's.** The resolver reads the remote address and the header from the
   innermost (container) request, past every wrapper, so no filter's view is ever used. Spring's
-  `ForwardedHeaderFilter` (`server.forward-headers-strategy: framework`), which rewrote
-  `getRemoteAddr()` to the left-most entry of any peer, is gone: every strategy but `native` is
-  refused at startup (#256).
-- **Tomcat has already applied the same list** (`forward-headers-strategy: native`, #256): from a
-  listed peer its `RemoteIpValve` walks `X-Forwarded-For` from the right past the listed hops,
-  makes the entry it stops at the container's remote address and leaves only the entries to its
-  left in the header; from any other peer it changes nothing. The resolver continues that one walk
-  with the same list, so it never trusts more than the list: an unlisted remote address is the
-  client. It is kept as defence in depth and for what the valve does not do (strict parsing,
-  normalisation, the hop cap, an entry with a port or brackets, where the valve stops). An entry
-  that is no address at all, or an empty entry, which only a listed hop could have written as its
-  own peer, leaves that text as the remote address and the row stores `NULL`. A listed IPv6 hop
-  written with a `%zone` is passed over by the valve where the resolver alone would stop; its
-  address is listed either way. See
+  `ForwardedHeaderFilter` (`server.request.header.forwarded.strategy: framework`), which rewrote
+  `getRemoteAddr()` to the left-most entry of any peer, is gone: every strategy but `web-server`
+  is refused at startup (#256).
+- **Tomcat has already applied the same list**
+  (`server.request.header.forwarded.strategy: web-server`, #256): from a listed peer its
+  `RemoteIpValve` walks `X-Forwarded-For` from the right past the listed hops, makes the entry it
+  stops at the container's remote address and leaves only the entries to its left in the header;
+  from any other peer it changes nothing. The resolver continues that one walk with the same list,
+  so it never trusts more than the list: an unlisted remote address is the client. It is kept as
+  defence in depth and for what the valve does not do (strict parsing, normalisation, the hop cap,
+  an entry with a port or brackets, where the valve stops). An entry that is no address at all, or
+  an empty entry, which only a listed hop could have written as its own peer, leaves that text as
+  the remote address and the row stores `NULL`. A listed IPv6 hop written with a `%zone` is passed
+  over by the valve where the resolver alone would stop; its address is listed either way. See
   `docs/security/production-hardening.md` ("Forwarded headers").
 - **Behind a trusted peer**, `X-Forwarded-For` is walked lazily from the right (several header
   lines are one list, in order): the client is the first entry that is not itself a trusted

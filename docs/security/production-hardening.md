@@ -31,7 +31,8 @@ headers").
 
 ## Forwarded headers
 
-`server.forward-headers-strategy` is `native` (#256): Tomcat's `RemoteIpValve` rewrites the remote
+`server.request.header.forwarded.strategy` is `web-server` (#256; Spring Boot 4.2's name for the
+deprecated `server.forward-headers-strategy: native`): Tomcat's `RemoteIpValve` rewrites the remote
 address, scheme, host and port from `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host` and
 `X-Forwarded-Port`, and it does so **only when the direct peer is listed in
 `finaxis.security.client-ip.trusted-proxies`** (`FINAXIS_CLIENT_IP_TRUSTED_PROXIES`:
@@ -56,15 +57,15 @@ Tomcat's CIDR form, which resolves each header entry through DNS.
   (`ForwardedHeaderUtils`), enabling Sentry's send-default-pii would record the left-most,
   client-chosen `X-Forwarded-For` as the user's address, and a separate `management.server.port`
   builds a second Tomcat this customizer is not proven to narrow. Re-check before turning any on.
-- **Every strategy but `native` is refused at startup**, unset included; the message names
-  `server.forward-headers-strategy` and the required `native`. `framework` installs Spring's
-  `ForwardedHeaderFilter`, which has no trusted-proxy list and believes all of these headers,
-  `Forwarded` first, from any peer, so any client could choose its rate-limit bucket, its logged
-  address and the scheme and host of the URLs the application builds. `none` (and unset) installs
-  no valve, so the list would no longer govern `getRemoteAddr()`, scheme, host, port, HSTS or the
-  anonymous rate-limit key while the audit resolver still applied it: inconsistent data. Startup
-  also fails if, with `native`, Tomcat has no `RemoteIpValve`. The checks run when the embedded
-  Tomcat is built, which every deployment does.
+- **Every strategy but `web-server` is refused at startup**, unset included; the message names
+  `server.request.header.forwarded.strategy` and the required `web-server`. `framework` installs
+  Spring's `ForwardedHeaderFilter`, which has no trusted-proxy list and believes all of these
+  headers, `Forwarded` first, from any peer, so any client could choose its rate-limit bucket, its
+  logged address and the scheme and host of the URLs the application builds. `none` (and unset)
+  installs no valve, so the list would no longer govern `getRemoteAddr()`, scheme, host, port, HSTS
+  or the anonymous rate-limit key while the audit resolver still applied it: inconsistent data.
+  Startup also fails if, with `web-server`, Tomcat has no `RemoteIpValve` that trusts exactly the
+  list. The checks run when the embedded Tomcat is built, which every deployment does.
 - An entry the pattern does not recognise (a port, brackets, `::ffff:a.b.c.d`, text, an empty
   entry) is never trusted: the valve stops there and that entry's text, verbatim, is the remote
   address (and so the access log's address and the anonymous rate-limit key; an empty entry gives

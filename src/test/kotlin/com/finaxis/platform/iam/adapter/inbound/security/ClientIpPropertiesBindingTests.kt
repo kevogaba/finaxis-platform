@@ -52,7 +52,7 @@ class ClientIpPropertiesBindingTests {
             .run { context ->
                 val failure = assertNotNull(context.startupFailure)
                 val messages =
-                    generateSequence(failure as Throwable) { it.cause }
+                    generateSequence(failure) { it.cause }
                         .mapNotNull { it.message }
                         .joinToString("\n")
                 assertTrue(messages.contains("10.0.0.0/33"), messages)

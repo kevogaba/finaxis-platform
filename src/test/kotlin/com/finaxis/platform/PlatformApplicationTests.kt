@@ -8,9 +8,11 @@ import com.finaxis.platform.common.web.scanPlatformTypes
 import com.finaxis.platform.common.web.scanRestControllers
 import com.finaxis.platform.common.web.scanTypesWithMethodAnnotation
 import com.finaxis.platform.lifecycle.PermissionGuard
+import jakarta.servlet.Filter
 import org.jobrunr.jobs.lambdas.JobRequestHandler
 import org.junit.jupiter.api.Test
 import org.springframework.amqp.rabbit.annotation.RabbitListener
+import org.springframework.aop.support.AopUtils
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.web.servlet.FilterRegistrationBean
@@ -30,6 +32,19 @@ class PlatformApplicationTests
         @Test
         fun contextLoads() {
             assertTrue(true)
+        }
+
+        @Test
+        fun `no servlet filter bean is proxied`() {
+            // A class-based proxy of a filter cannot intercept OncePerRequestFilter's final
+            // doFilter and init: Spring warns at startup, and doFilter runs on the proxy instance.
+            val proxied =
+                applicationContext
+                    .getBeansOfType(Filter::class.java)
+                    .filterValues(AopUtils::isAopProxy)
+                    .keys
+
+            assertTrue(proxied.isEmpty(), "Proxied servlet filter beans: $proxied")
         }
 
         @Test

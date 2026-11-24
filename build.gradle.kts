@@ -5,9 +5,12 @@ import com.sun.management.OperatingSystemMXBean
 import io.zonky.test.db.postgres.embedded.EmbeddedPostgres
 import net.ltgt.gradle.errorprone.errorprone
 import org.flywaydb.core.Flyway
+import org.gradle.api.services.BuildService
+import org.gradle.api.services.BuildServiceParameters
 import org.springframework.boot.gradle.tasks.bundling.BootBuildImage
 import org.springframework.boot.gradle.tasks.bundling.BootJar
 import java.lang.management.ManagementFactory
+import java.net.ServerSocket
 
 // Versions pinned here only for jOOQ codegen bootstrapping; keep aligned with the versions
 // resolved for the application's own Flyway/PostgreSQL dependencies below.
@@ -60,9 +63,14 @@ repositories {
     mavenCentral()
 }
 
+// Mockito's inline mock maker needs an instrumentation agent. The test JVMs load it at start, as
+// Mockito documents, rather than letting it attach itself at runtime, which the JDK warns about and
+// will refuse by default (JEP 451).
+val mockitoAgent: Configuration = configurations.create("mockitoAgent") { isTransitive = false }
+
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-actuator")
-    implementation("org.springframework.boot:spring-boot-starter-amqp")
+    implementation("org.springframework.boot:spring-boot-starter-rabbitmq")
     implementation("org.springframework.boot:spring-boot-starter-aspectj")
     implementation("org.springframework.boot:spring-boot-starter-cache")
     implementation("org.springframework.boot:spring-boot-starter-data-jdbc")
@@ -118,7 +126,7 @@ dependencies {
     runtimeOnly("org.springframework.modulith:spring-modulith-runtime")
     runtimeOnly("org.springframework.modulith:spring-modulith-starter-insight")
     testImplementation("org.springframework.boot:spring-boot-starter-actuator-test")
-    testImplementation("org.springframework.boot:spring-boot-starter-amqp-test")
+    testImplementation("org.springframework.boot:spring-boot-starter-rabbitmq-test")
     testImplementation("org.springframework.boot:spring-boot-starter-data-jdbc-test")
     testImplementation("org.springframework.boot:spring-boot-starter-data-redis-test")
     testImplementation("org.springframework.boot:spring-boot-starter-flyway-test")
@@ -146,6 +154,7 @@ dependencies {
     testImplementation("org.testcontainers:testcontainers-postgresql")
     testImplementation("org.testcontainers:testcontainers-rabbitmq")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    mockitoAgent("org.mockito:mockito-core")
 
     errorprone(libs.errorprone.core)
 }
@@ -167,16 +176,17 @@ kotlin {
             "-Xjsr305=strict",
             "-java-parameters", // Retain parameter names for reflection
             "-opt-in=kotlin.uuid.ExperimentalUuidApi",
+            // Writes type-use annotations into the bytecode, so Bean Validation sees the element
+            // cascade `List<@Valid T>` (RequestBodyValidationArchitectureTest).
+            "-Xemit-jvm-type-annotations",
         )
     }
 }
 
-// jOOQ generates sources into this directory at task-execution time (see the EmbeddedPostgres
-// block below), but Qodana's own project-model sync runs with an empty task list, and the
-// conditional block never registers this as a source root in that case - leaving every jOOQ
-// consumer with unresolved-reference sanity findings even though qodana.yaml's bootstrap step has
-// already generated the files on disk. Registering the (possibly still-empty) directory
-// unconditionally is harmless for Gradle/IDE tooling and fixes that sync gap.
+// jOOQ generates sources into this directory at task-execution time (see `JooqCodegenDatabase`
+// below). Registering the (possibly still-empty) directory as a source root up front lets every
+// jOOQ consumer resolve during an IDE or Qodana project-model sync, which runs no tasks, once
+// qodana.yaml's bootstrap step has generated the files on disk.
 sourceSets.named("main") {
     java.srcDir(layout.buildDirectory.dir("generated-src/jooq/main"))
 }
@@ -188,78 +198,142 @@ kotlin {
 }
 
 // jOOQ codegen introspects a live PostgreSQL schema; rather than requiring a pre-migrated local
-// database (which breaks clean checkouts and CI), start a disposable, Flyway-migrated, Dockerless
-// embedded Postgres here and point codegen at it. It is closed once the jOOQ codegen task, its
-// last consumer, finishes executing.
-//
-// Only do this when Gradle is actually about to run tasks. IDE/tool project-model resolution
-// (e.g. IntelliJ Gradle sync, Qodana's static analysis) evaluates this script too, but with an
-// empty task list, and Qodana runs it inside its own container with no Docker access - starting
-// the container unconditionally broke that sync with "Could not find a valid Docker environment."
-if (gradle.startParameter.taskNames.isNotEmpty()) {
-    val jooqCodegenDatabase = EmbeddedPostgres.builder().start()
-    val jooqCodegenJdbcUrl = jooqCodegenDatabase.getJdbcUrl("postgres", "postgres")
-
-    try {
-        Flyway
-            .configure()
-            // As spring.flyway.postgresql.transactional-lock=false in application.yaml: the
-            // CONCURRENTLY index migrations (V25-V28, V30) cannot finish under a transactional
-            // lock.
-            .configuration(mapOf("flyway.postgresql.transactional.lock" to "false"))
-            .dataSource(jooqCodegenJdbcUrl, "postgres", "")
-            .locations(
-                "filesystem:${layout.projectDirectory.dir("src/main/resources/db/migration")}",
-            ).load()
-            .migrate()
-    } catch (ex: Exception) {
-        jooqCodegenDatabase.close()
-        throw ex
+// database (which breaks clean checkouts and CI), it reads a disposable, Flyway-migrated,
+// Dockerless embedded Postgres. The database starts only when `jooqCodegen` actually runs, inside
+// this build service: starting a process while Gradle configures the build is deprecated (it fails
+// from Gradle 11) and slowed every IDE or Qodana sync. jOOQ reads its JDBC URL from the
+// configuration Gradle snapshots before the task runs, so the port is chosen while configuring (a
+// socket bound and released, no process) and the database is started on it later. The service
+// closes the database as soon as codegen, its only consumer, finishes, and at the latest when the
+// build ends (a failed task included).
+abstract class JooqCodegenDatabase :
+    BuildService<JooqCodegenDatabase.Params>,
+    AutoCloseable {
+    interface Params : BuildServiceParameters {
+        val migrations: DirectoryProperty
+        val port: Property<Int>
     }
 
-    jooq {
-        configuration {
-            jdbc {
-                driver = "org.postgresql.Driver"
-                url = jooqCodegenJdbcUrl
-                user = "postgres"
-                password = ""
-            }
-            generator {
-                name = "org.jooq.codegen.KotlinGenerator"
-                database {
-                    name = "org.jooq.meta.postgres.PostgresDatabase"
-                    inputSchema = "public"
-                }
-                target {
-                    packageName = "com.finaxis.platform.jooq"
-                    directory =
-                        layout.buildDirectory
-                            .dir("generated-src/jooq/main")
-                            .get()
-                            .asFile.absolutePath
-                }
-            }
+    private var database: EmbeddedPostgres? = null
+
+    /** Starts the database on the configured port and migrates it; called by `jooqCodegen`. */
+    @Synchronized
+    fun start() {
+        if (database != null) return
+        val running = EmbeddedPostgres.builder().setPort(parameters.port.get()).start()
+        database = running
+        val url = running.getJdbcUrl("postgres", "postgres")
+        try {
+            Flyway
+                .configure()
+                // As spring.flyway.postgresql.transactional-lock=false in application.yaml: the
+                // CONCURRENTLY index migrations (V25-V28, V30) cannot finish under a
+                // transactional lock.
+                .configuration(mapOf("flyway.postgresql.transactional.lock" to "false"))
+                .dataSource(url, "postgres", "")
+                .locations("filesystem:${parameters.migrations.get().asFile}")
+                .load()
+                .migrate()
+        } catch (ex: Exception) {
+            close()
+            throw ex
         }
     }
 
-    tasks.named("compileKotlin") {
-        dependsOn(tasks.named("jooqCodegen"))
+    @Synchronized
+    override fun close() {
+        database?.close()
+        database = null
+    }
+}
+
+val jooqCodegenPort = ServerSocket(0).use { it.localPort }
+
+val jooqCodegenDatabase =
+    gradle.sharedServices.registerIfAbsent("jooqCodegenDatabase", JooqCodegenDatabase::class) {
+        parameters.migrations.set(layout.projectDirectory.dir("src/main/resources/db/migration"))
+        parameters.port.set(jooqCodegenPort)
     }
 
-    tasks.named("generateSentryBundleIdJava") {
-        // Make the task run after the tasks that generate code during build
-        dependsOn("jooqCodegen")
+jooq {
+    configuration {
+        jdbc {
+            driver = "org.postgresql.Driver"
+            url = "jdbc:postgresql://localhost:$jooqCodegenPort/postgres"
+            user = "postgres"
+            password = ""
+        }
+        generator {
+            name = "org.jooq.codegen.KotlinGenerator"
+            // jOOQ names a key's join paths after the table they lead to, so a self-referencing
+            // key, or two keys between the same tables, gives two paths one name and codegen warns
+            // "Ambiguous key name". Name those inverse (one-to-many) paths explicitly instead. No
+            // code navigates them; they only stop the collision.
+            strategy {
+                matchers {
+                    foreignKeys {
+                        foreignKey {
+                            expression = "fk_branch_parent_same_organisation"
+                            pathMethodNameInverse { expression = "childBranches" }
+                        }
+                        foreignKey {
+                            expression = "fk_gl_account_parent_same_organisation"
+                            pathMethodNameInverse { expression = "childGlAccounts" }
+                        }
+                        foreignKey {
+                            expression = "fk_journal_entry_reverses"
+                            pathMethodNameInverse { expression = "reversingJournalEntries" }
+                        }
+                        foreignKey {
+                            expression = "fk_posting_request_corrects"
+                            pathMethodNameInverse { expression = "correctingPostingRequests" }
+                        }
+                        foreignKey {
+                            expression = "permission_view_requirement_permission_id_fkey"
+                            pathMethodNameInverse { expression = "viewRequirements" }
+                        }
+                        foreignKey {
+                            expression = ".*_required_view_permission_id_fkey"
+                            pathMethodNameInverse { expression = "requiredByPermissions" }
+                        }
+                    }
+                }
+            }
+            database {
+                name = "org.jooq.meta.postgres.PostgresDatabase"
+                inputSchema = "public"
+            }
+            generate {
+                // The two keys of permission_view_requirement would also give permission two
+                // identically named many-to-many paths; nothing uses many-to-many paths.
+                isImplicitJoinPathsManyToMany = false
+            }
+            target {
+                packageName = "com.finaxis.platform.jooq"
+                directory =
+                    layout.buildDirectory
+                        .dir("generated-src/jooq/main")
+                        .get()
+                        .asFile.absolutePath
+            }
+        }
     }
+}
 
-    tasks.named("jooqCodegen") {
-        inputs.files(fileTree("src/main/resources/db/migration"))
-        // jOOQ codegen is the last consumer of the live database: it introspects the schema and
-        // writes generated .kt sources to disk, so the embedded instance can be closed as soon as
-        // this task finishes executing. `gradle.buildFinished` is deprecated, and there is no
-        // earlier safe point since codegen itself runs at task-execution time.
-        doLast { jooqCodegenDatabase.close() }
-    }
+tasks.named("compileKotlin") {
+    dependsOn(tasks.named("jooqCodegen"))
+}
+
+tasks.named("generateSentryBundleIdJava") {
+    // Make the task run after the tasks that generate code during build
+    dependsOn("jooqCodegen")
+}
+
+tasks.named("jooqCodegen") {
+    inputs.files(fileTree("src/main/resources/db/migration"))
+    usesService(jooqCodegenDatabase)
+    doFirst { jooqCodegenDatabase.get().start() }
+    doLast { jooqCodegenDatabase.get().close() }
 }
 
 detekt {
@@ -479,6 +553,17 @@ tasks.withType<Test> {
     // to debug an ordering-dependent failure.
     maxParallelForks =
         providers.gradleProperty("testForks").map(String::toInt).getOrElse(defaultTestForks)
+    val agent: FileCollection = mockitoAgent
+    jvmArgumentProviders.add(
+        CommandLineArgumentProvider { listOf("-javaagent:${agent.singleFile}") },
+    )
+    // Mockito's inline mock maker appends a jar to the boot class path at its first mock, after
+    // which the JVM can share only boot classes and warns about it. Test JVMs therefore run
+    // without class-data sharing, a start-up optimisation only; deployed JVMs keep it.
+    jvmArgs("-Xshare:off")
+    // Testcontainers' Docker client loads a native library through JNA, a restricted method that
+    // JDK 25 allows but warns about unless native access is granted, as bootRun already grants it.
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
 
 tasks.withType<JavaExec> {
@@ -630,6 +715,10 @@ tasks.named<BootBuildImage>("bootBuildImage") {
     System.getenv("FINAXIS_BUILD_CA_BUNDLE")?.takeIf(String::isNotBlank)?.let { caBundle ->
         bindings.add("$caBundle:/etc/ssl/certs/ca-certificates.crt:ro")
     }
+    // Spring Boot 4.2 moved the default builder to paketobuildpacks/ubuntu-resolute-builder
+    // (Ubuntu 26.04). Pinned to the one 4.1 used, so the upgrade leaves the image's operating
+    // system where it was; moving to 26.04 is a change of its own.
+    builder = "paketobuildpacks/builder-noble-java-tiny"
     // `environment.set` replaces the map wholesale, so each branch has to be complete. Both run
     // Spring AOT; what differs is what consumes it. A native image has no JVM, so the HotSpot flags
     // in JAVA_TOOL_OPTIONS would go unread there, while the JVM image has to be told to use the AOT
@@ -642,6 +731,7 @@ tasks.named<BootBuildImage>("bootBuildImage") {
                 // is Java 25 bytecode, so an older default would not read it.
                 put("BP_JVM_VERSION", "25.*")
                 put("BP_NATIVE_IMAGE", "true")
+                put("BP_SPRING_CLOUD_BINDINGS_DISABLED", "true")
                 // Extra `native-image` arguments, for callers that have to build somewhere
                 // smaller than a developer machine. CI passes `-Ob` here: a two-core runner with
                 // 8 GB cannot finish the optimising build, and quick-build mode still exercises
@@ -656,6 +746,10 @@ tasks.named<BootBuildImage>("bootBuildImage") {
             mapOf(
                 "BP_JVM_VERSION" to "25.*",
                 "BP_SPRING_AOT_ENABLED" to "true",
+                // The Paketo Spring Boot buildpack adds Spring Cloud Bindings, which fails Spring
+                // Boot 4.2 at startup (EnvironmentPostProcessor moved package); the 4.2 release
+                // notes say to disable it until the buildpack or the library catches up.
+                "BP_SPRING_CLOUD_BINDINGS_DISABLED" to "true",
                 // `BPE_APPEND_*` concatenates with no separator unless `BPE_DELIM_*` gives one, and
                 // JAVA_TOOL_OPTIONS is space-separated. Without both, the flags below arrive glued
                 // to the option before them and the JVM refuses to start:

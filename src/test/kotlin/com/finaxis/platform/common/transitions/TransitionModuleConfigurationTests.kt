@@ -85,6 +85,11 @@ class TransitionModuleConfigurationTests {
             "false",
             environment.getProperty("namastack.outbox.processing.delete-completed-records"),
         )
+        val recordStatuses = "namastack.outbox.observability.metrics.record-statuses"
+        assertEquals(
+            listOf("new", "failed"),
+            (0..2).mapNotNull { environment.getProperty("$recordStatuses[$it]") },
+        )
     }
 
     private fun externalizedEvent(): ExternalizedTransitionEvent =

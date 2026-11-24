@@ -264,10 +264,13 @@ class ClientIpResolverTests {
             forwardedFor?.let { addHeader(X_FORWARDED_FOR, it) }
         }
 
-    /** What a filter behind Spring's ForwardedHeaderFilter (`framework` strategy) is given. */
+    /**
+     * What a filter behind Spring's ForwardedHeaderFilter (`framework` strategy) is given, reading
+     * the `X-Forwarded-*` headers these requests carry (`false`: not the RFC 7239 `Forwarded`).
+     */
     private fun forwardedHeaderFilterView(request: MockHttpServletRequest): HttpServletRequest {
         val chain = MockFilterChain()
-        ForwardedHeaderFilter().doFilter(request, MockHttpServletResponse(), chain)
+        ForwardedHeaderFilter(false).doFilter(request, MockHttpServletResponse(), chain)
         return chain.request as HttpServletRequest
     }
 
