@@ -1,6 +1,5 @@
 package com.finaxis.platform.lifecycle
 
-import com.fasterxml.jackson.databind.ObjectMapper
 import com.finaxis.platform.TestcontainersConfiguration
 import com.finaxis.platform.common.id.uuidV7
 import com.finaxis.platform.common.persistence.SystemActor
@@ -33,6 +32,8 @@ import org.jobrunr.storage.JobNotFoundException
 import org.jobrunr.storage.StorageProvider
 import org.jooq.DSLContext
 import org.junit.jupiter.api.Test
+import org.springframework.amqp.core.Message
+import org.springframework.amqp.core.MessageProperties
 import org.springframework.amqp.rabbit.core.RabbitTemplate
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.TestConfiguration
@@ -44,6 +45,7 @@ import org.springframework.test.annotation.DirtiesContext
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 import org.springframework.test.context.TestConstructor
+import tools.jackson.databind.json.JsonMapper
 import java.time.Instant
 import java.util.Properties
 import java.util.UUID
@@ -87,7 +89,7 @@ class ApplicationInvitePipelineIntegrationTests(
     private val dsl: DSLContext,
     private val flakyDispatchStore: FlakyDispatchStore,
     private val rabbitTemplate: RabbitTemplate,
-    private val objectMapper: ObjectMapper,
+    private val jsonMapper: JsonMapper,
 ) {
     private val fixture = TenantAdminOrganisationFixture(organisationProvisioningService, dsl)
 
@@ -377,9 +379,15 @@ class ApplicationInvitePipelineIntegrationTests(
                         "dispatchKey" to invite.dispatchKey,
                     ),
             )
-        rabbitTemplate.convertAndSend(
+        // `send`, not `convertAndSend`: the template's JSON converter (installed by Namastack's
+        // outbox) would send the bytes as a JSON string, which the listener rejects unread. The
+        // event is written by Spring Boot's Jackson 3 mapper, as the outbox writes it.
+        rabbitTemplate.send(
             USER_PROVISIONING_QUEUE,
-            objectMapper.writeValueAsBytes(event),
+            Message(
+                jsonMapper.writeValueAsBytes(event),
+                MessageProperties().apply { contentType = MessageProperties.CONTENT_TYPE_JSON },
+            ),
         )
     }
 

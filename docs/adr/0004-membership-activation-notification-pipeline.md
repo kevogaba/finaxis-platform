@@ -25,6 +25,8 @@ notification flow and establishes the reference pattern for future domain events
   exchange, so Namastack routing must be configured explicitly.
 - The notifications adapter uses a thin `@RabbitListener`: deserialize and validate the message,
   delegate to the notification application service, and let failures propagate for AMQP handling.
+  Since [ADR 0045](0045-consume-integration-events-over-amqp-1-0.md) it consumes over RabbitMQ's
+  native AMQP 1.0, with the same settlement.
 - The application service schedules a JobRunr `JobRequest`; the handler is the welcome-email stub.
   Its job identifier is deterministic from membership ID, transition, and occurrence time so
   redelivery does not enqueue a duplicate job.

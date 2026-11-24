@@ -4,6 +4,15 @@ spring:
   profiles:
     active: test
 
+finaxis:
+  amqp:
+    # Most test contexts run no RabbitMQ, and RabbitMQ's AMQP 1.0 client fails an application
+    # that cannot reach the broker at startup (AmqpListenerConfiguration). The two configurations
+    # that do run one, TestcontainersConfiguration and PostgresRabbitTestConfiguration, switch this
+    # back on for their contexts. In this profile-less document so a test that activates another
+    # profile (`local`) reads it too.
+    enabled: false
+
 ---
 
 spring:
