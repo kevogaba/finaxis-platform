@@ -152,6 +152,13 @@ class RoleManagementService(
         requireTenantPermission(command.actorId, command.organisationId, "role.assign_permission")
         val role = persistence.lockRole(command.organisationId, command.roleId).orResourceNotFound()
         requireEditable(role)
+        // Only the seeded administrator roles hold it, granted by migration (#342, ADR 0044):
+        // composing it into any role would let its holders assign themselves anything.
+        if (command.permissionCode == SELF_ASSIGN) {
+            throw InvalidOperationException(safeDetail = SELF_ASSIGN_NOT_GRANTABLE)
+        }
+        val holders = persistence.membershipIdsWithRole(command.organisationId, command.roleId)
+        requireMayWidenHeldRole(command.actorId, command.organisationId, holders)
         val permissionId =
             persistence
                 .permissionIdByCode(
@@ -168,7 +175,8 @@ class RoleManagementService(
             permissionId,
             command.actorId,
         )
-        invalidateRoleMemberships(command.organisationId, command.roleId)
+        // The holders read above: the role lock keeps the set unchanged until commit.
+        holders.forEach(permissionCacheInvalidator::evictMembership)
         audit(
             command.organisationId,
             command.roleId,
@@ -235,6 +243,7 @@ class RoleManagementService(
             command.branchId,
             "user.assign_role",
         )
+        requireSelfAssignmentAllowed(command.actorId, command.organisationId, command.userId)
         val membership =
             persistence
                 .membership(
@@ -410,6 +419,11 @@ class RoleManagementService(
         val role = persistence.lockRole(organisationId, roleId).orResourceNotFound()
         requireMutable(role)
         val transition = pick(role.status)
+        // Re-enabling a DISABLED role gives its holders its permissions back (#342, ADR 0044).
+        if (transition == RoleTransition.ACTIVATE && role.status == RoleStatus.DISABLED) {
+            val holders = persistence.membershipIdsWithRole(organisationId, roleId)
+            requireMayWidenHeldRole(actorId, organisationId, holders)
+        }
         val result =
             try {
                 transitionExecutor.execute(
@@ -543,6 +557,35 @@ class RoleManagementService(
                 )
             }
         }
+    }
+
+    /**
+     * Adding a permission to, or re-enabling, a role the caller holds (an ACTIVE assignment at any
+     * scope, so their membership is among the role's [holders]) adds to their own access, so it
+     * also needs `user.assign_self` tenant-wide (#342, ADR 0044). [holders] is read under the role
+     * lock, which every new assignment of the role also takes, so an assignment to the caller
+     * cannot land between this check and the change.
+     */
+    private fun requireMayWidenHeldRole(
+        actorId: UUID,
+        organisationId: UUID,
+        holders: List<UUID>,
+    ) {
+        val own = persistence.membership(organisationId, actorId)?.id ?: return
+        if (own in holders) requireTenantPermission(actorId, organisationId, SELF_ASSIGN)
+    }
+
+    /**
+     * A self-assignment also needs `user.assign_self` tenant-wide, which only the seeded
+     * administrator roles hold (#342, ADR 0044). It runs before any lookup, so even a repeat of an
+     * assignment that exists is refused.
+     */
+    private fun requireSelfAssignmentAllowed(
+        actorId: UUID,
+        organisationId: UUID,
+        userId: UUID,
+    ) {
+        if (userId == actorId) requireTenantPermission(actorId, organisationId, SELF_ASSIGN)
     }
 
     private fun requireTenantPermission(
@@ -683,6 +726,9 @@ class RoleManagementService(
     }
 
     private companion object {
+        const val SELF_ASSIGN = "user.assign_self"
+        const val SELF_ASSIGN_NOT_GRANTABLE =
+            "user.assign_self is held only by the seeded administrator roles and cannot be granted."
         const val REVOKE_ROLE = "user.revoke_role"
         const val ACTIVE = "ACTIVE"
         const val INACTIVE = "INACTIVE"

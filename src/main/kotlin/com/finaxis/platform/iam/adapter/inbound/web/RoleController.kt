@@ -331,7 +331,10 @@ class RoleController(
     @PreAuthorize("hasAuthority('role.activate')")
     @Operation(
         summary = "Activate role",
-        description = "Activates a tenant-managed role.",
+        description =
+            "Activates a tenant-managed role. A caller who holds the role (an ACTIVE " +
+                "assignment at any scope) also needs user.assign_self, since re-enabling it " +
+                "gives them its permissions back (#342).",
         parameters = [
             Parameter(
                 name = "Idempotency-Key",
@@ -359,7 +362,9 @@ class RoleController(
         ),
         ApiResponse(
             responseCode = "403",
-            description = "Forbidden",
+            description =
+                "Forbidden: a missing permission, including `user.assign_self` when the caller " +
+                    "holds the role (#342)",
             content = [Content(schema = Schema(implementation = ApiProblem::class))],
         ),
         ApiResponse(
@@ -539,6 +544,10 @@ class RoleController(
                 "together with, or after, every view permission the catalogue requires for it " +
                 "(required_view_permissions): otherwise 400 validation_failed lists each " +
                 "missing view and the permission that needs it, and nothing is written. " +
+                "user.assign_self is refused for every role with 422 invalid_operation: only " +
+                "the seeded administrator roles hold it (#342). A caller who holds the role " +
+                "(an ACTIVE assignment at any scope) also needs user.assign_self, since the " +
+                "grant adds to their own access. " +
                 "The role row is locked first, so concurrent compositions run one at a time.",
         parameters = [
             Parameter(
@@ -571,7 +580,9 @@ class RoleController(
         ),
         ApiResponse(
             responseCode = "403",
-            description = "Forbidden",
+            description =
+                "Forbidden: a missing permission, including `user.assign_self` when the caller " +
+                    "holds the role (#342)",
             content = [Content(schema = Schema(implementation = ApiProblem::class))],
         ),
         ApiResponse(
@@ -582,6 +593,11 @@ class RoleController(
         ApiResponse(
             responseCode = "409",
             description = "Immutable role",
+            content = [Content(schema = Schema(implementation = ApiProblem::class))],
+        ),
+        ApiResponse(
+            responseCode = "422",
+            description = "user.assign_self, which no role can be granted (#342)",
             content = [Content(schema = Schema(implementation = ApiProblem::class))],
         ),
     )

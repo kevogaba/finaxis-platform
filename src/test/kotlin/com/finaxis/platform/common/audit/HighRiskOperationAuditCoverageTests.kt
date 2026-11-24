@@ -381,6 +381,7 @@ class HighRiskOperationAuditCoverageTests(
                 "user.approve" to "user.approve",
                 "user.assign_branch" to "branch.assign_user",
                 "user.assign_role" to "user.assign_role",
+                "user.assign_self" to "user.assign_role",
                 "user.deactivate" to "user_account.complete_deactivation",
                 "user.invite" to "user.invite",
                 "user.revoke_branch" to "branch.revoke_user",

@@ -467,6 +467,16 @@ class BranchProvisioningService(
             command.organisationId,
             "user.assign_branch",
         )
+        // A self-assignment also needs user.assign_self tenant-wide, which only the seeded
+        // administrator roles hold (#342, ADR 0044). Checked before the user, organisation and
+        // membership lookups; the branch's existence is part of the route check above.
+        if (command.userId == command.assignedBy) {
+            permissionGuard.requireTenantPermission(
+                command.assignedBy,
+                command.organisationId,
+                SELF_ASSIGN_PERMISSION,
+            )
+        }
         resourceNotFoundUnless(assignmentStore.userExists(command.userId))
         conflictUnless(
             lifecycleStore.organisationState(command.organisationId) ==
@@ -789,6 +799,7 @@ class BranchProvisioningService(
     }
 
     private companion object {
+        const val SELF_ASSIGN_PERMISSION = "user.assign_self"
         val AMENDABLE_BRANCH_STATES =
             setOf(BranchLifecycleState.DRAFT, BranchLifecycleState.ACTIVE)
         val ALLOWED_BRANCH_CREATION_STATES =
