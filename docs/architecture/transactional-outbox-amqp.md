@@ -7,7 +7,9 @@ be one — see [ADR 0008](../adr/0008-transactional-outbox-over-direct-amqp.md).
 [FSM transitions](fsm-transitions.md), [ADR 0002](../adr/0002-fsm-transition-infrastructure.md),
 and [ADR 0004](../adr/0004-membership-activation-notification-pipeline.md), which establish the
 `transition -> Spring application event -> Modulith externalization -> Namastack outbox ->
-RabbitMQ -> thin listener` pipeline this document assumes.
+RabbitMQ -> thin listener` pipeline this document assumes. The outbox publishes over AMQP 0.9.1;
+the listeners consume over RabbitMQ's native AMQP 1.0
+([ADR 0045](../adr/0045-consume-integration-events-over-amqp-1-0.md)).
 
 ## Transactional guarantee
 

@@ -70,6 +70,7 @@ val mockitoAgent: Configuration = configurations.create("mockitoAgent") { isTran
 
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-actuator")
+    implementation("org.springframework.boot:spring-boot-starter-amqp-rabbitmq")
     implementation("org.springframework.boot:spring-boot-starter-rabbitmq")
     implementation("org.springframework.boot:spring-boot-starter-aspectj")
     implementation("org.springframework.boot:spring-boot-starter-cache")
@@ -561,8 +562,9 @@ tasks.withType<Test> {
     // which the JVM can share only boot classes and warns about it. Test JVMs therefore run
     // without class-data sharing, a start-up optimisation only; deployed JVMs keep it.
     jvmArgs("-Xshare:off")
-    // Testcontainers' Docker client loads a native library through JNA, a restricted method that
-    // JDK 25 allows but warns about unless native access is granted, as bootRun already grants it.
+    // Testcontainers' Docker client (JNA) and the AMQP 1.0 client (Netty) load native libraries
+    // through restricted methods, which JDK 25 allows but warns about unless native access is
+    // granted; every JVM this build starts or packages grants it (see the bootJar manifest).
     jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
 
@@ -656,6 +658,11 @@ tasks.named<BootJar>("bootJar") {
     layered {
         enabled.set(System.getenv("ENABLE_LAYERED_JAR")?.toBoolean() ?: false)
     }
+    // Netty, under RabbitMQ's AMQP 1.0 client, loads its native transport through a restricted
+    // method; JDK 25 allows it but warns unless native access is granted. This covers `java -jar`;
+    // the JVM image's launcher reads the flag from JAVA_TOOL_OPTIONS below instead, and bootRun
+    // and the test JVMs pass it on their command lines.
+    manifest.attributes("Enable-Native-Access" to "ALL-UNNAMED")
     // The Spring Boot plugin puts the `aot` source set on this jar's classpath unconditionally, and
     // Gradle does not clean the output of a task it skipped - so an AOT-free build after an
     // AOT-enabled one packages the previous run's bean definitions. That is not merely untidy: the
@@ -748,8 +755,11 @@ tasks.named<BootBuildImage>("bootBuildImage") {
                 "BPE_DELIM_JAVA_TOOL_OPTIONS" to " ",
                 // Heap sizing is left to the buildpack's memory calculator, which derives an
                 // explicit -Xmx from the container limit; a MaxRAMPercentage beside it is ignored.
+                // Native access for Netty under the AMQP 1.0 client, as the bootJar manifest grants
+                // it to `java -jar`, which this launcher is not.
                 "BPE_APPEND_JAVA_TOOL_OPTIONS" to
-                    "-XX:+HeapDumpOnOutOfMemoryError -XX:+ExitOnOutOfMemoryError",
+                    "-XX:+HeapDumpOnOutOfMemoryError -XX:+ExitOnOutOfMemoryError " +
+                    "--enable-native-access=ALL-UNNAMED",
             )
         },
     )

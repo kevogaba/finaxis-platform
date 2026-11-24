@@ -111,6 +111,16 @@ spring:
         serialize-externalization: false
     runtime:
       verification-enabled: true
+  amqp:
+    rabbitmq:
+      # RabbitMQ's native AMQP 1.0, which the @RabbitListener consumers and the topology
+      # declarations use (AmqpListenerConfiguration). Same broker, port and credentials as the
+      # AMQP 0.9.1 client below, which the outbox publisher still uses: RabbitMQ serves both
+      # protocols on one port. The application refuses to start while this broker is unreachable.
+      host: ${FINAXIS_RABBITMQ_HOST:localhost}
+      port: ${FINAXIS_RABBITMQ_PORT:5673}
+      username: ${FINAXIS_RABBITMQ_USERNAME:finaxis}
+      password: ${FINAXIS_RABBITMQ_PASSWORD:finaxis}
   rabbitmq:
     host: ${FINAXIS_RABBITMQ_HOST:localhost}
     port: ${FINAXIS_RABBITMQ_PORT:5673}

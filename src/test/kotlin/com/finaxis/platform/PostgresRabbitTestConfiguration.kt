@@ -6,6 +6,7 @@ import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.springframework.context.annotation.Bean
 import org.springframework.security.oauth2.jwt.JwtDecoder
+import org.springframework.test.context.DynamicPropertyRegistrar
 import org.testcontainers.containers.GenericContainer
 import org.testcontainers.utility.DockerImageName
 
@@ -29,6 +30,9 @@ class PostgresRabbitTestConfiguration {
 
     @Bean
     fun rabbitVirtualHost(): IsolatedRabbitVirtualHost = SharedTestContainers.newVirtualHost()
+
+    @Bean
+    fun amqpEnabled(): DynamicPropertyRegistrar = SharedTestContainers.amqpEnabled()
 
     @Bean
     fun jwtDecoder(): JwtDecoder = JwtDecoder { error("Test context does not decode JWTs") }
