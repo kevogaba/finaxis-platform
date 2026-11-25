@@ -5,6 +5,7 @@ import com.finaxis.platform.SharedTestContainers.IsolatedRabbitVirtualHost
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.springframework.context.annotation.Bean
+import org.springframework.test.context.DynamicPropertyRegistrar
 import org.testcontainers.containers.GenericContainer
 import org.testcontainers.grafana.LgtmStackContainer
 import org.testcontainers.utility.DockerImageName
@@ -26,6 +27,9 @@ class TestcontainersConfiguration {
 
     @Bean
     fun rabbitVirtualHost(): IsolatedRabbitVirtualHost = SharedTestContainers.newVirtualHost()
+
+    @Bean
+    fun amqpEnabled(): DynamicPropertyRegistrar = SharedTestContainers.amqpEnabled()
 
     @Bean
     @ServiceConnection(name = "redis")

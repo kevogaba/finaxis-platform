@@ -22,14 +22,18 @@ FSMs, tenant setup, business date, audit views, and REST adapters), `accounting`
 with their lifecycles, the journal schema, the synchronous posting engine, versioned posting rules,
 reversal, control-account reconciliation and manual journals - see
 `docs/architecture/accounting-module-boundary.md`), `notifications` (RabbitMQ
-listener → JobRunr job), `common` (reusable transitions/audit/context/persistence/web infra),
-`config`.
+listener → JobRunr job), `common` (reusable transitions/audit/context/persistence/web infra and
+the AMQP 1.0 listener wiring), `config`.
 
 The membership-activation pipeline is the **reference event pattern** — copy it for new
 domain events rather than inventing another mechanism: transition `eventFactory` →
 `ExternalizedTransitionEvent` → Modulith/Namastack outbox → RabbitMQ (routed by the event's
 `target`) → thin `@RabbitListener` → application service → JobRunr job. See
-`docs/adr/0004-membership-activation-notification-pipeline.md`.
+`docs/adr/0004-membership-activation-notification-pipeline.md`. The listeners consume over
+RabbitMQ's native AMQP 1.0 and the application fails fast at startup while the broker is
+unreachable (`docs/adr/0045-consume-integration-events-over-amqp-1-0.md`). The Namastack outbox
+publishes through Namastack's own RabbitMQ module over AMQP 0.9.1 until Namastack supports AMQP
+1.0 (owner decision): never replace its publishing with a platform-written `OutboxHandler`.
 
 Known follow-ups (do not treat as bugs): `config` intentionally does not declare an
 `@ApplicationModule` because it is infrastructure wiring rather than a domain module; JaCoCo
@@ -599,7 +603,12 @@ Do not invent accounting tables or columns outside those documents.
   chosen by a Namastack `RabbitOutboxRouting` bean keyed on the event `target` (the Modulith
   bridge drops the exchange), so a new externalized event needs a matching route.
 - Keep RabbitMQ listeners thin: deserialize, validate, delegate to an application service,
-  ensure idempotency (deterministic job/keys), ack/nack on outcome.
+  ensure idempotency (deterministic job/keys), ack/nack on outcome. Every `@RabbitListener` runs
+  in an AMQP 1.0 container from `AmqpListenerConfiguration`'s factory (ADR 0045); throw
+  `AmqpRejectAndDontRequeueException` for a message that can never be processed (it is dropped),
+  anything else to have it delivered again. A test context that runs a broker imports
+  `TestcontainersConfiguration` or `PostgresRabbitTestConfiguration`, which switch
+  `finaxis.amqp.enabled` back on.
 - Use JobRunr for durable background work (email, SMS, reports, imports/exports, retries,
   recurring). Do not use JobRunr as the outbox/externalization engine.
 - Keep state mutation, transition validation, log creation, event publication, broker

@@ -1,8 +1,11 @@
 package com.finaxis.platform
 
+import org.springframework.boot.amqp.rabbitmq.autoconfigure.AmqpRabbitConnectionDetails
 import org.springframework.boot.flyway.autoconfigure.FlywayConnectionDetails
 import org.springframework.boot.jdbc.autoconfigure.JdbcConnectionDetails
 import org.springframework.boot.rabbitmq.autoconfigure.RabbitConnectionDetails
+import org.springframework.boot.ssl.SslBundle
+import org.springframework.test.context.DynamicPropertyRegistrar
 import org.testcontainers.grafana.LgtmStackContainer
 import org.testcontainers.postgresql.PostgreSQLContainer
 import org.testcontainers.rabbitmq.RabbitMQContainer
@@ -110,6 +113,13 @@ object SharedTestContainers {
         return IsolatedRabbitVirtualHost(name)
     }
 
+    /**
+     * Runs the AMQP 1.0 admin and listener containers, which the test `application.yaml` switches
+     * off for the contexts that run no broker.
+     */
+    fun amqpEnabled(): DynamicPropertyRegistrar =
+        DynamicPropertyRegistrar { registry -> registry.add("finaxis.amqp.enabled") { true } }
+
     private fun PostgreSQLContainer.admin(block: (Connection) -> Unit) =
         DriverManager.getConnection(jdbcUrl, username, password).use(block)
 
@@ -182,12 +192,14 @@ object SharedTestContainers {
 
     /**
      * One context's virtual host on the shared broker, with the broker's own address and admin
-     * credentials, as Spring Boot's service connection offered for a broker of its own. Deleted
-     * when its context closes.
+     * credentials, as Spring Boot's service connection offered for a broker of its own: to the
+     * AMQP 0.9.1 client (the outbox publisher) and to the AMQP 1.0 client (the listeners and the
+     * topology), which RabbitMQ serves on the same port. Deleted when its context closes.
      */
     class IsolatedRabbitVirtualHost internal constructor(
         private val name: String,
     ) : RabbitConnectionDetails,
+        AmqpRabbitConnectionDetails,
         AutoCloseable {
         override fun getUsername(): String = rabbit.adminUsername
 
@@ -200,6 +212,11 @@ object SharedTestContainers {
                 .create(
                     rabbit.amqpUrl,
                 ).let { listOf(RabbitConnectionDetails.Address(it.host, it.port)) }
+
+        override fun getAddress(): AmqpRabbitConnectionDetails.Address =
+            getAddresses().single().let { AmqpRabbitConnectionDetails.Address(it.host, it.port) }
+
+        override fun getSslBundle(): SslBundle? = null
 
         override fun close() {
             runCatching { rabbitManagement("DELETE", "/api/vhosts/$name") }
