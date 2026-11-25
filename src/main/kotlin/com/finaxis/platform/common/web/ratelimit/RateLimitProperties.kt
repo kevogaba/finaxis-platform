@@ -2,6 +2,7 @@ package com.finaxis.platform.common.web.ratelimit
 
 import org.springframework.aot.hint.annotation.RegisterReflectionForBinding
 import org.springframework.boot.context.properties.ConfigurationProperties
+import java.time.Duration
 
 /**
  * Typed configuration for distributed API rate limiting.
@@ -17,6 +18,13 @@ data class RateLimitProperties(
     val enabled: Boolean = true,
     val includeHeaders: Boolean = true,
     val failOpen: Boolean = true,
+    /**
+     * The command timeout of the rate limiter's own Redis connection: how long a request waits on
+     * a Redis that stops answering before the limiter gives up (and fails open). Kept apart from
+     * `spring.data.redis.timeout`, the cache's and the session's, because every API request waits
+     * on this one; Spring Boot has no property for a second client's timeout.
+     */
+    val redisTimeout: Duration = Duration.ofSeconds(DEFAULT_REDIS_TIMEOUT_SECONDS),
     val policies: Map<RateLimitPolicyId, RateLimitPolicy> = defaultPolicies(),
     val paths: RateLimitPathProperties = RateLimitPathProperties(),
 ) {
@@ -24,6 +32,13 @@ data class RateLimitProperties(
         require(policies.keys == RateLimitPolicyId.entries.toSet()) {
             "Rate-limit policies must contain exactly the supported policy IDs"
         }
+        require(!redisTimeout.isZero && !redisTimeout.isNegative) {
+            "The rate limiter's Redis timeout must be positive"
+        }
+    }
+
+    private companion object {
+        const val DEFAULT_REDIS_TIMEOUT_SECONDS = 5L
     }
 }
 

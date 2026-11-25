@@ -28,15 +28,28 @@ class TransitionModuleConfigurationTests {
     }
 
     @Test
-    fun `application yaml configures Modulith Namastack outbox and RabbitMQ publishing`() {
-        val source =
-            YamlPropertySourceLoader()
-                .load("application", FileSystemResource("src/main/resources/application.yaml"))
-                .first()
-        // Config values use "${FINAXIS_...:default}" placeholders; resolve them through a real
-        // Environment (with no matching OS env vars set) so assertions see the resolved defaults.
-        val environment = StandardEnvironment()
-        environment.propertySources.addFirst(source)
+    fun `application yaml configures the RabbitMQ publisher Namastack 2_0 requires`() {
+        val environment = applicationYaml()
+
+        assertEquals(
+            "correlated",
+            environment.getProperty("spring.rabbitmq.publisher-confirm-type"),
+        )
+        assertEquals("true", environment.getProperty("spring.rabbitmq.publisher-returns"))
+        assertEquals("true", environment.getProperty("spring.rabbitmq.template.mandatory"))
+        assertEquals(
+            "true",
+            environment.getProperty("namastack.outbox.rabbit.fail-on-unroutable"),
+        )
+        assertEquals(
+            "true",
+            environment.getProperty("namastack.outbox.rabbit.idempotency-header-enabled"),
+        )
+    }
+
+    @Test
+    fun `application yaml configures Modulith externalization into the Namastack outbox`() {
+        val environment = applicationYaml()
 
         assertEquals(
             "outbox",
@@ -47,16 +60,6 @@ class TransitionModuleConfigurationTests {
             environment.getProperty(
                 "spring.modulith.events.externalization.serialize-externalization",
             ),
-        )
-        assertEquals(
-            "correlated",
-            environment.getProperty("spring.rabbitmq.publisher-confirm-type"),
-        )
-        assertEquals("true", environment.getProperty("spring.rabbitmq.publisher-returns"))
-        assertEquals("true", environment.getProperty("spring.rabbitmq.template.mandatory"))
-        assertEquals(
-            "true",
-            environment.getProperty("namastack.outbox.rabbit.fail-on-unroutable"),
         )
         assertEquals("true", environment.getProperty("namastack.outbox.enabled"))
         assertEquals("fixed", environment.getProperty("namastack.outbox.polling.trigger"))
@@ -91,6 +94,19 @@ class TransitionModuleConfigurationTests {
             (0..2).mapNotNull { environment.getProperty("$recordStatuses[$it]") },
         )
     }
+
+    /**
+     * `application.yaml` in a real Environment, so its "${FINAXIS_...:default}" placeholders
+     * resolve to their defaults (no matching OS variable is set in the test JVM).
+     */
+    private fun applicationYaml(): StandardEnvironment =
+        StandardEnvironment().apply {
+            propertySources.addFirst(
+                YamlPropertySourceLoader()
+                    .load("application", FileSystemResource("src/main/resources/application.yaml"))
+                    .first(),
+            )
+        }
 
     private fun externalizedEvent(): ExternalizedTransitionEvent =
         ExternalizedTransitionEvent(
