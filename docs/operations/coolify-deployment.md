@@ -28,12 +28,12 @@ deployment, not a Coolify-native build from source.
   `SecurityConfiguration` permits only the literal string `/actuator/health` unauthenticated;
   `/actuator/health/readiness` or `/actuator/health/liveness` will 401 against Coolify's check even
   though the probes themselves are enabled (`management.endpoint.health.probes.enabled: true`).
-- Coolify sits in front of the application as a reverse proxy (Traefik). `server.forward-headers-
-  strategy: native` believes Traefik's `X-Forwarded-*` headers **only** once
-  `FINAXIS_CLIENT_IP_TRUSTED_PROXIES` names Traefik [^client-ip]; until then the client address,
-  scheme and port the application sees are Traefik's connection's (#256), HSTS is not sent and a
-  same-origin browser request is refused as CORS. Set it before, or with, the first deploy of this
-  release; the `production` profile logs a startup `WARN` while it is empty.
+- Coolify sits in front of the application as a reverse proxy (Traefik).
+  `server.request.header.forwarded.strategy: web-server` believes Traefik's `X-Forwarded-*` headers
+  **only** once `FINAXIS_CLIENT_IP_TRUSTED_PROXIES` names Traefik [^client-ip]; until then the
+  client address, scheme and port the application sees are Traefik's connection's (#256), HSTS is
+  not sent and a same-origin browser request is refused as CORS. Set it before, or with, the first
+  deploy of this release; the `production` profile logs a startup `WARN` while it is empty.
 
 ## Required environment variables
 
@@ -93,7 +93,11 @@ readiness-coolify-deployment-design.md` has the full empirical verification).
 [^api-docs]: Enabling this also serves a relaxed, docs-compatible Content-Security-Policy on
   *every* response in place of the configured strict one — see production-hardening.md.
 [^otel-endpoints]: Also `OTEL_SERVICE_NAME`/`_NAMESPACE`, `FINAXIS_DEPLOYMENT_ENVIRONMENT`,
-  `FINAXIS_SERVICE_VERSION`.
+  `FINAXIS_SERVICE_VERSION`. One collector for all three signals needs only
+  `OTEL_EXPORTER_OTLP_ENDPOINT` (its base URL, e.g. `http://collector:4318`; each exporter appends
+  `/v1/traces`, `/v1/logs` or `/v1/metrics`); a per-signal `OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT`
+  (a full URL) overrides it for that signal. With neither set, the exporters use
+  `http://localhost:4318`.
 [^otel]: `management.opentelemetry.enabled` and its three per-signal export flags are Spring
   Boot's own auto-configuration, frozen at image-build time. All four are set at build time via
   the GitHub Actions repo variables `FINAXIS_OTEL_ENABLED`, `FINAXIS_OTEL_TRACES_ENABLED`,

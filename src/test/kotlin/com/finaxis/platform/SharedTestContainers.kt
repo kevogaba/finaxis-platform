@@ -1,8 +1,8 @@
 package com.finaxis.platform
 
-import org.springframework.boot.amqp.autoconfigure.RabbitConnectionDetails
 import org.springframework.boot.flyway.autoconfigure.FlywayConnectionDetails
 import org.springframework.boot.jdbc.autoconfigure.JdbcConnectionDetails
+import org.springframework.boot.rabbitmq.autoconfigure.RabbitConnectionDetails
 import org.testcontainers.grafana.LgtmStackContainer
 import org.testcontainers.postgresql.PostgreSQLContainer
 import org.testcontainers.rabbitmq.RabbitMQContainer

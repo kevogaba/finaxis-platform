@@ -13,6 +13,7 @@ import io.lettuce.core.codec.ByteArrayCodec
 import io.lettuce.core.codec.RedisCodec
 import io.lettuce.core.codec.StringCodec
 import org.springframework.beans.factory.DisposableBean
+import org.springframework.beans.factory.config.BeanDefinition
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.boot.data.redis.autoconfigure.DataRedisConnectionDetails
@@ -20,6 +21,7 @@ import org.springframework.boot.data.redis.autoconfigure.DataRedisProperties
 import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.context.annotation.Role
 import org.springframework.core.Ordered
 import java.time.Clock
 import java.time.Duration
@@ -93,9 +95,14 @@ class RateLimitConfiguration {
 
     /**
      * API-wide rate-limit servlet filter.
+     *
+     * Infrastructure, so Spring Modulith's module observability leaves it unproxied: a class-based
+     * proxy of a [org.springframework.web.filter.OncePerRequestFilter] cannot intercept its final
+     * `doFilter` and `init`, so it observed nothing and ran `doFilter` on the proxy instance.
      */
     @Bean
     @ConditionalOnMissingBean
+    @Role(BeanDefinition.ROLE_INFRASTRUCTURE)
     fun rateLimitFilter(
         properties: RateLimitProperties,
         keyResolver: RateLimitKeyResolver,

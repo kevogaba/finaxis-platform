@@ -1,9 +1,12 @@
 package com.finaxis.platform.iam.adapter.inbound.security
 
+import org.apache.catalina.Engine
 import org.apache.catalina.valves.RemoteIpValve
 import org.slf4j.LoggerFactory
+import org.springframework.boot.tomcat.RemoteIp
 import org.springframework.boot.tomcat.TomcatWebServerFactory
 import org.springframework.boot.web.server.WebServerFactoryCustomizer
+import org.springframework.boot.web.server.autoconfigure.ForwardedHeaderStrategy
 import org.springframework.boot.web.server.autoconfigure.ServerProperties
 import org.springframework.core.Ordered
 import org.springframework.core.env.Environment
@@ -14,14 +17,16 @@ import org.springframework.stereotype.Component
  * Makes Tomcat's `RemoteIpValve` believe forwarded headers only from the reverse proxies listed in
  * `finaxis.security.client-ip.trusted-proxies` (#256), the same list [ClientIpResolver] uses.
  *
- * `server.forward-headers-strategy: native` installs the valve with Tomcat's default internal
- * proxies, which trust every private range. This customizer runs after Spring Boot's and replaces
- * that with [TrustedProxyPattern] built from the list, clears any other trusted-proxy setting and
- * pins the four header names, so no `server.tomcat.remoteip.*` setting widens or redirects it
- * (`protocol-header-https-value` aside). With the default empty list the pattern matches nothing:
- * no forwarded header is believed, `getRemoteAddr()` is the peer and scheme, host and port are
- * what the connector saw. From a listed peer the valve honours `X-Forwarded-For`, `-Proto`,
- * `-Host` and `-Port`; it never reads the RFC 7239 `Forwarded` header or `X-Forwarded-Prefix`.
+ * `server.request.header.forwarded.strategy: web-server` (Spring Boot 4.2's name for the former
+ * `server.forward-headers-strategy: native`) installs the valve with Tomcat's default internal
+ * proxies, which trust every private range. Spring Boot 4.2 builds that valve from the factory's
+ * `RemoteIp`; this customizer runs after Spring Boot's and replaces it with [TrustedProxyPattern]
+ * built from the list, clears any other trusted-proxy setting and pins the four header names, so no
+ * `server.tomcat.remoteip.*` setting widens or redirects it (`protocol-header-https-value` aside).
+ * With the default empty list the pattern matches nothing: no forwarded header is believed,
+ * `getRemoteAddr()` is the peer and scheme, host and port are what the connector saw. From a listed
+ * peer the valve honours `X-Forwarded-For`, `-Proto`, `-Host` and `-Port`; it never reads the RFC
+ * 7239 `Forwarded` header or `X-Forwarded-Prefix`.
  *
  * Under the `production` profile an empty list is logged once as a `WARN` when the server is
  * built: behind a TLS-terminating proxy the client address, scheme, host and port are then the
@@ -32,14 +37,14 @@ import org.springframework.stereotype.Component
  * `InetAddress.getByName`, a DNS lookup of client-supplied text. A regular expression never
  * resolves anything.
  *
- * Every strategy but `native` is refused at startup, unset included: `framework` installs Spring's
- * `ForwardedHeaderFilter`, which has no trusted-proxy list and believes those headers from any
- * peer; `none` (and unset, outside a detected cloud platform) installs no valve, so the list would
- * govern only the audit address and not `getRemoteAddr()`, scheme, host, port, HSTS or the
+ * Every strategy but `web-server` is refused at startup, unset included: `framework` installs
+ * Spring's `ForwardedHeaderFilter`, which has no trusted-proxy list and believes those headers from
+ * any peer; `none` (and unset, outside a detected cloud platform) installs no valve, so the list
+ * would govern only the audit address and not `getRemoteAddr()`, scheme, host, port, HSTS or the
  * anonymous rate-limit key. That check runs whenever the Tomcat factory is customized (a MOCK test
- * context creates the factory bean too, so it also notices). As a second guard, building the
- * server fails when no `RemoteIpValve` is on the engine after Spring Boot's customizer ran; that
- * one runs only when an embedded Tomcat is actually built, which every deployment does.
+ * context creates the factory bean too, so it also notices). As a second guard, building the server
+ * fails when no `RemoteIpValve` is on the engine after Spring Boot's customizer ran; that one runs
+ * only when an embedded Tomcat is actually built, which every deployment does.
  */
 @Component
 class TrustedProxyValveCustomizer(
@@ -49,18 +54,30 @@ class TrustedProxyValveCustomizer(
 ) : WebServerFactoryCustomizer<TomcatWebServerFactory>,
     Ordered {
     override fun customize(factory: TomcatWebServerFactory) {
-        val strategy = serverProperties.forwardHeadersStrategy
-        check(strategy == ServerProperties.ForwardHeadersStrategy.NATIVE) {
-            "server.forward-headers-strategy must be native, was ${strategy ?: "unset"}: " +
-                "only native applies finaxis.security.client-ip.trusted-proxies to forwarded " +
-                "headers (framework believes them from any peer, none ignores the list)"
+        val strategy = serverProperties.request.header.forwarded.strategy
+        check(strategy == ForwardedHeaderStrategy.WEB_SERVER) {
+            "server.request.header.forwarded.strategy must be web-server, was " +
+                "${strategy ?: "unset"}: only web-server applies " +
+                "finaxis.security.client-ip.trusted-proxies to forwarded headers (framework " +
+                "believes them from any peer, none ignores the list)"
         }
+        val pattern = TrustedProxyPattern.of(clientIpProperties.trustedRanges)
         // Checked when the server is built, not here: a MOCK test context also creates and
-        // customizes the factory bean, without the valve, but never starts a server from it.
-        factory.addContextCustomizers({ _ ->
-            check(factory.engineValves.any { it is RemoteIpValve }) {
-                "server.forward-headers-strategy is native but Tomcat has no RemoteIpValve, so " +
-                    "finaxis.security.client-ip.trusted-proxies would not govern forwarded headers"
+        // customizes the factory bean but never starts a server from it. Spring Boot 4.2 builds
+        // the valve from `factory.remoteIp` and adds it to the engine while it creates Tomcat,
+        // before the context (already a child of the engine's host) is customized.
+        factory.addContextCustomizers({ context ->
+            val engine = context.parent?.parent as? Engine
+            val valves =
+                engine
+                    ?.pipeline
+                    ?.valves
+                    .orEmpty()
+                    .filterIsInstance<RemoteIpValve>()
+            check(valves.size == 1 && valves.single().internalProxies == pattern) {
+                "server.request.header.forwarded.strategy is web-server but Tomcat has no " +
+                    "RemoteIpValve built from finaxis.security.client-ip.trusted-proxies, so " +
+                    "the list would not govern forwarded headers"
             }
         })
         if (clientIpProperties.trustedRanges.isEmpty() &&
@@ -68,18 +85,26 @@ class TrustedProxyValveCustomizer(
         ) {
             log.warn(EMPTY_LIST_IN_PRODUCTION)
         }
-        val pattern = TrustedProxyPattern.of(clientIpProperties.trustedRanges)
-        factory.engineValves.filterIsInstance<RemoteIpValve>().forEach { valve ->
-            valve.setInternalProxies(pattern)
-            valve.setTrustedProxies(null)
-            valve.remoteIpHeader = X_FORWARDED_FOR
-            valve.protocolHeader = X_FORWARDED_PROTO
-            valve.hostHeader = X_FORWARDED_HOST
-            valve.portHeader = X_FORWARDED_PORT
-        }
+        // Replaces whatever Spring Boot derived from `server.tomcat.remoteip.*`, keeping only
+        // its HTTPS protocol value and its usage: the valve Spring Boot builds from this trusts
+        // exactly the list and reads only the four pinned headers.
+        val configured = factory.remoteIp
+        factory.remoteIp =
+            RemoteIp(
+                // host, port, remote address and protocol header names, then the HTTPS value
+                RemoteIp.Header(
+                    X_FORWARDED_HOST,
+                    X_FORWARDED_PORT,
+                    X_FORWARDED_FOR,
+                    X_FORWARDED_PROTO,
+                    configured?.header()?.protocolHttpsValue(),
+                ),
+                RemoteIp.Proxies(pattern, null),
+                configured?.usage() ?: RemoteIp.Usage.FOR_FORWARDED_REQUEST_HEADERS,
+            )
     }
 
-    /** After Spring Boot's own Tomcat customizer, which adds the valve. */
+    /** After Spring Boot's own Tomcat customizer, which sets `factory.remoteIp`. */
     override fun getOrder(): Int = Ordered.LOWEST_PRECEDENCE
 
     /** Header names and the production warning. */

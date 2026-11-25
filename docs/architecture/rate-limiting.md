@@ -53,16 +53,15 @@ change through configuration properties. Keep limits out of business logic.
 - Anonymous: `rate-limit:{policy}:anon:{remoteAddress}`.
 
 `remoteAddress` is `request.remoteAddr`, which Tomcat's `RemoteIpValve` sets
-(`server.forward-headers-strategy: native`, #256) from `X-Forwarded-For` **only** when the direct
-peer is listed in `finaxis.security.client-ip.trusted-proxies`; with the default empty list it is
-always the peer. A client therefore cannot pick its anonymous bucket by sending a forged
-`X-Forwarded-For` (or `Forwarded`, which is never read), and the number of anonymous keys is
-bounded by the number of real client addresses. Two limits remain: an IPv6 client usually owns at
-least a `/64`, so per-address anonymous buckets do not bound one IPv6 client; and the key is the
-remote address text verbatim, so a listed proxy that writes `ip:port` entries would give one
-bucket per source port (Traefik writes plain addresses; such a proxy is unsupported). Behind an
-unlisted proxy every anonymous caller shares the proxy's bucket, so a deployment behind Traefik
-must list it (see
+(`server.request.header.forwarded.strategy: web-server`, #256) from `X-Forwarded-For` **only** when
+the direct peer is listed in `finaxis.security.client-ip.trusted-proxies`; with the default empty
+list it is always the peer. A client therefore cannot pick its anonymous bucket by sending a forged
+`X-Forwarded-For` (or `Forwarded`, which is never read), and the number of anonymous keys is bounded
+by the number of real client addresses. Two limits remain: an IPv6 client usually owns at least a
+`/64`, so per-address anonymous buckets do not bound one IPv6 client; and the key is the remote
+address text verbatim, so a listed proxy that writes `ip:port` entries would give one bucket per
+source port (Traefik writes plain addresses; such a proxy is unsupported). Behind an unlisted proxy
+every anonymous caller shares the proxy's bucket, so a deployment behind Traefik must list it (see
 `docs/security/production-hardening.md`, "Forwarded headers"). Do not parse `X-Forwarded-For`
 headers directly in application code; `ClientIpResolver` (the audit address) is the one exception.
 

@@ -1,6 +1,6 @@
 # Transactional Outbox and AMQP Publication (Namastack)
 
-Namastack (`io.namastack:namastack-outbox-*:1.7.1`, via `spring-modulith-starter-namastack`) is the
+Namastack (`io.namastack:namastack-outbox-*:2.0.0`, via `spring-modulith-starter-namastack`) is the
 **only** transactional outbox mechanism in this codebase, and must remain the only one. There is no
 custom poller, publisher, or claim logic anywhere in `com.finaxis.platform`, and there must never
 be one — see [ADR 0008](../adr/0008-transactional-outbox-over-direct-amqp.md). Read this with
@@ -70,7 +70,7 @@ New events add a `metadata["eventType"]` entry with the catalogue name (see
 this key, since that would mean editing already-stable, already-tested FSM definition code for a
 purely cosmetic addition — this table is the source of truth for the existing mapping instead.
 
-## Outbox mechanics (verified against the actual Namastack 1.7.1 jars)
+## Outbox mechanics (verified against the Namastack jars: 1.7.1, rechecked for 2.0.0)
 
 ### Schema ownership: deliberately outside Flyway
 
@@ -158,6 +158,35 @@ by construction —
 New consumers of the two new events should follow the same pattern rather than relying solely on
 the new header.
 
+## Namastack 2.0 (with Spring Boot 4.2)
+
+The upgrade from 1.11.1 keeps the tables, payloads, handler ids and retry state in place
+(Namastack's 2.0.0 migration guide). Four things change around it:
+
+- **New `outbox_record` indexes, built by Namastack at startup.** 2.0 replaces five 1.x indexes
+  with four (`idx_outbox_record_status_created_id`, `..._key_completed_created_id`,
+  `..._status_retry_partition`, `..._status_partition`). Its schema script, which this repository
+  leaves enabled because these tables are starter-managed, creates them with
+  `CREATE INDEX IF NOT EXISTS` on the first 2.0 start. That is a plain, non-concurrent build: it
+  blocks writes to `outbox_record`, and so every transaction that enqueues an event, for as long
+  as it takes. `outbox_record` keeps completed records (`delete-completed-records: false`), so on
+  a large table schedule the first 2.0 start for a quiet period. The five 1.x indexes are not
+  dropped; nothing reads them any more.
+- **`Outbox.schedule` requires an active transaction.** Namastack 2.0 refuses it outside one, so
+  a record is only ever written with the change that raised it. Nothing here calls it directly:
+  Spring Modulith's externalization schedules inside the transaction that publishes the event.
+- **`outbox.records` gauges `NEW` and `FAILED` only** by default (`COMPLETED` needed a count over a
+  table that only grows, on every scrape). `application.yaml` states the choice
+  (`namastack.outbox.observability.metrics.record-statuses: [new, failed]`) rather than relying
+  on the default.
+- **Settings Namastack 2.0 checks.** Its RabbitMQ publisher refuses to start without
+  `spring.rabbitmq.publisher-confirm-type: correlated`, and `fail-on-unroutable: true` needs
+  `spring.rabbitmq.publisher-returns: true` and `spring.rabbitmq.template.mandatory: true`. All
+  three are set, and `TransitionModuleConfigurationTests` asserts them.
+- **Active long-task timers kept.** Spring Boot 4.2 no longer creates an observation's
+  `<name>.active` timer by default; `management.metrics.observations.include-active-long-task-timer:
+  true` keeps them, so `outbox.record.process.active` is still exported.
+
 ## Observability
 
 `namastack-outbox-observability` (already a dependency) auto-configures Micrometer
@@ -167,9 +196,9 @@ the new header.
   channel, handler id (low-cardinality) and record key, record id, delivery attempt
   (high-cardinality);
 - `outbox.record.schedule` — span/timer around each polling cycle;
-- gauges: `outbox.records` (by status and channel), `outbox.instance.partitions.assigned`,
-  `outbox.instance.records.pending`, `outbox.cluster.instances.active`,
-  `outbox.cluster.partitions.unassigned`.
+- gauges: `outbox.records` (by status and channel; `NEW` and `FAILED` since 2.0),
+  `outbox.instance.partitions.assigned`, `outbox.instance.records.pending`,
+  `outbox.cluster.instances.active`, `outbox.cluster.partitions.unassigned`.
 
 These are exported through the existing OpenTelemetry/Micrometer wiring already configured in
 `application.yaml`; no custom logging or metrics code was added for this change, since duplicating

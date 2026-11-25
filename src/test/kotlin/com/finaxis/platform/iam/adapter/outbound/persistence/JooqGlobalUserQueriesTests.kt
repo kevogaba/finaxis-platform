@@ -9,8 +9,8 @@ import com.finaxis.platform.jooq.tables.references.USER_ACCOUNT
 import com.finaxis.platform.jooq.tables.references.USER_ORGANISATION_MEMBERSHIP
 import org.jooq.DSLContext
 import org.jooq.ExecuteContext
+import org.jooq.ExecuteListener
 import org.jooq.impl.DSL
-import org.jooq.impl.DefaultExecuteListener
 import org.jooq.impl.DefaultExecuteListenerProvider
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
@@ -35,7 +35,7 @@ class JooqGlobalUserQueriesTests(
 ) {
     @Test
     fun `a search spans organisations, counts memberships and filters by status and tenant`() {
-        val tag = uuidV7().toString().take(8)
+        val tag = uniqueTag()
         val orgA = insertOrganisation("dir-a-$tag")
         val orgB = insertOrganisation("dir-b-$tag")
         val ann = insertUser("ann-$tag", "ACTIVE")
@@ -62,7 +62,7 @@ class JooqGlobalUserQueriesTests(
 
     @Test
     fun `sorting by a named key honours the direction and the default is newest first`() {
-        val tag = uuidV7().toString().take(8)
+        val tag = uniqueTag()
         insertUser("a-$tag", "ACTIVE")
         insertUser("b-$tag", "ACTIVE")
 
@@ -77,7 +77,7 @@ class JooqGlobalUserQueriesTests(
 
     @Test
     fun `a profile lists the memberships newest first with the tenant and keeps the full count`() {
-        val tag = uuidV7().toString().take(8)
+        val tag = uniqueTag()
         val user = insertUser("profile-$tag", "ACTIVE")
         val older = insertOrganisation("dir-old-$tag")
         val newer = insertOrganisation("dir-new-$tag")
@@ -94,7 +94,7 @@ class JooqGlobalUserQueriesTests(
 
     @Test
     fun `a search costs the same statements whatever the page size`() {
-        val tag = uuidV7().toString().take(8)
+        val tag = uniqueTag()
         repeat(6) { insertUser("n$it-$tag", "ACTIVE") }
         val counter = AtomicInteger()
         val counting =
@@ -102,7 +102,7 @@ class JooqGlobalUserQueriesTests(
                 DSL.using(
                     dsl.configuration().derive(
                         DefaultExecuteListenerProvider(
-                            object : DefaultExecuteListener() {
+                            object : ExecuteListener {
                                 override fun executeStart(ctx: ExecuteContext) {
                                     counter.incrementAndGet()
                                 }
@@ -118,6 +118,13 @@ class JooqGlobalUserQueriesTests(
 
         assertEquals(small, counter.get())
     }
+
+    /**
+     * The random end of a UUIDv7. Its start is the creation time, which every UUIDv7 made in the
+     * same minute shares, and other test classes in this context commit users whose names and
+     * email addresses embed UUIDv7 values: a search by a time-prefix tag would find them too.
+     */
+    private fun uniqueTag() = uuidV7().toString().takeLast(12)
 
     private fun insertOrganisation(code: String): UUID {
         val id = uuidV7()
