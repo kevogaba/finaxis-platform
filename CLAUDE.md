@@ -46,6 +46,18 @@ welcome and organisation-invite emails over SMTP. Email delivery is OFF by defau
 `docs/adr/0016-email-delivery-transport-and-retry-classification.md` and
 `docs/architecture/email-delivery.md`.
 
+## Configuration
+
+- **Properties first.** Configure framework and library behaviour (Spring Boot, Spring Modulith,
+  Namastack, JobRunr, springdoc, Resilience4j, ...) through properties in `application*.yaml`
+  and the environment variables they name, whenever a property exists. Write a `@Bean`,
+  customizer or configurer only when it is absolutely necessary, because no property exists or
+  the one that does cannot express the requirement, and justify it with evidence: its KDoc names
+  the property looked for and why it does not fit (the library's configuration metadata or
+  reference documentation), and the same change adds it to the inventory in
+  `docs/development/configuration-properties.md`. Every framework or library upgrade re-checks
+  that inventory and replaces what a new property now covers.
+
 ## Database and identifiers
 
 The greenfield window is **closed** — `V1`–`V3` are the frozen base and every further change is a

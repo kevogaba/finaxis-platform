@@ -62,9 +62,10 @@ class TransitionModuleConfiguration {
             }.build()
 
     /**
-     * Routes typed externalized transition events to their declared RabbitMQ exchange. Each
-     * message also carries the outbox record key as a header so consumers can deduplicate under
-     * Namastack's at-least-once delivery semantics.
+     * Routes typed externalized transition events to their declared RabbitMQ exchange. The
+     * exchange is the event's own `target`, which no property can express. The deduplication
+     * header is Namastack's (`namastack.outbox.rabbit.idempotency-header-enabled`): every message
+     * carries `Idempotency-Key`, the outbox record id, the same on every retry of the record.
      */
     @Bean
     fun rabbitOutboxRouting(): RabbitOutboxRouting =
@@ -72,11 +73,6 @@ class TransitionModuleConfiguration {
             route(OutboxPayloadSelector.type(ExternalizedTransitionEvent::class.java)) {
                 target { payload, _ -> (payload as ExternalizedTransitionEvent).target }
                 key { _, _ -> "" }
-                header(OUTBOX_RECORD_KEY_HEADER) { _, metadata -> metadata.key }
             }
         }
-
-    private companion object {
-        const val OUTBOX_RECORD_KEY_HEADER = "X-Outbox-Record-Key"
-    }
 }

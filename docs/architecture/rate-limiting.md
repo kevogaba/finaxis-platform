@@ -143,6 +143,25 @@ spring:
 
 Use Redis credentials from environment or secret stores. Do not commit production credentials.
 
+The limiter keeps its own connection (Bucket4j needs a raw Lettuce connection with a byte-array
+codec) on a Lettuce client built from **the configuration Spring Boot derives from
+`spring.data.redis.*`**: the topology above, the database, credentials, TLS
+(`spring.data.redis.ssl.*`) and client resources. That file is its whole connection
+configuration; no code builds a Redis URI. Its command timeout alone is its own:
+`finaxis.rate-limit.redis-timeout` (`FINAXIS_RATE_LIMIT_REDIS_TIMEOUT`, default `5s`), set on its
+connection, because every API request waits on it, while the permission cache and the session
+keep `spring.data.redis.timeout` (`FINAXIS_REDIS_TIMEOUT`, `60s`). Spring Boot has no property
+for a second client's timeout. It is not Boot's client
+itself, because Boot's `LettuceConnectionFactory` disposes its client when the context stops and
+creates another when it starts (Spring's test context cache does so to idle contexts), which
+closes any connection held on the old one and would leave the limiter failing open.
+
+Fail-open waits for that 5 s when Redis stops answering without refusing connections; a refused
+connection fails at once. A static master/replica topology
+(`spring.data.redis.masterreplica.*`) is not supported by the limiter, as before.
+`RateLimitRedisBackendIntegrationTests` proves it on a real Redis, a context stop and start
+included.
+
 ## Response
 
 Rejected requests return HTTP `429 Too Many Requests` with:

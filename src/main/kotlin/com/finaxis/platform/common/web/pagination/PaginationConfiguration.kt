@@ -5,8 +5,6 @@ import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
-import org.springframework.data.domain.PageRequest
-import org.springframework.data.web.config.PageableHandlerMethodArgumentResolverCustomizer
 import org.springframework.web.servlet.HandlerInterceptor
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer
@@ -16,18 +14,6 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer
  */
 @Configuration
 class PaginationConfiguration {
-    /**
-     * Applies the configured fallback and maximum page size to Spring Data Pageable arguments.
-     */
-    @Bean
-    fun pageableHandlerMethodArgumentResolverCustomizer(
-        properties: PaginationProperties,
-    ): PageableHandlerMethodArgumentResolverCustomizer =
-        PageableHandlerMethodArgumentResolverCustomizer { resolver ->
-            resolver.setFallbackPageable(PageRequest.of(0, properties.defaultPageSize))
-            resolver.setMaxPageSize(properties.maxPageSize)
-        }
-
     /** Rejects malformed and out-of-range public pagination parameters before MVC caps them. */
     @Bean
     fun paginationParameterValidationInterceptor(

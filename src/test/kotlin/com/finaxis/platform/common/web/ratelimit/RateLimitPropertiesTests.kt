@@ -8,6 +8,7 @@ import org.springframework.boot.env.YamlPropertySourceLoader
 import org.springframework.core.env.MapPropertySource
 import org.springframework.core.env.StandardEnvironment
 import org.springframework.core.io.FileSystemResource
+import java.time.Duration
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -86,6 +87,14 @@ class RateLimitPropertiesTests {
             assertTrue(catchAll >= 0)
             assertTrue(export < catchAll, "first match wins, so the export rule comes first")
             assertEquals(1, rules.count { it.policy == RateLimitPolicyId.TENANT_EXPORT })
+        }
+    }
+
+    @Test
+    fun `the limiter's Redis timeout defaults to five seconds and must be positive`() {
+        assertEquals(Duration.ofSeconds(5), bindApplicationYaml().redisTimeout)
+        assertFailsWith<IllegalArgumentException> {
+            RateLimitProperties(redisTimeout = Duration.ZERO)
         }
     }
 

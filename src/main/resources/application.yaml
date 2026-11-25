@@ -102,6 +102,10 @@ spring:
     redis:
       host: ${FINAXIS_REDIS_HOST:localhost}
       port: ${FINAXIS_REDIS_PORT:6379}
+      # The command timeout of the permission cache's and the session's Redis calls: 60s, the
+      # Lettuce default they already ran with. The rate limiter, whose client is built from this
+      # same configuration, has its own shorter one (finaxis.rate-limit.redis-timeout).
+      timeout: ${FINAXIS_REDIS_TIMEOUT:60s}
       repositories:
         enabled: false
   modulith:
@@ -175,6 +179,9 @@ namastack:
       stop-on-first-failure: true
       delete-completed-records: false
     rabbit:
+      # Every message carries Namastack's `Idempotency-Key` header: the outbox record id, the
+      # same on each retry of the record, for consumers to deduplicate against.
+      idempotency-header-enabled: true
       fail-on-unroutable: true
       publisher-confirm-timeout: ${FINAXIS_OUTBOX_RABBIT_CONFIRM_TIMEOUT:10s}
     observability:
@@ -363,6 +370,10 @@ finaxis:
     enabled: ${FINAXIS_RATE_LIMIT_ENABLED:true}
     include-headers: ${FINAXIS_RATE_LIMIT_INCLUDE_HEADERS:true}
     fail-open: ${FINAXIS_RATE_LIMIT_FAIL_OPEN:true}
+    # How long a request waits on a Redis that stops answering before the limiter gives up and
+    # fails open: every API request waits on it, so it stays short and apart from
+    # spring.data.redis.timeout (RateLimitConfiguration).
+    redis-timeout: ${FINAXIS_RATE_LIMIT_REDIS_TIMEOUT:5s}
     policies:
       auth-selection:
         capacity: ${FINAXIS_RATE_LIMIT_AUTH_SELECTION_CAPACITY:20}
@@ -455,6 +466,10 @@ finaxis:
           path: /api/v1/**
           policy: tenant-command
   email:
+    # Off by default in every profile, production included: a deployment with no mail provider yet
+    # must still boot and answer /actuator/health. FINAXIS_EMAIL_ENABLED is the live toggle, read
+    # at run time (EmailConfiguration), so flipping it needs a restart, not a rebuild. SMTP itself
+    # is spring.mail.* above.
     enabled: ${FINAXIS_EMAIL_ENABLED:false}
     from-address: ${FINAXIS_EMAIL_FROM_ADDRESS:no-reply@finaxis.local}
     from-display-name: ${FINAXIS_EMAIL_FROM_DISPLAY_NAME:Finaxis}

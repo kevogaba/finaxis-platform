@@ -143,10 +143,13 @@ Namastack (like virtually every outbox implementation) provides **at-least-once*
 crash between a successful RabbitMQ publish and marking the record `COMPLETED` results in the
 same record being retried and republished on the next poll. Consumers must be idempotent.
 
-Every AMQP message published through `RabbitOutboxRouting` now carries an
-`X-Outbox-Record-Key` header (`TransitionModuleConfiguration.rabbitOutboxRouting()`), set from
-Namastack's own `OutboxRecordMetadata.key` — the same key Namastack uses to order and partition
-records. Consumers can use it to deduplicate redelivered messages.
+Every AMQP message the outbox publishes carries Namastack's `Idempotency-Key` header, the outbox
+record id (`OutboxRecordMetadata.recordId`): one value per record, the same on every retry of it,
+so a redelivered message can be recognised. It is switched on by a property,
+`namastack.outbox.rabbit.idempotency-header-enabled: true` (Namastack 2.0), and
+`OutboxIdempotencyHeaderIntegrationTests` reads it off the broker. Until then a custom
+`X-Outbox-Record-Key` header carried `OutboxRecordMetadata.key`, the key Namastack orders and
+partitions records by, which more than one record can share.
 
 This is not a new pattern: every existing consumer downstream of the outbox is already idempotent
 by construction —

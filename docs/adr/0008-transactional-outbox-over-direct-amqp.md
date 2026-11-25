@@ -45,6 +45,11 @@ Every published message now carries an `X-Outbox-Record-Key` header (Namastack's
 `OutboxRoute.Builder.header(...)` extension point), so consumers have a stable key to deduplicate
 against under the library's inherent at-least-once delivery.
 
+> **Since Namastack 2.0** the header is Namastack's own `Idempotency-Key`, the outbox record id
+> (the same on every retry of a record), switched on by the
+> `namastack.outbox.rabbit.idempotency-header-enabled` property; the custom header and the code
+> that set it are gone (`docs/development/configuration-properties.md`).
+
 The Part 2 event-name catalogue (`TenantActivated`, `BranchClosed`, etc.) is documented as a
 mapping against existing `target` strings rather than used to rename them, and most catalogue
 names without a current externalized event are left unwired — see

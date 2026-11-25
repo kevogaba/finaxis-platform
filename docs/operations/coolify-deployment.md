@@ -1,5 +1,8 @@
 # Coolify Deployment
 
+> Deploying the Spring Boot 4.2 / Namastack 2.0 / AMQP 1.0 consumer release for the first time:
+> read [deployment-notes-spring-boot-4-2.md](deployment-notes-spring-boot-4-2.md) first.
+
 CI builds the JVM image (see [native-image-deployment.md](native-image-deployment.md) for how the
 JVM and native variants differ) and pushes it to GHCR on every push to `main`
 (`.github/workflows/container-image.yml`), then calls a Coolify deploy webhook. Coolify pulls the
@@ -44,7 +47,7 @@ deployment and are not provisioned by it:
 | --- | --- |
 | `SPRING_PROFILES_ACTIVE` | `production` |
 | `FINAXIS_DATASOURCE_URL` / `_USERNAME` / `_PASSWORD` | |
-| `FINAXIS_REDIS_HOST` / `_PORT` | |
+| `FINAXIS_REDIS_HOST` / `_PORT` | Optional: `FINAXIS_REDIS_TIMEOUT` (default `60s`, cache and session) and `FINAXIS_RATE_LIMIT_REDIS_TIMEOUT` (default `5s`, the rate limiter, which fails open after it) |
 | `FINAXIS_RABBITMQ_HOST` / `_PORT` / `_USERNAME` / `_PASSWORD` | RabbitMQ 4.0+; startup fails fast while it is unreachable [^amqp] |
 | `FINAXIS_KEYCLOAK_ISSUER_URI` | **Must be the public URL** [^issuer] |
 | `FINAXIS_KEYCLOAK_AUDIENCE` | |
